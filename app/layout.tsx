@@ -1,5 +1,6 @@
 import './styles.css';
 import type { Metadata } from 'next';
+import MetaConsent from '@/components/MetaConsent';
 
 export const metadata: Metadata = {
   title: 'QY Roam | Pocket WiFi for Singapore Travellers',
@@ -29,6 +30,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <div><a href="/privacy">Privacy</a><br/><a href="/terms">Terms</a></div>
           </div>
         </footer>
+        <MetaConsent />
       </body>
     </html>
   );
