@@ -10,13 +10,26 @@ create table if not exists public.orders (
   travel_start date,
   travel_end date,
   shipping_address jsonb,
-  fulfilment_status text not null default 'paid',
+  fulfilment_status text not null default 'awaiting_payment',
+  courier_tracking text,
+  return_tracking text,
+  dispatched_at timestamptz,
+  returned_at timestamptz,
+  notes text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Safe to re-run against an earlier MVP schema.
+alter table public.orders add column if not exists courier_tracking text;
+alter table public.orders add column if not exists return_tracking text;
+alter table public.orders add column if not exists dispatched_at timestamptz;
+alter table public.orders add column if not exists returned_at timestamptz;
+alter table public.orders add column if not exists notes text;
 
 alter table public.orders enable row level security;
 
 -- No client-side policies are defined. Orders are read/written only with the server-side service role.
 create index if not exists orders_created_at_idx on public.orders(created_at desc);
 create index if not exists orders_fulfilment_status_idx on public.orders(fulfilment_status);
+create index if not exists orders_travel_start_idx on public.orders(travel_start);
