@@ -10,9 +10,9 @@ export default function TermsPage() {
     <h2>Delivery</h2>
     <p>Customers must provide an accurate Singapore delivery address and reachable contact number. Delivery estimates are not guaranteed where delays result from courier operations, incomplete details, events beyond our reasonable control, or bookings made too close to departure.</p>
     <h2>Return of equipment</h2>
-    <p>The pocket WiFi device and supplied accessories remain the property of QY Venture Pte. Ltd. Customers must follow the return instructions included with the order and return all equipment promptly after the booked rental period. Customers are responsible for arranging the return courier unless the order expressly includes a prepaid return service.</p>
+    <p>The pocket WiFi device and supplied accessories remain the property of QY Venture Pte. Ltd. Customers must follow the return instructions included with the order and hand the complete equipment package to the designated return courier within 5 calendar days after the booked rental period ends. Customers are responsible for arranging the return courier unless the order expressly includes a prepaid return service. Customers should retain courier acceptance or tracking evidence until QY Roam confirms receipt.</p>
     <h2>Loss, damage and late return</h2>
-    <p>Customers are responsible for reasonable charges arising from loss, material damage or failure to return rented equipment. The final replacement and late-return fee schedule will be displayed before public launch and may be updated from time to time for future bookings.</p>
+    <p>Customers are responsible for reasonable charges arising from loss, material damage or failure to return rented equipment. QY Roam will contact the customer before applying any loss, damage or late-return charge. The final replacement and late-return fee schedule will be displayed before public launch and will apply to the booking terms accepted at checkout.</p>
     <h2>Cancellations and refunds</h2>
     <p>Cancellation eligibility and any administrative charge depend on how close the request is to dispatch or service commencement. Once a device has been dispatched or a service period has started, refunds may be limited to the extent permitted by law and any non-recoverable third-party costs.</p>
     <h2>Acceptable use</h2>
@@ -21,6 +21,6 @@ export default function TermsPage() {
     <p>To the extent permitted by law, QY Venture Pte. Ltd. is not liable for indirect or consequential losses caused by network outages, local operator restrictions, device incompatibility, travel disruption or circumstances beyond our reasonable control. Nothing in these terms excludes rights or liabilities that cannot lawfully be excluded.</p>
     <h2>Support</h2>
     <p>For booking, delivery or return assistance, contact QY Roam at +65 8032 7183.</p>
-    <p><strong>Draft terms:</strong> Final loss/damage fees, courier charges, cancellation windows and return deadlines must be confirmed before public launch.</p>
+    <p><strong>Draft terms:</strong> Final loss/damage fees, courier charges and cancellation windows must be confirmed before public launch.</p>
   </main>;
 }
