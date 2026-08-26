@@ -41,8 +41,6 @@ async function inventoryAvailable(start:string,end:string) {
   return rows.length<inventory;
 }
 async function activeStripeHolds(stripe:Stripe,start:string,end:string) {
-  // Stripe Checkout sessions provide a short inventory hold before the webhook creates the paid order.
-  // This narrows the race where simultaneous shoppers could all pass the Supabase stock check.
   const sessions=await stripe.checkout.sessions.list({status:'open',limit:100});
   const cutoff=Math.floor(Date.now()/1000)-(HOLD_MINUTES*60);
   return sessions.data.filter(session=>{
@@ -75,7 +73,8 @@ export async function POST(req: Request) {
   const origin=siteOrigin(req);
   const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[]=[{quantity:1,price_data:{currency:'sgd',unit_amount:rentalAmount,product_data:{name:`QY Roam Pocket WiFi — ${country}`,description:`${start} to ${end} · ${days} day${days===1?'':'s'}`}}}];
   if(courierFee>0) lineItems.push({quantity:1,price_data:{currency:'sgd',unit_amount:courierFee,product_data:{name:'Singapore courier delivery & return handling'}}});
-  const session=await stripe.checkout.sessions.create({mode:'payment',line_items:lineItems,automatic_payment_methods:{enabled:true},expires_at:Math.floor(Date.now()/1000)+(HOLD_MINUTES*60),billing_address_collection:'required',shipping_address_collection:{allowed_countries:['SG']},phone_number_collection:{enabled:true},customer_creation:'always',success_url:`${origin}/success?session_id={CHECKOUT_SESSION_ID}`,cancel_url:`${origin}/?checkout=cancelled`,metadata:{country,start,end,days:String(days),daily_rate_sgd:daily.toFixed(2),source:'qyroam.com',measurement_consent:body.measurementConsent===true?'accepted':'essential'},consent_collection:{terms_of_service:'required'}});
+  // Checkout uses payment methods enabled in the Stripe Dashboard (Cards + PayNow for this account).
+  const session=await stripe.checkout.sessions.create({mode:'payment',line_items:lineItems,expires_at:Math.floor(Date.now()/1000)+(HOLD_MINUTES*60),billing_address_collection:'required',shipping_address_collection:{allowed_countries:['SG']},phone_number_collection:{enabled:true},customer_creation:'always',success_url:`${origin}/success?session_id={CHECKOUT_SESSION_ID}`,cancel_url:`${origin}/?checkout=cancelled`,metadata:{country,start,end,days:String(days),daily_rate_sgd:daily.toFixed(2),source:'qyroam.com',measurement_consent:body.measurementConsent===true?'accepted':'essential'},consent_collection:{terms_of_service:'required'}});
   return NextResponse.json({url:session.url},{headers:{'Cache-Control':'no-store'}});
  } catch(error){ console.error('checkout_error',error); return NextResponse.json({error:'Unable to start checkout.'},{status:500}); }
 }
