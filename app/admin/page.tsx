@@ -5,9 +5,10 @@ export const dynamic = 'force-dynamic';
 
 export default async function AdminPage() {
   const supabase = getSupabaseAdmin();
-  const { data: orders = [] } = supabase
+  const result = supabase
     ? await supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(100)
     : { data: [] as any[] };
+  const orders: any[] = result.data ?? [];
 
   const active = orders.filter((o:any)=>!['closed','cancelled'].includes(o.fulfilment_status));
   const revenue = orders.filter((o:any)=>o.payment_status === 'paid').reduce((sum:number,o:any)=>sum + Number(o.amount_sgd || 0), 0);
