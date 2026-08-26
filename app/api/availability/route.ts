@@ -28,9 +28,10 @@ export async function GET(req: NextRequest) {
   const to = end.toISOString().slice(0, 10);
   const url = new URL('/rest/v1/orders', supabaseUrl);
   url.searchParams.set('select', 'id');
-  url.searchParams.set('start_date', `lte.${to}`);
-  url.searchParams.set('end_date', `gte.${from}`);
-  url.searchParams.set('status', 'not.in.(cancelled,payment_failed,closed)');
+  // Keep these names aligned with supabase/schema.sql.
+  url.searchParams.set('travel_start', `lte.${to}`);
+  url.searchParams.set('travel_end', `gte.${from}`);
+  url.searchParams.set('fulfilment_status', 'not.in.(cancelled,payment_failed,closed)');
 
   try {
     const res = await fetch(url, {
@@ -43,6 +44,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ available: remaining > 0, remaining, inventoryMode: 'live' }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('availability check failed', error);
+    // This endpoint is advisory; checkout independently fails closed if its live inventory check fails.
     return NextResponse.json({ available: inventory > 0, remaining: inventory, inventoryMode: 'fallback' }, { headers: { 'Cache-Control': 'no-store' } });
   }
 }
