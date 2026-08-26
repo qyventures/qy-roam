@@ -24,6 +24,21 @@ function limited(req: Request) {
   if(attempts.size>5000) for(const [k,v] of attempts) if(v.reset<=now) attempts.delete(k);
   return current.count>MAX_ATTEMPTS;
 }
+async function inventoryAvailable(start:string,end:string) {
+  const inventory=Math.max(0,Number(process.env.POCKET_WIFI_INVENTORY||'10')||0);
+  if(inventory<1) return false;
+  const supabaseUrl=process.env.SUPABASE_URL, serviceKey=process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if(!supabaseUrl||!serviceKey) return true;
+  const url=new URL('/rest/v1/orders',supabaseUrl);
+  url.searchParams.set('select','id');
+  url.searchParams.set('start_date',`lte.${end}`);
+  url.searchParams.set('end_date',`gte.${start}`);
+  url.searchParams.set('status','not.in.(cancelled,payment_failed,closed)');
+  const res=await fetch(url,{headers:{apikey:serviceKey,Authorization:`Bearer ${serviceKey}`},cache:'no-store'});
+  if(!res.ok) throw new Error(`Inventory lookup failed (${res.status})`);
+  const rows=(await res.json()) as unknown[];
+  return rows.length<inventory;
+}
 
 export async function POST(req: Request) {
  try {
@@ -39,7 +54,9 @@ export async function POST(req: Request) {
   const minLeadDays=Math.max(0,Number.parseInt(process.env.MIN_DELIVERY_LEAD_DAYS||'2',10)||0); const earliest=new Date(now); earliest.setUTCDate(earliest.getUTCDate()+minLeadDays);
   if(startDate<earliest) return NextResponse.json({error:`Please book at least ${minLeadDays} day${minLeadDays===1?'':'s'} before departure so we can arrange delivery. Contact +65 8032 7183 for urgent trips.`},{status:400});
   const days=Math.floor((endDate.getTime()-startDate.getTime())/86400000)+1; if(days<1||days>90) return NextResponse.json({error:'Bookings must be between 1 and 90 days.'},{status:400});
-  const start=String(body.start), end=String(body.end); const rentalAmount=Math.max(1000,Math.round(daily*days*100)); const courierFee=Math.max(0,Math.round(Number(process.env.COURIER_FEE_SGD||'0')*100));
+  const start=String(body.start), end=String(body.end);
+  if(!(await inventoryAvailable(start,end))) return NextResponse.json({error:'Pocket WiFi is sold out for these dates. Please choose different dates or contact +65 8032 7183.'},{status:409,headers:{'Cache-Control':'no-store'}});
+  const rentalAmount=Math.max(1000,Math.round(daily*days*100)); const courierFee=Math.max(0,Math.round(Number(process.env.COURIER_FEE_SGD||'0')*100));
   const stripe=new Stripe(key,{apiVersion:'2024-06-20'}); const origin=siteOrigin(req);
   const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[]=[{quantity:1,price_data:{currency:'sgd',unit_amount:rentalAmount,product_data:{name:`QY Roam Pocket WiFi — ${country}`,description:`${start} to ${end} · ${days} day${days===1?'':'s'}`}}}];
   if(courierFee>0) lineItems.push({quantity:1,price_data:{currency:'sgd',unit_amount:courierFee,product_data:{name:'Singapore courier delivery & return handling'}}});
