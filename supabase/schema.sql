@@ -20,16 +20,23 @@ create table if not exists public.orders (
   updated_at timestamptz not null default now()
 );
 
--- Safe to re-run against an earlier MVP schema.
 alter table public.orders add column if not exists courier_tracking text;
 alter table public.orders add column if not exists return_tracking text;
 alter table public.orders add column if not exists dispatched_at timestamptz;
 alter table public.orders add column if not exists returned_at timestamptz;
 alter table public.orders add column if not exists notes text;
-
 alter table public.orders enable row level security;
 
--- No client-side policies are defined. Orders are read/written only with the server-side service role.
+-- Webhook idempotency ledger: Stripe may retry the same event multiple times.
+create table if not exists public.stripe_events (
+  event_id text primary key,
+  event_type text not null,
+  processed_at timestamptz not null default now()
+);
+alter table public.stripe_events enable row level security;
+
+-- No client policies: both tables are server/service-role only.
 create index if not exists orders_created_at_idx on public.orders(created_at desc);
 create index if not exists orders_fulfilment_status_idx on public.orders(fulfilment_status);
 create index if not exists orders_travel_start_idx on public.orders(travel_start);
+create index if not exists stripe_events_processed_at_idx on public.stripe_events(processed_at desc);
