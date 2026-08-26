@@ -10,10 +10,14 @@ export async function GET() {
     webhook: Boolean(process.env.STRIPE_WEBHOOK_SECRET),
     supabase: Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY),
     admin: Boolean(process.env.ADMIN_USER && process.env.ADMIN_PASSWORD),
+    inventory: Boolean(process.env.POCKET_WIFI_INVENTORY),
   };
 
   const coreReady = checks.stripe && checks.siteUrl;
-  const launchReady = coreReady && checks.webhook && checks.supabase && checks.admin;
+  const launchReady = coreReady && checks.webhook && checks.supabase && checks.admin && checks.inventory;
+  const missing = Object.entries(checks)
+    .filter(([, configured]) => !configured)
+    .map(([name]) => name);
 
   return NextResponse.json(
     {
@@ -21,6 +25,7 @@ export async function GET() {
       launchReady,
       service: 'qy-roam',
       checks,
+      missing,
       timestamp: new Date().toISOString(),
     },
     {
