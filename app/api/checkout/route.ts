@@ -31,9 +31,10 @@ async function inventoryAvailable(start:string,end:string) {
   if(!supabaseUrl||!serviceKey) return true;
   const url=new URL('/rest/v1/orders',supabaseUrl);
   url.searchParams.set('select','id');
-  url.searchParams.set('start_date',`lte.${end}`);
-  url.searchParams.set('end_date',`gte.${start}`);
-  url.searchParams.set('status','not.in.(cancelled,payment_failed,closed)');
+  // Keep these names aligned with supabase/schema.sql. A mismatch here can silently break stock protection.
+  url.searchParams.set('travel_start',`lte.${end}`);
+  url.searchParams.set('travel_end',`gte.${start}`);
+  url.searchParams.set('fulfilment_status','not.in.(cancelled,payment_failed,closed)');
   const res=await fetch(url,{headers:{apikey:serviceKey,Authorization:`Bearer ${serviceKey}`},cache:'no-store'});
   if(!res.ok) throw new Error(`Inventory lookup failed (${res.status})`);
   const rows=(await res.json()) as unknown[];
