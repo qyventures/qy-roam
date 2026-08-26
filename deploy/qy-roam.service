@@ -1,0 +1,24 @@
+[Unit]
+Description=QY Roam Next.js production service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/qy-roam
+EnvironmentFile=/root/.config/qyroam/.env
+Environment=NODE_ENV=production
+Environment=PORT=3000
+ExecStart=/usr/bin/npm run start
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+# Basic hardening while retaining access to app files and outbound network.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+
+[Install]
+WantedBy=multi-user.target
