@@ -38,6 +38,7 @@ export default async function SuccessPage({ searchParams }: Props) {
         <p>
           If you completed payment, please wait a moment and refresh this page. Some payment methods can take a little longer to confirm.
         </p>
+        {sessionId && <p><a className="secondary" href={`/booking?session_id=${encodeURIComponent(sessionId)}`}>Check booking status</a></p>}
         <p>
           If you need help, contact us at{' '}
           <a href="tel:+6580327183"><strong>+65 8032 7183</strong></a>.
@@ -62,6 +63,11 @@ export default async function SuccessPage({ searchParams }: Props) {
       <p>
         Please keep the device, cable and pouch together during your rental. Return instructions will be supplied with the order.
       </p>
+      {sessionId && (
+        <p>
+          <a className="secondary" href={`/booking?session_id=${encodeURIComponent(sessionId)}`}>View booking & delivery status</a>
+        </p>
+      )}
       <p>
         If your departure is soon or you need to change delivery details, contact us at{' '}
         <a href="tel:+6580327183"><strong>+65 8032 7183</strong></a>.
