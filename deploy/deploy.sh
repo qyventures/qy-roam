@@ -4,7 +4,7 @@ set -euo pipefail
 APP_DIR="${APP_DIR:-/root/qy-roam}"
 ENV_FILE="${ENV_FILE:-/root/.config/qyroam/.env}"
 SERVICE_NAME="${SERVICE_NAME:-qy-roam}"
-HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3000/api/health}"
+HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3100/api/health}"
 
 cd "$APP_DIR"
 
