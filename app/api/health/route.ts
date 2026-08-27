@@ -28,7 +28,21 @@ function isStrongAdminPassword(value?: string) {
   return /[a-z]/.test(value) && /[A-Z]/.test(value) && /\d/.test(value) && /[^A-Za-z0-9]/.test(value);
 }
 
+function isSmtpConfigured() {
+  const port = Number(process.env.SMTP_PORT || '587');
+  return Boolean(
+    process.env.SMTP_HOST &&
+    Number.isInteger(port) && port > 0 && port <= 65535 &&
+    process.env.SMTP_USER &&
+    process.env.SMTP_PASS &&
+    process.env.SMTP_FROM &&
+    (process.env.ORDER_FULFILMENT_EMAIL || 'enquiries@sgsimshop.com').includes('@')
+  );
+}
+
 export async function GET() {
+  const adminUser = process.env.ADMIN_USER || process.env.ADMIN_BASIC_USER;
+  const adminPassword = process.env.ADMIN_PASSWORD || process.env.ADMIN_BASIC_PASSWORD;
   const checks = {
     stripe: hasPrefix(process.env.STRIPE_SECRET_KEY, ['sk_live_', 'rk_live_']),
     publishableKey: hasPrefix(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY, ['pk_live_']),
@@ -39,9 +53,10 @@ export async function GET() {
       process.env.SUPABASE_SERVICE_ROLE_KEY &&
       process.env.SUPABASE_SERVICE_ROLE_KEY.length >= 32,
     ),
-    admin: Boolean(process.env.ADMIN_USER && isStrongAdminPassword(process.env.ADMIN_PASSWORD)),
+    admin: Boolean(adminUser && isStrongAdminPassword(adminPassword)),
     inventory: isPositiveInteger(process.env.POCKET_WIFI_INVENTORY),
     deliveryLeadDays: isPositiveInteger(process.env.MIN_DELIVERY_LEAD_DAYS),
+    fulfilmentEmail: isSmtpConfigured(),
   };
 
   const coreReady = checks.stripe && checks.publishableKey && checks.siteUrl;
