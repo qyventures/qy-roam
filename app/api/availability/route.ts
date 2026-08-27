@@ -56,6 +56,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ available: remaining > 0, remaining, inventoryMode: 'live' }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('availability check failed', error);
-    return NextResponse.json({ available: inventory > 0, remaining: inventory, inventoryMode: 'fallback' }, { headers: { 'Cache-Control': 'no-store' } });
+    return NextResponse.json(
+      { available: false, remaining: 0, inventoryMode: 'unavailable', error: 'Live availability is temporarily unavailable. Please try again shortly or contact +65 8032 7183.' },
+      { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '30' } }
+    );
   }
 }
