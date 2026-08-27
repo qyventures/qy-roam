@@ -25,6 +25,7 @@ async function activeStripeHolds(stripe: Stripe, start: string, end: string) {
 
     for (const session of sessions.data) {
       if (session.created < cutoff || session.metadata?.source !== 'qyroam.com') continue;
+      if (session.metadata?.product_type && session.metadata.product_type !== 'pocket_wifi') continue;
       const holdStart = session.metadata?.start;
       const holdEnd = session.metadata?.end;
       if (holdStart && holdEnd && holdStart <= end && holdEnd >= start) holds += 1;
@@ -74,6 +75,7 @@ export async function GET(req: NextRequest) {
   const to = end.toISOString().slice(0, 10);
   const url = new URL('/rest/v1/orders', supabaseUrl);
   url.searchParams.set('select', 'id');
+  url.searchParams.set('product_type', 'eq.pocket_wifi');
   url.searchParams.set('travel_start', `lte.${to}`);
   url.searchParams.set('travel_end', `gte.${from}`);
   url.searchParams.set('fulfilment_status', 'not.in.(cancelled,payment_failed,closed)');
