@@ -10,6 +10,7 @@ Sales-ready Pocket Wi-Fi rental MVP for QY Venture Pte. Ltd.
 - Nginx TLS reverse proxy for `qyroam.com`
 - systemd service for restart-on-failure and boot persistence
 - Meta Pixel/CAPI instrumentation gated by advertising consent
+- Dedicated local app port `3100` to avoid conflicts with other Next.js services on the VPS
 
 ## VPS deployment
 
@@ -30,11 +31,11 @@ cd /root/qy-roam
 bash deploy/deploy.sh
 ```
 
-The script fast-forwards `main`, installs dependencies, builds with the protected env file, restarts the service, then checks `http://127.0.0.1:3000/api/health`.
+The script fast-forwards `main`, installs dependencies, builds with the protected env file, restarts the service, then checks `http://127.0.0.1:3100/api/health`.
 
 ## Nginx and TLS
 
-`deploy/nginx-qyroam.conf` is the production reverse-proxy template. Provision the certificate only after `qyroam.com` and `www.qyroam.com` point to the VPS. Then enable the site and test Nginx before reload.
+`deploy/nginx-qyroam.conf` is the production reverse-proxy template and proxies QY Roam to `127.0.0.1:3100`. Provision the certificate only after `qyroam.com` and `www.qyroam.com` point to the VPS. Then enable the site and test Nginx before reload.
 
 ## Required production configuration
 
