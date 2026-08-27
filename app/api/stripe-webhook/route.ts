@@ -42,13 +42,33 @@ async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.E
   const {error}=await supabase.from('orders').upsert({stripe_session_id:session.id,payment_status:session.payment_status,customer_name:session.customer_details?.name,email:session.customer_details?.email,phone:session.customer_details?.phone,amount_sgd:(session.amount_total||0)/100,product_type:productType,plan_name:session.metadata?.plan_name||null,country:session.metadata?.country,travel_start:session.metadata?.start||null,travel_end:session.metadata?.end||null,fulfilment_status:fulfilment,shipping_address:session.shipping_details?.address||null,updated_at:new Date().toISOString()},{onConflict:'stripe_session_id'}); if(error) throw error;
 }
 
+async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string, type:string) {
+  if(!supabase) throw new Error('Persistence unavailable');
+  const claimed=await supabase.from('stripe_events').insert({event_id:id,event_type:type});
+  if(claimed.error?.code==='23505') return false;
+  if(claimed.error) throw claimed.error;
+  return true;
+}
+
 export async function POST(req:Request){
   const key=process.env.STRIPE_SECRET_KEY,webhookSecret=process.env.STRIPE_WEBHOOK_SECRET; if(!key||!webhookSecret) return NextResponse.json({error:'Webhook configuration incomplete'},{status:503});
   const stripe=new Stripe(key,{apiVersion:'2024-06-20'}); let event:Stripe.Event;
   try{event=stripe.webhooks.constructEvent(await req.text(),req.headers.get('stripe-signature')||'',webhookSecret);}catch{return NextResponse.json({error:'Invalid signature'},{status:400});}
   if(!['checkout.session.completed','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed'].includes(event.type)) return NextResponse.json({received:true});
   const session=event.data.object as Stripe.Checkout.Session, supabase=getSupabaseAdmin(); if(!supabase) return NextResponse.json({error:'Persistence unavailable'},{status:503});
-  const claimed=await supabase.from('stripe_events').insert({event_id:event.id,event_type:event.type}); if(claimed.error?.code==='23505') return NextResponse.json({received:true,duplicate:true}); if(claimed.error) return NextResponse.json({error:'Persistence unavailable'},{status:500});
-  try{await persistSession(session,event.type); if(event.type!=='checkout.session.async_payment_failed'){await sendHumanFulfilmentEmail(session);await sendMetaPurchase(session);} const completed=await supabase.from('stripe_events').update({processed_at:new Date().toISOString()}).eq('event_id',event.id);if(completed.error)throw completed.error;}catch(error){console.error('stripe_webhook_processing_error',error);await supabase.from('stripe_events').delete().eq('event_id',event.id);return NextResponse.json({error:'Processing failed'},{status:500});}
+  const eventClaimId=`stripe:${event.id}`;
+  try{
+    if(!(await claimOnce(supabase,eventClaimId,event.type))) return NextResponse.json({received:true,duplicate:true});
+    await persistSession(session,event.type);
+    if(event.type!=='checkout.session.async_payment_failed'&&session.payment_status==='paid'){
+      const fulfilmentClaimId=`fulfilment:${session.id}`;
+      if(await claimOnce(supabase,fulfilmentClaimId,'fulfilment.notification')){
+        try{await sendHumanFulfilmentEmail(session);}
+        catch(error){await supabase.from('stripe_events').delete().eq('event_id',fulfilmentClaimId);throw error;}
+      }
+      await sendMetaPurchase(session);
+    }
+    const completed=await supabase.from('stripe_events').update({processed_at:new Date().toISOString()}).eq('event_id',eventClaimId);if(completed.error)throw completed.error;
+  }catch(error){console.error('stripe_webhook_processing_error',error);await supabase.from('stripe_events').delete().eq('event_id',eventClaimId);return NextResponse.json({error:'Processing failed'},{status:500});}
   return NextResponse.json({received:true});
 }
