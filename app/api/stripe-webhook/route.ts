@@ -36,7 +36,13 @@ async function sendMetaPurchase(session: Stripe.Checkout.Session) {
     event_source_url: `${process.env.NEXT_PUBLIC_SITE_URL || 'https://qyroam.com'}/success`,
     event_id: `stripe_${session.id}`,
     user_data: userData,
-    custom_data: { currency: 'SGD', value: (session.amount_total || 0)/100, order_id: session.id },
+    custom_data: {
+      currency: 'SGD',
+      value: (session.amount_total || 0)/100,
+      order_id: session.id,
+      content_category: session.metadata?.product_type || 'pocket_wifi',
+      content_name: session.metadata?.plan_name || session.metadata?.country || 'QY Roam'
+    },
   }] };
   const response = await fetch(`https://graph.facebook.com/v21.0/${pixel}/events?access_token=${encodeURIComponent(token)}`, {
     method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)
@@ -52,18 +58,27 @@ async function persistSession(session: Stripe.Checkout.Session, eventType: Strip
   const existing = await supabase.from('orders').select('fulfilment_status').eq('stripe_session_id', session.id).maybeSingle();
   if (existing.error) throw existing.error;
   const current = existing.data?.fulfilment_status;
-  // Never regress an order already being fulfilled when Stripe retries a webhook.
   const fulfilment = paid
     ? (current && !['awaiting_payment','payment_failed'].includes(current) ? current : 'paid')
     : failed
       ? (current && !['awaiting_payment','payment_failed'].includes(current) ? current : 'payment_failed')
       : (current || 'awaiting_payment');
+  const productType = session.metadata?.product_type || 'pocket_wifi';
   const { error } = await supabase.from('orders').upsert({
-    stripe_session_id:session.id, payment_status:session.payment_status,
-    customer_name:session.customer_details?.name, email:session.customer_details?.email, phone:session.customer_details?.phone,
-    amount_sgd:(session.amount_total||0)/100, country:session.metadata?.country,
-    travel_start:session.metadata?.start||null, travel_end:session.metadata?.end||null,
-    fulfilment_status:fulfilment, shipping_address:session.shipping_details?.address||null, updated_at:new Date().toISOString(),
+    stripe_session_id:session.id,
+    payment_status:session.payment_status,
+    customer_name:session.customer_details?.name,
+    email:session.customer_details?.email,
+    phone:session.customer_details?.phone,
+    amount_sgd:(session.amount_total||0)/100,
+    product_type:productType,
+    plan_name:session.metadata?.plan_name||null,
+    country:session.metadata?.country,
+    travel_start:session.metadata?.start||null,
+    travel_end:session.metadata?.end||null,
+    fulfilment_status:fulfilment,
+    shipping_address:productType==='pocket_wifi' ? session.shipping_details?.address||null : null,
+    updated_at:new Date().toISOString(),
   }, {onConflict:'stripe_session_id'});
   if (error) throw error;
 }
