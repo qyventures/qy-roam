@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import crypto from 'crypto';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
+import { sendSmtpMail } from '@/lib/smtp';
 
 export const runtime = 'nodejs';
 
@@ -46,12 +47,17 @@ async function sendMetaPurchase(session: Stripe.Checkout.Session) {
 
 async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
   if (session.payment_status !== 'paid') return;
-  const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.ORDER_NOTIFICATION_FROM;
+
+  const host = process.env.SMTP_HOST;
+  const port = Number(process.env.SMTP_PORT || '587');
+  const secure = process.env.SMTP_SECURE === 'true' || port === 465;
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+  const from = process.env.SMTP_FROM || user;
   const to = process.env.ORDER_FULFILMENT_EMAIL || 'enquiries@sgsimshop.com';
-  if (!apiKey || !from) {
+  if (!host || !user || !pass || !from) {
     console.error('fulfilment_email_not_configured');
-    return;
+    throw new Error('SMTP fulfilment email is not configured');
   }
 
   const productType = session.metadata?.product_type || 'pocket_wifi';
@@ -91,12 +97,7 @@ async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
     'Customer support: +65 8032 7183'
   ].join('\n');
 
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from, to: [to], subject, text })
-  });
-  if (!response.ok) throw new Error(`Fulfilment email failed (${response.status}): ${await response.text()}`);
+  await sendSmtpMail({ host, port, secure, user, pass, from, to, subject, text });
 }
 
 async function persistSession(session: Stripe.Checkout.Session, eventType: Stripe.Event.Type) {
@@ -109,7 +110,6 @@ async function persistSession(session: Stripe.Checkout.Session, eventType: Strip
   const current = existing.data?.fulfilment_status;
   const productType = session.metadata?.product_type || 'pocket_wifi';
   const defaultPaidStatus = productType === 'esim' ? 'paid' : 'paid';
-  // Never regress an order already being fulfilled when Stripe retries a webhook.
   const fulfilment = paid
     ? (current && !['awaiting_payment','payment_failed'].includes(current) ? current : defaultPaidStatus)
     : failed
