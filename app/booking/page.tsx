@@ -5,7 +5,7 @@ import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
-  title: 'Booking status | QY Roam',
+  title: 'Order status | QY Roam',
   robots: { index: false, follow: false },
 };
 
@@ -17,12 +17,12 @@ const statusLabels: Record<string, string> = {
   awaiting_payment: 'Awaiting payment confirmation',
   payment_failed: 'Payment failed',
   paid: 'Paid — preparing your order',
-  packing: 'Packing your pocket WiFi',
+  packing: 'Preparing your order',
   dispatched: 'Dispatched for delivery',
   'with customer': 'Delivered / with customer',
   return_due: 'Return due',
   returned: 'Returned to QY Roam',
-  closed: 'Rental completed',
+  closed: 'Order completed',
   cancelled: 'Cancelled',
 };
 
@@ -33,9 +33,9 @@ export default async function BookingPage({ searchParams }: Props) {
   if (!sessionId || !sessionId.startsWith('cs_') || !key) {
     return (
       <main className="wrap section legal">
-        <span className="eyebrow">Booking status</span>
-        <h1>Open your booking from the confirmation link.</h1>
-        <p>This page needs the secure booking reference from your QY Roam checkout confirmation.</p>
+        <span className="eyebrow">Order status</span>
+        <h1>Open your order from the confirmation link.</h1>
+        <p>This page needs the secure reference from your QY Roam checkout confirmation.</p>
         <p>If you need help, contact <a href="tel:+6580327183"><strong>+65 8032 7183</strong></a>.</p>
         <a className="secondary" href="/">Back to QY Roam</a>
       </main>
@@ -56,6 +56,9 @@ export default async function BookingPage({ searchParams }: Props) {
 
     const fulfilment = order?.data?.fulfilment_status || (session.payment_status === 'paid' ? 'paid' : 'awaiting_payment');
     const destination = session.metadata?.country || 'your destination';
+    const planName = session.metadata?.plan_name || destination;
+    const productType = session.metadata?.product_type || 'pocket_wifi';
+    const isEsim = productType === 'esim';
     const start = session.metadata?.start || '';
     const end = session.metadata?.end || '';
     const amount = session.amount_total != null ? `S$${(session.amount_total / 100).toFixed(2)}` : '';
@@ -63,31 +66,38 @@ export default async function BookingPage({ searchParams }: Props) {
 
     return (
       <main className="wrap section legal">
-        <span className="eyebrow">Booking status</span>
-        <h1>{paid ? statusLabels[fulfilment] || 'Booking confirmed' : 'Payment not yet confirmed'}</h1>
-        <p><strong>{destination}</strong>{start && end ? ` · ${start} to ${end}` : ''}{amount ? ` · ${amount}` : ''}</p>
+        <span className="eyebrow">Order status</span>
+        <h1>{paid ? statusLabels[fulfilment] || 'Order confirmed' : 'Payment not yet confirmed'}</h1>
+        <p><strong>{planName}</strong>{start && end ? ` · ${start} to ${end}` : ''}{amount ? ` · ${amount}` : ''}</p>
 
         {paid ? (
-          <>
-            <p>Your payment is confirmed. We’ll use the Singapore delivery details from checkout to fulfil your order.</p>
-            {order?.data?.courier_tracking && <p><strong>Delivery tracking:</strong> {order.data.courier_tracking}</p>}
-            {order?.data?.return_tracking && <p><strong>Return tracking:</strong> {order.data.return_tracking}</p>}
-            {fulfilment === 'return_due' && <p>Please hand the complete device kit to the return courier within 5 calendar days after your rental ends and keep the tracking receipt until QY Roam confirms receipt.</p>}
-          </>
+          isEsim ? (
+            <>
+              <p>Your payment is confirmed. Your eSIM order is queued for digital fulfilment to the email address used at checkout.</p>
+              <p>If you have not received your eSIM details within the stated fulfilment window, contact +65 8032 7183.</p>
+            </>
+          ) : (
+            <>
+              <p>Your payment is confirmed. We’ll use the Singapore delivery details from checkout to fulfil your order.</p>
+              {order?.data?.courier_tracking && <p><strong>Delivery tracking:</strong> {order.data.courier_tracking}</p>}
+              {order?.data?.return_tracking && <p><strong>Return tracking:</strong> {order.data.return_tracking}</p>}
+              {fulfilment === 'return_due' && <p>Please hand the complete device kit to the return courier within 5 calendar days after your rental ends and keep the tracking receipt until QY Roam confirms receipt.</p>}
+            </>
+          )
         ) : (
           <p>If you just completed PayNow or another payment method, allow a short time for Stripe to confirm it, then refresh this page.</p>
         )}
 
-        <p>Need to change delivery details or need urgent help? Call <a href="tel:+6580327183"><strong>+65 8032 7183</strong></a>.</p>
-        <a className="secondary" href="/">Back to QY Roam</a>
+        <p>Need help? Call <a href="tel:+6580327183"><strong>+65 8032 7183</strong></a>.</p>
+        <a className="secondary" href={isEsim ? '/esim' : '/'}>{isEsim ? 'Back to eSIM plans' : 'Back to QY Roam'}</a>
       </main>
     );
   } catch (error) {
     console.error('booking_status_lookup_error', error);
     return (
       <main className="wrap section legal">
-        <span className="eyebrow">Booking status</span>
-        <h1>We couldn’t load this booking.</h1>
+        <span className="eyebrow">Order status</span>
+        <h1>We couldn’t load this order.</h1>
         <p>Please check the original confirmation link or contact <a href="tel:+6580327183"><strong>+65 8032 7183</strong></a> for help.</p>
         <a className="secondary" href="/">Back to QY Roam</a>
       </main>
