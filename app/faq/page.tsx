@@ -12,6 +12,34 @@ const faqs = [
   ['How can I get help?', 'WhatsApp or call our Singapore support team at +65 8032 7183.']
 ];
 
+const faqSchema = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: faqs.map(([question, answer]) => ({
+    '@type': 'Question',
+    name: question,
+    acceptedAnswer: {
+      '@type': 'Answer',
+      text: answer
+    }
+  }))
+};
+
 export default function FAQ() {
-  return <main className="wrap section"><span className="eyebrow">Help centre</span><h1>Frequently asked questions</h1><p className="lead">Everything you need to know before travelling with QY Roam.</p><div className="faq-list">{faqs.map(([q,a]) => <details key={q}><summary>{q}</summary><p>{a}</p></details>)}</div><section className="cta"><h2>Still need help?</h2><p>Our Singapore support team can help with bookings, delivery and returns.</p><a className="secondary" href="https://wa.me/6580327183">WhatsApp +65 8032 7183</a></section></main>;
+  return (
+    <main className="wrap section">
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(faqSchema) }} />
+      <span className="eyebrow">Help centre</span>
+      <h1>Frequently asked questions</h1>
+      <p className="lead">Everything you need to know before travelling with QY Roam.</p>
+      <div className="faq-list">
+        {faqs.map(([q, a]) => <details key={q}><summary>{q}</summary><p>{a}</p></details>)}
+      </div>
+      <section className="cta">
+        <h2>Still need help?</h2>
+        <p>Our Singapore support team can help with bookings, delivery and returns.</p>
+        <a className="secondary" href="https://wa.me/6580327183">WhatsApp +65 8032 7183</a>
+      </section>
+    </main>
+  );
 }
