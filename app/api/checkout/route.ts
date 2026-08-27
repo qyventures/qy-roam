@@ -29,7 +29,7 @@ async function inventoryAvailable(start:string,end:string) {
   const inventory=Math.max(0,Number(process.env.POCKET_WIFI_INVENTORY||'10')||0);
   if(inventory<1) return false;
   const supabaseUrl=process.env.SUPABASE_URL, serviceKey=process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if(!supabaseUrl||!serviceKey) return true;
+  if(!supabaseUrl||!serviceKey) throw new Error('Live inventory store is not configured');
   const url=new URL('/rest/v1/orders',supabaseUrl);
   url.searchParams.set('select','id');
   url.searchParams.set('travel_start',`lte.${end}`);
@@ -56,6 +56,7 @@ export async function POST(req: Request) {
   const type=req.headers.get('content-type')||''; if(!type.toLowerCase().startsWith('application/json')) return NextResponse.json({error:'Expected JSON request.'},{status:415});
   const length=Number(req.headers.get('content-length')||0); if(length>MAX_BODY_BYTES) return NextResponse.json({error:'Request too large.'},{status:413});
   const key=process.env.STRIPE_SECRET_KEY; if(!key) return NextResponse.json({error:'Payment configuration incomplete.'},{status:503});
+  if(!process.env.SUPABASE_URL||!process.env.SUPABASE_SERVICE_ROLE_KEY) return NextResponse.json({error:'Live inventory is not configured yet. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
   const raw=await req.text(); if(new TextEncoder().encode(raw).length>MAX_BODY_BYTES) return NextResponse.json({error:'Request too large.'},{status:413});
   let body:Record<string,unknown>; try { body=JSON.parse(raw); } catch { return NextResponse.json({error:'Invalid request.'},{status:400}); }
   const country=String(body.country||''); const daily=DAILY_RATES[country]; const startDate=parseDate(body.start); const endDate=parseDate(body.end);
