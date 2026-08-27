@@ -44,15 +44,20 @@ async function sendMetaPurchase(session: Stripe.Checkout.Session) {
   if (!response.ok) console.error('meta_capi_error', response.status, await response.text());
 }
 
-async function persistSession(session: Stripe.Checkout.Session) {
+async function persistSession(session: Stripe.Checkout.Session, eventType: Stripe.Event.Type) {
   const supabase = getSupabaseAdmin();
   if (!supabase) throw new Error('Order persistence unavailable');
   const paid = session.payment_status === 'paid';
+  const failed = eventType === 'checkout.session.async_payment_failed';
   const existing = await supabase.from('orders').select('fulfilment_status').eq('stripe_session_id', session.id).maybeSingle();
   if (existing.error) throw existing.error;
   const current = existing.data?.fulfilment_status;
   // Never regress an order already being fulfilled when Stripe retries a webhook.
-  const fulfilment = paid ? (current && !['awaiting_payment','payment_failed'].includes(current) ? current : 'paid') : (current || 'awaiting_payment');
+  const fulfilment = paid
+    ? (current && !['awaiting_payment','payment_failed'].includes(current) ? current : 'paid')
+    : failed
+      ? (current && !['awaiting_payment','payment_failed'].includes(current) ? current : 'payment_failed')
+      : (current || 'awaiting_payment');
   const { error } = await supabase.from('orders').upsert({
     stripe_session_id:session.id, payment_status:session.payment_status,
     customer_name:session.customer_details?.name, email:session.customer_details?.email, phone:session.customer_details?.phone,
@@ -81,8 +86,10 @@ export async function POST(req: Request) {
   if (claimed.error) { console.error('stripe_event_claim_error',claimed.error); return NextResponse.json({error:'Persistence unavailable'},{status:500}); }
 
   try {
-    await persistSession(session);
+    await persistSession(session, event.type);
     if (event.type !== 'checkout.session.async_payment_failed') await sendMetaPurchase(session);
+    const completed = await supabase.from('stripe_events').update({processed_at:new Date().toISOString()}).eq('event_id',event.id);
+    if (completed.error) throw completed.error;
   } catch (error) {
     console.error('stripe_webhook_processing_error',error);
     await supabase.from('stripe_events').delete().eq('event_id',event.id);
