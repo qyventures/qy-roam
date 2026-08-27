@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
+import { applyPromoCents, normalisePromoCode } from '../../../lib/promotions';
 
 export const runtime = 'nodejs';
 
@@ -70,11 +71,14 @@ export async function POST(req: Request) {
   const booked=await bookedInventoryCount(start,end);
   const holds=await activeStripeHolds(stripe,start,end);
   if(booked+holds>=inventory) return NextResponse.json({error:booked>=inventory?'Pocket WiFi is sold out for these dates. Please choose different dates or contact +65 8032 7183.':'Pocket WiFi is currently being reserved by other customers for these dates. Please try again shortly or contact +65 8032 7183.'},{status:409,headers:{'Cache-Control':'no-store'}});
-  const rentalAmount=Math.max(1000,Math.round(daily*days*100)); const courierFee=Math.max(0,Math.round(Number(process.env.COURIER_FEE_SGD||'0')*100));
+  const rentalBeforePromo=Math.max(1000,Math.round(daily*days*100));
+  const promo=applyPromoCents(rentalBeforePromo, body.promoCode);
+  const rentalAmount=promo.amountCents;
+  const courierFee=Math.max(0,Math.round(Number(process.env.COURIER_FEE_SGD||'0')*100));
   const origin=siteOrigin(req);
-  const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[]=[{quantity:1,price_data:{currency:'sgd',unit_amount:rentalAmount,product_data:{name:`QY Roam Pocket WiFi — ${country}`,description:`${start} to ${end} · ${days} day${days===1?'':'s'}`}}}];
+  const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[]=[{quantity:1,price_data:{currency:'sgd',unit_amount:rentalAmount,product_data:{name:`QY Roam Pocket WiFi — ${country}`,description:`${start} to ${end} · ${days} day${days===1?'':'s'}${promo.discountCents>0?` · ${normalisePromoCode(body.promoCode)} applied`:''}`}}}];
   if(courierFee>0) lineItems.push({quantity:1,price_data:{currency:'sgd',unit_amount:courierFee,product_data:{name:'Singapore courier delivery & return handling'}}});
-  const session=await stripe.checkout.sessions.create({mode:'payment',line_items:lineItems,expires_at:Math.floor(Date.now()/1000)+(HOLD_MINUTES*60),billing_address_collection:'required',shipping_address_collection:{allowed_countries:['SG']},phone_number_collection:{enabled:true},customer_creation:'always',success_url:`${origin}/success?session_id={CHECKOUT_SESSION_ID}`,cancel_url:`${origin}/?checkout=cancelled`,metadata:{country,start,end,days:String(days),daily_rate_sgd:daily.toFixed(2),source:'qyroam.com',measurement_consent:body.measurementConsent===true?'accepted':'essential'},consent_collection:{terms_of_service:'required'}});
+  const session=await stripe.checkout.sessions.create({mode:'payment',line_items:lineItems,expires_at:Math.floor(Date.now()/1000)+(HOLD_MINUTES*60),billing_address_collection:'required',shipping_address_collection:{allowed_countries:['SG']},phone_number_collection:{enabled:true},customer_creation:'always',success_url:`${origin}/success?session_id={CHECKOUT_SESSION_ID}`,cancel_url:`${origin}/?checkout=cancelled`,metadata:{country,start,end,days:String(days),daily_rate_sgd:daily.toFixed(2),rental_before_promo_sgd:(rentalBeforePromo/100).toFixed(2),promo_code:promo.promoCode,promo_discount_sgd:(promo.discountCents/100).toFixed(2),source:'qyroam.com',measurement_consent:body.measurementConsent===true?'accepted':'essential'},consent_collection:{terms_of_service:'required'}});
   return NextResponse.json({url:session.url},{headers:{'Cache-Control':'no-store'}});
  } catch(error){ console.error('checkout_error',error); return NextResponse.json({error:'Unable to start checkout.'},{status:500}); }
 }
