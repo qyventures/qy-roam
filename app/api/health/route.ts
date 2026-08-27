@@ -19,14 +19,27 @@ function isProductionSiteUrl(value?: string) {
   }
 }
 
+function hasPrefix(value: string | undefined, prefixes: string[]) {
+  return Boolean(value && prefixes.some((prefix) => value.startsWith(prefix)));
+}
+
+function isStrongAdminPassword(value?: string) {
+  if (!value || value.length < 16) return false;
+  return /[a-z]/.test(value) && /[A-Z]/.test(value) && /\d/.test(value) && /[^A-Za-z0-9]/.test(value);
+}
+
 export async function GET() {
   const checks = {
-    stripe: Boolean(process.env.STRIPE_SECRET_KEY),
-    publishableKey: Boolean(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY),
+    stripe: hasPrefix(process.env.STRIPE_SECRET_KEY, ['sk_live_', 'rk_live_']),
+    publishableKey: hasPrefix(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY, ['pk_live_']),
     siteUrl: isProductionSiteUrl(process.env.NEXT_PUBLIC_SITE_URL),
-    webhook: Boolean(process.env.STRIPE_WEBHOOK_SECRET),
-    supabase: Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY),
-    admin: Boolean(process.env.ADMIN_USER && process.env.ADMIN_PASSWORD),
+    webhook: hasPrefix(process.env.STRIPE_WEBHOOK_SECRET, ['whsec_']),
+    supabase: Boolean(
+      process.env.SUPABASE_URL?.startsWith('https://') &&
+      process.env.SUPABASE_SERVICE_ROLE_KEY &&
+      process.env.SUPABASE_SERVICE_ROLE_KEY.length >= 32,
+    ),
+    admin: Boolean(process.env.ADMIN_USER && isStrongAdminPassword(process.env.ADMIN_PASSWORD)),
     inventory: isPositiveInteger(process.env.POCKET_WIFI_INVENTORY),
     deliveryLeadDays: isPositiveInteger(process.env.MIN_DELIVERY_LEAD_DAYS),
   };
