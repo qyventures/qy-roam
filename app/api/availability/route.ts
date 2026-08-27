@@ -33,8 +33,14 @@ export async function GET(req: NextRequest) {
   const supabaseUrl = process.env.SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
+  // Production availability must never fall back to a guessed fleet count. If the
+  // live order store is not configured, fail closed so customers cannot reserve
+  // inventory we cannot verify.
   if (!supabaseUrl || !serviceKey) {
-    return NextResponse.json({ available: inventory > 0, remaining: inventory, inventoryMode: 'configured' }, { headers: { 'Cache-Control': 'no-store' } });
+    return NextResponse.json(
+      { available: false, remaining: 0, inventoryMode: 'unavailable', error: 'Live availability is not configured yet. Please try again shortly or contact +65 8032 7183.' },
+      { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '30' } }
+    );
   }
 
   const from = start.toISOString().slice(0, 10);
