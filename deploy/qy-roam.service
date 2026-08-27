@@ -8,7 +8,7 @@ User=root
 WorkingDirectory=/root/qy-roam
 EnvironmentFile=/root/.config/qyroam/.env
 Environment=NODE_ENV=production
-Environment=PORT=3000
+Environment=PORT=3100
 ExecStart=/usr/bin/npm run start
 Restart=always
 RestartSec=5
