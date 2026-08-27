@@ -6,6 +6,8 @@ create table if not exists public.orders (
   email text,
   phone text,
   amount_sgd numeric(10,2),
+  product_type text not null default 'pocket_wifi',
+  plan_name text,
   country text,
   travel_start date,
   travel_end date,
@@ -20,6 +22,8 @@ create table if not exists public.orders (
   updated_at timestamptz not null default now()
 );
 
+alter table public.orders add column if not exists product_type text not null default 'pocket_wifi';
+alter table public.orders add column if not exists plan_name text;
 alter table public.orders add column if not exists courier_tracking text;
 alter table public.orders add column if not exists return_tracking text;
 alter table public.orders add column if not exists dispatched_at timestamptz;
@@ -37,6 +41,7 @@ alter table public.stripe_events enable row level security;
 
 -- No client policies: both tables are server/service-role only.
 create index if not exists orders_created_at_idx on public.orders(created_at desc);
+create index if not exists orders_product_type_idx on public.orders(product_type);
 create index if not exists orders_fulfilment_status_idx on public.orders(fulfilment_status);
 create index if not exists orders_travel_start_idx on public.orders(travel_start);
 create index if not exists stripe_events_processed_at_idx on public.stripe_events(processed_at desc);
