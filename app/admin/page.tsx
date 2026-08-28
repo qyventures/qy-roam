@@ -56,6 +56,12 @@ export default async function AdminPage() {
     ? await supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(500)
     : { data: [] as any[] };
   const orders: any[] = result.data ?? [];
+  const notificationResult = supabase
+    ? await supabase.from('fulfilment_notifications').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('updated_at', { ascending: false }).limit(500)
+    : { data: [] as any[] };
+  const notifications: any[] = notificationResult.data ?? [];
+  const notificationBySession = new Map(notifications.map((n:any)=>[n.stripe_session_id,n]));
+  const pendingNotifications = notifications.filter((n:any)=>n.status !== 'sent');
 
   const paid = orders.filter((o:any)=>o.payment_status === 'paid');
   const active = orders.filter((o:any)=>!['closed','cancelled','payment_failed'].includes(o.fulfilment_status));
@@ -125,6 +131,7 @@ export default async function AdminPage() {
           <div style={cardStyle}><small>WiFi dispatch exceptions</small><div style={metricStyle}>{wifiDispatchExceptions.length}</div><small>departing within 2 days / unresolved</small></div>
           <div style={cardStyle}><small>eSIM fulfilment exceptions</small><div style={metricStyle}>{esimExceptions.length}</div><small>departing within 2 days / unresolved</small></div>
           <div style={cardStyle}><small>Overdue WiFi returns</small><div style={metricStyle}>{returnExceptions.length}</div><small>more than 5 days past trip end</small></div>
+          <div style={cardStyle}><small>Ops email exceptions</small><div style={metricStyle}>{pendingNotifications.length}</div><small>paid-order notifications not confirmed sent</small></div>
         </div>
       </section>
     </>}
@@ -133,16 +140,18 @@ export default async function AdminPage() {
       <h2>Orders</h2>
       {supabase && orders.length === 0 && <p>No orders yet.</p>}
       {orders.length > 0 && <div style={{overflowX:'auto',...cardStyle,padding:0}}><table style={{width:'100%',borderCollapse:'collapse',minWidth:920}}>
-        <thead><tr style={{background:'#f8fafc'}}><th align="left" style={{padding:'12px 10px'}}>Order</th><th align="left">Customer</th><th align="left">Product / trip</th><th align="left">Payment</th><th align="left">Amount</th><th align="left">Fulfilment</th></tr></thead>
+        <thead><tr style={{background:'#f8fafc'}}><th align="left" style={{padding:'12px 10px'}}>Order</th><th align="left">Customer</th><th align="left">Product / trip</th><th align="left">Payment</th><th align="left">Amount</th><th align="left">Ops email</th><th align="left">Fulfilment</th></tr></thead>
         <tbody>{orders.map((o:any)=>{
           const flag = tripFlag(o);
           const product = isEsim(o) ? 'eSIM' : 'Pocket WiFi';
+          const notification:any = notificationBySession.get(o.stripe_session_id);
           return <tr key={o.id} style={{borderTop:'1px solid #e5e8ed',verticalAlign:'top'}}>
             <td style={{padding:'14px 10px'}}><strong>{String(o.stripe_session_id || o.id).slice(-10)}</strong><br/><small>{o.created_at ? new Date(o.created_at).toLocaleDateString('en-SG') : ''}</small></td>
             <td style={{padding:'14px 8px'}}>{o.customer_name || '-'}<br/><small>{o.phone || '-'}</small>{o.email && <><br/><small>{o.email}</small></>}</td>
             <td style={{padding:'14px 8px'}}><strong>{product}</strong>{o.plan_name && <><br/><small>{o.plan_name}</small></>}<br/>{o.country || '-'}<br/><small>{o.travel_start || '-'} → {o.travel_end || '-'}</small>{flag && <><br/><small><strong>{flag}</strong></small></>}</td>
             <td style={{padding:'14px 8px'}}>{o.payment_status || '-'}</td>
             <td style={{padding:'14px 8px'}}><strong>{money(o.amount_sgd)}</strong></td>
+            <td style={{padding:'14px 8px'}}>{notification?.status === 'sent' ? '✓ Sent' : notification ? `⚠ ${notification.status}` : o.payment_status === 'paid' ? '⚠ Not recorded' : '-'}{notification?.last_error && <><br/><small>{String(notification.last_error).slice(0,120)}</small></>}</td>
             <td style={{padding:'14px 8px'}}><AdminOrderActions id={o.id} initialStatus={o.fulfilment_status} productType={o.product_type} courierTracking={o.courier_tracking} returnTracking={o.return_tracking}/></td>
           </tr>;
         })}</tbody>
