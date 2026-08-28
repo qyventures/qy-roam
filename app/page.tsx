@@ -2,19 +2,9 @@
 
 import { FormEvent, useMemo, useState } from 'react';
 import { LAUNCH_PROMO, validLaunchPromo } from '../lib/promotions';
+import { WIFI_PLANS } from '../lib/wifiPlans';
 
-const plans = [
-  { country: 'Japan', code: 'JP', daily: 1.84, data: '1GB/day high-speed', note: 'Then managed speed' },
-  { country: 'South Korea', code: 'KR', daily: 1.84, data: '1GB/day high-speed', note: 'Then managed speed' },
-  { country: 'Thailand', code: 'TH', daily: 1.84, data: '1GB/day high-speed', note: 'Then managed speed' },
-  { country: 'Malaysia', code: 'MY', daily: 1.84, data: '1GB/day high-speed', note: 'Then managed speed' },
-  { country: 'Indonesia', code: 'ID', daily: 1.84, data: '1GB/day high-speed', note: 'Then managed speed' },
-  { country: 'Taiwan', code: 'TW', daily: 1.84, data: '1GB/day high-speed', note: 'Then managed speed' },
-  { country: 'Vietnam', code: 'VN', daily: 1.84, data: '1GB/day high-speed', note: 'Then managed speed' },
-  { country: 'Australia', code: 'AU', daily: 3.78, data: '1GB/day high-speed', note: 'Then managed speed' },
-  { country: 'United States', code: 'US', daily: 3.78, data: '1GB/day high-speed', note: 'Then managed speed' },
-  { country: 'United Kingdom', code: 'GB', daily: 3.78, data: '1GB/day high-speed', note: 'Then managed speed' }
-];
+const plans = WIFI_PLANS;
 
 const DELIVERY_LEAD_DAYS = 2;
 type Availability = { available: boolean; remaining?: number; error?: string };

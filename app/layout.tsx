@@ -26,9 +26,18 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  const schema = {
+    '@context': 'https://schema.org',
+    '@graph': [
+      { '@type':'Organization', name:'QY Venture Pte. Ltd.', url:'https://qyroam.com', telephone:'+65 8032 7183', address:{'@type':'PostalAddress',addressCountry:'SG'} },
+      { '@type':'WebSite', name:'QY Roam', url:'https://qyroam.com' },
+      { '@type':'Service', name:'QY Roam Travel Connectivity', serviceType:'Travel eSIM and Pocket WiFi rental', provider:{'@type':'Organization',name:'QY Venture Pte. Ltd.'}, areaServed:'Singapore', url:'https://qyroam.com' }
+    ]
+  };
   return (
     <html lang="en">
       <body>
+        <script type="application/ld+json" dangerouslySetInnerHTML={{__html: JSON.stringify(schema)}} />
         <header className="site-header">
           <div className="wrap header-inner">
             <a href="/" className="brand">QY Roam</a>
