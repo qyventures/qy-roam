@@ -9,6 +9,8 @@ const MAX_BODY_BYTES=4096;
 const WINDOW_MS=60_000;
 const MAX_ATTEMPTS=12;
 const HOLD_MINUTES=30;
+const QY_OPS_URL='https://cqyhqbzrgkckalbowhrx.supabase.co';
+const QY_OPS_ANON='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNxeWhxYnpyZ2tja2FsYm93aHJ4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc4OTI0NDIsImV4cCI6MjEwMzQ2ODQ0Mn0.rzPO2wUxnGc37RTMdtsc9Mo9UE5F5RcIkOJkBke6dR4';
 const attempts=new Map<string,{count:number;reset:number}>();
 
 function parseDate(value: unknown) { const text=String(value||''); if(!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null; const date=new Date(`${text}T00:00:00Z`); return Number.isNaN(date.getTime())?null:date; }
@@ -28,17 +30,24 @@ function limited(req: Request) {
 }
 async function bookedInventoryCount(start:string,end:string) {
   const supabaseUrl=process.env.SUPABASE_URL, serviceKey=process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if(!supabaseUrl||!serviceKey) throw new Error('Live inventory store is not configured');
-  const url=new URL('/rest/v1/orders',supabaseUrl);
-  url.searchParams.set('select','id');
-  url.searchParams.set('product_type','eq.pocket_wifi');
-  url.searchParams.set('travel_start',`lte.${end}`);
-  url.searchParams.set('travel_end',`gte.${start}`);
-  url.searchParams.set('fulfilment_status','not.in.(cancelled,payment_failed,closed)');
-  const res=await fetch(url,{headers:{apikey:serviceKey,Authorization:`Bearer ${serviceKey}`},cache:'no-store'});
-  if(!res.ok) throw new Error(`Inventory lookup failed (${res.status})`);
-  const rows=(await res.json()) as unknown[];
-  return rows.length;
+  if(supabaseUrl&&serviceKey){
+    const url=new URL('/rest/v1/orders',supabaseUrl);
+    url.searchParams.set('select','id');
+    url.searchParams.set('product_type','eq.pocket_wifi');
+    url.searchParams.set('payment_status','eq.paid');
+    url.searchParams.set('travel_start',`lte.${end}`);
+    url.searchParams.set('travel_end',`gte.${start}`);
+    url.searchParams.set('fulfilment_status','not.in.(cancelled,payment_failed,closed)');
+    const res=await fetch(url,{headers:{apikey:serviceKey,Authorization:`Bearer ${serviceKey}`},cache:'no-store'});
+    if(!res.ok) throw new Error(`Inventory lookup failed (${res.status})`);
+    return ((await res.json()) as unknown[]).length;
+  }
+  const edge=new URL('/functions/v1/qy-roam-availability',QY_OPS_URL);
+  edge.searchParams.set('start',start); edge.searchParams.set('end',end);
+  const res=await fetch(edge,{headers:{apikey:QY_OPS_ANON,Authorization:`Bearer ${QY_OPS_ANON}`},cache:'no-store'});
+  if(!res.ok) throw new Error(`QY Ops inventory lookup failed (${res.status})`);
+  const body=(await res.json()) as {committed?:number};
+  return Math.max(0,Number(body.committed||0));
 }
 async function activeStripeHolds(stripe:Stripe,start:string,end:string) {
   const sessions=await stripe.checkout.sessions.list({status:'open',limit:100});
@@ -57,7 +66,6 @@ export async function POST(req: Request) {
   const type=req.headers.get('content-type')||''; if(!type.toLowerCase().startsWith('application/json')) return NextResponse.json({error:'Expected JSON request.'},{status:415});
   const length=Number(req.headers.get('content-length')||0); if(length>MAX_BODY_BYTES) return NextResponse.json({error:'Request too large.'},{status:413});
   const key=process.env.STRIPE_SECRET_KEY; if(!key) return NextResponse.json({error:'Payment configuration incomplete.'},{status:503});
-  if(!process.env.SUPABASE_URL||!process.env.SUPABASE_SERVICE_ROLE_KEY) return NextResponse.json({error:'Live inventory is not configured yet. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
   const raw=await req.text(); if(new TextEncoder().encode(raw).length>MAX_BODY_BYTES) return NextResponse.json({error:'Request too large.'},{status:413});
   let body:Record<string,unknown>; try { body=JSON.parse(raw); } catch { return NextResponse.json({error:'Invalid request.'},{status:400}); }
   const country=String(body.country||''); const wifiPlan=getWifiPlan(country); const daily=wifiPlan?.daily; const startDate=parseDate(body.start); const endDate=parseDate(body.end);
