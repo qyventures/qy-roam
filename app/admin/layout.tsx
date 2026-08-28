@@ -8,6 +8,7 @@ const items = [
   ['Reports','/admin/reports'],
   ['Forecasting','/admin/forecasting'],
   ['Closing','/admin/closing'],
+  ['Launch','/admin/launch'],
 ];
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
