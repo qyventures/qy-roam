@@ -14,7 +14,23 @@ export async function POST(req: NextRequest) {
   const action = text(body.action, 60);
 
   try {
-    if (action === 'inventory_create') {
+    if (action === 'order_create') {
+      const product = text(body.product_type, 40) || 'pocket_wifi';
+      const now = Date.now();
+      const row = {
+        stripe_session_id: `manual_${now}_${Math.random().toString(36).slice(2,8)}`,
+        payment_status: text(body.payment_status, 40) || 'paid', customer_name: text(body.customer_name, 120) || null,
+        email: text(body.email, 200).toLowerCase() || null, phone: text(body.phone, 60) || null,
+        amount_sgd: Math.max(0, num(body.amount_sgd)), product_type: product, plan_name: text(body.plan_name, 160) || null,
+        country: text(body.country, 120) || null, travel_start: body.travel_start || null, travel_end: body.travel_end || null,
+        fulfilment_status: text(body.fulfilment_status, 40) || (product === 'esim' ? 'pending_fulfilment' : 'pending_dispatch'),
+        notes: `Manual order${text(body.notes, 1500) ? ` · ${text(body.notes,1500)}` : ''}`,
+        updated_at: new Date().toISOString()
+      };
+      if (!row.email && !row.phone) return NextResponse.json({ error: 'Customer email or phone is required' }, { status: 400 });
+      if (row.amount_sgd <= 0) return NextResponse.json({ error: 'Order amount must be greater than zero' }, { status: 400 });
+      const { error } = await db.from('orders').insert(row); if (error) throw error;
+    } else if (action === 'inventory_create') {
       const row = {
         sku: text(body.sku, 80), name: text(body.name, 120), product_type: text(body.product_type, 40) || 'pocket_wifi',
         serial_no: text(body.serial_no, 120) || null, status: text(body.status, 40) || 'available',
