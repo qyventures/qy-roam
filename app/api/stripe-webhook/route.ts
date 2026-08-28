@@ -23,7 +23,7 @@ async function sendMetaPurchase(session: Stripe.Checkout.Session) {
 
 async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
   if(session.payment_status!=='paid') return;
-  const host=process.env.SMTP_HOST, port=Number(process.env.SMTP_PORT||'587'), secure=process.env.SMTP_SECURE==='true'||port===465, user=process.env.SMTP_USER, pass=process.env.SMTP_PASS, from=process.env.SMTP_FROM||user, to=process.env.ORDER_FULFILMENT_EMAIL||'enquiries@sgsimshop.com';
+  const host=process.env.SMTP_HOST, port=Number(process.env.SMTP_PORT||'587'), secure=process.env.SMTP_SECURE==='true'||port===465, user=process.env.SMTP_USER, pass=process.env.SMTP_PASS, from=process.env.SMTP_FROM||user, to=process.env.ORDER_FULFILMENT_EMAIL||'qyventures@gmail.com';
   if(!host||!user||!pass||!from) throw new Error('SMTP fulfilment email is not configured');
   const productType=session.metadata?.product_type||'pocket_wifi', isEsim=productType==='esim', destination=session.metadata?.country||'', planName=session.metadata?.plan_name||'', start=session.metadata?.start||'', end=session.metadata?.end||'', customer=session.customer_details, amount=((session.amount_total||0)/100).toFixed(2), shipping=session.shipping_details?.address;
   const shippingText=shipping?[shipping.line1,shipping.line2,shipping.city,shipping.state,shipping.postal_code,shipping.country].filter(Boolean).join(', '):'Not applicable / not supplied';
