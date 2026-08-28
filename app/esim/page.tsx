@@ -4,8 +4,8 @@ import { useMemo, useState } from 'react';
 import { ESIM_PLANS, ESIM_PROMO } from '../../lib/esimPlans';
 
 export default function EsimPage() {
-  const [planId, setPlanId] = useState(ESIM_PLANS[0].id);
-  const [promoCode, setPromoCode] = useState(ESIM_PROMO.code);
+  const [planId, setPlanId] = useState<string>(ESIM_PLANS[0].id);
+  const [promoCode, setPromoCode] = useState<string>(ESIM_PROMO.code);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const plan = useMemo(() => ESIM_PLANS.find((item) => item.id === planId) || ESIM_PLANS[0], [planId]);

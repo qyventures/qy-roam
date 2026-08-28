@@ -38,7 +38,7 @@ export default function Home() {
   const [country, setCountry] = useState('Japan');
   const [start, setStart] = useState(earliestStart);
   const [end, setEnd] = useState(earliestStart);
-  const [promoCode, setPromoCode] = useState(LAUNCH_PROMO.code);
+  const [promoCode, setPromoCode] = useState<string>(LAUNCH_PROMO.code);
   const [searched, setSearched] = useState(false);
   const [availability, setAvailability] = useState<Availability | null>(null);
   const [checking, setChecking] = useState(false);
