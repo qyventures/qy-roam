@@ -81,7 +81,7 @@ export default async function AdminPage() {
           <td style={{padding:'14px 8px'}}>{o.customer_name}<br/><small>{o.phone}</small>{o.email && <><br/><small>{o.email}</small></>}</td>
           <td style={{padding:'14px 8px'}}><strong>{product}</strong>{o.plan_name && <><br/><small>{o.plan_name}</small></>}<br/>{o.country}<br/><small>{o.travel_start} → {o.travel_end}</small>{flag && <><br/><small><strong>{flag}</strong></small></>}</td>
           <td style={{padding:'14px 8px'}}>S${Number(o.amount_sgd).toFixed(2)}</td>
-          <td style={{padding:'14px 8px'}}><AdminOrderActions id={o.id} initialStatus={o.fulfilment_status} courierTracking={o.courier_tracking} returnTracking={o.return_tracking}/></td>
+          <td style={{padding:'14px 8px'}}><AdminOrderActions id={o.id} initialStatus={o.fulfilment_status} productType={o.product_type} courierTracking={o.courier_tracking} returnTracking={o.return_tracking}/></td>
         </tr>;
       })}</tbody>
     </table></div>}
