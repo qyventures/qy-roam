@@ -31,7 +31,7 @@ alter table public.orders add column if not exists returned_at timestamptz;
 alter table public.orders add column if not exists notes text;
 alter table public.orders enable row level security;
 
--- Webhook idempotency ledger: Stripe may retry the same event multiple times.
+-- Stripe event idempotency ledger: Stripe may retry the same event multiple times.
 create table if not exists public.stripe_events (
   event_id text primary key,
   event_type text not null,
@@ -39,9 +39,26 @@ create table if not exists public.stripe_events (
 );
 alter table public.stripe_events enable row level security;
 
--- No client policies: both tables are server/service-role only.
+-- Durable human-fulfilment notification ledger. One row per paid checkout.
+-- The webhook records pending before SMTP and sent after SMTP succeeds. Failed
+-- sends stay retryable without coupling the notification state to Stripe's
+-- event-level idempotency record.
+create table if not exists public.fulfilment_notifications (
+  stripe_session_id text primary key,
+  status text not null default 'pending' check (status in ('pending','sending','sent')),
+  attempts integer not null default 0,
+  last_attempt_at timestamptz,
+  sent_at timestamptz,
+  last_error text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+alter table public.fulfilment_notifications enable row level security;
+
+-- No client policies: all operational tables are server/service-role only.
 create index if not exists orders_created_at_idx on public.orders(created_at desc);
 create index if not exists orders_product_type_idx on public.orders(product_type);
 create index if not exists orders_fulfilment_status_idx on public.orders(fulfilment_status);
 create index if not exists orders_travel_start_idx on public.orders(travel_start);
 create index if not exists stripe_events_processed_at_idx on public.stripe_events(processed_at desc);
+create index if not exists fulfilment_notifications_status_idx on public.fulfilment_notifications(status, updated_at);
