@@ -41,6 +41,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <header className="site-header">
           <div className="wrap header-inner">
             <a href="/" className="brand">QY Roam</a>
+            <div className="mobile-product-nav"><a href="/esim">eSIM</a><a href="/#plans">Pocket WiFi</a></div>
             <nav>
               <a href="/esim">eSIM</a>
               <a href="/#plans">Pocket WiFi</a>
