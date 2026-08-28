@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { ESIM_PLANS, ESIM_PROMO } from '../../lib/esimPlans';
+import { trackMeta } from '../../lib/metaClient';
 
 export default function EsimPage() {
   const [planId, setPlanId] = useState<string>(ESIM_PLANS[0].id);
@@ -15,6 +16,15 @@ export default function EsimPage() {
     setError('');
     try {
       const measurementConsent = localStorage.getItem('qyroam_consent') === 'accepted';
+      if (measurementConsent) trackMeta('InitiateCheckout', {
+        content_name: `${plan.destination} Travel eSIM`,
+        content_category: 'Travel eSIM',
+        content_ids: [plan.id],
+        content_type: 'product',
+        value: Number(plan.qyPriceSgd.toFixed(2)),
+        currency: 'SGD',
+        num_items: 1
+      });
       const res = await fetch('/api/esim-checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

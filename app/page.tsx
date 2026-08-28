@@ -3,6 +3,7 @@
 import { FormEvent, useMemo, useState } from 'react';
 import { LAUNCH_PROMO, validLaunchPromo } from '../lib/promotions';
 import { WIFI_PLANS } from '../lib/wifiPlans';
+import { trackMeta } from '../lib/metaClient';
 
 const plans = WIFI_PLANS;
 
@@ -77,6 +78,15 @@ export default function Home() {
     let currentAvailability = availability;
     if (!currentAvailability?.available) { currentAvailability = await checkAvailability(); if (!currentAvailability.available) return; }
     const measurementConsent = localStorage.getItem('qyroam_consent') === 'accepted';
+    if (measurementConsent) trackMeta('InitiateCheckout', {
+      content_name: `${country} Pocket WiFi`,
+      content_category: 'Pocket WiFi',
+      content_ids: [plan.code],
+      content_type: 'product',
+      value: Number(subtotal.toFixed(2)),
+      currency: 'SGD',
+      num_items: 1
+    });
     try {
       const res = await fetch('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ country, start, end, promoCode, measurementConsent }) });
       const data = await res.json();
