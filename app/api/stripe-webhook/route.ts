@@ -50,6 +50,32 @@ async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string
   return true;
 }
 
+async function deliverFulfilmentNotification(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session){
+  const existing=await supabase.from('fulfilment_notifications').select('status').eq('stripe_session_id',session.id).maybeSingle();
+  if(existing.error) throw existing.error;
+  if(existing.data?.status==='sent') return;
+  if(!existing.data){
+    const created=await supabase.from('fulfilment_notifications').insert({stripe_session_id:session.id,status:'pending'});
+    if(created.error?.code!=='23505'&&created.error) throw created.error;
+    if(created.error?.code==='23505'){
+      const raced=await supabase.from('fulfilment_notifications').select('status').eq('stripe_session_id',session.id).single();
+      if(raced.error) throw raced.error;
+      if(raced.data?.status==='sent') return;
+    }
+  }
+  const attempt=await supabase.from('fulfilment_notifications').update({status:'sending',last_attempt_at:new Date().toISOString(),last_error:null,updated_at:new Date().toISOString()}).eq('stripe_session_id',session.id).neq('status','sent');
+  if(attempt.error) throw attempt.error;
+  try{
+    await sendHumanFulfilmentEmail(session);
+    const sent=await supabase.from('fulfilment_notifications').update({status:'sent',sent_at:new Date().toISOString(),updated_at:new Date().toISOString()}).eq('stripe_session_id',session.id);
+    if(sent.error) throw sent.error;
+  }catch(error){
+    const message=error instanceof Error?error.message:'SMTP delivery failed';
+    await supabase.from('fulfilment_notifications').update({status:'pending',last_error:message.slice(0,500),updated_at:new Date().toISOString()}).eq('stripe_session_id',session.id);
+    throw error;
+  }
+}
+
 export async function POST(req:Request){
   const key=process.env.STRIPE_SECRET_KEY,webhookSecret=process.env.STRIPE_WEBHOOK_SECRET; if(!key||!webhookSecret) return NextResponse.json({error:'Webhook configuration incomplete'},{status:503});
   const stripe=new Stripe(key,{apiVersion:'2024-06-20'}); let event:Stripe.Event;
@@ -61,11 +87,7 @@ export async function POST(req:Request){
     if(!(await claimOnce(supabase,eventClaimId,event.type))) return NextResponse.json({received:true,duplicate:true});
     await persistSession(session,event.type);
     if(event.type!=='checkout.session.async_payment_failed'&&session.payment_status==='paid'){
-      const fulfilmentClaimId=`fulfilment:${session.id}`;
-      if(await claimOnce(supabase,fulfilmentClaimId,'fulfilment.notification')){
-        try{await sendHumanFulfilmentEmail(session);}
-        catch(error){await supabase.from('stripe_events').delete().eq('event_id',fulfilmentClaimId);throw error;}
-      }
+      await deliverFulfilmentNotification(supabase,session);
       await sendMetaPurchase(session);
     }
     const completed=await supabase.from('stripe_events').update({processed_at:new Date().toISOString()}).eq('event_id',eventClaimId);if(completed.error)throw completed.error;
