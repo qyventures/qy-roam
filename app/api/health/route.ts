@@ -33,14 +33,28 @@ function isSmtpConfigured() {
   return Boolean(
     process.env.SMTP_HOST &&
     Number.isInteger(port) && port > 0 && port <= 65535 &&
-    process.env.SMTP_USER &&
-    process.env.SMTP_PASS &&
-    process.env.SMTP_FROM &&
+    process.env.SMTP_USER && process.env.SMTP_PASS && process.env.SMTP_FROM &&
     (process.env.ORDER_FULFILMENT_EMAIL || 'enquiries@sgsimshop.com').includes('@')
   );
 }
 
-export async function GET() {
+function constantTimeEqual(a: string, b: string) {
+  const encoder = new TextEncoder();
+  const left = encoder.encode(a), right = encoder.encode(b);
+  let diff = left.length ^ right.length;
+  const length = Math.max(left.length, right.length);
+  for (let i = 0; i < length; i += 1) diff |= (left[i % Math.max(left.length, 1)] || 0) ^ (right[i % Math.max(right.length, 1)] || 0);
+  return diff === 0;
+}
+
+function isAuthorized(req: Request) {
+  const expected = process.env.HEALTH_CHECK_TOKEN;
+  if (!expected || expected.length < 24) return false;
+  const supplied = req.headers.get('authorization');
+  return Boolean(supplied?.startsWith('Bearer ') && constantTimeEqual(supplied.slice(7), expected));
+}
+
+export async function GET(req: Request) {
   const adminUser = process.env.ADMIN_USER || process.env.ADMIN_BASIC_USER;
   const adminPassword = process.env.ADMIN_PASSWORD || process.env.ADMIN_BASIC_PASSWORD;
   const checks = {
@@ -48,38 +62,21 @@ export async function GET() {
     publishableKey: hasPrefix(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY, ['pk_live_']),
     siteUrl: isProductionSiteUrl(process.env.NEXT_PUBLIC_SITE_URL),
     webhook: hasPrefix(process.env.STRIPE_WEBHOOK_SECRET, ['whsec_']),
-    supabase: Boolean(
-      process.env.SUPABASE_URL?.startsWith('https://') &&
-      process.env.SUPABASE_SERVICE_ROLE_KEY &&
-      process.env.SUPABASE_SERVICE_ROLE_KEY.length >= 32,
-    ),
+    supabase: Boolean(process.env.SUPABASE_URL?.startsWith('https://') && process.env.SUPABASE_SERVICE_ROLE_KEY && process.env.SUPABASE_SERVICE_ROLE_KEY.length >= 32),
     admin: Boolean(adminUser && isStrongAdminPassword(adminPassword)),
     inventory: isPositiveInteger(process.env.POCKET_WIFI_INVENTORY),
     deliveryLeadDays: isPositiveInteger(process.env.MIN_DELIVERY_LEAD_DAYS),
     fulfilmentEmail: isSmtpConfigured(),
   };
-
   const coreReady = checks.stripe && checks.publishableKey && checks.siteUrl;
   const launchReady = Object.values(checks).every(Boolean);
-  const missing = Object.entries(checks)
-    .filter(([, configured]) => !configured)
-    .map(([name]) => name);
+  const headers = { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' };
 
-  return NextResponse.json(
-    {
-      ok: coreReady,
-      launchReady,
-      service: 'qy-roam',
-      checks,
-      missing,
-      timestamp: new Date().toISOString(),
-    },
-    {
-      status: coreReady ? 200 : 503,
-      headers: {
-        'Cache-Control': 'no-store',
-        'X-Robots-Tag': 'noindex, nofollow',
-      },
-    },
-  );
+  // Public probes get only liveness. Configuration names/status are deliberately private.
+  if (!isAuthorized(req)) {
+    return NextResponse.json({ ok: true, service: 'qy-roam' }, { status: 200, headers });
+  }
+
+  const missing = Object.entries(checks).filter(([, configured]) => !configured).map(([name]) => name);
+  return NextResponse.json({ ok: coreReady, launchReady, service: 'qy-roam', checks, missing, timestamp: new Date().toISOString() }, { status: coreReady ? 200 : 503, headers });
 }
