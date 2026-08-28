@@ -2,6 +2,7 @@ import Link from 'next/link';
 
 const items = [
   ['Sales Orders','/admin'],
+  ['New Order','/admin/manual-order'],
   ['Inventory','/admin/inventory'],
   ['CRM','/admin/crm'],
   ['Reports','/admin/reports'],
