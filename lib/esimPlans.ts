@@ -5,6 +5,8 @@ export type EsimPlan = {
   data: string;
   benchmarkPriceSgd: number;
   qyPriceSgd: number;
+  benchmarkSource: 'Changi Recommends';
+  benchmarkVerifiedOn: string;
   note: string;
 };
 
@@ -19,6 +21,8 @@ function discounted(price: number) {
   return Math.floor(price * 0.85 * 100) / 100;
 }
 
+// Server-authoritative catalogue. Do not add or reprice a plan unless its
+// like-for-like Changi Recommends public benchmark has been freshly verified.
 export const ESIM_PLANS: EsimPlan[] = [
   {
     id: 'jp-10d-500mb-daily',
@@ -27,6 +31,8 @@ export const ESIM_PLANS: EsimPlan[] = [
     data: '500MB high-speed daily, then unlimited managed speed',
     benchmarkPriceSgd: 5.67,
     qyPriceSgd: discounted(5.67),
+    benchmarkSource: 'Changi Recommends',
+    benchmarkVerifiedOn: '2026-08-29',
     note: 'Hotspot/tethering supported'
   },
   {
@@ -36,6 +42,8 @@ export const ESIM_PLANS: EsimPlan[] = [
     data: 'Unlimited 4G data',
     benchmarkPriceSgd: 13.0,
     qyPriceSgd: discounted(13.0),
+    benchmarkSource: 'Changi Recommends',
+    benchmarkVerifiedOn: '2026-08-29',
     note: 'Hotspot/tethering supported'
   },
   {
@@ -45,6 +53,8 @@ export const ESIM_PLANS: EsimPlan[] = [
     data: '5GB high-speed total, then unlimited managed speed',
     benchmarkPriceSgd: 15.0,
     qyPriceSgd: discounted(15.0),
+    benchmarkSource: 'Changi Recommends',
+    benchmarkVerifiedOn: '2026-08-29',
     note: 'Hotspot/tethering supported'
   },
   {
@@ -54,6 +64,8 @@ export const ESIM_PLANS: EsimPlan[] = [
     data: '3GB high-speed total, then unlimited managed speed',
     benchmarkPriceSgd: 10.54,
     qyPriceSgd: discounted(10.54),
+    benchmarkSource: 'Changi Recommends',
+    benchmarkVerifiedOn: '2026-08-29',
     note: 'Reloadable plan benchmark'
   },
   {
@@ -63,6 +75,8 @@ export const ESIM_PLANS: EsimPlan[] = [
     data: '20GB high-speed total, then unlimited managed speed',
     benchmarkPriceSgd: 36.9,
     qyPriceSgd: discounted(36.9),
+    benchmarkSource: 'Changi Recommends',
+    benchmarkVerifiedOn: '2026-08-29',
     note: 'Hotspot/tethering supported'
   }
 ];
