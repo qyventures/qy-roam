@@ -12,7 +12,7 @@ function normalizePhone(value?: string | null) { if (!value) return undefined; c
 
 async function sendMetaPurchase(session: Stripe.Checkout.Session) {
   if (session.payment_status !== 'paid' || session.metadata?.measurement_consent !== 'accepted') return;
-  const token=process.env.META_CAPI_TOKEN, pixel=process.env.NEXT_PUBLIC_META_PIXEL_ID;
+  const token=(process.env.META_CAPI_ACCESS_TOKEN || process.env.META_CAPI_TOKEN), pixel=process.env.NEXT_PUBLIC_META_PIXEL_ID;
   if (!token || !pixel) return;
   const email=normalizeEmail(session.customer_details?.email), phone=normalizePhone(session.customer_details?.phone);
   const userData:Record<string,string[]>={}; if(email) userData.em=[sha256(email)!]; if(phone) userData.ph=[sha256(phone)!];
