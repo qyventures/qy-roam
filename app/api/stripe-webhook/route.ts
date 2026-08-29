@@ -23,12 +23,18 @@ async function sendMetaPurchase(session: Stripe.Checkout.Session) {
 
 async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
   if(session.payment_status!=='paid') return;
-  const host=process.env.SMTP_HOST, port=Number(process.env.SMTP_PORT||'587'), secure=process.env.SMTP_SECURE==='true'||port===465, user=process.env.SMTP_USER, pass=process.env.SMTP_PASS, from=process.env.SMTP_FROM||user, to=process.env.ORDER_FULFILMENT_EMAIL||'qyventures@gmail.com';
+  const host=process.env.SMTP_HOST, port=Number(process.env.SMTP_PORT||'587'), secure=process.env.SMTP_SECURE==='true'||port===465, user=process.env.SMTP_USER, pass=process.env.SMTP_PASS, from=process.env.SMTP_FROM||user, to=process.env.ORDER_FULFILMENT_EMAIL||process.env.FULFILMENT_TO||'enquiries@sgsimshop.com';
   if(!host||!user||!pass||!from) throw new Error('SMTP fulfilment email is not configured');
   const productType=session.metadata?.product_type||'pocket_wifi', isEsim=productType==='esim', destination=session.metadata?.country||'', planName=session.metadata?.plan_name||'', start=session.metadata?.start||'', end=session.metadata?.end||'', customer=session.customer_details, amount=((session.amount_total||0)/100).toFixed(2), shipping=session.shipping_details?.address;
   const shippingText=shipping?[shipping.line1,shipping.line2,shipping.city,shipping.state,shipping.postal_code,shipping.country].filter(Boolean).join(', '):'Not applicable / not supplied';
   const subject=`[QY Roam] Paid ${isEsim?'eSIM':'Pocket WiFi'} order — ${destination||planName||session.id}`;
   const text=['A paid QY Roam order requires human fulfilment.','',`Order reference: ${session.id}`,`Product: ${isEsim?'Travel eSIM':'Pocket WiFi'}`,`Destination: ${destination||'-'}`,`Plan: ${planName||'-'}`,`Travel dates: ${start||'-'}${end?` to ${end}`:''}`,`Amount paid: S$${amount}`,`Promo code: ${session.metadata?.promo_code||'-'}`,'',`Customer name: ${customer?.name||'-'}`,`Email: ${customer?.email||'-'}`,`Phone: ${customer?.phone||'-'}`,`Delivery address: ${shippingText}`,'',isEsim?'Action: Please process the eSIM manually and send the QR code / activation instructions to the customer.':'Action: Please prepare and fulfil the Pocket WiFi order according to the travel dates and delivery details.','','Customer support: +65 8032 7183'].join('\n');
+  const relayUrl=process.env.SMTP_RELAY_URL, relaySecret=process.env.SMTP_RELAY_SECRET;
+  if(relayUrl&&relaySecret){
+    const response=await fetch(relayUrl,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({relay_secret:relaySecret,smtp_host:host,smtp_port:port,smtp_user:user,smtp_pass:pass,from,to,subject,text})});
+    if(!response.ok) throw new Error(`SMTP relay failed (${response.status}): ${(await response.text()).slice(0,300)}`);
+    return;
+  }
   await sendSmtpMail({host,port,secure,user,pass,from,to,subject,text});
 }
 
