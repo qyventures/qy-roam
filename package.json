@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "node .next/standalone/server.js",
-    "lint": "next lint"
+    "lint": "next lint",
+    "check:esim-pricing": "node scripts/check-esim-pricing.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",
