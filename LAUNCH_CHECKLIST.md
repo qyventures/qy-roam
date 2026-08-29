@@ -38,10 +38,12 @@ bash deploy/deploy.sh
 
 Expected result: optimized Next.js build succeeds, `qy-roam` restarts, and the local health endpoint responds.
 
+The production service is intentionally bound to **port 3002** on the VPS. Port 3000 is used by another application, so do not use it for QY Roam health checks.
+
 Check manually if needed:
 
 ```bash
-curl -sS http://127.0.0.1:3000/api/health
+curl -sS http://127.0.0.1:3002/api/health
 systemctl status qy-roam --no-pager
 journalctl -u qy-roam -n 100 --no-pager
 ```
