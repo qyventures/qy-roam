@@ -30,12 +30,21 @@ function isStrongAdminPassword(value?: string) {
 
 function isSmtpConfigured() {
   const port = Number(process.env.SMTP_PORT || '587');
+  const recipient = process.env.ORDER_FULFILMENT_EMAIL || 'qyventures@gmail.com';
   return Boolean(
     process.env.SMTP_HOST &&
     Number.isInteger(port) && port > 0 && port <= 65535 &&
     process.env.SMTP_USER && process.env.SMTP_PASS && process.env.SMTP_FROM &&
-    (process.env.ORDER_FULFILMENT_EMAIL || 'enquiries@sgsimshop.com').includes('@')
+    recipient.includes('@')
   );
+}
+
+function isMetaPixelConfigured() {
+  return /^\d{6,25}$/.test(process.env.NEXT_PUBLIC_META_PIXEL_ID || '');
+}
+
+function isMetaCapiConfigured() {
+  return Boolean(process.env.META_CAPI_ACCESS_TOKEN && process.env.META_CAPI_ACCESS_TOKEN.length >= 20);
 }
 
 function constantTimeEqual(a: string, b: string) {
@@ -68,8 +77,13 @@ export async function GET(req: Request) {
     deliveryLeadDays: isPositiveInteger(process.env.MIN_DELIVERY_LEAD_DAYS),
     fulfilmentEmail: isSmtpConfigured(),
   };
+  const paidAcquisitionChecks = {
+    metaPixel: isMetaPixelConfigured(),
+    metaCapi: isMetaCapiConfigured(),
+  };
   const coreReady = checks.stripe && checks.publishableKey && checks.siteUrl;
   const launchReady = Object.values(checks).every(Boolean);
+  const paidAcquisitionReady = launchReady && Object.values(paidAcquisitionChecks).every(Boolean);
   const headers = { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' };
 
   // Public probes get only liveness. Configuration names/status are deliberately private.
@@ -78,5 +92,18 @@ export async function GET(req: Request) {
   }
 
   const missing = Object.entries(checks).filter(([, configured]) => !configured).map(([name]) => name);
-  return NextResponse.json({ ok: coreReady, launchReady, service: 'qy-roam', checks, missing, timestamp: new Date().toISOString() }, { status: coreReady ? 200 : 503, headers });
+  const paidAcquisitionMissing = Object.entries(paidAcquisitionChecks)
+    .filter(([, configured]) => !configured)
+    .map(([name]) => name);
+  return NextResponse.json({
+    ok: coreReady,
+    launchReady,
+    paidAcquisitionReady,
+    service: 'qy-roam',
+    checks,
+    paidAcquisitionChecks,
+    missing,
+    paidAcquisitionMissing,
+    timestamp: new Date().toISOString()
+  }, { status: coreReady ? 200 : 503, headers });
 }
