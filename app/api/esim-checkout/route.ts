@@ -52,6 +52,8 @@ export async function POST(req: Request) {
       billing_address_collection: 'required',
       phone_number_collection: { enabled: true },
       customer_creation: 'always',
+      // Digital eSIM fulfilment must never request or depend on courier/shipping data.
+      // product_type is set explicitly below so the webhook cannot consume router stock.
       success_url: `${origin}/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${origin}/esim?checkout=cancelled`,
       metadata: {
