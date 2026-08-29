@@ -50,14 +50,23 @@ async function bookedInventoryCount(start:string,end:string) {
   return Math.max(0,Number(body.committed||0));
 }
 async function activeStripeHolds(stripe:Stripe,start:string,end:string) {
-  const sessions=await stripe.checkout.sessions.list({status:'open',limit:100});
   const cutoff=Math.floor(Date.now()/1000)-(HOLD_MINUTES*60);
-  return sessions.data.filter(session=>{
-    if(session.created<cutoff||session.metadata?.source!=='qyroam.com') return false;
-    if(session.metadata?.product_type && session.metadata.product_type!=='pocket_wifi') return false;
-    const holdStart=session.metadata?.start, holdEnd=session.metadata?.end;
-    return Boolean(holdStart&&holdEnd&&holdStart<=end&&holdEnd>=start);
-  }).length;
+  let startingAfter:string|undefined;
+  let holds=0;
+  // Match the availability endpoint's pagination so checkout cannot oversell when
+  // Stripe has more than 100 open sessions during a busy launch period.
+  for(let page=0;page<5;page+=1){
+    const sessions=await stripe.checkout.sessions.list({status:'open',limit:100,...(startingAfter?{starting_after:startingAfter}:{})});
+    for(const session of sessions.data){
+      if(session.created<cutoff||session.metadata?.source!=='qyroam.com') continue;
+      if(session.metadata?.product_type && session.metadata.product_type!=='pocket_wifi') continue;
+      const holdStart=session.metadata?.start, holdEnd=session.metadata?.end;
+      if(holdStart&&holdEnd&&holdStart<=end&&holdEnd>=start) holds+=1;
+    }
+    if(!sessions.has_more||sessions.data.length===0) break;
+    startingAfter=sessions.data[sessions.data.length-1].id;
+  }
+  return holds;
 }
 
 export async function POST(req: Request) {
