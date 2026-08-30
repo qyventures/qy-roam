@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
+import { initialFulfilmentStatus, validFulfilmentStatus } from '@/lib/orderLifecycle';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,14 +17,18 @@ export async function POST(req: NextRequest) {
   try {
     if (action === 'order_create') {
       const product = text(body.product_type, 40) || 'pocket_wifi';
+      if (product !== 'pocket_wifi' && product !== 'esim') return NextResponse.json({ error: 'Invalid product type' }, { status: 400 });
+      const paymentStatus = text(body.payment_status, 40) || 'paid';
+      const requestedStatus = text(body.fulfilment_status, 40);
+      if (requestedStatus && !validFulfilmentStatus(product, requestedStatus)) return NextResponse.json({ error: 'Invalid fulfilment status for this product' }, { status: 400 });
       const now = Date.now();
       const row = {
         stripe_session_id: `manual_${now}_${Math.random().toString(36).slice(2,8)}`,
-        payment_status: text(body.payment_status, 40) || 'paid', customer_name: text(body.customer_name, 120) || null,
+        payment_status: paymentStatus, customer_name: text(body.customer_name, 120) || null,
         email: text(body.email, 200).toLowerCase() || null, phone: text(body.phone, 60) || null,
         amount_sgd: Math.max(0, num(body.amount_sgd)), product_type: product, plan_name: text(body.plan_name, 160) || null,
         country: text(body.country, 120) || null, travel_start: body.travel_start || null, travel_end: body.travel_end || null,
-        fulfilment_status: text(body.fulfilment_status, 40) || (product === 'esim' ? 'pending_fulfilment' : 'pending_dispatch'),
+        fulfilment_status: requestedStatus || initialFulfilmentStatus(product, paymentStatus),
         notes: `Manual order${text(body.notes, 1500) ? ` · ${text(body.notes,1500)}` : ''}`,
         updated_at: new Date().toISOString()
       };

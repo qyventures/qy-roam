@@ -16,10 +16,11 @@ type Props = {
 const statusLabels: Record<string, string> = {
   awaiting_payment: 'Awaiting payment confirmation',
   payment_failed: 'Payment failed',
+  awaiting_fulfilment: 'Paid — eSIM fulfilment in progress',
   paid: 'Paid — preparing your order',
   packing: 'Preparing your order',
   dispatched: 'Dispatched for delivery',
-  'with customer': 'Delivered / with customer',
+  with_customer: 'Delivered / with customer',
   return_due: 'Return due',
   returned: 'Returned to QY Roam',
   closed: 'Order completed',
@@ -73,8 +74,8 @@ export default async function BookingPage({ searchParams }: Props) {
         {paid ? (
           isEsim ? (
             <>
-              <p>Your payment is confirmed. Your eSIM order is queued for digital fulfilment to the email address used at checkout.</p>
-              <p>If you have not received your eSIM details within the stated fulfilment window, contact +65 8032 7183.</p>
+              <p>{fulfilment === 'fulfilled' ? 'Your eSIM order has been marked fulfilled.' : 'Your payment is confirmed. Your eSIM order is queued for digital fulfilment to the email address used at checkout.'}</p>
+              {fulfilment !== 'fulfilled' && <p>If you have not received your eSIM details within the stated fulfilment window, contact +65 8032 7183.</p>}
             </>
           ) : (
             <>

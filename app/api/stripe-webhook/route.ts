@@ -51,29 +51,38 @@ async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.E
   const {error}=await supabase.from('orders').upsert({stripe_session_id:session.id,payment_status:session.payment_status,customer_name:session.customer_details?.name,email:session.customer_details?.email,phone:session.customer_details?.phone,amount_sgd:(session.amount_total||0)/100,product_type:productType,plan_name:session.metadata?.plan_name||null,country:session.metadata?.country,travel_start:session.metadata?.start||null,travel_end:session.metadata?.end||null,fulfilment_status:fulfilment,shipping_address:session.shipping_details?.address||null,updated_at:new Date().toISOString()},{onConflict:'stripe_session_id'}); if(error) throw error;
 }
 
-async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string, type:string) {
+type EventClaim = 'claimed' | 'processed' | 'in_progress';
+
+async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string, type:string):Promise<EventClaim> {
   if(!supabase) throw new Error('Persistence unavailable');
-  const claimed=await supabase.from('stripe_events').insert({event_id:id,event_type:type});
-  if(claimed.error?.code==='23505') return false;
+  const claimed=await supabase.from('stripe_events').insert({event_id:id,event_type:type,processing_started_at:new Date().toISOString()});
+  if(claimed.error?.code==='23505'){
+    const existing=await supabase.from('stripe_events').select('processed_at').eq('event_id',id).maybeSingle();
+    if(existing.error) throw existing.error;
+    return existing.data?.processed_at ? 'processed' : 'in_progress';
+  }
   if(claimed.error) throw claimed.error;
-  return true;
+  return 'claimed';
 }
 
 async function deliverFulfilmentNotification(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session){
-  const existing=await supabase.from('fulfilment_notifications').select('status').eq('stripe_session_id',session.id).maybeSingle();
+  let existing=await supabase.from('fulfilment_notifications').select('status,updated_at,attempts').eq('stripe_session_id',session.id).maybeSingle();
   if(existing.error) throw existing.error;
   if(existing.data?.status==='sent') return;
   if(!existing.data){
     const created=await supabase.from('fulfilment_notifications').insert({stripe_session_id:session.id,status:'pending'});
     if(created.error?.code!=='23505'&&created.error) throw created.error;
-    if(created.error?.code==='23505'){
-      const raced=await supabase.from('fulfilment_notifications').select('status').eq('stripe_session_id',session.id).single();
-      if(raced.error) throw raced.error;
-      if(raced.data?.status==='sent') return;
-    }
+    existing=await supabase.from('fulfilment_notifications').select('status,updated_at,attempts').eq('stripe_session_id',session.id).single();
+    if(existing.error) throw existing.error;
+    if(existing.data?.status==='sent') return;
   }
-  const attempt=await supabase.from('fulfilment_notifications').update({status:'sending',last_attempt_at:new Date().toISOString(),last_error:null,updated_at:new Date().toISOString()}).eq('stripe_session_id',session.id).neq('status','sent');
+  const notification=existing.data!;
+  const staleSending=notification.status==='sending'&&Date.now()-new Date(notification.updated_at).getTime()>15*60_000;
+  if(notification.status==='sending'&&!staleSending) throw new Error('Fulfilment notification is already being sent');
+  const now=new Date().toISOString();
+  const attempt=await supabase.from('fulfilment_notifications').update({status:'sending',attempts:Number(notification.attempts||0)+1,last_attempt_at:now,last_error:null,updated_at:now}).eq('stripe_session_id',session.id).eq('status',notification.status).eq('updated_at',notification.updated_at).select('stripe_session_id');
   if(attempt.error) throw attempt.error;
+  if(attempt.data?.length!==1) throw new Error('Fulfilment notification was claimed by another delivery attempt');
   try{
     await sendHumanFulfilmentEmail(session);
     const sent=await supabase.from('fulfilment_notifications').update({status:'sent',sent_at:new Date().toISOString(),updated_at:new Date().toISOString()}).eq('stripe_session_id',session.id);
@@ -92,14 +101,18 @@ export async function POST(req:Request){
   if(!['checkout.session.completed','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed'].includes(event.type)) return NextResponse.json({received:true});
   const session=event.data.object as Stripe.Checkout.Session, supabase=getSupabaseAdmin(); if(!supabase) return NextResponse.json({error:'Persistence unavailable'},{status:503});
   const eventClaimId=`stripe:${event.id}`;
+  let eventClaimed=false;
   try{
-    if(!(await claimOnce(supabase,eventClaimId,event.type))) return NextResponse.json({received:true,duplicate:true});
+    const claim=await claimOnce(supabase,eventClaimId,event.type);
+    if(claim==='processed') return NextResponse.json({received:true,duplicate:true});
+    if(claim==='in_progress') return NextResponse.json({error:'Event is still processing'},{status:500});
+    eventClaimed=true;
     await persistSession(session,event.type);
     if(event.type!=='checkout.session.async_payment_failed'&&session.payment_status==='paid'){
       await deliverFulfilmentNotification(supabase,session);
       await sendMetaPurchase(session);
     }
     const completed=await supabase.from('stripe_events').update({processed_at:new Date().toISOString()}).eq('event_id',eventClaimId);if(completed.error)throw completed.error;
-  }catch(error){console.error('stripe_webhook_processing_error',error);await supabase.from('stripe_events').delete().eq('event_id',eventClaimId);return NextResponse.json({error:'Processing failed'},{status:500});}
+  }catch(error){console.error('stripe_webhook_processing_error',error);if(eventClaimed) await supabase.from('stripe_events').delete().eq('event_id',eventClaimId);return NextResponse.json({error:'Processing failed'},{status:500});}
   return NextResponse.json({received:true});
 }

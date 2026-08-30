@@ -32,11 +32,19 @@ alter table public.orders add column if not exists notes text;
 alter table public.orders enable row level security;
 
 -- Stripe event idempotency ledger: Stripe may retry the same event multiple times.
+-- processed_at stays null while side effects are in flight so an interrupted
+-- delivery is retried instead of being mistaken for a completed event.
 create table if not exists public.stripe_events (
   event_id text primary key,
   event_type text not null,
-  processed_at timestamptz not null default now()
+  received_at timestamptz not null default now(),
+  processing_started_at timestamptz not null default now(),
+  processed_at timestamptz
 );
+alter table public.stripe_events add column if not exists received_at timestamptz not null default now();
+alter table public.stripe_events add column if not exists processing_started_at timestamptz not null default now();
+alter table public.stripe_events alter column processed_at drop default;
+alter table public.stripe_events alter column processed_at drop not null;
 alter table public.stripe_events enable row level security;
 
 -- Durable human-fulfilment notification ledger. One row per paid checkout.

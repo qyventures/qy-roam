@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+import os
+from dotenv import load_dotenv
+from google.ads.googleads.client import GoogleAdsClient
+from google.ads.googleads.errors import GoogleAdsException
+
+load_dotenv('/root/.config/qy-google-ads/.env', override=False)
+customer_id = os.environ['GOOGLE_ADS_CUSTOMER_ID'].replace('-', '')
+client = GoogleAdsClient.load_from_dict({
+    'developer_token': os.environ['GOOGLE_ADS_DEVELOPER_TOKEN'],
+    'client_id': os.environ['GOOGLE_ADS_CLIENT_ID'],
+    'client_secret': os.environ['GOOGLE_ADS_CLIENT_SECRET'],
+    'refresh_token': os.environ['GOOGLE_ADS_REFRESH_TOKEN'],
+    'use_proto_plus': True,
+})
+svc = client.get_service('CampaignBudgetService')
+op = client.get_type('CampaignBudgetOperation')
+b = op.create
+b.name = 'QY Roam API Permission Validation - DO NOT CREATE'
+b.amount_micros = 10_000_000
+b.delivery_method = client.enums.BudgetDeliveryMethodEnum.STANDARD
+b.explicitly_shared = False
+try:
+    request = client.get_type('MutateCampaignBudgetsRequest')
+    request.customer_id = customer_id
+    request.operations.append(op)
+    request.validate_only = True
+    svc.mutate_campaign_budgets(request=request)
+    print('VALIDATE_ONLY_WRITE_PERMISSION: PASS')
+except GoogleAdsException as exc:
+    print('VALIDATE_ONLY_WRITE_PERMISSION: FAIL')
+    for err in exc.failure.errors:
+        print(f'{err.error_code}: {err.message}')
+    raise SystemExit(2)
