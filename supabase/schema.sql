@@ -63,6 +63,21 @@ create table if not exists public.fulfilment_notifications (
 );
 alter table public.fulfilment_notifications enable row level security;
 
+-- Durable Meta CAPI delivery ledger. Stripe retries remain safe when Meta is
+-- temporarily unavailable, and a successfully delivered Purchase is never sent
+-- again by a later webhook event for the same Checkout Session.
+create table if not exists public.meta_purchase_deliveries (
+  stripe_session_id text primary key,
+  status text not null default 'pending' check (status in ('pending','sending','sent')),
+  attempts integer not null default 0,
+  last_attempt_at timestamptz,
+  sent_at timestamptz,
+  last_error text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+alter table public.meta_purchase_deliveries enable row level security;
+
 -- No client policies: all operational tables are server/service-role only.
 create index if not exists orders_created_at_idx on public.orders(created_at desc);
 create index if not exists orders_product_type_idx on public.orders(product_type);
@@ -70,3 +85,4 @@ create index if not exists orders_fulfilment_status_idx on public.orders(fulfilm
 create index if not exists orders_travel_start_idx on public.orders(travel_start);
 create index if not exists stripe_events_processed_at_idx on public.stripe_events(processed_at desc);
 create index if not exists fulfilment_notifications_status_idx on public.fulfilment_notifications(status, updated_at);
+create index if not exists meta_purchase_deliveries_status_idx on public.meta_purchase_deliveries(status, updated_at);

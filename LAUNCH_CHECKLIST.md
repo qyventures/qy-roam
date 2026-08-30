@@ -71,6 +71,8 @@ Subscribe to the Checkout/payment events used by the application, copy the resul
 
 ## 5. End-to-end payment smoke test
 
+Before deploying this application version, apply `supabase/schema.sql` to the production Supabase project. The webhook requires the `orders`, `stripe_events`, `fulfilment_notifications`, and `meta_purchase_deliveries` tables; deploy the schema before restarting the app so paid webhook processing cannot fail on a missing delivery ledger.
+
 Before advertising, make one controlled real booking using the lowest practical charge and verify:
 
 1. Destination/date availability succeeds.

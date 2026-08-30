@@ -62,6 +62,11 @@ export default async function AdminPage() {
   const notifications: any[] = notificationResult.data ?? [];
   const notificationBySession = new Map(notifications.map((n:any)=>[n.stripe_session_id,n]));
   const pendingNotifications = notifications.filter((n:any)=>n.status !== 'sent');
+  const metaDeliveryResult = supabase
+    ? await supabase.from('meta_purchase_deliveries').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('updated_at', { ascending: false }).limit(500)
+    : { data: [] as any[] };
+  const metaDeliveries: any[] = metaDeliveryResult.data ?? [];
+  const pendingMetaDeliveries = metaDeliveries.filter((delivery:any)=>delivery.status !== 'sent');
 
   const paid = orders.filter((o:any)=>o.payment_status === 'paid');
   const active = orders.filter((o:any)=>!['closed','cancelled','payment_failed'].includes(o.fulfilment_status));
@@ -132,6 +137,7 @@ export default async function AdminPage() {
           <div style={cardStyle}><small>eSIM fulfilment exceptions</small><div style={metricStyle}>{esimExceptions.length}</div><small>departing within 2 days / unresolved</small></div>
           <div style={cardStyle}><small>Overdue WiFi returns</small><div style={metricStyle}>{returnExceptions.length}</div><small>more than 5 days past trip end</small></div>
           <div style={cardStyle}><small>Ops email exceptions</small><div style={metricStyle}>{pendingNotifications.length}</div><small>paid-order notifications not confirmed sent</small></div>
+          <div style={cardStyle}><small>Meta CAPI exceptions</small><div style={metricStyle}>{pendingMetaDeliveries.length}</div><small>consented purchases not confirmed delivered</small></div>
         </div>
       </section>
     </>}

@@ -10,15 +10,20 @@ function sha256(value?: string | null) { return value ? crypto.createHash('sha25
 function normalizeEmail(value?: string | null) { return value?.trim().toLowerCase(); }
 function normalizePhone(value?: string | null) { if (!value) return undefined; const digits=value.replace(/\D/g,''); return digits||undefined; }
 
+function metaPurchaseConfigured(session: Stripe.Checkout.Session) {
+  return session.payment_status === 'paid' &&
+    session.metadata?.measurement_consent === 'accepted' &&
+    Boolean((process.env.META_CAPI_ACCESS_TOKEN || process.env.META_CAPI_TOKEN) && process.env.NEXT_PUBLIC_META_PIXEL_ID);
+}
+
 async function sendMetaPurchase(session: Stripe.Checkout.Session) {
-  if (session.payment_status !== 'paid' || session.metadata?.measurement_consent !== 'accepted') return;
   const token=(process.env.META_CAPI_ACCESS_TOKEN || process.env.META_CAPI_TOKEN), pixel=process.env.NEXT_PUBLIC_META_PIXEL_ID;
-  if (!token || !pixel) return;
+  if (!token || !pixel) throw new Error('Meta CAPI is not configured');
   const email=normalizeEmail(session.customer_details?.email), phone=normalizePhone(session.customer_details?.phone);
   const userData:Record<string,string[]>={}; if(email) userData.em=[sha256(email)!]; if(phone) userData.ph=[sha256(phone)!];
-  const payload={data:[{event_name:'Purchase',event_time:Math.floor(Date.now()/1000),action_source:'website',event_source_url:`${process.env.NEXT_PUBLIC_SITE_URL||'https://qyroam.com'}/success`,event_id:`stripe_${session.id}`,user_data:userData,custom_data:{currency:'SGD',value:(session.amount_total||0)/100,order_id:session.id,content_type:session.metadata?.product_type||'pocket_wifi'}}]};
+  const payload={data:[{event_name:'Purchase',event_time:session.created,action_source:'website',event_source_url:`${process.env.NEXT_PUBLIC_SITE_URL||'https://qyroam.com'}/success`,event_id:`stripe_${session.id}`,user_data:userData,custom_data:{currency:'SGD',value:(session.amount_total||0)/100,order_id:session.id,content_type:session.metadata?.product_type||'pocket_wifi'}}]};
   const response=await fetch(`https://graph.facebook.com/v21.0/${pixel}/events?access_token=${encodeURIComponent(token)}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-  if(!response.ok) console.error('meta_capi_error',response.status,await response.text());
+  if(!response.ok) throw new Error(`Meta CAPI failed (${response.status}): ${(await response.text()).slice(0,300)}`);
 }
 
 async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
@@ -137,6 +142,37 @@ async function deliverFulfilmentNotification(supabase:NonNullable<ReturnType<typ
   }
 }
 
+async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session){
+  if(!metaPurchaseConfigured(session)) return;
+  let existing=await supabase.from('meta_purchase_deliveries').select('status,updated_at,attempts').eq('stripe_session_id',session.id).maybeSingle();
+  if(existing.error) throw existing.error;
+  if(existing.data?.status==='sent') return;
+  if(!existing.data){
+    const created=await supabase.from('meta_purchase_deliveries').insert({stripe_session_id:session.id,status:'pending'});
+    if(created.error?.code!=='23505'&&created.error) throw created.error;
+    existing=await supabase.from('meta_purchase_deliveries').select('status,updated_at,attempts').eq('stripe_session_id',session.id).single();
+    if(existing.error) throw existing.error;
+    if(existing.data?.status==='sent') return;
+  }
+  const delivery=existing.data!;
+  const staleSending=delivery.status==='sending'&&Date.now()-new Date(delivery.updated_at).getTime()>15*60_000;
+  if(delivery.status==='sending'&&!staleSending) throw new Error('Meta purchase delivery is already being sent');
+  const now=new Date().toISOString();
+  const attempt=await supabase.from('meta_purchase_deliveries').update({status:'sending',attempts:Number(delivery.attempts||0)+1,last_attempt_at:now,last_error:null,updated_at:now}).eq('stripe_session_id',session.id).eq('status',delivery.status).eq('updated_at',delivery.updated_at).select('stripe_session_id');
+  if(attempt.error) throw attempt.error;
+  if(attempt.data?.length!==1) throw new Error('Meta purchase delivery was claimed by another attempt');
+  try{
+    await sendMetaPurchase(session);
+    const sentAt=new Date().toISOString();
+    const sent=await supabase.from('meta_purchase_deliveries').update({status:'sent',sent_at:sentAt,updated_at:sentAt}).eq('stripe_session_id',session.id).eq('status','sending');
+    if(sent.error) throw sent.error;
+  }catch(error){
+    const message=error instanceof Error?error.message:'Meta CAPI delivery failed';
+    await supabase.from('meta_purchase_deliveries').update({status:'pending',last_error:message.slice(0,500),updated_at:new Date().toISOString()}).eq('stripe_session_id',session.id).eq('status','sending');
+    throw error;
+  }
+}
+
 export async function POST(req:Request){
   const key=process.env.STRIPE_SECRET_KEY,webhookSecret=process.env.STRIPE_WEBHOOK_SECRET; if(!key||!webhookSecret) return NextResponse.json({error:'Webhook configuration incomplete'},{status:503});
   const stripe=new Stripe(key,{apiVersion:'2024-06-20'}); let event:Stripe.Event;
@@ -153,7 +189,7 @@ export async function POST(req:Request){
     await persistSession(session,event.type);
     if(event.type!=='checkout.session.async_payment_failed'&&session.payment_status==='paid'){
       await deliverFulfilmentNotification(supabase,session);
-      await sendMetaPurchase(session);
+      await deliverMetaPurchase(supabase,session);
     }
     const completed=await supabase.from('stripe_events').update({processed_at:new Date().toISOString()}).eq('event_id',eventClaimId).eq('processing_started_at',claimStartedAt).is('processed_at',null).select('event_id');
     if(completed.error)throw completed.error;
