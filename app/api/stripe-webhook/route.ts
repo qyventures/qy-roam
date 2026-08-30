@@ -51,18 +51,38 @@ async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.E
   const {error}=await supabase.from('orders').upsert({stripe_session_id:session.id,payment_status:session.payment_status,customer_name:session.customer_details?.name,email:session.customer_details?.email,phone:session.customer_details?.phone,amount_sgd:(session.amount_total||0)/100,product_type:productType,plan_name:session.metadata?.plan_name||null,country:session.metadata?.country,travel_start:session.metadata?.start||null,travel_end:session.metadata?.end||null,fulfilment_status:fulfilment,shipping_address:session.shipping_details?.address||null,updated_at:new Date().toISOString()},{onConflict:'stripe_session_id'}); if(error) throw error;
 }
 
-type EventClaim = 'claimed' | 'processed' | 'in_progress';
+type EventClaim =
+  | { status: 'claimed'; processingStartedAt: string }
+  | { status: 'processed' }
+  | { status: 'in_progress' };
+
+const EVENT_CLAIM_STALE_MS = 30 * 60_000;
 
 async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string, type:string):Promise<EventClaim> {
   if(!supabase) throw new Error('Persistence unavailable');
-  const claimed=await supabase.from('stripe_events').insert({event_id:id,event_type:type,processing_started_at:new Date().toISOString()});
+  const processingStartedAt=new Date().toISOString();
+  const claimed=await supabase.from('stripe_events').insert({event_id:id,event_type:type,processing_started_at:processingStartedAt});
   if(claimed.error?.code==='23505'){
-    const existing=await supabase.from('stripe_events').select('processed_at').eq('event_id',id).maybeSingle();
+    const existing=await supabase.from('stripe_events').select('processed_at,processing_started_at').eq('event_id',id).maybeSingle();
     if(existing.error) throw existing.error;
-    return existing.data?.processed_at ? 'processed' : 'in_progress';
+    if(existing.data?.processed_at) return {status:'processed'};
+    const previousStartedAt=existing.data?.processing_started_at;
+    const previousStartedMs=previousStartedAt ? new Date(previousStartedAt).getTime() : Number.NaN;
+    if(!previousStartedAt||!Number.isFinite(previousStartedMs)||Date.now()-previousStartedMs<=EVENT_CLAIM_STALE_MS) return {status:'in_progress'};
+
+    // A process can die after inserting the event but before completing it. Reclaim
+    // only the exact stale version so concurrent Stripe retries cannot both proceed.
+    const reclaimed=await supabase.from('stripe_events')
+      .update({event_type:type,processing_started_at:processingStartedAt})
+      .eq('event_id',id)
+      .is('processed_at',null)
+      .eq('processing_started_at',previousStartedAt)
+      .select('event_id');
+    if(reclaimed.error) throw reclaimed.error;
+    return reclaimed.data?.length===1 ? {status:'claimed',processingStartedAt} : {status:'in_progress'};
   }
   if(claimed.error) throw claimed.error;
-  return 'claimed';
+  return {status:'claimed',processingStartedAt};
 }
 
 async function deliverFulfilmentNotification(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session){
@@ -101,18 +121,26 @@ export async function POST(req:Request){
   if(!['checkout.session.completed','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed'].includes(event.type)) return NextResponse.json({received:true});
   const session=event.data.object as Stripe.Checkout.Session, supabase=getSupabaseAdmin(); if(!supabase) return NextResponse.json({error:'Persistence unavailable'},{status:503});
   const eventClaimId=`stripe:${event.id}`;
-  let eventClaimed=false;
+  let claimStartedAt:string|undefined;
   try{
     const claim=await claimOnce(supabase,eventClaimId,event.type);
-    if(claim==='processed') return NextResponse.json({received:true,duplicate:true});
-    if(claim==='in_progress') return NextResponse.json({error:'Event is still processing'},{status:500});
-    eventClaimed=true;
+    if(claim.status==='processed') return NextResponse.json({received:true,duplicate:true});
+    if(claim.status==='in_progress') return NextResponse.json({error:'Event is still processing'},{status:500});
+    claimStartedAt=claim.processingStartedAt;
     await persistSession(session,event.type);
     if(event.type!=='checkout.session.async_payment_failed'&&session.payment_status==='paid'){
       await deliverFulfilmentNotification(supabase,session);
       await sendMetaPurchase(session);
     }
-    const completed=await supabase.from('stripe_events').update({processed_at:new Date().toISOString()}).eq('event_id',eventClaimId);if(completed.error)throw completed.error;
-  }catch(error){console.error('stripe_webhook_processing_error',error);if(eventClaimed) await supabase.from('stripe_events').delete().eq('event_id',eventClaimId);return NextResponse.json({error:'Processing failed'},{status:500});}
+    const completed=await supabase.from('stripe_events').update({processed_at:new Date().toISOString()}).eq('event_id',eventClaimId).eq('processing_started_at',claimStartedAt).is('processed_at',null).select('event_id');
+    if(completed.error)throw completed.error;
+    if(completed.data?.length!==1) throw new Error('Stripe event claim ownership was lost');
+  }catch(error){
+    console.error('stripe_webhook_processing_error',error);
+    // Delete only the claim owned by this invocation. A stale worker must never
+    // erase a newer retry's reclaimed lease.
+    if(claimStartedAt) await supabase.from('stripe_events').delete().eq('event_id',eventClaimId).eq('processing_started_at',claimStartedAt).is('processed_at',null);
+    return NextResponse.json({error:'Processing failed'},{status:500});
+  }
   return NextResponse.json({received:true});
 }
