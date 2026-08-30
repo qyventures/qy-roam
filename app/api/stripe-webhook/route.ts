@@ -43,12 +43,35 @@ async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
 async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.Event.Type){
   const supabase=getSupabaseAdmin(); if(!supabase) throw new Error('Order persistence unavailable');
   const paid=session.payment_status==='paid', failed=eventType==='checkout.session.async_payment_failed';
-  const existing=await supabase.from('orders').select('fulfilment_status').eq('stripe_session_id',session.id).maybeSingle(); if(existing.error) throw existing.error;
+  const existing=await supabase.from('orders').select('payment_status,fulfilment_status').eq('stripe_session_id',session.id).maybeSingle(); if(existing.error) throw existing.error;
   const current=existing.data?.fulfilment_status, productType=session.metadata?.product_type;
   if(productType!=='esim'&&productType!=='pocket_wifi') throw new Error('Unknown or missing product_type on Stripe session');
   const defaultPaidStatus=productType==='esim'?'awaiting_fulfilment':'paid';
   const fulfilment=paid?(current&&!['awaiting_payment','payment_failed'].includes(current)?current:defaultPaidStatus):failed?(current&&!['awaiting_payment','payment_failed'].includes(current)?current:'payment_failed'):(current||'awaiting_payment');
-  const {error}=await supabase.from('orders').upsert({stripe_session_id:session.id,payment_status:session.payment_status,customer_name:session.customer_details?.name,email:session.customer_details?.email,phone:session.customer_details?.phone,amount_sgd:(session.amount_total||0)/100,product_type:productType,plan_name:session.metadata?.plan_name||null,country:session.metadata?.country,travel_start:session.metadata?.start||null,travel_end:session.metadata?.end||null,fulfilment_status:fulfilment,shipping_address:session.shipping_details?.address||null,updated_at:new Date().toISOString()},{onConflict:'stripe_session_id'}); if(error) throw error;
+  const order={stripe_session_id:session.id,payment_status:session.payment_status,customer_name:session.customer_details?.name,email:session.customer_details?.email,phone:session.customer_details?.phone,amount_sgd:(session.amount_total||0)/100,product_type:productType,plan_name:session.metadata?.plan_name||null,country:session.metadata?.country,travel_start:session.metadata?.start||null,travel_end:session.metadata?.end||null,fulfilment_status:fulfilment,shipping_address:session.shipping_details?.address||null,updated_at:new Date().toISOString()};
+
+  // Checkout events can arrive out of order. Once a session is recorded as paid,
+  // an older `completed` snapshot or a late async failure must not make inventory
+  // available again. The database-side filter also closes the race between this
+  // read and a concurrent paid-event write.
+  if(existing.data){
+    if(!paid&&existing.data.payment_status==='paid') return;
+    let update=supabase.from('orders').update(order).eq('stripe_session_id',session.id);
+    if(!paid) update=update.or('payment_status.is.null,payment_status.neq.paid');
+    const {error}=await update;
+    if(error) throw error;
+    return;
+  }
+
+  const inserted=await supabase.from('orders').insert(order);
+  if(!inserted.error) return;
+  // A concurrent event may have created the row after our initial read. Paid
+  // events may overwrite it; unpaid events remain guarded against paid rows.
+  if(inserted.error.code!=='23505') throw inserted.error;
+  let update=supabase.from('orders').update(order).eq('stripe_session_id',session.id);
+  if(!paid) update=update.or('payment_status.is.null,payment_status.neq.paid');
+  const {error}=await update;
+  if(error) throw error;
 }
 
 type EventClaim =
