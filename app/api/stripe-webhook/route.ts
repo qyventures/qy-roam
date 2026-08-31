@@ -10,6 +10,21 @@ export const runtime = 'nodejs';
 function sha256(value?: string | null) { return value ? crypto.createHash('sha256').update(value).digest('hex') : undefined; }
 function normalizeEmail(value?: string | null) { return value?.trim().toLowerCase(); }
 function normalizePhone(value?: string | null) { if (!value) return undefined; const digits=value.replace(/\D/g,''); return digits||undefined; }
+const DELIVERY_TIMEOUT_MS=20_000;
+
+async function postJsonWithTimeout(url:string,body:unknown,timeoutMs=DELIVERY_TIMEOUT_MS){
+  const controller=new AbortController();
+  const deadline=setTimeout(()=>controller.abort(),timeoutMs);
+  try{
+    const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:controller.signal});
+    // Consume the response while the deadline is still active. A provider that
+    // sends headers and then stalls its body must not hold the webhook open.
+    const responseBody=await response.text();
+    return {ok:response.ok,status:response.status,responseBody};
+  }finally{
+    clearTimeout(deadline);
+  }
+}
 
 function metaPurchaseConfigured(session: Stripe.Checkout.Session) {
   return session.payment_status === 'paid' &&
@@ -17,14 +32,14 @@ function metaPurchaseConfigured(session: Stripe.Checkout.Session) {
     Boolean(getMetaCapiToken() && process.env.NEXT_PUBLIC_META_PIXEL_ID);
 }
 
-async function sendMetaPurchase(session: Stripe.Checkout.Session) {
+async function sendMetaPurchase(session: Stripe.Checkout.Session, eventTime: number) {
   const token=getMetaCapiToken(), pixel=process.env.NEXT_PUBLIC_META_PIXEL_ID;
   if (!token || !pixel) throw new Error('Meta CAPI is not configured');
   const email=normalizeEmail(session.customer_details?.email), phone=normalizePhone(session.customer_details?.phone);
   const userData:Record<string,string[]>={}; if(email) userData.em=[sha256(email)!]; if(phone) userData.ph=[sha256(phone)!];
-  const payload={data:[{event_name:'Purchase',event_time:session.created,action_source:'website',event_source_url:`${process.env.NEXT_PUBLIC_SITE_URL||'https://qyroam.com'}/success`,event_id:`stripe_${session.id}`,user_data:userData,custom_data:{currency:'SGD',value:(session.amount_total||0)/100,order_id:session.id,content_type:session.metadata?.product_type||'pocket_wifi'}}]};
-  const response=await fetch(`https://graph.facebook.com/v21.0/${pixel}/events?access_token=${encodeURIComponent(token)}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-  if(!response.ok) throw new Error(`Meta CAPI failed (${response.status}): ${(await response.text()).slice(0,300)}`);
+  const payload={data:[{event_name:'Purchase',event_time:eventTime,action_source:'website',event_source_url:`${process.env.NEXT_PUBLIC_SITE_URL||'https://qyroam.com'}/success`,event_id:`stripe_${session.id}`,user_data:userData,custom_data:{currency:'SGD',value:(session.amount_total||0)/100,order_id:session.id,content_type:session.metadata?.product_type||'pocket_wifi'}}]};
+  const response=await postJsonWithTimeout(`https://graph.facebook.com/v21.0/${pixel}/events?access_token=${encodeURIComponent(token)}`,payload);
+  if(!response.ok) throw new Error(`Meta CAPI failed (${response.status}): ${response.responseBody.slice(0,300)}`);
 }
 
 async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
@@ -39,11 +54,11 @@ async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
   const text=['A paid QY Roam order requires human fulfilment.','',`Order reference: ${session.id}`,`Product: ${isEsim?'Travel eSIM':'Pocket WiFi'}`,`Destination: ${destination||'-'}`,`Plan: ${planName||'-'}`,`Travel dates: ${start||'-'}${end?` to ${end}`:''}`,`Amount paid: S$${amount}`,`Promo code: ${session.metadata?.promo_code||'-'}`,'',`Customer name: ${customer?.name||'-'}`,`Email: ${customer?.email||'-'}`,`Phone: ${customer?.phone||'-'}`,`Delivery address: ${shippingText}`,'',isEsim?'Action: Please process the eSIM manually and send the QR code / activation instructions to the customer.':'Action: Please prepare and fulfil the Pocket WiFi order according to the travel dates and delivery details.','','Customer support: +65 8032 7183'].join('\n');
   const relayUrl=process.env.SMTP_RELAY_URL, relaySecret=process.env.SMTP_RELAY_SECRET;
   if(relayUrl&&relaySecret){
-    const response=await fetch(relayUrl,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({relay_secret:relaySecret,smtp_host:host,smtp_port:port,smtp_user:user,smtp_pass:pass,from,to,subject,text})});
-    if(!response.ok) throw new Error(`SMTP relay failed (${response.status}): ${(await response.text()).slice(0,300)}`);
+    const response=await postJsonWithTimeout(relayUrl,{relay_secret:relaySecret,smtp_host:host,smtp_port:port,smtp_user:user,smtp_pass:pass,from,to,subject,text});
+    if(!response.ok) throw new Error(`SMTP relay failed (${response.status}): ${response.responseBody.slice(0,300)}`);
     return;
   }
-  await sendSmtpMail({host,port,secure,user,pass,from,to,subject,text});
+  await sendSmtpMail({host,port,secure,user,pass,from,to,subject,text,timeoutMs:DELIVERY_TIMEOUT_MS});
 }
 
 async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.Event.Type){
@@ -143,7 +158,7 @@ async function deliverFulfilmentNotification(supabase:NonNullable<ReturnType<typ
   }
 }
 
-async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session){
+async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session,eventTime:number){
   if(!metaPurchaseConfigured(session)) return;
   let existing=await supabase.from('meta_purchase_deliveries').select('status,updated_at,attempts').eq('stripe_session_id',session.id).maybeSingle();
   if(existing.error) throw existing.error;
@@ -163,7 +178,7 @@ async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof getSup
   if(attempt.error) throw attempt.error;
   if(attempt.data?.length!==1) throw new Error('Meta purchase delivery was claimed by another attempt');
   try{
-    await sendMetaPurchase(session);
+    await sendMetaPurchase(session,eventTime);
     const sentAt=new Date().toISOString();
     const sent=await supabase.from('meta_purchase_deliveries').update({status:'sent',sent_at:sentAt,updated_at:sentAt}).eq('stripe_session_id',session.id).eq('status','sending');
     if(sent.error) throw sent.error;
@@ -205,7 +220,9 @@ export async function POST(req:Request){
     }
     if(event.type!=='checkout.session.async_payment_failed'&&session.payment_status==='paid'){
       await deliverFulfilmentNotification(supabase,session);
-      await deliverMetaPurchase(supabase,session);
+      // Use the signed Stripe event timestamp: the Checkout Session may have
+      // been created well before an asynchronous payment actually succeeded.
+      await deliverMetaPurchase(supabase,session,event.created);
     }
     const completed=await supabase.from('stripe_events').update({processed_at:new Date().toISOString()}).eq('event_id',eventClaimId).eq('processing_started_at',claimStartedAt).is('processed_at',null).select('event_id');
     if(completed.error)throw completed.error;

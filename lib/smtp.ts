@@ -11,6 +11,7 @@ type SmtpOptions = {
   to: string;
   subject: string;
   text: string;
+  timeoutMs?: number;
 };
 
 function encode(value: string) {
@@ -53,32 +54,35 @@ async function command(socket: net.Socket | tls.TLSSocket, value: string, expect
 }
 
 export async function sendSmtpMail(options: SmtpOptions) {
-  const socket = options.secure
+  const timeoutMs = options.timeoutMs ?? 20_000;
+  let activeSocket: net.Socket | tls.TLSSocket = options.secure
     ? tls.connect({ host: options.host, port: options.port, servername: options.host })
     : net.connect({ host: options.host, port: options.port });
-  socket.setTimeout(15000);
+  activeSocket.setTimeout(timeoutMs);
+  // Bound the whole SMTP conversation, not every command independently. Without
+  // this guard a silent relay can consume one full socket timeout per protocol
+  // step and leave a paid Stripe event unacknowledged for several minutes.
+  const deadline = setTimeout(() => activeSocket.destroy(new Error('SMTP delivery timed out')), timeoutMs);
 
-  await waitForResponse(socket, [220]);
-  await command(socket, `EHLO qyroam.com`, [250]);
+  try {
+    await waitForResponse(activeSocket, [220]);
+    await command(activeSocket, `EHLO qyroam.com`, [250]);
 
-  if (!options.secure && options.port === 587) {
-    await command(socket, 'STARTTLS', [220]);
-    const secureSocket = tls.connect({ socket, servername: options.host });
-    secureSocket.setTimeout(15000);
-    await command(secureSocket, 'EHLO qyroam.com', [250]);
-    await command(secureSocket, 'AUTH LOGIN', [334]);
-    await command(secureSocket, encode(options.user), [334]);
-    await command(secureSocket, encode(options.pass), [235]);
-    await sendMessage(secureSocket, options);
-    secureSocket.end();
-    return;
+    if (!options.secure && options.port === 587) {
+      await command(activeSocket, 'STARTTLS', [220]);
+      activeSocket = tls.connect({ socket: activeSocket, servername: options.host });
+      activeSocket.setTimeout(timeoutMs);
+      await command(activeSocket, 'EHLO qyroam.com', [250]);
+    }
+
+    await command(activeSocket, 'AUTH LOGIN', [334]);
+    await command(activeSocket, encode(options.user), [334]);
+    await command(activeSocket, encode(options.pass), [235]);
+    await sendMessage(activeSocket, options);
+  } finally {
+    clearTimeout(deadline);
+    activeSocket.destroy();
   }
-
-  await command(socket, 'AUTH LOGIN', [334]);
-  await command(socket, encode(options.user), [334]);
-  await command(socket, encode(options.pass), [235]);
-  await sendMessage(socket, options);
-  socket.end();
 }
 
 async function sendMessage(socket: net.Socket | tls.TLSSocket, options: SmtpOptions) {
