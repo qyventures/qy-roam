@@ -15,9 +15,11 @@ Required before launch:
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `ADMIN_USER`
 - `ADMIN_PASSWORD` — strong unique password
-- `SITE_URL=https://qyroam.com`
+- `NEXT_PUBLIC_SITE_URL=https://qyroam.com`
 - `POCKET_WIFI_INVENTORY` — actual units available for sale
 - `MIN_DELIVERY_LEAD_DAYS=2` unless operations approves another value
+- `HEALTH_CHECK_TOKEN` — random value of at least 24 characters used by the private deployment readiness check
+- SMTP host, credentials, sender and fulfilment recipient for paid-order alerts
 
 Optional until measurement launch:
 
@@ -38,17 +40,17 @@ bash deploy/deploy.sh
 
 Expected result: optimized Next.js build succeeds, `qy-roam` restarts, and the local health endpoint responds.
 
-The production service is intentionally bound to **port 3002** on the VPS. Port 3000 is used by another application, so do not use it for QY Roam health checks.
+The production service is intentionally bound to **port 3100** on the VPS. Other local ports are used by separate applications, so use this port for QY Roam health checks.
 
 Check manually if needed:
 
 ```bash
-curl -sS http://127.0.0.1:3002/api/health
+curl -sS http://127.0.0.1:3100/api/health
 systemctl status qy-roam --no-pager
 journalctl -u qy-roam -n 100 --no-pager
 ```
 
-Do not proceed if health reports missing launch-critical configuration.
+The unauthenticated endpoint above is a liveness probe and intentionally does not disclose configuration. `deploy/deploy.sh` uses `HEALTH_CHECK_TOKEN` to verify private launch readiness and fails if any launch-critical configuration is missing. Do not proceed unless that deployment check passes.
 
 ## 3. DNS and HTTPS
 
