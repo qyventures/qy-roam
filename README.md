@@ -12,6 +12,10 @@ Sales-ready Pocket Wi-Fi rental MVP for QY Venture Pte. Ltd.
 - Meta Pixel/CAPI instrumentation gated by advertising consent
 - Dedicated local app port `3100` to avoid conflicts with other Next.js services on the VPS
 
+The canonical Stripe webhook endpoint is `https://qyroam.com/api/stripe/webhook`.
+The legacy `/api/stripe-webhook` endpoint remains available during migration;
+configure only the canonical endpoint in Stripe to avoid duplicate deliveries.
+
 ## VPS deployment
 
 The repo is expected at `/root/qy-roam` and production secrets at `/root/.config/qyroam/.env` with mode `600`.

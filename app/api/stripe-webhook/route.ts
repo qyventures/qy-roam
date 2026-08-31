@@ -179,6 +179,11 @@ export async function POST(req:Request){
   try{event=stripe.webhooks.constructEvent(await req.text(),req.headers.get('stripe-signature')||'',webhookSecret);}catch{return NextResponse.json({error:'Invalid signature'},{status:400});}
   if(!['checkout.session.completed','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed'].includes(event.type)) return NextResponse.json({received:true});
   const session=event.data.object as Stripe.Checkout.Session, supabase=getSupabaseAdmin(); if(!supabase) return NextResponse.json({error:'Persistence unavailable'},{status:503});
+  // QY Roam can share a Stripe account with other products. A broad Checkout
+  // webhook subscription must acknowledge their sessions without creating an
+  // order, sending fulfilment email, or filling this app's idempotency ledger.
+  // Both QY Roam checkout routes set this server-controlled marker.
+  if(session.metadata?.source!=='qyroam.com') return NextResponse.json({received:true,ignored:true});
   const eventClaimId=`stripe:${event.id}`;
   let claimStartedAt:string|undefined;
   try{
