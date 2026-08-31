@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { applyPromoCents, normalisePromoCode } from '../../../lib/promotions';
 import { getWifiPlan, WIFI_BENCHMARK } from '../../../lib/wifiPlans';
+import { getSupabaseAdmin } from '../../../lib/supabaseAdmin';
 
 export const runtime = 'nodejs';
 
@@ -9,8 +10,6 @@ const MAX_BODY_BYTES=4096;
 const WINDOW_MS=60_000;
 const MAX_ATTEMPTS=12;
 const HOLD_MINUTES=30;
-const QY_OPS_URL='https://cqyhqbzrgkckalbowhrx.supabase.co';
-const QY_OPS_ANON='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNxeWhxYnpyZ2tja2FsYm93aHJ4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc4OTI0NDIsImV4cCI6MjEwMzQ2ODQ0Mn0.rzPO2wUxnGc37RTMdtsc9Mo9UE5F5RcIkOJkBke6dR4';
 const attempts=new Map<string,{count:number;reset:number}>();
 
 function parseDate(value: unknown) { const text=String(value||''); if(!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null; const date=new Date(`${text}T00:00:00Z`); return Number.isNaN(date.getTime())?null:date; }
@@ -29,31 +28,11 @@ function limited(req: Request) {
   if(attempts.size>5000) for(const [k,v] of attempts) if(v.reset<=now) attempts.delete(k);
   return current.count>MAX_ATTEMPTS;
 }
-async function bookedInventoryCount(start:string,end:string) {
-  const supabaseUrl=process.env.SUPABASE_URL, serviceKey=process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if(supabaseUrl&&serviceKey){
-    const url=new URL('/rest/v1/orders',supabaseUrl);
-    url.searchParams.set('select','id');
-    url.searchParams.set('product_type','eq.pocket_wifi');
-    url.searchParams.set('payment_status','eq.paid');
-    url.searchParams.set('travel_start',`lte.${end}`);
-    url.searchParams.set('travel_end',`gte.${start}`);
-    url.searchParams.set('fulfilment_status','not.in.(cancelled,payment_failed,closed)');
-    const res=await fetch(url,{headers:{apikey:serviceKey,Authorization:`Bearer ${serviceKey}`},cache:'no-store'});
-    if(!res.ok) throw new Error(`Inventory lookup failed (${res.status})`);
-    return ((await res.json()) as unknown[]).length;
-  }
-  const edge=new URL('/functions/v1/qy-roam-availability',QY_OPS_URL);
-  edge.searchParams.set('start',start); edge.searchParams.set('end',end);
-  const res=await fetch(edge,{headers:{apikey:QY_OPS_ANON,Authorization:`Bearer ${QY_OPS_ANON}`},cache:'no-store'});
-  if(!res.ok) throw new Error(`QY Ops inventory lookup failed (${res.status})`);
-  const body=(await res.json()) as {committed?:number};
-  return Math.max(0,Number(body.committed||0));
-}
 async function activeStripeHolds(stripe:Stripe,start:string,end:string,requestId:string|null) {
   const cutoff=Math.floor(Date.now()/1000)-(HOLD_MINUTES*60);
   let startingAfter:string|undefined;
   let holds=0;
+  const requestIds:string[]=[];
   // Match the availability endpoint's pagination so checkout cannot oversell when
   // Stripe has more than 100 open sessions during a busy launch period.
   for(let page=0;page<5;page+=1){
@@ -61,14 +40,18 @@ async function activeStripeHolds(stripe:Stripe,start:string,end:string,requestId
     for(const session of sessions.data){
       if(session.created<cutoff||session.metadata?.source!=='qyroam.com') continue;
       if(session.metadata?.product_type && session.metadata.product_type!=='pocket_wifi') continue;
-      if(requestId&&session.metadata?.checkout_request_id===requestId) return {holds,existingUrl:session.url};
+      if(requestId&&session.metadata?.checkout_request_id===requestId) return {holds,requestIds,existingUrl:session.url};
       const holdStart=session.metadata?.start, holdEnd=session.metadata?.end;
-      if(holdStart&&holdEnd&&holdStart<=end&&holdEnd>=start) holds+=1;
+      if(holdStart&&holdEnd&&holdStart<=end&&holdEnd>=start){
+        holds+=1;
+        const holdRequestId=checkoutRequestId(session.metadata?.checkout_request_id);
+        if(holdRequestId) requestIds.push(holdRequestId);
+      }
     }
     if(!sessions.has_more||sessions.data.length===0) break;
     startingAfter=sessions.data[sessions.data.length-1].id;
   }
-  return {holds,existingUrl:null};
+  return {holds,requestIds,existingUrl:null};
 }
 
 export async function POST(req: Request) {
@@ -80,7 +63,7 @@ export async function POST(req: Request) {
   const raw=await req.text(); if(new TextEncoder().encode(raw).length>MAX_BODY_BYTES) return NextResponse.json({error:'Request too large.'},{status:413});
   let body:Record<string,unknown>; try { body=JSON.parse(raw); } catch { return NextResponse.json({error:'Invalid request.'},{status:400}); }
   const requestId=checkoutRequestId(body.checkoutRequestId);
-  if(body.checkoutRequestId!==undefined&&!requestId) return NextResponse.json({error:'Invalid checkout request.'},{status:400});
+  if(!requestId) return NextResponse.json({error:'Invalid checkout request.'},{status:400});
   const country=String(body.country||''); const wifiPlan=getWifiPlan(country); const daily=wifiPlan?.daily; const startDate=parseDate(body.start); const endDate=parseDate(body.end);
   if(!wifiPlan||!daily||!startDate||!endDate||endDate<startDate) return NextResponse.json({error:'Please select a valid destination and travel period.'},{status:400});
   const now=new Date(); now.setUTCHours(0,0,0,0); if(startDate<now) return NextResponse.json({error:'Travel start date cannot be in the past.'},{status:400});
@@ -93,9 +76,21 @@ export async function POST(req: Request) {
   if(inventory<1) return NextResponse.json({error:'Pocket WiFi is sold out for these dates. Please choose different dates or contact +65 8032 7183.'},{status:409,headers:{'Cache-Control':'no-store'}});
   const holdState=await activeStripeHolds(stripe,start,end,requestId);
   if(holdState.existingUrl) return NextResponse.json({url:holdState.existingUrl},{headers:{'Cache-Control':'no-store'}});
-  const booked=await bookedInventoryCount(start,end);
-  const holds=holdState.holds;
-  if(booked+holds>=inventory) return NextResponse.json({error:booked>=inventory?'Pocket WiFi is sold out for these dates. Please choose different dates or contact +65 8032 7183.':'Pocket WiFi is currently being reserved by other customers for these dates. Please try again shortly or contact +65 8032 7183.'},{status:409,headers:{'Cache-Control':'no-store'}});
+  const supabase=getSupabaseAdmin();
+  if(!supabase) return NextResponse.json({error:'Live reservation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
+  const expiresAt=new Date(Date.now()+HOLD_MINUTES*60_000).toISOString();
+  const reservation=await supabase.rpc('qy_reserve_pocket_wifi',{
+    p_checkout_request_id:requestId,
+    p_travel_start:start,
+    p_travel_end:end,
+    p_inventory:inventory,
+    p_expires_at:expiresAt,
+    p_stripe_hold_count:holdState.holds,
+    p_stripe_hold_request_ids:holdState.requestIds
+  });
+  if(reservation.error) throw reservation.error;
+  const reserved=reservation.data?.[0]?.reserved===true;
+  if(!reserved) return NextResponse.json({error:'Pocket WiFi is sold out or currently reserved for these dates. Please try different dates or contact +65 8032 7183.'},{status:409,headers:{'Cache-Control':'no-store'}});
   const rentalBeforePromo=Math.max(1000,Math.round(daily*days*100));
   const promo=applyPromoCents(rentalBeforePromo, body.promoCode);
   const rentalAmount=promo.amountCents;
@@ -103,7 +98,9 @@ export async function POST(req: Request) {
   const origin=siteOrigin(req);
   const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[]=[{quantity:1,price_data:{currency:'sgd',unit_amount:rentalAmount,product_data:{name:`QY Roam Pocket WiFi — ${country}`,description:`${start} to ${end} · ${days} day${days===1?'':'s'}${promo.discountCents>0?` · ${normalisePromoCode(body.promoCode)} applied`:''}`}}}];
   if(courierFee>0) lineItems.push({quantity:1,price_data:{currency:'sgd',unit_amount:courierFee,product_data:{name:'Singapore courier delivery & return handling'}}});
-  const session=await stripe.checkout.sessions.create({mode:'payment',line_items:lineItems,expires_at:Math.floor(Date.now()/1000)+(HOLD_MINUTES*60),billing_address_collection:'required',shipping_address_collection:{allowed_countries:['SG']},phone_number_collection:{enabled:true},customer_creation:'always',success_url:`${origin}/success?session_id={CHECKOUT_SESSION_ID}`,cancel_url:`${origin}/?checkout=cancelled`,metadata:{product_type:'pocket_wifi',plan_name:`${country} Pocket WiFi`,country,start,end,days:String(days),daily_rate_sgd:daily.toFixed(2),benchmark_provider:WIFI_BENCHMARK.provider,benchmark_rate_sgd:wifiPlan.benchmarkRateSgd.toFixed(2),benchmark_verified_on:WIFI_BENCHMARK.verifiedOn,rental_before_promo_sgd:(rentalBeforePromo/100).toFixed(2),promo_code:promo.promoCode,promo_discount_sgd:(promo.discountCents/100).toFixed(2),checkout_request_id:requestId||'',source:'qyroam.com',measurement_consent:body.measurementConsent===true?'accepted':'essential'},consent_collection:{terms_of_service:'required'}},requestId?{idempotencyKey:`qyroam_wifi_${requestId}`} : undefined);
+  const session=await stripe.checkout.sessions.create({mode:'payment',line_items:lineItems,expires_at:Math.floor(new Date(expiresAt).getTime()/1000),billing_address_collection:'required',shipping_address_collection:{allowed_countries:['SG']},phone_number_collection:{enabled:true},customer_creation:'always',success_url:`${origin}/success?session_id={CHECKOUT_SESSION_ID}`,cancel_url:`${origin}/?checkout=cancelled`,metadata:{product_type:'pocket_wifi',plan_name:`${country} Pocket WiFi`,country,start,end,days:String(days),daily_rate_sgd:daily.toFixed(2),benchmark_provider:WIFI_BENCHMARK.provider,benchmark_rate_sgd:wifiPlan.benchmarkRateSgd.toFixed(2),benchmark_verified_on:WIFI_BENCHMARK.verifiedOn,rental_before_promo_sgd:(rentalBeforePromo/100).toFixed(2),promo_code:promo.promoCode,promo_discount_sgd:(promo.discountCents/100).toFixed(2),checkout_request_id:requestId,source:'qyroam.com',measurement_consent:body.measurementConsent===true?'accepted':'essential'},consent_collection:{terms_of_service:'required'}},{idempotencyKey:`qyroam_wifi_${requestId}`});
+  const linked=await supabase.from('checkout_reservations').update({stripe_session_id:session.id}).eq('checkout_request_id',requestId);
+  if(linked.error) console.error('checkout_reservation_link_error',linked.error);
   return NextResponse.json({url:session.url},{headers:{'Cache-Control':'no-store'}});
  } catch(error){ console.error('checkout_error',error); return NextResponse.json({error:'Unable to start checkout.'},{status:500}); }
 }

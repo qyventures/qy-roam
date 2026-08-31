@@ -193,6 +193,16 @@ export async function POST(req:Request){
     if(claim.status==='in_progress') return NextResponse.json({error:'Event is still processing'},{status:500});
     claimStartedAt=claim.processingStartedAt;
     await persistSession(session,event.type);
+    // A paid or failed terminal event supersedes the temporary checkout hold.
+    // Keeping pending async-payment reservations until expiry prevents the same
+    // router being sold while Stripe is still confirming payment.
+    if(session.payment_status==='paid'||event.type==='checkout.session.async_payment_failed'){
+      const checkoutRequestId=session.metadata?.checkout_request_id;
+      if(checkoutRequestId){
+        const released=await supabase.from('checkout_reservations').delete().eq('checkout_request_id',checkoutRequestId);
+        if(released.error) throw released.error;
+      }
+    }
     if(event.type!=='checkout.session.async_payment_failed'&&session.payment_status==='paid'){
       await deliverFulfilmentNotification(supabase,session);
       await deliverMetaPurchase(supabase,session);

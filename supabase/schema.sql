@@ -78,6 +78,98 @@ create table if not exists public.meta_purchase_deliveries (
 );
 alter table public.meta_purchase_deliveries enable row level security;
 
+-- Short-lived inventory reservations close the gap between an availability
+-- check and Stripe Checkout Session creation. The reservation RPC serializes
+-- competing checkouts, so two customers cannot both claim the final router.
+create table if not exists public.checkout_reservations (
+  checkout_request_id text primary key,
+  stripe_session_id text unique,
+  travel_start date not null,
+  travel_end date not null,
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now(),
+  check (travel_end >= travel_start)
+);
+alter table public.checkout_reservations enable row level security;
+
+create or replace function public.qy_reserve_pocket_wifi(
+  p_checkout_request_id text,
+  p_travel_start date,
+  p_travel_end date,
+  p_inventory integer,
+  p_expires_at timestamptz,
+  p_stripe_hold_count integer default 0,
+  p_stripe_hold_request_ids text[] default array[]::text[]
+)
+returns table(reserved boolean, remaining integer)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_existing public.checkout_reservations%rowtype;
+  v_booked integer;
+  v_reserved integer;
+  v_committed integer;
+begin
+  if p_checkout_request_id is null or p_checkout_request_id !~ '^[A-Za-z0-9_-]{16,80}$' then
+    raise exception 'invalid checkout request id';
+  end if;
+  if p_travel_start is null or p_travel_end is null or p_travel_end < p_travel_start then
+    raise exception 'invalid reservation dates';
+  end if;
+
+  -- A single transaction-level lock makes capacity calculation plus insertion
+  -- atomic across every application instance.
+  perform pg_advisory_xact_lock(hashtext('qy_roam_pocket_wifi_checkout'));
+  delete from public.checkout_reservations where expires_at <= now();
+
+  select * into v_existing
+  from public.checkout_reservations
+  where checkout_request_id = p_checkout_request_id;
+  if found then
+    if v_existing.travel_start <> p_travel_start or v_existing.travel_end <> p_travel_end then
+      raise exception 'checkout request id was already used for different dates';
+    end if;
+    return query select true, greatest(0, p_inventory - 1);
+    return;
+  end if;
+
+  select count(*)::integer into v_booked
+  from public.orders
+  where product_type = 'pocket_wifi'
+    and payment_status = 'paid'
+    and travel_start <= p_travel_end
+    and travel_end >= p_travel_start
+    and fulfilment_status not in ('cancelled', 'payment_failed', 'closed');
+
+  -- Stripe holds passed by the app are counted once. Reservations already
+  -- represented by those sessions are excluded from the database count.
+  select count(*)::integer into v_reserved
+  from public.checkout_reservations
+  where expires_at > now()
+    and travel_start <= p_travel_end
+    and travel_end >= p_travel_start
+    and not (checkout_request_id = any(coalesce(p_stripe_hold_request_ids, array[]::text[])));
+
+  v_committed := v_booked + v_reserved + greatest(0, coalesce(p_stripe_hold_count, 0));
+  if p_inventory < 1 or v_committed >= p_inventory then
+    return query select false, greatest(0, p_inventory - v_committed);
+    return;
+  end if;
+
+  insert into public.checkout_reservations (
+    checkout_request_id, travel_start, travel_end, expires_at
+  ) values (
+    p_checkout_request_id, p_travel_start, p_travel_end, p_expires_at
+  );
+  return query select true, greatest(0, p_inventory - v_committed - 1);
+end;
+$$;
+
+revoke all on function public.qy_reserve_pocket_wifi(text,date,date,integer,timestamptz,integer,text[]) from public;
+grant execute on function public.qy_reserve_pocket_wifi(text,date,date,integer,timestamptz,integer,text[]) to service_role;
+
 -- No client policies: all operational tables are server/service-role only.
 create index if not exists orders_created_at_idx on public.orders(created_at desc);
 create index if not exists orders_product_type_idx on public.orders(product_type);
@@ -86,3 +178,4 @@ create index if not exists orders_travel_start_idx on public.orders(travel_start
 create index if not exists stripe_events_processed_at_idx on public.stripe_events(processed_at desc);
 create index if not exists fulfilment_notifications_status_idx on public.fulfilment_notifications(status, updated_at);
 create index if not exists meta_purchase_deliveries_status_idx on public.meta_purchase_deliveries(status, updated_at);
+create index if not exists checkout_reservations_dates_idx on public.checkout_reservations(travel_start, travel_end, expires_at);
