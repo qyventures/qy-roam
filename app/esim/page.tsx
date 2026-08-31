@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { ESIM_PLANS, ESIM_PROMO } from '../../lib/esimPlans';
 import { trackMeta } from '../../lib/metaClient';
 
@@ -8,14 +8,21 @@ export default function EsimPage() {
   const [planId, setPlanId] = useState<string>(ESIM_PLANS[0].id);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const checkoutAttempt = useRef<{ planId: string; requestId: string } | null>(null);
+  const checkoutInFlight = useRef(false);
   const plan = useMemo(() => ESIM_PLANS.find((item) => item.id === planId) || ESIM_PLANS[0], [planId]);
   const dailyPrice = plan.qyPriceSgd / plan.days;
 
   async function checkout() {
+    if (checkoutInFlight.current) return;
+    checkoutInFlight.current = true;
     setBusy(true);
     setError('');
     try {
       const measurementConsent = localStorage.getItem('qyroam_consent') === 'accepted';
+      if (checkoutAttempt.current?.planId !== planId) {
+        checkoutAttempt.current = { planId, requestId: crypto.randomUUID() };
+      }
       if (measurementConsent) trackMeta('InitiateCheckout', {
         content_name: `${plan.destination} Travel eSIM`,
         content_category: 'Travel eSIM',
@@ -28,7 +35,7 @@ export default function EsimPage() {
       const res = await fetch('/api/esim-checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ planId, measurementConsent })
+        body: JSON.stringify({ planId, measurementConsent, checkoutRequestId: checkoutAttempt.current.requestId })
       });
       const data = await res.json();
       if (data.url) window.location.href = data.url;
@@ -36,6 +43,7 @@ export default function EsimPage() {
     } catch {
       setError('Checkout is temporarily unavailable. Please contact +65 8032 7183.');
     } finally {
+      checkoutInFlight.current = false;
       setBusy(false);
     }
   }

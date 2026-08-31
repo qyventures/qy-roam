@@ -4,6 +4,10 @@ import { ESIM_PROMO, getEsimPlan } from '../../../lib/esimPlans';
 
 export const runtime = 'nodejs';
 
+const MAX_BODY_BYTES = 4096;
+
+function checkoutRequestId(value: unknown) { const id=String(value||''); return /^[A-Za-z0-9_-]{16,80}$/.test(id)?id:null; }
+
 function siteOrigin(req: Request) {
   const configured = process.env.NEXT_PUBLIC_SITE_URL;
   if (configured) {
@@ -23,7 +27,15 @@ export async function POST(req: Request) {
     const key = process.env.STRIPE_SECRET_KEY;
     if (!key) return NextResponse.json({ error: 'Payment configuration incomplete.' }, { status: 503 });
 
-    const body = await req.json() as Record<string, unknown>;
+    const length = Number(req.headers.get('content-length') || 0);
+    if (length > MAX_BODY_BYTES) return NextResponse.json({ error: 'Request too large.' }, { status: 413 });
+    const raw = await req.text();
+    if (new TextEncoder().encode(raw).length > MAX_BODY_BYTES) return NextResponse.json({ error: 'Request too large.' }, { status: 413 });
+    let body: Record<string, unknown>;
+    try { body = JSON.parse(raw) as Record<string, unknown>; }
+    catch { return NextResponse.json({ error: 'Invalid request.' }, { status: 400 }); }
+    const requestId = checkoutRequestId(body.checkoutRequestId);
+    if (body.checkoutRequestId !== undefined && !requestId) return NextResponse.json({ error: 'Invalid checkout request.' }, { status: 400 });
     const plan = getEsimPlan(body.planId);
     if (!plan) return NextResponse.json({ error: 'Please select a valid eSIM plan.' }, { status: 400 });
 
@@ -64,11 +76,12 @@ export async function POST(req: Request) {
         promo_code: ESIM_PROMO.code,
         benchmark_price_sgd: plan.benchmarkPriceSgd.toFixed(2),
         promo_discount_percent: String(ESIM_PROMO.percent),
+        checkout_request_id: requestId || '',
         source: 'qyroam.com',
         measurement_consent: body.measurementConsent === true ? 'accepted' : 'essential'
       },
       consent_collection: { terms_of_service: 'required' }
-    });
+    }, requestId ? { idempotencyKey: `qyroam_esim_${requestId}` } : undefined);
 
     return NextResponse.json({ url: session.url }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
