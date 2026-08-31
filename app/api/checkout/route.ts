@@ -98,7 +98,17 @@ export async function POST(req: Request) {
   const origin=siteOrigin(req);
   const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[]=[{quantity:1,price_data:{currency:'sgd',unit_amount:rentalAmount,product_data:{name:`QY Roam Pocket WiFi — ${country}`,description:`${start} to ${end} · ${days} day${days===1?'':'s'}${promo.discountCents>0?` · ${normalisePromoCode(body.promoCode)} applied`:''}`}}}];
   if(courierFee>0) lineItems.push({quantity:1,price_data:{currency:'sgd',unit_amount:courierFee,product_data:{name:'Singapore courier delivery & return handling'}}});
-  const session=await stripe.checkout.sessions.create({mode:'payment',line_items:lineItems,expires_at:Math.floor(new Date(expiresAt).getTime()/1000),billing_address_collection:'required',shipping_address_collection:{allowed_countries:['SG']},phone_number_collection:{enabled:true},customer_creation:'always',success_url:`${origin}/success?session_id={CHECKOUT_SESSION_ID}`,cancel_url:`${origin}/?checkout=cancelled`,metadata:{product_type:'pocket_wifi',plan_name:`${country} Pocket WiFi`,country,start,end,days:String(days),daily_rate_sgd:daily.toFixed(2),benchmark_provider:WIFI_BENCHMARK.provider,benchmark_rate_sgd:wifiPlan.benchmarkRateSgd.toFixed(2),benchmark_verified_on:WIFI_BENCHMARK.verifiedOn,rental_before_promo_sgd:(rentalBeforePromo/100).toFixed(2),promo_code:promo.promoCode,promo_discount_sgd:(promo.discountCents/100).toFixed(2),checkout_request_id:requestId,source:'qyroam.com',measurement_consent:body.measurementConsent===true?'accepted':'essential'},consent_collection:{terms_of_service:'required'}},{idempotencyKey:`qyroam_wifi_${requestId}`});
+  let session:Stripe.Checkout.Session;
+  try{
+    session=await stripe.checkout.sessions.create({mode:'payment',line_items:lineItems,expires_at:Math.floor(new Date(expiresAt).getTime()/1000),billing_address_collection:'required',shipping_address_collection:{allowed_countries:['SG']},phone_number_collection:{enabled:true},customer_creation:'always',success_url:`${origin}/success?session_id={CHECKOUT_SESSION_ID}`,cancel_url:`${origin}/?checkout=cancelled`,metadata:{product_type:'pocket_wifi',plan_name:`${country} Pocket WiFi`,country,start,end,days:String(days),daily_rate_sgd:daily.toFixed(2),benchmark_provider:WIFI_BENCHMARK.provider,benchmark_rate_sgd:wifiPlan.benchmarkRateSgd.toFixed(2),benchmark_verified_on:WIFI_BENCHMARK.verifiedOn,rental_before_promo_sgd:(rentalBeforePromo/100).toFixed(2),promo_code:promo.promoCode,promo_discount_sgd:(promo.discountCents/100).toFixed(2),checkout_request_id:requestId,source:'qyroam.com',measurement_consent:body.measurementConsent===true?'accepted':'essential'},consent_collection:{terms_of_service:'required'}},{idempotencyKey:`qyroam_wifi_${requestId}`});
+  }catch(error){
+    // Do not strand scarce inventory when Stripe rejects or cannot create the
+    // Checkout Session. If Stripe created it but the response was interrupted,
+    // the open session remains visible to activeStripeHolds on the next request.
+    const released=await supabase.from('checkout_reservations').delete().eq('checkout_request_id',requestId).is('stripe_session_id',null);
+    if(released.error) console.error('checkout_reservation_release_error',released.error);
+    throw error;
+  }
   const linked=await supabase.from('checkout_reservations').update({stripe_session_id:session.id}).eq('checkout_request_id',requestId);
   if(linked.error) console.error('checkout_reservation_link_error',linked.error);
   return NextResponse.json({url:session.url},{headers:{'Cache-Control':'no-store'}});

@@ -55,5 +55,24 @@ export async function hasRequiredPaymentSchema() {
     console.error('production_payment_schema_check_failed', { tables: failures });
     return false;
   }
+
+  // The table checks above are not enough for Pocket WiFi sales: checkout uses
+  // this RPC as the atomic inventory boundary. Probe it with zero inventory so
+  // it can never create a reservation while still verifying that the function,
+  // its current signature, and the service-role grant are all deployed.
+  const today = new Date().toISOString().slice(0, 10);
+  const reservationProbe = await supabase.rpc('qy_reserve_pocket_wifi', {
+    p_checkout_request_id: `readiness_${crypto.randomUUID().replaceAll('-', '')}`,
+    p_travel_start: today,
+    p_travel_end: today,
+    p_inventory: 0,
+    p_expires_at: new Date(Date.now() + 60_000).toISOString(),
+    p_stripe_hold_count: 0,
+    p_stripe_hold_request_ids: [],
+  });
+  if (reservationProbe.error || reservationProbe.data?.[0]?.reserved !== false) {
+    console.error('production_payment_reservation_rpc_check_failed');
+    return false;
+  }
   return true;
 }
