@@ -17,6 +17,14 @@ const REQUIRED_PAYMENT_SCHEMA = [
     table: 'meta_purchase_deliveries',
     columns: 'stripe_session_id,status,attempts,updated_at',
   },
+  {
+    // Pocket WiFi checkout relies on this durable hold ledger to make the
+    // availability check and the subsequent Stripe session creation safe under
+    // concurrent requests. Treat its absence as launch-blocking rather than
+    // discovering it only after a customer begins checkout.
+    table: 'checkout_reservations',
+    columns: 'checkout_request_id,stripe_session_id,travel_start,travel_end,expires_at',
+  },
 ] as const;
 
 /**
