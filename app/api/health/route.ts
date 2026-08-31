@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { getAdminCredentials, getMetaCapiToken } from '@/lib/runtimeConfig';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -44,7 +45,8 @@ function isMetaPixelConfigured() {
 }
 
 function isMetaCapiConfigured() {
-  return Boolean(process.env.META_CAPI_ACCESS_TOKEN && process.env.META_CAPI_ACCESS_TOKEN.length >= 20);
+  const token = getMetaCapiToken();
+  return Boolean(token && token.length >= 20);
 }
 
 function constantTimeEqual(a: string, b: string) {
@@ -64,8 +66,7 @@ function isAuthorized(req: Request) {
 }
 
 export async function GET(req: Request) {
-  const adminUser = process.env.ADMIN_USER || process.env.ADMIN_BASIC_USER;
-  const adminPassword = process.env.ADMIN_PASSWORD || process.env.ADMIN_BASIC_PASSWORD;
+  const { user: adminUser, password: adminPassword } = getAdminCredentials();
   const checks = {
     stripe: hasPrefix(process.env.STRIPE_SECRET_KEY, ['sk_live_', 'rk_live_']),
     publishableKey: hasPrefix(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY, ['pk_live_']),

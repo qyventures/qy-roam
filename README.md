@@ -45,4 +45,8 @@ The script fast-forwards `main`, installs dependencies, validates public pricing
 
 See `.env.example`. Launch-critical values include Stripe secret/publishable keys, Stripe webhook secret, Supabase URL/service-role key, admin credentials, production site URL, inventory, and delivery lead time. Meta Pixel/CAPI values can remain unset until measurement is authorized.
 
+For compatibility, deployments using the older `ADMIN_BASIC_USER`,
+`ADMIN_BASIC_PASSWORD`, or `META_CAPI_TOKEN` names continue to work. New
+deployments should use the canonical names shown in `.env.example`.
+
 Never commit `.env` or live secrets to this public repository.

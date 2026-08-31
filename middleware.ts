@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getAdminCredentials } from './lib/runtimeConfig';
 
 function safeEqual(a: string, b: string) {
   const maxLength = Math.max(a.length, b.length);
@@ -14,8 +15,7 @@ export function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  const user = process.env.ADMIN_BASIC_USER;
-  const pass = process.env.ADMIN_BASIC_PASSWORD;
+  const { user, password: pass } = getAdminCredentials();
   if (!user || !pass) return new NextResponse('Admin access is not configured.', { status: 503 });
 
   const auth = req.headers.get('authorization');

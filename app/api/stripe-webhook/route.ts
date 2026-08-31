@@ -3,6 +3,7 @@ import Stripe from 'stripe';
 import crypto from 'crypto';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { sendSmtpMail } from '@/lib/smtp';
+import { getMetaCapiToken } from '@/lib/runtimeConfig';
 
 export const runtime = 'nodejs';
 
@@ -13,11 +14,11 @@ function normalizePhone(value?: string | null) { if (!value) return undefined; c
 function metaPurchaseConfigured(session: Stripe.Checkout.Session) {
   return session.payment_status === 'paid' &&
     session.metadata?.measurement_consent === 'accepted' &&
-    Boolean((process.env.META_CAPI_ACCESS_TOKEN || process.env.META_CAPI_TOKEN) && process.env.NEXT_PUBLIC_META_PIXEL_ID);
+    Boolean(getMetaCapiToken() && process.env.NEXT_PUBLIC_META_PIXEL_ID);
 }
 
 async function sendMetaPurchase(session: Stripe.Checkout.Session) {
-  const token=(process.env.META_CAPI_ACCESS_TOKEN || process.env.META_CAPI_TOKEN), pixel=process.env.NEXT_PUBLIC_META_PIXEL_ID;
+  const token=getMetaCapiToken(), pixel=process.env.NEXT_PUBLIC_META_PIXEL_ID;
   if (!token || !pixel) throw new Error('Meta CAPI is not configured');
   const email=normalizeEmail(session.customer_details?.email), phone=normalizePhone(session.customer_details?.phone);
   const userData:Record<string,string[]>={}; if(email) userData.em=[sha256(email)!]; if(phone) userData.ph=[sha256(phone)!];

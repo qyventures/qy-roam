@@ -1,4 +1,5 @@
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
+import { getMetaCapiToken } from '@/lib/runtimeConfig';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,7 +14,7 @@ export default async function LaunchPage(){
  const webhook=Boolean(process.env.STRIPE_WEBHOOK_SECRET);
  const smtp=Boolean(process.env.SMTP_HOST&&process.env.SMTP_USER&&process.env.SMTP_PASS);
  const pixel=Boolean(process.env.NEXT_PUBLIC_META_PIXEL_ID);
- const capi=Boolean(process.env.META_CAPI_ACCESS_TOKEN);
+ const capi=Boolean(getMetaCapiToken());
  const site=true;
  const organicReady=stripe&&dbOk;
  const paidReady=organicReady&&webhook&&smtp&&pixel&&capi;
