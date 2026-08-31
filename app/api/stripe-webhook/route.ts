@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { sendSmtpMail } from '@/lib/smtp';
 import { getMetaCapiToken } from '@/lib/runtimeConfig';
+import { validateQyRoamSession } from '@/lib/qyRoamSession';
 
 export const runtime = 'nodejs';
 
@@ -200,6 +201,14 @@ export async function POST(req:Request){
   // order, sending fulfilment email, or filling this app's idempotency ledger.
   // Both QY Roam checkout routes set this server-controlled marker.
   if(session.metadata?.source!=='qyroam.com') return NextResponse.json({received:true,ignored:true});
+  const validation=validateQyRoamSession(session);
+  if(!validation.valid){
+    // Never persist or fulfil a malformed digital order. Returning a failure is
+    // intentional: Stripe will retry and surface the delivery failure instead
+    // of silently losing a legitimate order that needs operator attention.
+    console.error('stripe_webhook_order_integrity_error',{sessionId:session.id,reason:validation.reason});
+    return NextResponse.json({error:'Order integrity validation failed'},{status:500});
+  }
   const eventClaimId=`stripe:${event.id}`;
   let claimStartedAt:string|undefined;
   try{

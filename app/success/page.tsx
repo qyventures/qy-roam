@@ -1,5 +1,5 @@
 import Stripe from 'stripe';
-import { qyRoamProductType, type QyRoamProductType } from '@/lib/qyRoamSession';
+import { validateQyRoamSession, type QyRoamProductType } from '@/lib/qyRoamSession';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,8 +23,9 @@ export default async function SuccessPage({ searchParams }: Props) {
     try {
       const stripe = new Stripe(key, { apiVersion: '2024-06-20' });
       const session = await stripe.checkout.sessions.retrieve(sessionId);
-      productType = qyRoamProductType(session);
-      if (!productType) throw new Error('Checkout Session does not belong to QY Roam');
+      const validation = validateQyRoamSession(session);
+      if (!validation.valid) throw new Error(`Invalid QY Roam Checkout Session: ${validation.reason}`);
+      productType = validation.productType;
       paid = session.payment_status === 'paid';
       destination = session.metadata?.country || '';
       start = session.metadata?.start || '';
