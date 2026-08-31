@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getAdminCredentials, getMetaCapiToken } from '@/lib/runtimeConfig';
+import { hasRequiredPaymentSchema } from '@/lib/productionReadiness';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -66,13 +67,23 @@ function isAuthorized(req: Request) {
 }
 
 export async function GET(req: Request) {
+  const headers = { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' };
+
+  // Public probes get only liveness and must not trigger external dependency
+  // checks or disclose production configuration.
+  if (!isAuthorized(req)) {
+    return NextResponse.json({ ok: true, service: 'qy-roam' }, { status: 200, headers });
+  }
+
   const { user: adminUser, password: adminPassword } = getAdminCredentials();
+  const paymentSchema = await hasRequiredPaymentSchema();
   const checks = {
     stripe: hasPrefix(process.env.STRIPE_SECRET_KEY, ['sk_live_', 'rk_live_']),
     publishableKey: hasPrefix(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY, ['pk_live_']),
     siteUrl: isProductionSiteUrl(process.env.NEXT_PUBLIC_SITE_URL),
     webhook: hasPrefix(process.env.STRIPE_WEBHOOK_SECRET, ['whsec_']),
     supabase: Boolean(process.env.SUPABASE_URL?.startsWith('https://') && process.env.SUPABASE_SERVICE_ROLE_KEY && process.env.SUPABASE_SERVICE_ROLE_KEY.length >= 32),
+    paymentSchema,
     admin: Boolean(adminUser && isStrongAdminPassword(adminPassword)),
     inventory: isPositiveInteger(process.env.POCKET_WIFI_INVENTORY),
     deliveryLeadDays: isPositiveInteger(process.env.MIN_DELIVERY_LEAD_DAYS),
@@ -85,12 +96,6 @@ export async function GET(req: Request) {
   const coreReady = checks.stripe && checks.publishableKey && checks.siteUrl;
   const launchReady = Object.values(checks).every(Boolean);
   const paidAcquisitionReady = launchReady && Object.values(paidAcquisitionChecks).every(Boolean);
-  const headers = { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' };
-
-  // Public probes get only liveness. Configuration names/status are deliberately private.
-  if (!isAuthorized(req)) {
-    return NextResponse.json({ ok: true, service: 'qy-roam' }, { status: 200, headers });
-  }
 
   const missing = Object.entries(checks).filter(([, configured]) => !configured).map(([name]) => name);
   const paidAcquisitionMissing = Object.entries(paidAcquisitionChecks)
