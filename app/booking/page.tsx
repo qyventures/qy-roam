@@ -1,6 +1,8 @@
 import type { Metadata } from 'next';
 import Stripe from 'stripe';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
+import { initialFulfilmentStatus } from '@/lib/orderLifecycle';
+import { qyRoamProductType } from '@/lib/qyRoamSession';
 
 export const dynamic = 'force-dynamic';
 
@@ -46,6 +48,8 @@ export default async function BookingPage({ searchParams }: Props) {
   try {
     const stripe = new Stripe(key, { apiVersion: '2024-06-20' });
     const session = await stripe.checkout.sessions.retrieve(sessionId);
+    const productType = qyRoamProductType(session);
+    if (!productType) throw new Error('Checkout Session does not belong to QY Roam');
     const supabase = getSupabaseAdmin();
     const order = supabase
       ? await supabase
@@ -55,10 +59,9 @@ export default async function BookingPage({ searchParams }: Props) {
           .maybeSingle()
       : null;
 
-    const fulfilment = order?.data?.fulfilment_status || (session.payment_status === 'paid' ? 'paid' : 'awaiting_payment');
+    const fulfilment = order?.data?.fulfilment_status || initialFulfilmentStatus(productType, session.payment_status);
     const destination = session.metadata?.country || 'your destination';
     const planName = session.metadata?.plan_name || destination;
-    const productType = session.metadata?.product_type || 'pocket_wifi';
     const isEsim = productType === 'esim';
     const start = session.metadata?.start || '';
     const end = session.metadata?.end || '';

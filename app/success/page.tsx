@@ -1,4 +1,5 @@
 import Stripe from 'stripe';
+import { qyRoamProductType, type QyRoamProductType } from '@/lib/qyRoamSession';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,23 +16,36 @@ export default async function SuccessPage({ searchParams }: Props) {
   let start = '';
   let end = '';
   let amount = '';
-  let productType = 'pocket_wifi';
+  let productType: QyRoamProductType | null = null;
   let planName = '';
 
   if (sessionId && key && sessionId.startsWith('cs_')) {
     try {
       const stripe = new Stripe(key, { apiVersion: '2024-06-20' });
       const session = await stripe.checkout.sessions.retrieve(sessionId);
+      productType = qyRoamProductType(session);
+      if (!productType) throw new Error('Checkout Session does not belong to QY Roam');
       paid = session.payment_status === 'paid';
       destination = session.metadata?.country || '';
       start = session.metadata?.start || '';
       end = session.metadata?.end || '';
-      productType = session.metadata?.product_type || 'pocket_wifi';
       planName = session.metadata?.plan_name || '';
       amount = session.amount_total != null ? `S$${(session.amount_total / 100).toFixed(2)}` : '';
     } catch (error) {
       console.error('success_session_lookup_error', error);
     }
+  }
+
+  if (!productType) {
+    return (
+      <main className="wrap section legal">
+        <span className="eyebrow">Order status</span>
+        <h1>We couldn’t load this QY Roam order.</h1>
+        <p>Please use the confirmation link from your QY Roam checkout or contact us for help.</p>
+        <p><a href="tel:+6580327183"><strong>+65 8032 7183</strong></a></p>
+        <a className="secondary" href="/">Back to QY Roam</a>
+      </main>
+    );
   }
 
   if (!paid) {
