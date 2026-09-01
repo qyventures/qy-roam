@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
-import { validFulfilmentStatus } from '@/lib/orderLifecycle';
+import { validFulfilmentStatus, validFulfilmentTransition } from '@/lib/orderLifecycle';
 
 export const runtime = 'nodejs';
 
@@ -15,10 +15,16 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const id = Number(params.id);
   if (!Number.isSafeInteger(id) || id < 1) return NextResponse.json({ error: 'Invalid order id' }, { status: 400 });
 
-  const existing = await supabase.from('orders').select('product_type,dispatched_at,returned_at').eq('id', id).maybeSingle();
+  const existing = await supabase.from('orders').select('product_type,payment_status,fulfilment_status,dispatched_at,returned_at').eq('id', id).maybeSingle();
   if (existing.error) return NextResponse.json({ error: 'Unable to load order' }, { status: 500 });
   if (!existing.data) return NextResponse.json({ error: 'Order not found' }, { status: 404 });
   if (!validFulfilmentStatus(existing.data.product_type, status)) return NextResponse.json({ error: 'Invalid fulfilment status for this order' }, { status: 400 });
+  if (existing.data.payment_status !== 'paid') {
+    return NextResponse.json({ error: 'Only paid orders can be updated for fulfilment' }, { status: 409 });
+  }
+  if (!validFulfilmentTransition(existing.data.product_type, existing.data.fulfilment_status, status)) {
+    return NextResponse.json({ error: 'This fulfilment transition is not allowed for the current order state' }, { status: 409 });
+  }
 
   const patch: Record<string, any> = {
     fulfilment_status: status,

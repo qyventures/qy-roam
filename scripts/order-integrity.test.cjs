@@ -24,6 +24,7 @@ const { LAUNCH_PROMO } = require('../lib/promotions.ts');
 const { validateQyRoamSession } = require('../lib/qyRoamSession.ts');
 const { parseExactIsoDate, validCheckoutRequestId } = require('../lib/checkoutValidation.ts');
 const { WIFI_BENCHMARK, WIFI_PLANS } = require('../lib/wifiPlans.ts');
+const { allowedFulfilmentStatuses, validFulfilmentTransition } = require('../lib/orderLifecycle.ts');
 
 // The success page, booking-status page, and Stripe webhook must all use this
 // same validator rather than trusting the QY Roam source marker by itself.
@@ -143,4 +144,19 @@ test('checkout request ids use the same production boundary everywhere', () => {
   for (const value of ['short', 'contains spaces 123456', 'bad/slashes/123456', 'x'.repeat(81)]) {
     assert.equal(validCheckoutRequestId(value), null);
   }
+});
+
+test('Pocket WiFi fulfilment follows a dispatch and return lifecycle', () => {
+  assert.deepEqual(allowedFulfilmentStatuses('pocket_wifi', 'paid'), ['paid', 'packing', 'dispatched', 'cancelled']);
+  assert.equal(validFulfilmentTransition('pocket_wifi', 'paid', 'returned'), false);
+  assert.equal(validFulfilmentTransition('pocket_wifi', 'dispatched', 'returned'), true);
+  assert.equal(validFulfilmentTransition('pocket_wifi', 'returned', 'closed'), true);
+  assert.equal(validFulfilmentTransition('pocket_wifi', 'closed', 'packing'), false);
+});
+
+test('eSIM lifecycle cannot use router statuses or reopen closed orders', () => {
+  assert.deepEqual(allowedFulfilmentStatuses('esim', 'awaiting_fulfilment'), ['awaiting_fulfilment', 'fulfilled', 'cancelled']);
+  assert.equal(validFulfilmentTransition('esim', 'awaiting_fulfilment', 'dispatched'), false);
+  assert.equal(validFulfilmentTransition('esim', 'fulfilled', 'closed'), true);
+  assert.equal(validFulfilmentTransition('esim', 'closed', 'awaiting_fulfilment'), false);
 });
