@@ -4,7 +4,7 @@ import { applyPromoCents, normalisePromoCode } from '../../../lib/promotions';
 import { getWifiPlan, WIFI_BENCHMARK } from '../../../lib/wifiPlans';
 import { getSupabaseAdmin } from '../../../lib/supabaseAdmin';
 import { parseExactIsoDate, validCheckoutRequestId } from '../../../lib/checkoutValidation';
-import { QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance } from '../../../lib/orderProvenance';
+import { QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance, validQyRoamProvenance } from '../../../lib/orderProvenance';
 import { operationalConfig } from '../../../lib/operationalConfig';
 
 export const runtime = 'nodejs';
@@ -44,7 +44,10 @@ async function activeStripeHolds(stripe:Stripe,country:string,start:string,end:s
       // Stripe normally removes expired sessions from the "open" list, but
       // expiry is the inventory boundary. Check it explicitly so a session
       // expired early (or retained briefly by the API) cannot block a router.
-      if(session.created<cutoff||!session.expires_at||session.expires_at<=nowSeconds||session.metadata?.source!=='qyroam.com') continue;
+      // Do not let a manually-created lookalike session in a shared Stripe
+      // account consume scarce router capacity. Holds use the same
+      // server-authored provenance boundary as paid-order fulfilment.
+      if(session.created<cutoff||!session.expires_at||session.expires_at<=nowSeconds||session.metadata?.source!=='qyroam.com'||!validQyRoamProvenance(session.id,session.metadata)) continue;
       if(session.metadata?.product_type && session.metadata.product_type!=='pocket_wifi') continue;
       if(requestId&&session.metadata?.checkout_request_id===requestId){
         const sameBooking=session.metadata?.product_type==='pocket_wifi'&&session.metadata?.country===country&&session.metadata?.start===start&&session.metadata?.end===end;

@@ -242,6 +242,14 @@ test('Pocket WiFi availability only counts Checkout Sessions that are still unex
   }
 });
 
+test('Pocket WiFi holds require server-issued checkout provenance', () => {
+  const checkoutRoute = fs.readFileSync(require.resolve('../app/api/checkout/route.ts'), 'utf8');
+  const availabilityRoute = fs.readFileSync(require.resolve('../app/api/availability/route.ts'), 'utf8');
+  for (const source of [checkoutRoute, availabilityRoute]) {
+    assert.match(source, /validQyRoamProvenance\(session\.id,\s*session\.metadata\)/);
+  }
+});
+
 test('eSIM lifecycle cannot use router statuses or reopen closed orders', () => {
   assert.deepEqual(allowedFulfilmentStatuses('esim', 'awaiting_fulfilment'), ['awaiting_fulfilment', 'fulfilled', 'cancelled']);
   assert.equal(validFulfilmentTransition('esim', 'awaiting_fulfilment', 'dispatched'), false);

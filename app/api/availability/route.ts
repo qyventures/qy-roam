@@ -3,6 +3,7 @@ import Stripe from 'stripe';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { parseExactIsoDate } from '@/lib/checkoutValidation';
 import { operationalConfig } from '@/lib/operationalConfig';
+import { validQyRoamProvenance } from '@/lib/orderProvenance';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,7 +23,10 @@ async function activeStripeHolds(stripe: Stripe, start: string, end: string) {
     for (const session of sessions.data) {
       // Session status is eventually consistent around expiry. Capacity must
       // follow the Checkout Session's actual expiry, not only its age.
-      if (session.created < cutoff || !session.expires_at || session.expires_at <= nowSeconds || session.metadata?.source !== 'qyroam.com') continue;
+      // Inventory holds must be as trustworthy as fulfilment. A source marker
+      // alone is writable on manually-created Checkout Sessions in a shared
+      // Stripe account and must not be able to make routers appear sold out.
+      if (session.created < cutoff || !session.expires_at || session.expires_at <= nowSeconds || session.metadata?.source !== 'qyroam.com' || !validQyRoamProvenance(session.id, session.metadata)) continue;
       if (session.metadata?.product_type && session.metadata.product_type !== 'pocket_wifi') continue;
       const holdStart = session.metadata?.start;
       const holdEnd = session.metadata?.end;
