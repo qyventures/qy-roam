@@ -26,6 +26,9 @@ const { parseExactIsoDate, validCheckoutRequestId } = require('../lib/checkoutVa
 const { WIFI_BENCHMARK, WIFI_PLANS } = require('../lib/wifiPlans.ts');
 const { allowedFulfilmentStatuses, validFulfilmentTransition } = require('../lib/orderLifecycle.ts');
 
+process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
+const { signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
+
 // The success page, booking-status page, and Stripe webhook must all use this
 // same validator rather than trusting the QY Roam source marker by itself.
 const bookingPage = fs.readFileSync(require.resolve('../app/booking/page.tsx'), 'utf8');
@@ -35,7 +38,7 @@ const adminOrderActions = fs.readFileSync(require.resolve('../components/AdminOr
 const requestId = 'checkout_request_123456';
 
 function esimSession(plan = ESIM_PLANS[0]) {
-  return {
+  const session = {
     id: 'cs_test_esim',
     currency: 'sgd',
     amount_total: Math.max(50, Math.round(plan.qyPriceSgd * 100)),
@@ -51,13 +54,15 @@ function esimSession(plan = ESIM_PLANS[0]) {
       promo_discount_percent: String(ESIM_PROMO.percent)
     }
   };
+  session.metadata.qyroam_provenance = signedQyRoamProvenance(session.id, session.metadata);
+  return session;
 }
 
 function wifiSession(plan = WIFI_PLANS[0]) {
   const days = 4;
   const rental = Math.max(1000, Math.round(plan.daily * days * 100));
   const discount = Math.floor((rental * LAUNCH_PROMO.percent) / 100);
-  return {
+  const session = {
     id: 'cs_test_wifi',
     currency: 'sgd',
     amount_total: rental - discount,
@@ -80,6 +85,8 @@ function wifiSession(plan = WIFI_PLANS[0]) {
       courier_fee_sgd: '0.00'
     }
   };
+  session.metadata.qyroam_provenance = signedQyRoamProvenance(session.id, session.metadata);
+  return session;
 }
 
 test('accepts every server-authored eSIM catalogue session', () => {
@@ -123,6 +130,23 @@ test('ignores sessions outside the QY Roam checkout boundary', () => {
   const session = esimSession();
   session.metadata.source = 'another-store';
   assert.equal(validateQyRoamSession(session).valid, false);
+});
+
+test('rejects unsigned, copied, and session-id-replayed checkout provenance', () => {
+  const unsigned = esimSession();
+  delete unsigned.metadata.qyroam_provenance;
+  assert.equal(validateQyRoamSession(unsigned).valid, false);
+
+  const unrelated = esimSession();
+  unrelated.id = 'cs_test_unrelated_session';
+  unrelated.metadata.qyroam_provenance = signedQyRoamProvenance(unrelated.id, unrelated.metadata);
+  const copied = esimSession();
+  copied.metadata.qyroam_provenance = unrelated.metadata.qyroam_provenance;
+  assert.equal(validateQyRoamSession(copied).valid, false);
+
+  const replayed = esimSession();
+  replayed.id = 'cs_test_other_session';
+  assert.equal(validateQyRoamSession(replayed).valid, false);
 });
 
 test('booking status uses full checkout-session integrity validation', () => {

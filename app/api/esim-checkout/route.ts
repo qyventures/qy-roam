@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { ESIM_PROMO, getEsimPlan } from '../../../lib/esimPlans';
 import { validCheckoutRequestId } from '../../../lib/checkoutValidation';
+import { QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance } from '../../../lib/orderProvenance';
 
 export const runtime = 'nodejs';
 
@@ -38,6 +39,7 @@ export async function POST(req: Request) {
 
     const key = process.env.STRIPE_SECRET_KEY;
     if (!key) return NextResponse.json({ error: 'Payment configuration incomplete.' }, { status: 503 });
+    if (!process.env.ORDER_INTEGRITY_SECRET || process.env.ORDER_INTEGRITY_SECRET.length < 32) return NextResponse.json({ error: 'Order configuration incomplete.' }, { status: 503 });
 
     const length = Number(req.headers.get('content-length') || 0);
     if (length > MAX_BODY_BYTES) return NextResponse.json({ error: 'Request too large.' }, { status: 413 });
@@ -94,6 +96,15 @@ export async function POST(req: Request) {
       },
       consent_collection: { terms_of_service: 'required' }
     }, { idempotencyKey: `qyroam_esim_${requestId}` });
+
+    // Stripe assigns the session id during creation. Add a server-only HMAC
+    // bound to that id before exposing the Checkout URL, preventing a manually
+    // created lookalike session from crossing the fulfilment boundary.
+    const metadata = { ...session.metadata } as Record<string, string>;
+    const provenance = signedQyRoamProvenance(session.id, metadata);
+    if (metadata[QY_ROAM_PROVENANCE_METADATA_KEY] !== provenance) {
+      await stripe.checkout.sessions.update(session.id, { metadata: { [QY_ROAM_PROVENANCE_METADATA_KEY]: provenance } });
+    }
 
     // Stripe can return the prior response for this idempotency key after its
     // Checkout Session has expired. That response has no usable URL, so make

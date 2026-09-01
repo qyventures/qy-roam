@@ -85,6 +85,7 @@ export async function GET(req: Request) {
     publishableKey: hasPrefix(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY, ['pk_live_']),
     siteUrl: isProductionSiteUrl(process.env.NEXT_PUBLIC_SITE_URL),
     webhook: hasPrefix(process.env.STRIPE_WEBHOOK_SECRET, ['whsec_']),
+    orderIntegrity: Boolean(process.env.ORDER_INTEGRITY_SECRET && process.env.ORDER_INTEGRITY_SECRET.length >= 32),
     supabase: Boolean(process.env.SUPABASE_URL?.startsWith('https://') && process.env.SUPABASE_SERVICE_ROLE_KEY && process.env.SUPABASE_SERVICE_ROLE_KEY.length >= 32),
     paymentSchema,
     operationsSchema,

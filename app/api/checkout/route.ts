@@ -4,6 +4,7 @@ import { applyPromoCents, normalisePromoCode } from '../../../lib/promotions';
 import { getWifiPlan, WIFI_BENCHMARK } from '../../../lib/wifiPlans';
 import { getSupabaseAdmin } from '../../../lib/supabaseAdmin';
 import { parseExactIsoDate, validCheckoutRequestId } from '../../../lib/checkoutValidation';
+import { QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance } from '../../../lib/orderProvenance';
 
 export const runtime = 'nodejs';
 
@@ -42,7 +43,7 @@ async function activeStripeHolds(stripe:Stripe,country:string,start:string,end:s
       if(session.metadata?.product_type && session.metadata.product_type!=='pocket_wifi') continue;
       if(requestId&&session.metadata?.checkout_request_id===requestId){
         const sameBooking=session.metadata?.product_type==='pocket_wifi'&&session.metadata?.country===country&&session.metadata?.start===start&&session.metadata?.end===end;
-        return {holds,requestIds,existingUrl:sameBooking?session.url:null,requestConflict:!sameBooking};
+        return {holds,requestIds,existingUrl:sameBooking?session.url:null,existingSessionId:sameBooking?session.id:null,requestConflict:!sameBooking};
       }
       const holdStart=session.metadata?.start, holdEnd=session.metadata?.end;
       if(holdStart&&holdEnd&&holdStart<=end&&holdEnd>=start){
@@ -54,7 +55,7 @@ async function activeStripeHolds(stripe:Stripe,country:string,start:string,end:s
     if(!sessions.has_more||sessions.data.length===0) break;
     startingAfter=sessions.data[sessions.data.length-1].id;
   }
-  return {holds,requestIds,existingUrl:null,requestConflict:false};
+  return {holds,requestIds,existingUrl:null,existingSessionId:null,requestConflict:false};
 }
 
 export async function POST(req: Request) {
@@ -63,6 +64,7 @@ export async function POST(req: Request) {
   const type=req.headers.get('content-type')||''; if(!type.toLowerCase().startsWith('application/json')) return NextResponse.json({error:'Expected JSON request.'},{status:415});
   const length=Number(req.headers.get('content-length')||0); if(length>MAX_BODY_BYTES) return NextResponse.json({error:'Request too large.'},{status:413});
   const key=process.env.STRIPE_SECRET_KEY; if(!key) return NextResponse.json({error:'Payment configuration incomplete.'},{status:503});
+  if(!process.env.ORDER_INTEGRITY_SECRET||process.env.ORDER_INTEGRITY_SECRET.length<32) return NextResponse.json({error:'Order configuration incomplete.'},{status:503});
   const raw=await req.text(); if(new TextEncoder().encode(raw).length>MAX_BODY_BYTES) return NextResponse.json({error:'Request too large.'},{status:413});
   let body:Record<string,unknown>; try { body=JSON.parse(raw); } catch { return NextResponse.json({error:'Invalid request.'},{status:400}); }
   const requestId=validCheckoutRequestId(body.checkoutRequestId);
@@ -79,7 +81,18 @@ export async function POST(req: Request) {
   if(inventory<1) return NextResponse.json({error:'Pocket WiFi is sold out for these dates. Please choose different dates or contact +65 8032 7183.'},{status:409,headers:{'Cache-Control':'no-store'}});
   const holdState=await activeStripeHolds(stripe,country,start,end,requestId);
   if(holdState.requestConflict) return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.'},{status:409,headers:{'Cache-Control':'no-store'}});
-  if(holdState.existingUrl) return NextResponse.json({url:holdState.existingUrl},{headers:{'Cache-Control':'no-store'}});
+  if(holdState.existingUrl&&holdState.existingSessionId){
+    // A retry can find a session created just before a process interruption.
+    // Repair its provenance before returning its URL, rather than allowing an
+    // unsigned session to reach payment.
+    const existing=await stripe.checkout.sessions.retrieve(holdState.existingSessionId);
+    const metadata={...existing.metadata} as Record<string,string>;
+    const provenance=signedQyRoamProvenance(existing.id,metadata);
+    if(metadata[QY_ROAM_PROVENANCE_METADATA_KEY]!==provenance){
+      await stripe.checkout.sessions.update(existing.id,{metadata:{[QY_ROAM_PROVENANCE_METADATA_KEY]:provenance}});
+    }
+    return NextResponse.json({url:holdState.existingUrl},{headers:{'Cache-Control':'no-store'}});
+  }
   const supabase=getSupabaseAdmin();
   if(!supabase) return NextResponse.json({error:'Live reservation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
   const expiresAt=new Date(Date.now()+HOLD_MINUTES*60_000).toISOString();
@@ -112,6 +125,19 @@ export async function POST(req: Request) {
     const released=await supabase.from('checkout_reservations').delete().eq('checkout_request_id',requestId).is('stripe_session_id',null);
     if(released.error) console.error('checkout_reservation_release_error',released.error);
     throw error;
+  }
+  // The id-specific provenance is written before the checkout URL is exposed.
+  // Retrying the same idempotency key also repairs a session if a process died
+  // between Stripe creation and this metadata update.
+  const metadata={...session.metadata} as Record<string,string>;
+  const provenance=signedQyRoamProvenance(session.id,metadata);
+  if(metadata[QY_ROAM_PROVENANCE_METADATA_KEY]!==provenance){
+    try { await stripe.checkout.sessions.update(session.id,{metadata:{[QY_ROAM_PROVENANCE_METADATA_KEY]:provenance}}); }
+    catch(error){
+      const released=await supabase.from('checkout_reservations').delete().eq('checkout_request_id',requestId).is('stripe_session_id',null);
+      if(released.error) console.error('checkout_provenance_reservation_release_error',released.error);
+      throw error;
+    }
   }
   // Stripe retains idempotency keys after a Checkout Session expires. A client
   // retry using that key can therefore receive the old session, whose URL is

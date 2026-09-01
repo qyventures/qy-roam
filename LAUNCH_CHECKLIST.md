@@ -11,6 +11,7 @@ Required before launch:
 - `STRIPE_SECRET_KEY` — live `sk_live_...` or restricted live `rk_live_...`
 - `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` — live `pk_live_...`
 - `STRIPE_WEBHOOK_SECRET` — live `whsec_...` after webhook creation
+- `ORDER_INTEGRITY_SECRET` — random secret of at least 32 characters; binds Checkout Sessions to QY Roam before fulfilment
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `ADMIN_USER`

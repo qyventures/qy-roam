@@ -43,7 +43,7 @@ The script fast-forwards `main`, installs dependencies, validates public pricing
 
 ## Required production configuration
 
-See `.env.example`. Launch-critical values include Stripe secret/publishable keys, Stripe webhook secret, Supabase URL/service-role key, admin credentials, production site URL, inventory, and delivery lead time. Meta Pixel/CAPI values can remain unset until measurement is authorized.
+See `.env.example`. Launch-critical values include Stripe secret/publishable keys, Stripe webhook secret, the 32+ character `ORDER_INTEGRITY_SECRET`, Supabase URL/service-role key, admin credentials, production site URL, inventory, and delivery lead time. Meta Pixel/CAPI values can remain unset until measurement is authorized.
 
 For compatibility, deployments using the older `ADMIN_BASIC_USER`,
 `ADMIN_BASIC_PASSWORD`, or `META_CAPI_TOKEN` names continue to work. New

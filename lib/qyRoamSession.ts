@@ -3,6 +3,7 @@ import { ESIM_PROMO, getEsimPlan } from './esimPlans';
 import { LAUNCH_PROMO } from './promotions';
 import { getWifiPlan, WIFI_BENCHMARK } from './wifiPlans';
 import { parseExactIsoDate, validCheckoutRequestId } from './checkoutValidation';
+import { validQyRoamProvenance } from './orderProvenance';
 
 export type QyRoamProductType = 'esim' | 'pocket_wifi';
 
@@ -33,6 +34,9 @@ export function validateQyRoamSession(session: Stripe.Checkout.Session): QyRoamS
   if (!productType) return { valid: false, reason: 'unknown QY Roam product identity' };
   if (!validCheckoutRequestId(session.metadata?.checkout_request_id)) {
     return { valid: false, reason: 'missing or invalid checkout request id' };
+  }
+  if (!validQyRoamProvenance(session.id, session.metadata)) {
+    return { valid: false, reason: 'missing or invalid QY Roam checkout provenance' };
   }
 
   if (productType === 'pocket_wifi') {
