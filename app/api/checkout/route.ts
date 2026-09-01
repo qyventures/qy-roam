@@ -3,6 +3,7 @@ import Stripe from 'stripe';
 import { applyPromoCents, normalisePromoCode } from '../../../lib/promotions';
 import { getWifiPlan, WIFI_BENCHMARK } from '../../../lib/wifiPlans';
 import { getSupabaseAdmin } from '../../../lib/supabaseAdmin';
+import { parseExactIsoDate, validCheckoutRequestId } from '../../../lib/checkoutValidation';
 
 export const runtime = 'nodejs';
 
@@ -12,8 +13,6 @@ const MAX_ATTEMPTS=12;
 const HOLD_MINUTES=30;
 const attempts=new Map<string,{count:number;reset:number}>();
 
-function parseDate(value: unknown) { const text=String(value||''); if(!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null; const date=new Date(`${text}T00:00:00Z`); return Number.isNaN(date.getTime())?null:date; }
-function checkoutRequestId(value: unknown) { const id=String(value||''); return /^[A-Za-z0-9_-]{16,80}$/.test(id)?id:null; }
 function siteOrigin(req: Request) {
   const configured = process.env.NEXT_PUBLIC_SITE_URL;
   if (configured) { try { return new URL(configured).origin; } catch { throw new Error('Invalid NEXT_PUBLIC_SITE_URL'); } }
@@ -28,7 +27,7 @@ function limited(req: Request) {
   if(attempts.size>5000) for(const [k,v] of attempts) if(v.reset<=now) attempts.delete(k);
   return current.count>MAX_ATTEMPTS;
 }
-async function activeStripeHolds(stripe:Stripe,start:string,end:string,requestId:string|null) {
+async function activeStripeHolds(stripe:Stripe,country:string,start:string,end:string,requestId:string|null) {
   const cutoff=Math.floor(Date.now()/1000)-(HOLD_MINUTES*60);
   let startingAfter:string|undefined;
   let holds=0;
@@ -41,18 +40,21 @@ async function activeStripeHolds(stripe:Stripe,start:string,end:string,requestId
     for(const session of sessions.data){
       if(session.created<cutoff||session.metadata?.source!=='qyroam.com') continue;
       if(session.metadata?.product_type && session.metadata.product_type!=='pocket_wifi') continue;
-      if(requestId&&session.metadata?.checkout_request_id===requestId) return {holds,requestIds,existingUrl:session.url};
+      if(requestId&&session.metadata?.checkout_request_id===requestId){
+        const sameBooking=session.metadata?.product_type==='pocket_wifi'&&session.metadata?.country===country&&session.metadata?.start===start&&session.metadata?.end===end;
+        return {holds,requestIds,existingUrl:sameBooking?session.url:null,requestConflict:!sameBooking};
+      }
       const holdStart=session.metadata?.start, holdEnd=session.metadata?.end;
       if(holdStart&&holdEnd&&holdStart<=end&&holdEnd>=start){
         holds+=1;
-        const holdRequestId=checkoutRequestId(session.metadata?.checkout_request_id);
+        const holdRequestId=validCheckoutRequestId(session.metadata?.checkout_request_id);
         if(holdRequestId) requestIds.push(holdRequestId);
       }
     }
     if(!sessions.has_more||sessions.data.length===0) break;
     startingAfter=sessions.data[sessions.data.length-1].id;
   }
-  return {holds,requestIds,existingUrl:null};
+  return {holds,requestIds,existingUrl:null,requestConflict:false};
 }
 
 export async function POST(req: Request) {
@@ -63,9 +65,9 @@ export async function POST(req: Request) {
   const key=process.env.STRIPE_SECRET_KEY; if(!key) return NextResponse.json({error:'Payment configuration incomplete.'},{status:503});
   const raw=await req.text(); if(new TextEncoder().encode(raw).length>MAX_BODY_BYTES) return NextResponse.json({error:'Request too large.'},{status:413});
   let body:Record<string,unknown>; try { body=JSON.parse(raw); } catch { return NextResponse.json({error:'Invalid request.'},{status:400}); }
-  const requestId=checkoutRequestId(body.checkoutRequestId);
+  const requestId=validCheckoutRequestId(body.checkoutRequestId);
   if(!requestId) return NextResponse.json({error:'Invalid checkout request.'},{status:400});
-  const country=String(body.country||''); const wifiPlan=getWifiPlan(country); const daily=wifiPlan?.daily; const startDate=parseDate(body.start); const endDate=parseDate(body.end);
+  const country=String(body.country||''); const wifiPlan=getWifiPlan(country); const daily=wifiPlan?.daily; const startDate=parseExactIsoDate(body.start); const endDate=parseExactIsoDate(body.end);
   if(!wifiPlan||!daily||!startDate||!endDate||endDate<startDate) return NextResponse.json({error:'Please select a valid destination and travel period.'},{status:400});
   const now=new Date(); now.setUTCHours(0,0,0,0); if(startDate<now) return NextResponse.json({error:'Travel start date cannot be in the past.'},{status:400});
   const minLeadDays=Math.max(0,Number.parseInt(process.env.MIN_DELIVERY_LEAD_DAYS||'2',10)||0); const earliest=new Date(now); earliest.setUTCDate(earliest.getUTCDate()+minLeadDays);
@@ -75,7 +77,8 @@ export async function POST(req: Request) {
   const stripe=new Stripe(key,{apiVersion:'2024-06-20'});
   const inventory=Math.max(0,Number(process.env.POCKET_WIFI_INVENTORY||'10')||0);
   if(inventory<1) return NextResponse.json({error:'Pocket WiFi is sold out for these dates. Please choose different dates or contact +65 8032 7183.'},{status:409,headers:{'Cache-Control':'no-store'}});
-  const holdState=await activeStripeHolds(stripe,start,end,requestId);
+  const holdState=await activeStripeHolds(stripe,country,start,end,requestId);
+  if(holdState.requestConflict) return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.'},{status:409,headers:{'Cache-Control':'no-store'}});
   if(holdState.existingUrl) return NextResponse.json({url:holdState.existingUrl},{headers:{'Cache-Control':'no-store'}});
   const supabase=getSupabaseAdmin();
   if(!supabase) return NextResponse.json({error:'Live reservation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});

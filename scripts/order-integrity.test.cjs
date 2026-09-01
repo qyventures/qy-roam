@@ -22,6 +22,7 @@ require.extensions['.ts'] = (module, filename) => {
 const { ESIM_PLANS, ESIM_PROMO } = require('../lib/esimPlans.ts');
 const { LAUNCH_PROMO } = require('../lib/promotions.ts');
 const { validateQyRoamSession } = require('../lib/qyRoamSession.ts');
+const { parseExactIsoDate, validCheckoutRequestId } = require('../lib/checkoutValidation.ts');
 const { WIFI_BENCHMARK, WIFI_PLANS } = require('../lib/wifiPlans.ts');
 
 const requestId = 'checkout_request_123456';
@@ -115,4 +116,22 @@ test('ignores sessions outside the QY Roam checkout boundary', () => {
   const session = esimSession();
   session.metadata.source = 'another-store';
   assert.equal(validateQyRoamSession(session).valid, false);
+});
+
+test('checkout validation rejects normalized and malformed calendar dates', () => {
+  assert.equal(parseExactIsoDate('2026-09-10')?.toISOString().slice(0, 10), '2026-09-10');
+  for (const value of ['2026-02-29', '2026-04-31', '2026-13-01', '2026-9-10', '', null]) {
+    assert.equal(parseExactIsoDate(value), null);
+  }
+  const session = wifiSession();
+  session.metadata.start = '2026-02-29';
+  session.metadata.end = '2026-03-04';
+  assert.equal(validateQyRoamSession(session).valid, false);
+});
+
+test('checkout request ids use the same production boundary everywhere', () => {
+  assert.equal(validCheckoutRequestId(requestId), requestId);
+  for (const value of ['short', 'contains spaces 123456', 'bad/slashes/123456', 'x'.repeat(81)]) {
+    assert.equal(validCheckoutRequestId(value), null);
+  }
 });

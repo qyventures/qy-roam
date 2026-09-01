@@ -2,6 +2,7 @@ import type Stripe from 'stripe';
 import { ESIM_PROMO, getEsimPlan } from './esimPlans';
 import { LAUNCH_PROMO } from './promotions';
 import { getWifiPlan, WIFI_BENCHMARK } from './wifiPlans';
+import { parseExactIsoDate, validCheckoutRequestId } from './checkoutValidation';
 
 export type QyRoamProductType = 'esim' | 'pocket_wifi';
 
@@ -14,15 +15,6 @@ export function qyRoamProductType(session: Stripe.Checkout.Session): QyRoamProdu
 export type QyRoamSessionValidation =
   | { valid: true; productType: QyRoamProductType }
   | { valid: false; reason: string };
-
-const CHECKOUT_REQUEST_ID = /^[A-Za-z0-9_-]{16,80}$/;
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-
-function exactDate(value?: string) {
-  if (!value || !ISO_DATE.test(value)) return null;
-  const date = new Date(`${value}T00:00:00Z`);
-  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value ? date : null;
-}
 
 function moneyMetadataCents(value?: string) {
   if (!value || !/^\d+\.\d{2}$/.test(value)) return null;
@@ -39,15 +31,15 @@ function moneyMetadataCents(value?: string) {
 export function validateQyRoamSession(session: Stripe.Checkout.Session): QyRoamSessionValidation {
   const productType = qyRoamProductType(session);
   if (!productType) return { valid: false, reason: 'unknown QY Roam product identity' };
-  if (!CHECKOUT_REQUEST_ID.test(session.metadata?.checkout_request_id || '')) {
+  if (!validCheckoutRequestId(session.metadata?.checkout_request_id)) {
     return { valid: false, reason: 'missing or invalid checkout request id' };
   }
 
   if (productType === 'pocket_wifi') {
     const plan = getWifiPlan(session.metadata?.country);
     if (!plan) return { valid: false, reason: 'unknown Pocket WiFi destination' };
-    const start = exactDate(session.metadata?.start);
-    const end = exactDate(session.metadata?.end);
+    const start = parseExactIsoDate(session.metadata?.start);
+    const end = parseExactIsoDate(session.metadata?.end);
     if (!start || !end || end < start) return { valid: false, reason: 'invalid Pocket WiFi travel dates' };
     const days = Math.floor((end.getTime() - start.getTime()) / 86_400_000) + 1;
     if (days < 1 || days > 90 || session.metadata?.days !== String(days)) {

@@ -1,16 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
+import { parseExactIsoDate } from '@/lib/checkoutValidation';
 
 export const dynamic = 'force-dynamic';
 
 const HOLD_MINUTES = 30;
-
-function parseDate(value: string | null) {
-  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
-  const date = new Date(`${value}T00:00:00Z`);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
 
 async function activeStripeHolds(stripe: Stripe, start: string, end: string) {
   const cutoff = Math.floor(Date.now() / 1000) - HOLD_MINUTES * 60;
@@ -68,8 +63,8 @@ async function committedInventory(start: string, end: string, stripeHoldRequestI
 }
 
 export async function GET(req: NextRequest) {
-  const start = parseDate(req.nextUrl.searchParams.get('start'));
-  const end = parseDate(req.nextUrl.searchParams.get('end'));
+  const start = parseExactIsoDate(req.nextUrl.searchParams.get('start'));
+  const end = parseExactIsoDate(req.nextUrl.searchParams.get('end'));
   if (!start || !end || end < start) return NextResponse.json({ available: false, error: 'Valid start and end dates are required.' }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
 
   const now = new Date(); now.setUTCHours(0, 0, 0, 0);
