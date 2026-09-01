@@ -273,6 +273,15 @@ test('admin fulfilment writes reject stale concurrent order state', () => {
   assert.match(adminOrderRoute, /Order changed since it was loaded/);
 });
 
+test('Pocket WiFi dispatch and return require a recorded operational reference', () => {
+  assert.match(adminOrderRoute, /status === 'dispatched' && !courierTracking/);
+  assert.match(adminOrderRoute, /status === 'returned' && !returnTracking/);
+  assert.match(adminOrderRoute, /required before dispatching a Pocket WiFi order/);
+  assert.match(adminOrderRoute, /required before marking a Pocket WiFi order returned/);
+  assert.match(adminOrderActions, /status === 'dispatched' && !courier\.trim\(\)/);
+  assert.match(adminOrderActions, /status === 'returned' && !returned\.trim\(\)/);
+});
+
 test('admin actions advance their transition baseline after each save', () => {
   assert.match(adminOrderActions, /allowedFulfilmentStatuses\(productType, currentStatus\)/);
   assert.match(adminOrderActions, /setCurrentStatus\(result\.fulfilment_status\)/);

@@ -17,6 +17,12 @@ export default function AdminOrderActions({ id, initialStatus, productType = 'po
   async function save() {
     setSaving(true); setMessage('');
     try {
+      if (!isEsim && status === 'dispatched' && !courier.trim()) {
+        throw new Error('Enter a courier tracking or delivery reference before dispatching.');
+      }
+      if (!isEsim && status === 'returned' && !returned.trim()) {
+        throw new Error('Enter a return tracking or receipt reference before marking this order returned.');
+      }
       const body: Record<string, string> = { status };
       if (!isEsim) {
         body.courier_tracking = courier;
@@ -47,8 +53,8 @@ export default function AdminOrderActions({ id, initialStatus, productType = 'po
   return <div style={{display:'grid',gap:6,minWidth:190}}>
     <select aria-label="Fulfilment status" value={status} onChange={e=>setStatus(e.target.value)} disabled={statuses.length < 2}>{statuses.map(s=><option key={s} value={s}>{s.replaceAll('_',' ')}</option>)}</select>
     {!isEsim && <>
-      <input aria-label="Courier tracking" placeholder="Courier tracking" value={courier} onChange={e=>setCourier(e.target.value)} />
-      <input aria-label="Return tracking" placeholder="Return tracking" value={returned} onChange={e=>setReturned(e.target.value)} />
+      <input aria-label="Courier tracking" placeholder="Courier tracking / delivery reference" value={courier} onChange={e=>setCourier(e.target.value)} />
+      <input aria-label="Return tracking" placeholder="Return tracking / receipt reference" value={returned} onChange={e=>setReturned(e.target.value)} />
     </>}
     {isEsim && <small>Mark fulfilled after the QR code / activation instructions have been sent to the customer.</small>}
     <button type="button" onClick={save} disabled={saving || statuses.length < 2}>{saving ? 'Saving…' : 'Save'}</button>

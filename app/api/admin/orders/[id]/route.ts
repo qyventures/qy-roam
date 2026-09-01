@@ -7,6 +7,15 @@ import { deliverFulfilmentNotification, deliverMetaPurchase } from '@/app/api/st
 
 export const runtime = 'nodejs';
 
+function trackingValue(value: unknown, existing: string | null) {
+  // Keep an already-recorded reference when an older admin client submits no
+  // tracking field, but treat whitespace as absent. A physical dispatch or
+  // return without a reference cannot be reliably followed up by operations
+  // or the customer.
+  if (typeof value !== 'string') return (existing || '').trim();
+  return value.trim().slice(0, 200);
+}
+
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
   const supabase = getSupabaseAdmin();
   if (!supabase) return NextResponse.json({ error: 'Order database not configured' }, { status: 503 });
@@ -18,7 +27,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const id = Number(params.id);
   if (!Number.isSafeInteger(id) || id < 1) return NextResponse.json({ error: 'Invalid order id' }, { status: 400 });
 
-  const existing = await supabase.from('orders').select('product_type,payment_status,fulfilment_status,dispatched_at,returned_at').eq('id', id).maybeSingle();
+  const existing = await supabase.from('orders').select('product_type,payment_status,fulfilment_status,dispatched_at,returned_at,courier_tracking,return_tracking').eq('id', id).maybeSingle();
   if (existing.error) return NextResponse.json({ error: 'Unable to load order' }, { status: 500 });
   if (!existing.data) return NextResponse.json({ error: 'Order not found' }, { status: 404 });
   if (!validFulfilmentStatus(existing.data.product_type, status)) return NextResponse.json({ error: 'Invalid fulfilment status for this order' }, { status: 400 });
@@ -29,12 +38,24 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     return NextResponse.json({ error: 'This fulfilment transition is not allowed for the current order state' }, { status: 409 });
   }
 
+  const courierTracking = trackingValue(body.courier_tracking, existing.data.courier_tracking);
+  const returnTracking = trackingValue(body.return_tracking, existing.data.return_tracking);
+  if (existing.data.product_type === 'pocket_wifi' && status === 'dispatched' && !courierTracking) {
+    return NextResponse.json({ error: 'Courier tracking or delivery reference is required before dispatching a Pocket WiFi order' }, { status: 400 });
+  }
+  // `returned` is the inventory-release boundary. Require an operator to
+  // record the courier tracking/reference first so a missing device cannot be
+  // accidentally made available for another overlapping booking.
+  if (existing.data.product_type === 'pocket_wifi' && status === 'returned' && !returnTracking) {
+    return NextResponse.json({ error: 'Return tracking or receipt reference is required before marking a Pocket WiFi order returned' }, { status: 400 });
+  }
+
   const patch: Record<string, any> = {
     fulfilment_status: status,
     updated_at: new Date().toISOString(),
   };
-  if (typeof body.courier_tracking === 'string') patch.courier_tracking = body.courier_tracking.slice(0, 200);
-  if (typeof body.return_tracking === 'string') patch.return_tracking = body.return_tracking.slice(0, 200);
+  if (typeof body.courier_tracking === 'string') patch.courier_tracking = courierTracking || null;
+  if (typeof body.return_tracking === 'string') patch.return_tracking = returnTracking || null;
   if (typeof body.notes === 'string') patch.notes = body.notes.slice(0, 1000);
   if (status === 'dispatched' && !existing.data.dispatched_at) patch.dispatched_at = new Date().toISOString();
   if (status === 'returned' && !existing.data.returned_at) patch.returned_at = new Date().toISOString();
