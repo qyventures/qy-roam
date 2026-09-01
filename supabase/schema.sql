@@ -141,7 +141,13 @@ begin
     and payment_status = 'paid'
     and travel_start <= p_travel_end
     and travel_end >= p_travel_start
-    and fulfilment_status not in ('cancelled', 'payment_failed', 'closed');
+    -- A legacy order may have been marked cancelled after dispatch. It is
+    -- still physically committed until the return is recorded, so it must not
+    -- make a router available to an overlapping booking.
+    and (
+      fulfilment_status not in ('cancelled', 'payment_failed', 'closed')
+      or (fulfilment_status = 'cancelled' and dispatched_at is not null and returned_at is null)
+    );
 
   -- Stripe holds passed by the app are counted once. Reservations already
   -- represented by those sessions are excluded from the database count.

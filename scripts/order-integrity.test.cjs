@@ -176,8 +176,18 @@ test('Pocket WiFi fulfilment follows a dispatch and return lifecycle', () => {
   assert.deepEqual(allowedFulfilmentStatuses('pocket_wifi', 'paid'), ['paid', 'packing', 'dispatched', 'cancelled']);
   assert.equal(validFulfilmentTransition('pocket_wifi', 'paid', 'returned'), false);
   assert.equal(validFulfilmentTransition('pocket_wifi', 'dispatched', 'returned'), true);
+  assert.equal(validFulfilmentTransition('pocket_wifi', 'dispatched', 'cancelled'), false);
+  assert.equal(validFulfilmentTransition('pocket_wifi', 'with_customer', 'cancelled'), false);
+  assert.equal(validFulfilmentTransition('pocket_wifi', 'return_due', 'cancelled'), false);
   assert.equal(validFulfilmentTransition('pocket_wifi', 'returned', 'closed'), true);
   assert.equal(validFulfilmentTransition('pocket_wifi', 'closed', 'packing'), false);
+});
+
+test('Pocket WiFi capacity retains legacy post-dispatch cancellations until return', () => {
+  const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
+  const availabilityRoute = fs.readFileSync(require.resolve('../app/api/availability/route.ts'), 'utf8');
+  assert.match(schema, /fulfilment_status = 'cancelled' and dispatched_at is not null and returned_at is null/);
+  assert.match(availabilityRoute, /fulfilment_status\.eq\.cancelled,dispatched_at\.not\.is\.null,returned_at\.is\.null/);
 });
 
 test('eSIM lifecycle cannot use router statuses or reopen closed orders', () => {

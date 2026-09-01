@@ -36,9 +36,13 @@ export function validFulfilmentStatus(productType: string | null | undefined, st
 const WIFI_NEXT: Record<string, readonly string[]> = {
   paid: ['packing', 'dispatched', 'cancelled'],
   packing: ['paid', 'dispatched', 'cancelled'],
-  dispatched: ['packing', 'with_customer', 'return_due', 'returned', 'cancelled'],
-  with_customer: ['dispatched', 'return_due', 'returned', 'cancelled'],
-  return_due: ['with_customer', 'returned', 'cancelled'],
+  // Cancellation can release a router only before it leaves operations. Once
+  // dispatched, it remains committed to the trip until a physical return is
+  // recorded; otherwise an operator could accidentally sell the same router
+  // to an overlapping booking.
+  dispatched: ['packing', 'with_customer', 'return_due', 'returned'],
+  with_customer: ['dispatched', 'return_due', 'returned'],
+  return_due: ['with_customer', 'returned'],
   returned: ['with_customer', 'closed'],
 };
 

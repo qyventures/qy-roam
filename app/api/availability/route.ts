@@ -45,7 +45,10 @@ async function committedInventory(start: string, end: string, stripeHoldRequestI
       .eq('payment_status', 'paid')
       .lte('travel_start', end)
       .gte('travel_end', start)
-      .not('fulfilment_status', 'in', '(cancelled,payment_failed,closed)'),
+      // Keep legacy post-dispatch cancellations committed until a physical
+      // return is recorded. New lifecycle rules prevent that transition, but
+      // this protects capacity while older orders are still active.
+      .or('fulfilment_status.not.in.(cancelled,payment_failed,closed),and(fulfilment_status.eq.cancelled,dispatched_at.not.is.null,returned_at.is.null)'),
     supabase.from('checkout_reservations').select('checkout_request_id')
       .gt('expires_at', now)
       .lte('travel_start', end)
