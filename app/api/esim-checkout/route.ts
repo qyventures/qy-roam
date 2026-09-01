@@ -95,6 +95,15 @@ export async function POST(req: Request) {
       consent_collection: { terms_of_service: 'required' }
     }, { idempotencyKey: `qyroam_esim_${requestId}` });
 
+    // Stripe can return the prior response for this idempotency key after its
+    // Checkout Session has expired. That response has no usable URL, so make
+    // the recovery path explicit instead of returning a misleading success.
+    if (!session.url) {
+      return NextResponse.json({ error: 'This secure checkout session has expired. Please try again to start a new one.', checkoutExpired: true }, {
+        status: 409,
+        headers: { 'Cache-Control': 'no-store' }
+      });
+    }
     return NextResponse.json({ url: session.url }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('esim_checkout_error', error);

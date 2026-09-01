@@ -101,7 +101,13 @@ export default function Home() {
       const res = await fetch('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ country, start, end, promoCode, measurementConsent, checkoutRequestId: checkoutAttempt.current.requestId }) });
       const data = await res.json();
       if (data.url) window.location.href = data.url;
-      else setCheckoutError(data.error || 'Checkout is temporarily unavailable. Please contact +65 8032 7183.');
+      else {
+        // Keep the idempotency key after ordinary failures: the server may have
+        // created a session before a network response was lost. Rotate it only
+        // after the server has confirmed that Stripe's prior session expired.
+        if (data.checkoutExpired) checkoutAttempt.current = null;
+        setCheckoutError(data.error || 'Checkout is temporarily unavailable. Please contact +65 8032 7183.');
+      }
     } catch { setCheckoutError('Checkout is temporarily unavailable. Please contact +65 8032 7183.'); }
     finally { checkoutInFlight.current = false; setCheckingOut(false); }
   }

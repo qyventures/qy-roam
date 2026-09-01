@@ -39,7 +39,13 @@ export default function EsimPage() {
       });
       const data = await res.json();
       if (data.url) window.location.href = data.url;
-      else setError(data.error || 'Checkout is temporarily unavailable. Please contact +65 8032 7183.');
+      else {
+        // Do not rotate an idempotency key on a transient failure, since Stripe
+        // may already have created the session. An explicit expiry is safe to
+        // restart with a fresh request id.
+        if (data.checkoutExpired) checkoutAttempt.current = null;
+        setError(data.error || 'Checkout is temporarily unavailable. Please contact +65 8032 7183.');
+      }
     } catch {
       setError('Checkout is temporarily unavailable. Please contact +65 8032 7183.');
     } finally {

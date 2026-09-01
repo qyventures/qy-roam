@@ -113,6 +113,16 @@ export async function POST(req: Request) {
     if(released.error) console.error('checkout_reservation_release_error',released.error);
     throw error;
   }
+  // Stripe retains idempotency keys after a Checkout Session expires. A client
+  // retry using that key can therefore receive the old session, whose URL is
+  // null. Do not link its new inventory reservation or report a false success.
+  // The browser receives an explicit recoverable signal and creates a fresh
+  // checkout request id for the next attempt.
+  if(!session.url){
+    const released=await supabase.from('checkout_reservations').delete().eq('checkout_request_id',requestId).is('stripe_session_id',null);
+    if(released.error) console.error('checkout_expired_reservation_release_error',released.error);
+    return NextResponse.json({error:'This secure checkout session has expired. Please try again to start a new one.',checkoutExpired:true},{status:409,headers:{'Cache-Control':'no-store'}});
+  }
   const linked=await supabase.from('checkout_reservations').update({stripe_session_id:session.id}).eq('checkout_request_id',requestId);
   if(linked.error) console.error('checkout_reservation_link_error',linked.error);
   return NextResponse.json({url:session.url},{headers:{'Cache-Control':'no-store'}});
