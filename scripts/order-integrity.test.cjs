@@ -35,6 +35,8 @@ const { signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
 const bookingPage = fs.readFileSync(require.resolve('../app/booking/page.tsx'), 'utf8');
 const adminOrderRoute = fs.readFileSync(require.resolve('../app/api/admin/orders/[id]/route.ts'), 'utf8');
 const adminOrderActions = fs.readFileSync(require.resolve('../components/AdminOrderActions.tsx'), 'utf8');
+const esimCheckoutRoute = fs.readFileSync(require.resolve('../app/api/esim-checkout/route.ts'), 'utf8');
+const esimPage = fs.readFileSync(require.resolve('../app/esim/page.tsx'), 'utf8');
 
 const requestId = 'checkout_request_123456';
 
@@ -171,6 +173,14 @@ test('checkout request ids use the same production boundary everywhere', () => {
   for (const value of ['short', 'contains spaces 123456', 'bad/slashes/123456', 'x'.repeat(81)]) {
     assert.equal(validCheckoutRequestId(value), null);
   }
+});
+
+test('eSIM checkout never redirects a reused idempotency key to another plan', () => {
+  assert.match(esimCheckoutRoute, /function matchesRequestedEsim/);
+  assert.match(esimCheckoutRoute, /session\.metadata\?\.plan_id === plan\.id/);
+  assert.match(esimCheckoutRoute, /checkoutRequestConflict: true/);
+  assert.match(esimCheckoutRoute, /if \(!matchesRequestedEsim\(session, requestId, plan\)\)/);
+  assert.match(esimPage, /data\.checkoutExpired \|\| data\.checkoutRequestConflict/);
 });
 
 test('operational pricing and inventory configuration is strict and fail-closed', () => {

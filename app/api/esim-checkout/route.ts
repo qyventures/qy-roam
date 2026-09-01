@@ -30,6 +30,24 @@ function siteOrigin(req: Request) {
   return new URL(req.url).origin;
 }
 
+// Stripe idempotency keys are intentionally durable. If a caller reuses a
+// checkout request id for a different plan, Stripe returns the first session
+// instead of creating a new one. Never redirect a customer to that earlier
+// (but otherwise valid) purchase.
+function matchesRequestedEsim(session: Stripe.Checkout.Session, requestId: string, plan: NonNullable<ReturnType<typeof getEsimPlan>>) {
+  return session.metadata?.source === 'qyroam.com' &&
+    session.metadata?.product_type === 'esim' &&
+    session.metadata?.checkout_request_id === requestId &&
+    session.metadata?.plan_id === plan.id &&
+    session.metadata?.plan_name === `${plan.destination} · ${plan.days} days` &&
+    session.metadata?.country === plan.destination &&
+    session.metadata?.promo_code === ESIM_PROMO.code &&
+    session.metadata?.benchmark_price_sgd === plan.benchmarkPriceSgd.toFixed(2) &&
+    session.metadata?.promo_discount_percent === String(ESIM_PROMO.percent) &&
+    session.currency?.toLowerCase() === 'sgd' &&
+    session.amount_total === Math.max(50, Math.round(plan.qyPriceSgd * 100));
+}
+
 export async function POST(req: Request) {
   try {
     if (limited(req)) return NextResponse.json({ error: 'Too many checkout attempts. Please try again shortly.' }, { status: 429, headers: { 'Retry-After': '60' } });
@@ -96,6 +114,16 @@ export async function POST(req: Request) {
       },
       consent_collection: { terms_of_service: 'required' }
     }, { idempotencyKey: `qyroam_esim_${requestId}` });
+
+    if (!matchesRequestedEsim(session, requestId, plan)) {
+      // Do not update provenance on a session that belongs to a different
+      // selection. The client will create a new idempotency key on its next
+      // deliberate checkout attempt.
+      return NextResponse.json({ error: 'This checkout attempt belongs to a different eSIM plan. Please try again.', checkoutRequestConflict: true }, {
+        status: 409,
+        headers: { 'Cache-Control': 'no-store' }
+      });
+    }
 
     // Stripe assigns the session id during creation. Add a server-only HMAC
     // bound to that id before exposing the Checkout URL, preventing a manually

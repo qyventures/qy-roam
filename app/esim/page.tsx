@@ -41,9 +41,10 @@ export default function EsimPage() {
       if (data.url) window.location.href = data.url;
       else {
         // Do not rotate an idempotency key on a transient failure, since Stripe
-        // may already have created the session. An explicit expiry is safe to
-        // restart with a fresh request id.
-        if (data.checkoutExpired) checkoutAttempt.current = null;
+        // may already have created the session. An explicit expiry or a
+        // server-detected request/plan mismatch is safe to restart with a
+        // fresh request id.
+        if (data.checkoutExpired || data.checkoutRequestConflict) checkoutAttempt.current = null;
         setError(data.error || 'Checkout is temporarily unavailable. Please contact +65 8032 7183.');
       }
     } catch {
