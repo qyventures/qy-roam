@@ -37,6 +37,7 @@ const adminOrderRoute = fs.readFileSync(require.resolve('../app/api/admin/orders
 const adminOrderActions = fs.readFileSync(require.resolve('../components/AdminOrderActions.tsx'), 'utf8');
 const esimCheckoutRoute = fs.readFileSync(require.resolve('../app/api/esim-checkout/route.ts'), 'utf8');
 const esimPage = fs.readFileSync(require.resolve('../app/esim/page.tsx'), 'utf8');
+const adminOpsRoute = fs.readFileSync(require.resolve('../app/api/admin/ops/route.ts'), 'utf8');
 
 const requestId = 'checkout_request_123456';
 
@@ -258,6 +259,14 @@ test('Pocket WiFi holds require server-issued checkout provenance', () => {
   for (const source of [checkoutRoute, availabilityRoute]) {
     assert.match(source, /validQyRoamProvenance\(session\.id,\s*session\.metadata\)/);
   }
+});
+
+test('manual orders cannot bypass paid-order lifecycle, pricing, or WiFi capacity fields', () => {
+  assert.match(adminOpsRoute, /\['paid', 'unpaid', 'pending', 'failed'\]\.includes\(paymentStatus\)/);
+  assert.match(adminOpsRoute, /function money\(value: unknown\)/);
+  assert.match(adminOpsRoute, /parseExactIsoDate\(startRaw\)/);
+  assert.match(adminOpsRoute, /New orders must start in their initial fulfilment status/);
+  assert.match(adminOpsRoute, /Pocket WiFi orders require a destination and valid travel start and end dates/);
 });
 
 test('eSIM lifecycle cannot use router statuses or reopen closed orders', () => {

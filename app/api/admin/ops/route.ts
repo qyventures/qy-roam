@@ -1,12 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { initialFulfilmentStatus, validFulfilmentStatus } from '@/lib/orderLifecycle';
+import { parseExactIsoDate } from '@/lib/checkoutValidation';
 
 export const dynamic = 'force-dynamic';
 
 function text(v: unknown, max = 500) { return String(v ?? '').trim().slice(0, max); }
 function num(v: unknown, fallback = 0) { const n = Number(v); return Number.isFinite(n) ? n : fallback; }
 function int(v: unknown, fallback = 0) { return Math.trunc(num(v, fallback)); }
+function money(value: unknown) {
+  const raw = typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
+  if (!/^\d+(?:\.\d{1,2})?$/.test(raw)) return null;
+  const [dollars, fraction = ''] = raw.split('.');
+  const cents = Number(dollars) * 100 + Number(fraction.padEnd(2, '0'));
+  return Number.isSafeInteger(cents) && cents > 0 && cents <= 10_000_000 ? cents : null;
+}
+
+function optionalTravelDates(body: Record<string, unknown>) {
+  const startRaw = text(body.travel_start, 10);
+  const endRaw = text(body.travel_end, 10);
+  if (!startRaw && !endRaw) return { start: null, end: null };
+  const start = parseExactIsoDate(startRaw), end = parseExactIsoDate(endRaw);
+  if (!start || !end || end < start) return null;
+  return { start: startRaw, end: endRaw };
+}
 
 export async function POST(req: NextRequest) {
   const db = getSupabaseAdmin();
@@ -19,21 +36,34 @@ export async function POST(req: NextRequest) {
       const product = text(body.product_type, 40) || 'pocket_wifi';
       if (product !== 'pocket_wifi' && product !== 'esim') return NextResponse.json({ error: 'Invalid product type' }, { status: 400 });
       const paymentStatus = text(body.payment_status, 40) || 'paid';
+      if (!['paid', 'unpaid', 'pending', 'failed'].includes(paymentStatus)) return NextResponse.json({ error: 'Invalid payment status' }, { status: 400 });
       const requestedStatus = text(body.fulfilment_status, 40);
       if (requestedStatus && !validFulfilmentStatus(product, requestedStatus)) return NextResponse.json({ error: 'Invalid fulfilment status for this product' }, { status: 400 });
+      const initialStatus = initialFulfilmentStatus(product, paymentStatus);
+      // New orders must begin at the same lifecycle boundary as Stripe orders.
+      // Dispatch and return evidence can only be added through the guarded
+      // order-status endpoint after the order has been created.
+      if (requestedStatus && requestedStatus !== initialStatus) return NextResponse.json({ error: 'New orders must start in their initial fulfilment status' }, { status: 400 });
+      const travel = optionalTravelDates(body);
+      if (!travel) return NextResponse.json({ error: 'Travel dates must be valid ISO dates with the end date on or after the start date' }, { status: 400 });
+      const amountCents = money(body.amount_sgd);
+      if (amountCents === null) return NextResponse.json({ error: 'Order amount must be a positive amount with no more than two decimal places' }, { status: 400 });
+      const country = text(body.country, 120) || null;
+      if (product === 'pocket_wifi' && (!country || !travel.start || !travel.end)) {
+        return NextResponse.json({ error: 'Pocket WiFi orders require a destination and valid travel start and end dates' }, { status: 400 });
+      }
       const now = Date.now();
       const row = {
         stripe_session_id: `manual_${now}_${Math.random().toString(36).slice(2,8)}`,
         payment_status: paymentStatus, customer_name: text(body.customer_name, 120) || null,
         email: text(body.email, 200).toLowerCase() || null, phone: text(body.phone, 60) || null,
-        amount_sgd: Math.max(0, num(body.amount_sgd)), product_type: product, plan_name: text(body.plan_name, 160) || null,
-        country: text(body.country, 120) || null, travel_start: body.travel_start || null, travel_end: body.travel_end || null,
-        fulfilment_status: requestedStatus || initialFulfilmentStatus(product, paymentStatus),
+        amount_sgd: amountCents / 100, product_type: product, plan_name: text(body.plan_name, 160) || null,
+        country, travel_start: travel.start, travel_end: travel.end,
+        fulfilment_status: initialStatus,
         notes: `Manual order${text(body.notes, 1500) ? ` · ${text(body.notes,1500)}` : ''}`,
         updated_at: new Date().toISOString()
       };
       if (!row.email && !row.phone) return NextResponse.json({ error: 'Customer email or phone is required' }, { status: 400 });
-      if (row.amount_sgd <= 0) return NextResponse.json({ error: 'Order amount must be greater than zero' }, { status: 400 });
       const { error } = await db.from('orders').insert(row); if (error) throw error;
     } else if (action === 'inventory_create') {
       const row = {
