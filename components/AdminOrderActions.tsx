@@ -5,8 +5,9 @@ import { allowedFulfilmentStatuses } from '@/lib/orderLifecycle';
 
 export default function AdminOrderActions({ id, initialStatus, productType = 'pocket_wifi', courierTracking = '', returnTracking = '' }: { id: number; initialStatus: string; productType?: string | null; courierTracking?: string | null; returnTracking?: string | null }) {
   const isEsim = productType === 'esim';
+  const [currentStatus, setCurrentStatus] = useState(initialStatus);
   const [status, setStatus] = useState(initialStatus);
-  const statuses = allowedFulfilmentStatuses(productType, initialStatus);
+  const statuses = allowedFulfilmentStatuses(productType, currentStatus);
   const [courier, setCourier] = useState(courierTracking || '');
   const [returned, setReturned] = useState(returnTracking || '');
   const [saving, setSaving] = useState(false);
@@ -21,9 +22,13 @@ export default function AdminOrderActions({ id, initialStatus, productType = 'po
         body.return_tracking = returned;
       }
       const res = await fetch(`/api/admin/orders/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      if (!res.ok) throw new Error('Update failed');
+      const result = await res.json().catch(() => null) as { fulfilment_status?: string; error?: string } | null;
+      if (!res.ok) throw new Error(result?.error || 'Update failed');
+      if (!result?.fulfilment_status) throw new Error('Invalid update response');
+      setCurrentStatus(result.fulfilment_status);
+      setStatus(result.fulfilment_status);
       setMessage('Saved');
-    } catch { setMessage('Could not save'); }
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Could not save'); }
     finally { setSaving(false); }
   }
 

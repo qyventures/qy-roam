@@ -29,6 +29,8 @@ const { allowedFulfilmentStatuses, validFulfilmentTransition } = require('../lib
 // The success page, booking-status page, and Stripe webhook must all use this
 // same validator rather than trusting the QY Roam source marker by itself.
 const bookingPage = fs.readFileSync(require.resolve('../app/booking/page.tsx'), 'utf8');
+const adminOrderRoute = fs.readFileSync(require.resolve('../app/api/admin/orders/[id]/route.ts'), 'utf8');
+const adminOrderActions = fs.readFileSync(require.resolve('../components/AdminOrderActions.tsx'), 'utf8');
 
 const requestId = 'checkout_request_123456';
 
@@ -159,4 +161,15 @@ test('eSIM lifecycle cannot use router statuses or reopen closed orders', () => 
   assert.equal(validFulfilmentTransition('esim', 'awaiting_fulfilment', 'dispatched'), false);
   assert.equal(validFulfilmentTransition('esim', 'fulfilled', 'closed'), true);
   assert.equal(validFulfilmentTransition('esim', 'closed', 'awaiting_fulfilment'), false);
+});
+
+test('admin fulfilment writes reject stale concurrent order state', () => {
+  assert.match(adminOrderRoute, /\.eq\('fulfilment_status', existing\.data\.fulfilment_status\)/);
+  assert.match(adminOrderRoute, /\.eq\('payment_status', 'paid'\)/);
+  assert.match(adminOrderRoute, /Order changed since it was loaded/);
+});
+
+test('admin actions advance their transition baseline after each save', () => {
+  assert.match(adminOrderActions, /allowedFulfilmentStatuses\(productType, currentStatus\)/);
+  assert.match(adminOrderActions, /setCurrentStatus\(result\.fulfilment_status\)/);
 });

@@ -36,7 +36,22 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   if (status === 'dispatched' && !existing.data.dispatched_at) patch.dispatched_at = new Date().toISOString();
   if (status === 'returned' && !existing.data.returned_at) patch.returned_at = new Date().toISOString();
 
-  const { data, error } = await supabase.from('orders').update(patch).eq('id', id).select('id,fulfilment_status').single();
+  // Keep validation and persistence optimistic: another operator may advance
+  // the order after the read above. Updating only the state we validated
+  // prevents a stale browser from moving a returned/closed order backwards.
+  const { data, error } = await supabase.from('orders')
+    .update(patch)
+    .eq('id', id)
+    .eq('payment_status', 'paid')
+    .eq('fulfilment_status', existing.data.fulfilment_status)
+    .select('id,fulfilment_status')
+    .maybeSingle();
   if (error) return NextResponse.json({ error: 'Unable to update order' }, { status: 500 });
+  if (!data) {
+    return NextResponse.json({ error: 'Order changed since it was loaded. Refresh before updating it.' }, {
+      status: 409,
+      headers: { 'Cache-Control': 'no-store' },
+    });
+  }
   return NextResponse.json(data, { headers: { 'Cache-Control': 'no-store' } });
 }
