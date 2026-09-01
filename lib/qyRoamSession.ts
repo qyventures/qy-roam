@@ -99,7 +99,9 @@ export function validateQyRoamSession(session: Stripe.Checkout.Session): QyRoamS
     if (
       session.metadata?.country !== plan.destination ||
       session.metadata?.plan_name !== `${plan.destination} · ${plan.days} days` ||
-      session.metadata?.promo_code !== ESIM_PROMO.code
+      session.metadata?.promo_code !== ESIM_PROMO.code ||
+      session.metadata?.benchmark_price_sgd !== plan.benchmarkPriceSgd.toFixed(2) ||
+      session.metadata?.promo_discount_percent !== String(ESIM_PROMO.percent)
     ) {
       return { valid: false, reason: 'eSIM catalogue metadata does not match the selected plan' };
     }
