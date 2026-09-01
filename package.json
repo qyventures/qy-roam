@@ -8,6 +8,7 @@
     "start": "node .next/standalone/server.js",
     "lint": "next lint",
     "test:order-integrity": "node scripts/order-integrity.test.cjs",
+    "check:operations-schema": "node scripts/check-operations-schema.mjs",
     "check:esim-pricing": "node scripts/check-esim-pricing.mjs",
     "check:wifi-pricing": "node scripts/check-wifi-pricing.mjs"
   },

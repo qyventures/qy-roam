@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getAdminCredentials, getMetaCapiToken } from '@/lib/runtimeConfig';
-import { hasRequiredPaymentSchema } from '@/lib/productionReadiness';
+import { hasRequiredOperationsSchema, hasRequiredPaymentSchema } from '@/lib/productionReadiness';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -76,7 +76,10 @@ export async function GET(req: Request) {
   }
 
   const { user: adminUser, password: adminPassword } = getAdminCredentials();
-  const paymentSchema = await hasRequiredPaymentSchema();
+  const [paymentSchema, operationsSchema] = await Promise.all([
+    hasRequiredPaymentSchema(),
+    hasRequiredOperationsSchema(),
+  ]);
   const checks = {
     stripe: hasPrefix(process.env.STRIPE_SECRET_KEY, ['sk_live_', 'rk_live_']),
     publishableKey: hasPrefix(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY, ['pk_live_']),
@@ -84,6 +87,7 @@ export async function GET(req: Request) {
     webhook: hasPrefix(process.env.STRIPE_WEBHOOK_SECRET, ['whsec_']),
     supabase: Boolean(process.env.SUPABASE_URL?.startsWith('https://') && process.env.SUPABASE_SERVICE_ROLE_KEY && process.env.SUPABASE_SERVICE_ROLE_KEY.length >= 32),
     paymentSchema,
+    operationsSchema,
     admin: Boolean(adminUser && isStrongAdminPassword(adminPassword)),
     inventory: isPositiveInteger(process.env.POCKET_WIFI_INVENTORY),
     deliveryLeadDays: isPositiveInteger(process.env.MIN_DELIVERY_LEAD_DAYS),

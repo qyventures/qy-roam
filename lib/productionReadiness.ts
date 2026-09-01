@@ -27,6 +27,17 @@ const REQUIRED_PAYMENT_SCHEMA = [
   },
 ] as const;
 
+const REQUIRED_OPERATIONS_SCHEMA = [
+  { table: 'inventory_items', columns: 'id,sku,quantity_on_hand,reorder_level' },
+  { table: 'inventory_movements', columns: 'id,inventory_item_id,movement_type,quantity' },
+  { table: 'customers', columns: 'id,email,phone,total_orders,lifetime_value_sgd' },
+  { table: 'crm_activities', columns: 'id,customer_id,activity_type,completed_at' },
+  { table: 'sales_opportunities', columns: 'id,title,stage,probability,expected_value_sgd' },
+  { table: 'forecasts', columns: 'id,forecast_month,product_type,forecast_revenue_sgd' },
+  { table: 'closing_periods', columns: 'id,period_start,period_end,status,net_sales_sgd' },
+  { table: 'sales_daily_summary', columns: 'sales_date,product_type,paid_orders,revenue_sgd' },
+] as const;
+
 /**
  * Verify the database contract needed after a customer pays. Checking only that
  * credentials exist is insufficient: a valid Supabase project with an older
@@ -72,6 +83,40 @@ export async function hasRequiredPaymentSchema() {
   });
   if (reservationProbe.error || reservationProbe.data?.[0]?.reserved !== false) {
     console.error('production_payment_reservation_rpc_check_failed');
+    return false;
+  }
+  return true;
+}
+
+/**
+ * The admin UI is deliberately server-only, but it is still a production
+ * contract. Verify its tables and reporting view separately from checkout so
+ * operators can distinguish an order-taking issue from an incomplete admin
+ * migration.
+ */
+export async function hasRequiredOperationsSchema() {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) return false;
+
+  try {
+    // The Supabase generated-schema generic forms an impractically large union
+    // when probing many operational relations at once. These are deliberately
+    // runtime schema probes, so keep the query surface untyped here.
+    const database: any = supabase;
+    const results = await Promise.all(
+      REQUIRED_OPERATIONS_SCHEMA.map(({ table, columns }) =>
+        database.from(table).select(columns).limit(1),
+      ),
+    );
+    const failures = results
+      .map((result, index) => result.error ? REQUIRED_OPERATIONS_SCHEMA[index].table : null)
+      .filter(Boolean);
+    if (failures.length) {
+      console.error('production_operations_schema_check_failed', { tables: failures });
+      return false;
+    }
+  } catch {
+    console.error('production_operations_schema_check_unavailable');
     return false;
   }
   return true;
