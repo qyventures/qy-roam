@@ -233,6 +233,15 @@ test('Pocket WiFi capacity retains legacy post-dispatch cancellations until retu
   assert.match(availabilityRoute, /fulfilment_status\.not\.in\.\(cancelled,payment_failed,returned,closed\)/);
 });
 
+test('Pocket WiFi availability only counts Checkout Sessions that are still unexpired', () => {
+  const checkoutRoute = fs.readFileSync(require.resolve('../app/api/checkout/route.ts'), 'utf8');
+  const availabilityRoute = fs.readFileSync(require.resolve('../app/api/availability/route.ts'), 'utf8');
+  for (const source of [checkoutRoute, availabilityRoute]) {
+    assert.match(source, /session\.expires_at\s*<=\s*nowSeconds/);
+    assert.match(source, /!session\.expires_at/);
+  }
+});
+
 test('eSIM lifecycle cannot use router statuses or reopen closed orders', () => {
   assert.deepEqual(allowedFulfilmentStatuses('esim', 'awaiting_fulfilment'), ['awaiting_fulfilment', 'fulfilled', 'cancelled']);
   assert.equal(validFulfilmentTransition('esim', 'awaiting_fulfilment', 'dispatched'), false);

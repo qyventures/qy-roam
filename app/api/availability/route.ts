@@ -9,7 +9,8 @@ export const dynamic = 'force-dynamic';
 const HOLD_MINUTES = 30;
 
 async function activeStripeHolds(stripe: Stripe, start: string, end: string) {
-  const cutoff = Math.floor(Date.now() / 1000) - HOLD_MINUTES * 60;
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const cutoff = nowSeconds - HOLD_MINUTES * 60;
   let startingAfter: string | undefined;
   let holds = 0;
   const requestIds = new Set<string>();
@@ -19,7 +20,9 @@ async function activeStripeHolds(stripe: Stripe, start: string, end: string) {
   for (;;) {
     const sessions = await stripe.checkout.sessions.list({ status: 'open', limit: 100, ...(startingAfter ? { starting_after: startingAfter } : {}) });
     for (const session of sessions.data) {
-      if (session.created < cutoff || session.metadata?.source !== 'qyroam.com') continue;
+      // Session status is eventually consistent around expiry. Capacity must
+      // follow the Checkout Session's actual expiry, not only its age.
+      if (session.created < cutoff || !session.expires_at || session.expires_at <= nowSeconds || session.metadata?.source !== 'qyroam.com') continue;
       if (session.metadata?.product_type && session.metadata.product_type !== 'pocket_wifi') continue;
       const holdStart = session.metadata?.start;
       const holdEnd = session.metadata?.end;

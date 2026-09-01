@@ -30,7 +30,8 @@ function limited(req: Request) {
   return current.count>MAX_ATTEMPTS;
 }
 async function activeStripeHolds(stripe:Stripe,country:string,start:string,end:string,requestId:string|null) {
-  const cutoff=Math.floor(Date.now()/1000)-(HOLD_MINUTES*60);
+  const nowSeconds=Math.floor(Date.now()/1000);
+  const cutoff=nowSeconds-(HOLD_MINUTES*60);
   let startingAfter:string|undefined;
   let holds=0;
   const requestIds:string[]=[];
@@ -40,7 +41,10 @@ async function activeStripeHolds(stripe:Stripe,country:string,start:string,end:s
   for(;;){
     const sessions=await stripe.checkout.sessions.list({status:'open',limit:100,...(startingAfter?{starting_after:startingAfter}:{})});
     for(const session of sessions.data){
-      if(session.created<cutoff||session.metadata?.source!=='qyroam.com') continue;
+      // Stripe normally removes expired sessions from the "open" list, but
+      // expiry is the inventory boundary. Check it explicitly so a session
+      // expired early (or retained briefly by the API) cannot block a router.
+      if(session.created<cutoff||!session.expires_at||session.expires_at<=nowSeconds||session.metadata?.source!=='qyroam.com') continue;
       if(session.metadata?.product_type && session.metadata.product_type!=='pocket_wifi') continue;
       if(requestId&&session.metadata?.checkout_request_id===requestId){
         const sameBooking=session.metadata?.product_type==='pocket_wifi'&&session.metadata?.country===country&&session.metadata?.start===start&&session.metadata?.end===end;
