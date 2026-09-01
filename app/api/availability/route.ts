@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { parseExactIsoDate } from '@/lib/checkoutValidation';
+import { operationalConfig } from '@/lib/operationalConfig';
 
 export const dynamic = 'force-dynamic';
 
@@ -73,13 +74,15 @@ export async function GET(req: NextRequest) {
   if (!start || !end || end < start) return NextResponse.json({ available: false, error: 'Valid start and end dates are required.' }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
 
   const now = new Date(); now.setUTCHours(0, 0, 0, 0);
-  const minLeadDays = Math.max(0, Number.parseInt(process.env.MIN_DELIVERY_LEAD_DAYS || '2', 10) || 0);
+  const config = operationalConfig();
+  if (!config) return NextResponse.json({ available: false, remaining: 0, inventoryMode: 'unavailable', error: 'Live availability is temporarily unavailable. Please try again shortly or contact +65 8032 7183.' }, { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '30' } });
+  const minLeadDays = config.minDeliveryLeadDays;
   const earliest = new Date(now); earliest.setUTCDate(earliest.getUTCDate() + minLeadDays);
   const rentalDays = Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
   if (start < earliest) return NextResponse.json({ available: false, error: `Please book at least ${minLeadDays} day${minLeadDays === 1 ? '' : 's'} before departure.` }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
   if (rentalDays < 1 || rentalDays > 90) return NextResponse.json({ available: false, error: 'Bookings must be between 1 and 90 days.' }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
 
-  const inventory = Math.max(0, Number(process.env.POCKET_WIFI_INVENTORY || '10') || 0);
+  const inventory = config.pocketWifiInventory;
   const stripeKey = process.env.STRIPE_SECRET_KEY;
   if (!stripeKey || !getSupabaseAdmin()) return NextResponse.json({ available: false, remaining: 0, inventoryMode: 'unavailable', error: 'Live availability is not configured yet. Please try again shortly or contact +65 8032 7183.' }, { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '30' } });
 

@@ -1,15 +1,10 @@
 import { NextResponse } from 'next/server';
 import { getAdminCredentials, getMetaCapiToken } from '@/lib/runtimeConfig';
 import { hasRequiredOperationsSchema, hasRequiredPaymentSchema } from '@/lib/productionReadiness';
+import { operationalConfig } from '@/lib/operationalConfig';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
-
-function isPositiveInteger(value?: string) {
-  if (!value) return false;
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0;
-}
 
 function isProductionSiteUrl(value?: string) {
   if (!value) return false;
@@ -76,6 +71,7 @@ export async function GET(req: Request) {
   }
 
   const { user: adminUser, password: adminPassword } = getAdminCredentials();
+  const config = operationalConfig();
   const [paymentSchema, operationsSchema] = await Promise.all([
     hasRequiredPaymentSchema(),
     hasRequiredOperationsSchema(),
@@ -90,8 +86,9 @@ export async function GET(req: Request) {
     paymentSchema,
     operationsSchema,
     admin: Boolean(adminUser && isStrongAdminPassword(adminPassword)),
-    inventory: isPositiveInteger(process.env.POCKET_WIFI_INVENTORY),
-    deliveryLeadDays: isPositiveInteger(process.env.MIN_DELIVERY_LEAD_DAYS),
+    inventory: Boolean(config && config.pocketWifiInventory > 0),
+    deliveryLeadDays: Boolean(config),
+    courierFee: Boolean(config),
     fulfilmentEmail: isSmtpConfigured(),
   };
   const paidAcquisitionChecks = {

@@ -25,6 +25,7 @@ const { validateQyRoamSession } = require('../lib/qyRoamSession.ts');
 const { parseExactIsoDate, validCheckoutRequestId } = require('../lib/checkoutValidation.ts');
 const { WIFI_BENCHMARK, WIFI_PLANS } = require('../lib/wifiPlans.ts');
 const { allowedFulfilmentStatuses, validFulfilmentTransition } = require('../lib/orderLifecycle.ts');
+const { operationalConfig } = require('../lib/operationalConfig.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -169,6 +170,46 @@ test('checkout request ids use the same production boundary everywhere', () => {
   assert.equal(validCheckoutRequestId(requestId), requestId);
   for (const value of ['short', 'contains spaces 123456', 'bad/slashes/123456', 'x'.repeat(81)]) {
     assert.equal(validCheckoutRequestId(value), null);
+  }
+});
+
+test('operational pricing and inventory configuration is strict and fail-closed', () => {
+  const saved = {
+    inventory: process.env.POCKET_WIFI_INVENTORY,
+    leadDays: process.env.MIN_DELIVERY_LEAD_DAYS,
+    courierFee: process.env.COURIER_FEE_SGD,
+  };
+  try {
+    delete process.env.POCKET_WIFI_INVENTORY;
+    delete process.env.MIN_DELIVERY_LEAD_DAYS;
+    delete process.env.COURIER_FEE_SGD;
+    assert.deepEqual(operationalConfig(), { pocketWifiInventory: 10, minDeliveryLeadDays: 2, courierFeeCents: 0 });
+
+    process.env.POCKET_WIFI_INVENTORY = '12';
+    process.env.MIN_DELIVERY_LEAD_DAYS = '0';
+    process.env.COURIER_FEE_SGD = '4.50';
+    assert.deepEqual(operationalConfig(), { pocketWifiInventory: 12, minDeliveryLeadDays: 0, courierFeeCents: 450 });
+
+    for (const [key, value] of [
+      ['POCKET_WIFI_INVENTORY', 'Infinity'],
+      ['MIN_DELIVERY_LEAD_DAYS', '-1'],
+      ['COURIER_FEE_SGD', '1.234'],
+    ]) {
+      process.env.POCKET_WIFI_INVENTORY = '10';
+      process.env.MIN_DELIVERY_LEAD_DAYS = '2';
+      process.env.COURIER_FEE_SGD = '0';
+      process.env[key] = value;
+      assert.equal(operationalConfig(), null);
+    }
+  } finally {
+    for (const [key, value] of Object.entries({
+      POCKET_WIFI_INVENTORY: saved.inventory,
+      MIN_DELIVERY_LEAD_DAYS: saved.leadDays,
+      COURIER_FEE_SGD: saved.courierFee,
+    })) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 });
 

@@ -5,6 +5,7 @@ import { getWifiPlan, WIFI_BENCHMARK } from '../../../lib/wifiPlans';
 import { getSupabaseAdmin } from '../../../lib/supabaseAdmin';
 import { parseExactIsoDate, validCheckoutRequestId } from '../../../lib/checkoutValidation';
 import { QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance } from '../../../lib/orderProvenance';
+import { operationalConfig } from '../../../lib/operationalConfig';
 
 export const runtime = 'nodejs';
 
@@ -65,6 +66,7 @@ export async function POST(req: Request) {
   const length=Number(req.headers.get('content-length')||0); if(length>MAX_BODY_BYTES) return NextResponse.json({error:'Request too large.'},{status:413});
   const key=process.env.STRIPE_SECRET_KEY; if(!key) return NextResponse.json({error:'Payment configuration incomplete.'},{status:503});
   if(!process.env.ORDER_INTEGRITY_SECRET||process.env.ORDER_INTEGRITY_SECRET.length<32) return NextResponse.json({error:'Order configuration incomplete.'},{status:503});
+  const config=operationalConfig(); if(!config) return NextResponse.json({error:'Order configuration incomplete.'},{status:503});
   const raw=await req.text(); if(new TextEncoder().encode(raw).length>MAX_BODY_BYTES) return NextResponse.json({error:'Request too large.'},{status:413});
   let body:Record<string,unknown>; try { body=JSON.parse(raw); } catch { return NextResponse.json({error:'Invalid request.'},{status:400}); }
   const requestId=validCheckoutRequestId(body.checkoutRequestId);
@@ -72,12 +74,12 @@ export async function POST(req: Request) {
   const country=String(body.country||''); const wifiPlan=getWifiPlan(country); const daily=wifiPlan?.daily; const startDate=parseExactIsoDate(body.start); const endDate=parseExactIsoDate(body.end);
   if(!wifiPlan||!daily||!startDate||!endDate||endDate<startDate) return NextResponse.json({error:'Please select a valid destination and travel period.'},{status:400});
   const now=new Date(); now.setUTCHours(0,0,0,0); if(startDate<now) return NextResponse.json({error:'Travel start date cannot be in the past.'},{status:400});
-  const minLeadDays=Math.max(0,Number.parseInt(process.env.MIN_DELIVERY_LEAD_DAYS||'2',10)||0); const earliest=new Date(now); earliest.setUTCDate(earliest.getUTCDate()+minLeadDays);
+  const minLeadDays=config.minDeliveryLeadDays; const earliest=new Date(now); earliest.setUTCDate(earliest.getUTCDate()+minLeadDays);
   if(startDate<earliest) return NextResponse.json({error:`Please book at least ${minLeadDays} day${minLeadDays===1?'':'s'} before departure so we can arrange delivery. Contact +65 8032 7183 for urgent trips.`},{status:400});
   const days=Math.floor((endDate.getTime()-startDate.getTime())/86400000)+1; if(days<1||days>90) return NextResponse.json({error:'Bookings must be between 1 and 90 days.'},{status:400});
   const start=String(body.start), end=String(body.end);
   const stripe=new Stripe(key,{apiVersion:'2024-06-20'});
-  const inventory=Math.max(0,Number(process.env.POCKET_WIFI_INVENTORY||'10')||0);
+  const inventory=config.pocketWifiInventory;
   if(inventory<1) return NextResponse.json({error:'Pocket WiFi is sold out for these dates. Please choose different dates or contact +65 8032 7183.'},{status:409,headers:{'Cache-Control':'no-store'}});
   const holdState=await activeStripeHolds(stripe,country,start,end,requestId);
   if(holdState.requestConflict) return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.'},{status:409,headers:{'Cache-Control':'no-store'}});
@@ -111,7 +113,7 @@ export async function POST(req: Request) {
   const rentalBeforePromo=Math.max(1000,Math.round(daily*days*100));
   const promo=applyPromoCents(rentalBeforePromo, body.promoCode);
   const rentalAmount=promo.amountCents;
-  const courierFee=Math.max(0,Math.round(Number(process.env.COURIER_FEE_SGD||'0')*100));
+  const courierFee=config.courierFeeCents;
   const origin=siteOrigin(req);
   const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[]=[{quantity:1,price_data:{currency:'sgd',unit_amount:rentalAmount,product_data:{name:`QY Roam Pocket WiFi — ${country}`,description:`${start} to ${end} · ${days} day${days===1?'':'s'}${promo.discountCents>0?` · ${normalisePromoCode(body.promoCode)} applied`:''}`}}}];
   if(courierFee>0) lineItems.push({quantity:1,price_data:{currency:'sgd',unit_amount:courierFee,product_data:{name:'Singapore courier delivery & return handling'}}});

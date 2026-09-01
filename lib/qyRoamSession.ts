@@ -4,6 +4,7 @@ import { LAUNCH_PROMO } from './promotions';
 import { getWifiPlan, WIFI_BENCHMARK } from './wifiPlans';
 import { parseExactIsoDate, validCheckoutRequestId } from './checkoutValidation';
 import { validQyRoamProvenance } from './orderProvenance';
+import { operationalConfig } from './operationalConfig';
 
 export type QyRoamProductType = 'esim' | 'pocket_wifi';
 
@@ -40,6 +41,8 @@ export function validateQyRoamSession(session: Stripe.Checkout.Session): QyRoamS
   }
 
   if (productType === 'pocket_wifi') {
+    const config = operationalConfig();
+    if (!config) return { valid: false, reason: 'invalid Pocket WiFi operational pricing configuration' };
     const plan = getWifiPlan(session.metadata?.country);
     if (!plan) return { valid: false, reason: 'unknown Pocket WiFi destination' };
     const start = parseExactIsoDate(session.metadata?.start);
@@ -61,7 +64,7 @@ export function validateQyRoamSession(session: Stripe.Checkout.Session): QyRoamS
     const courierFeeMetadata = session.metadata?.courier_fee_sgd;
     // Sessions opened immediately before this field was deployed remain valid
     // against the server's configured fee during a rolling release.
-    const configuredCourierFee = Math.max(0, Math.round(Number(process.env.COURIER_FEE_SGD || '0') * 100));
+    const configuredCourierFee = config.courierFeeCents;
     const courierFee = courierFeeMetadata === undefined
       ? configuredCourierFee
       : moneyMetadataCents(courierFeeMetadata);
