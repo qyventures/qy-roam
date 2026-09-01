@@ -143,9 +143,11 @@ begin
     and travel_end >= p_travel_start
     -- A legacy order may have been marked cancelled after dispatch. It is
     -- still physically committed until the return is recorded, so it must not
-    -- make a router available to an overlapping booking.
+    -- make a router available to an overlapping booking. Conversely, a
+    -- recorded return is physical proof that the router is available again;
+    -- do not wait for a separate administrative close to release capacity.
     and (
-      fulfilment_status not in ('cancelled', 'payment_failed', 'closed')
+      fulfilment_status not in ('cancelled', 'payment_failed', 'returned', 'closed')
       or (fulfilment_status = 'cancelled' and dispatched_at is not null and returned_at is null)
     );
 

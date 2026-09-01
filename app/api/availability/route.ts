@@ -47,8 +47,10 @@ async function committedInventory(start: string, end: string, stripeHoldRequestI
       .gte('travel_end', start)
       // Keep legacy post-dispatch cancellations committed until a physical
       // return is recorded. New lifecycle rules prevent that transition, but
-      // this protects capacity while older orders are still active.
-      .or('fulfilment_status.not.in.(cancelled,payment_failed,closed),and(fulfilment_status.eq.cancelled,dispatched_at.not.is.null,returned_at.is.null)'),
+      // this protects capacity while older orders are still active. A returned
+      // router is deliberately excluded: physical receipt, not later admin
+      // closure, is the point at which it becomes rentable again.
+      .or('fulfilment_status.not.in.(cancelled,payment_failed,returned,closed),and(fulfilment_status.eq.cancelled,dispatched_at.not.is.null,returned_at.is.null)'),
     supabase.from('checkout_reservations').select('checkout_request_id')
       .gt('expires_at', now)
       .lte('travel_start', end)
