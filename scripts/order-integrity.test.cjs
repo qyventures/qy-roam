@@ -25,6 +25,10 @@ const { validateQyRoamSession } = require('../lib/qyRoamSession.ts');
 const { parseExactIsoDate, validCheckoutRequestId } = require('../lib/checkoutValidation.ts');
 const { WIFI_BENCHMARK, WIFI_PLANS } = require('../lib/wifiPlans.ts');
 
+// The success page, booking-status page, and Stripe webhook must all use this
+// same validator rather than trusting the QY Roam source marker by itself.
+const bookingPage = fs.readFileSync(require.resolve('../app/booking/page.tsx'), 'utf8');
+
 const requestId = 'checkout_request_123456';
 
 function esimSession(plan = ESIM_PLANS[0]) {
@@ -116,6 +120,11 @@ test('ignores sessions outside the QY Roam checkout boundary', () => {
   const session = esimSession();
   session.metadata.source = 'another-store';
   assert.equal(validateQyRoamSession(session).valid, false);
+});
+
+test('booking status uses full checkout-session integrity validation', () => {
+  assert.match(bookingPage, /validateQyRoamSession\(session\)/);
+  assert.doesNotMatch(bookingPage, /qyRoamProductType\(session\)/);
 });
 
 test('checkout validation rejects normalized and malformed calendar dates', () => {

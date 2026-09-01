@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import Stripe from 'stripe';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { initialFulfilmentStatus } from '@/lib/orderLifecycle';
-import { qyRoamProductType } from '@/lib/qyRoamSession';
+import { validateQyRoamSession } from '@/lib/qyRoamSession';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,8 +48,12 @@ export default async function BookingPage({ searchParams }: Props) {
   try {
     const stripe = new Stripe(key, { apiVersion: '2024-06-20' });
     const session = await stripe.checkout.sessions.retrieve(sessionId);
-    const productType = qyRoamProductType(session);
-    if (!productType) throw new Error('Checkout Session does not belong to QY Roam');
+    // Treat the customer-facing status page as the same trust boundary as the
+    // success page and webhook. A source marker alone is not enough because a
+    // manually created session in a shared Stripe account can carry metadata.
+    const validation = validateQyRoamSession(session);
+    if (!validation.valid) throw new Error(`Invalid QY Roam Checkout Session: ${validation.reason}`);
+    const productType = validation.productType;
     const supabase = getSupabaseAdmin();
     const order = supabase
       ? await supabase
