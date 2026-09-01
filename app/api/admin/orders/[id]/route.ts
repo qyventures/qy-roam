@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
+import Stripe from 'stripe';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { validFulfilmentStatus, validFulfilmentTransition } from '@/lib/orderLifecycle';
+import { validateQyRoamSession } from '@/lib/qyRoamSession';
+import { deliverFulfilmentNotification, deliverMetaPurchase } from '@/app/api/stripe-webhook/route';
 
 export const runtime = 'nodejs';
 
@@ -54,4 +57,46 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     });
   }
   return NextResponse.json(data, { headers: { 'Cache-Control': 'no-store' } });
+}
+
+// Stripe retries delivery failures for a finite window. This protected recovery
+// action lets an operator safely resume a failed paid-order notification after
+// that window: the same per-session ledgers used by the webhook prevent a
+// duplicate email or Meta Purchase once either delivery is already marked sent.
+export async function POST(_req: Request, { params }: { params: { id: string } }) {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) return NextResponse.json({ error: 'Order database not configured' }, { status: 503 });
+  const stripeKey = process.env.STRIPE_SECRET_KEY;
+  if (!stripeKey) return NextResponse.json({ error: 'Stripe is not configured' }, { status: 503 });
+
+  const id = Number(params.id);
+  if (!Number.isSafeInteger(id) || id < 1) return NextResponse.json({ error: 'Invalid order id' }, { status: 400 });
+
+  try {
+    const { data: order, error } = await supabase
+      .from('orders')
+      .select('stripe_session_id,payment_status')
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!order) return NextResponse.json({ error: 'Order not found' }, { status: 404 });
+    if (order.payment_status !== 'paid') return NextResponse.json({ error: 'Only paid orders can retry fulfilment notifications' }, { status: 409 });
+    if (!String(order.stripe_session_id).startsWith('cs_')) {
+      return NextResponse.json({ error: 'Manual orders do not have a Stripe fulfilment notification to retry' }, { status: 409 });
+    }
+
+    const stripe = new Stripe(stripeKey, { apiVersion: '2024-06-20' });
+    const session = await stripe.checkout.sessions.retrieve(order.stripe_session_id);
+    const validation = validateQyRoamSession(session);
+    if (!validation.valid || session.payment_status !== 'paid') {
+      return NextResponse.json({ error: 'The linked Stripe session is not a valid paid QY Roam order' }, { status: 409 });
+    }
+
+    await deliverFulfilmentNotification(supabase, session);
+    await deliverMetaPurchase(supabase, session, Math.floor(Date.now() / 1000));
+    return NextResponse.json({ ok: true }, { headers: { 'Cache-Control': 'no-store' } });
+  } catch (error) {
+    console.error('admin_order_notification_retry_error', error);
+    return NextResponse.json({ error: 'Unable to retry order notifications. Please try again shortly.' }, { status: 500 });
+  }
 }

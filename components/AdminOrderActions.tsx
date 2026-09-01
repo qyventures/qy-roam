@@ -11,6 +11,7 @@ export default function AdminOrderActions({ id, initialStatus, productType = 'po
   const [courier, setCourier] = useState(courierTracking || '');
   const [returned, setReturned] = useState(returnTracking || '');
   const [saving, setSaving] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const [message, setMessage] = useState('');
 
   async function save() {
@@ -32,6 +33,17 @@ export default function AdminOrderActions({ id, initialStatus, productType = 'po
     finally { setSaving(false); }
   }
 
+  async function retryNotifications() {
+    setRetrying(true); setMessage('');
+    try {
+      const res = await fetch(`/api/admin/orders/${id}`, { method: 'POST' });
+      const result = await res.json().catch(() => null) as { error?: string } | null;
+      if (!res.ok) throw new Error(result?.error || 'Notification retry failed');
+      setMessage('Notification retry started');
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Could not retry notifications'); }
+    finally { setRetrying(false); }
+  }
+
   return <div style={{display:'grid',gap:6,minWidth:190}}>
     <select aria-label="Fulfilment status" value={status} onChange={e=>setStatus(e.target.value)} disabled={statuses.length < 2}>{statuses.map(s=><option key={s} value={s}>{s.replaceAll('_',' ')}</option>)}</select>
     {!isEsim && <>
@@ -40,6 +52,7 @@ export default function AdminOrderActions({ id, initialStatus, productType = 'po
     </>}
     {isEsim && <small>Mark fulfilled after the QR code / activation instructions have been sent to the customer.</small>}
     <button type="button" onClick={save} disabled={saving || statuses.length < 2}>{saving ? 'Saving…' : 'Save'}</button>
+    <button type="button" onClick={retryNotifications} disabled={retrying}>{retrying ? 'Retrying notifications…' : 'Retry order notifications'}</button>
     {message && <small aria-live="polite">{message}</small>}
   </div>;
 }

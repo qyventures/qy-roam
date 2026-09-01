@@ -86,6 +86,7 @@ Before advertising, make one controlled real booking using the lowest practical 
 7. A repeated webhook does not create a duplicate order/event.
 8. Inventory for overlapping dates decreases appropriately.
 9. An eSIM order's plan, SGD amount, and promo metadata match the server catalogue before fulfilment.
+10. If a fulfilment or Meta delivery is deliberately failed during testing, the protected order action can retry it; a delivery already marked sent must not be duplicated.
 
 Refund/cancel the controlled transaction afterward if operationally appropriate.
 

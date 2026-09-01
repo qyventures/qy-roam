@@ -173,3 +173,11 @@ test('admin actions advance their transition baseline after each save', () => {
   assert.match(adminOrderActions, /allowedFulfilmentStatuses\(productType, currentStatus\)/);
   assert.match(adminOrderActions, /setCurrentStatus\(result\.fulfilment_status\)/);
 });
+
+test('admin can safely resume failed paid-order notifications', () => {
+  assert.match(adminOrderRoute, /export async function POST/);
+  assert.match(adminOrderRoute, /validateQyRoamSession\(session\)/);
+  assert.match(adminOrderRoute, /await deliverFulfilmentNotification\(supabase, session\)/);
+  assert.match(adminOrderRoute, /await deliverMetaPurchase\(supabase, session/);
+  assert.match(adminOrderActions, /Retry order notifications/);
+});

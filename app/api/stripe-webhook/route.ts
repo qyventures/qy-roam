@@ -130,7 +130,7 @@ async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string
   return {status:'claimed',processingStartedAt};
 }
 
-async function deliverFulfilmentNotification(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session){
+export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session){
   let existing=await supabase.from('fulfilment_notifications').select('status,updated_at,attempts').eq('stripe_session_id',session.id).maybeSingle();
   if(existing.error) throw existing.error;
   if(existing.data?.status==='sent') return;
@@ -159,7 +159,7 @@ async function deliverFulfilmentNotification(supabase:NonNullable<ReturnType<typ
   }
 }
 
-async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session,eventTime:number){
+export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session,eventTime:number){
   if(!metaPurchaseConfigured(session)) return;
   let existing=await supabase.from('meta_purchase_deliveries').select('status,updated_at,attempts').eq('stripe_session_id',session.id).maybeSingle();
   if(existing.error) throw existing.error;
