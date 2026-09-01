@@ -33,9 +33,10 @@ async function activeStripeHolds(stripe:Stripe,start:string,end:string,requestId
   let startingAfter:string|undefined;
   let holds=0;
   const requestIds:string[]=[];
-  // Match the availability endpoint's pagination so checkout cannot oversell when
-  // Stripe has more than 100 open sessions during a busy launch period.
-  for(let page=0;page<5;page+=1){
+  // Every still-valid QY Roam Checkout Session is an inventory hold. Do not cap
+  // pagination here: stopping after an arbitrary number of pages can undercount
+  // holds during a busy period and oversell the final routers.
+  for(;;){
     const sessions=await stripe.checkout.sessions.list({status:'open',limit:100,...(startingAfter?{starting_after:startingAfter}:{})});
     for(const session of sessions.data){
       if(session.created<cutoff||session.metadata?.source!=='qyroam.com') continue;

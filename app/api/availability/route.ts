@@ -17,7 +17,10 @@ async function activeStripeHolds(stripe: Stripe, start: string, end: string) {
   let startingAfter: string | undefined;
   let holds = 0;
   const requestIds = new Set<string>();
-  for (let page = 0; page < 5; page += 1) {
+  // Every still-valid QY Roam Checkout Session is an inventory hold. Do not cap
+  // pagination: an arbitrary page limit would report stock that is already held
+  // when checkout volume exceeds that limit.
+  for (;;) {
     const sessions = await stripe.checkout.sessions.list({ status: 'open', limit: 100, ...(startingAfter ? { starting_after: startingAfter } : {}) });
     for (const session of sessions.data) {
       if (session.created < cutoff || session.metadata?.source !== 'qyroam.com') continue;
