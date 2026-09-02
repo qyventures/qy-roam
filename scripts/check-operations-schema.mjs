@@ -7,6 +7,7 @@ const requiredContracts = [
   'create table if not exists public.inventory_items',
   'create table if not exists public.inventory_movements',
   'create or replace function public.qy_adjust_inventory',
+  'create or replace function public.qy_transition_pocket_wifi_order',
   'create or replace function public.qy_create_manual_pocket_wifi_order',
   'create table if not exists public.customers',
   'create table if not exists public.crm_activities',
@@ -17,6 +18,7 @@ const requiredContracts = [
   'alter table public.inventory_items enable row level security',
   'alter table public.customers enable row level security',
   'grant execute on function public.qy_adjust_inventory(bigint,integer,text,text,text) to service_role',
+  'grant execute on function public.qy_transition_pocket_wifi_order(bigint,text,text,text,text,text,bigint) to service_role',
   'grant execute on function public.qy_create_manual_pocket_wifi_order(text,text,text,text,numeric,text,text,date,date,text,integer) to service_role',
 ];
 

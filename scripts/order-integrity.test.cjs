@@ -405,6 +405,16 @@ test('Pocket WiFi dispatch and return require a recorded operational reference',
   assert.match(adminOrderActions, /status === 'returned' && !returned\.trim\(\)/);
 });
 
+test('Pocket WiFi dispatch and return atomically reconcile the assigned stock item', () => {
+  const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
+  assert.match(schema, /add column if not exists inventory_item_id bigint references public\.inventory_items/);
+  assert.match(schema, /create or replace function public\.qy_transition_pocket_wifi_order/);
+  assert.match(schema, /movement_type, quantity, reference, notes\)\s*\n    values \(v_item_id, 'dispatch', -1/);
+  assert.match(schema, /movement_type, quantity, reference, notes\)\s*\n    values \(v_item_id, 'return', 1/);
+  assert.match(adminOrderRoute, /rpc\('qy_transition_pocket_wifi_order'/);
+  assert.match(adminOrderActions, /Select the Pocket WiFi inventory item being dispatched/);
+});
+
 test('admin actions advance their transition baseline after each save', () => {
   assert.match(adminOrderActions, /allowedFulfilmentStatuses\(productType, currentStatus\)/);
   assert.match(adminOrderActions, /setCurrentStatus\(result\.fulfilment_status\)/);

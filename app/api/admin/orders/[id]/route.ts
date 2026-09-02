@@ -50,6 +50,34 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     return NextResponse.json({ error: 'Return tracking or receipt reference is required before marking a Pocket WiFi order returned' }, { status: 400 });
   }
 
+  if (existing.data.product_type === 'pocket_wifi') {
+    const selectedInventoryItemId = body.inventory_item_id === undefined || body.inventory_item_id === ''
+      ? null
+      : Number(body.inventory_item_id);
+    if (selectedInventoryItemId !== null && (!Number.isSafeInteger(selectedInventoryItemId) || selectedInventoryItemId < 1)) {
+      return NextResponse.json({ error: 'Invalid Pocket WiFi inventory item' }, { status: 400 });
+    }
+    // Dispatch/return update both ledgers inside the database transaction. This
+    // is the physical inventory boundary, so do not fall back to a plain order
+    // update if the new RPC has not been deployed yet.
+    const { data, error } = await supabase.rpc('qy_transition_pocket_wifi_order', {
+      p_order_id: id,
+      p_expected_status: existing.data.fulfilment_status,
+      p_next_status: status,
+      p_courier_tracking: typeof body.courier_tracking === 'string' ? courierTracking : null,
+      p_return_tracking: typeof body.return_tracking === 'string' ? returnTracking : null,
+      p_notes: typeof body.notes === 'string' ? body.notes.slice(0, 1000) : null,
+      p_inventory_item_id: selectedInventoryItemId,
+    });
+    if (error) {
+      const conflict = /changed since it was loaded/i.test(error.message || '');
+      return NextResponse.json({ error: conflict ? 'Order changed since it was loaded. Refresh before updating it.' : error.message || 'Unable to update order' }, { status: conflict ? 409 : 500 });
+    }
+    const order = Array.isArray(data) ? data[0] : data;
+    if (!order?.id) return NextResponse.json({ error: 'Unable to update order' }, { status: 500 });
+    return NextResponse.json({ id: order.id, fulfilment_status: order.fulfilment_status }, { headers: { 'Cache-Control': 'no-store' } });
+  }
+
   const patch: Record<string, any> = {
     fulfilment_status: status,
     updated_at: new Date().toISOString(),

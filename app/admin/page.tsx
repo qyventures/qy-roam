@@ -56,6 +56,10 @@ export default async function AdminPage() {
     ? await supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(500)
     : { data: [] as any[] };
   const orders: any[] = result.data ?? [];
+  const inventoryResult = supabase
+    ? await supabase.from('inventory_items').select('id,sku,name,quantity_on_hand').eq('product_type', 'pocket_wifi').order('name')
+    : { data: [] as any[] };
+  const inventoryItems: any[] = inventoryResult.data ?? [];
   const notificationResult = supabase
     ? await supabase.from('fulfilment_notifications').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('updated_at', { ascending: false }).limit(500)
     : { data: [] as any[] };
@@ -158,7 +162,7 @@ export default async function AdminPage() {
             <td style={{padding:'14px 8px'}}>{o.payment_status || '-'}</td>
             <td style={{padding:'14px 8px'}}><strong>{money(o.amount_sgd)}</strong></td>
             <td style={{padding:'14px 8px'}}>{notification?.status === 'sent' ? '✓ Sent' : notification ? `⚠ ${notification.status}` : o.payment_status === 'paid' ? '⚠ Not recorded' : '-'}{notification?.last_error && <><br/><small>{String(notification.last_error).slice(0,120)}</small></>}</td>
-            <td style={{padding:'14px 8px'}}><AdminOrderActions id={o.id} initialStatus={o.fulfilment_status} productType={o.product_type} courierTracking={o.courier_tracking} returnTracking={o.return_tracking}/></td>
+            <td style={{padding:'14px 8px'}}><AdminOrderActions id={o.id} initialStatus={o.fulfilment_status} productType={o.product_type} courierTracking={o.courier_tracking} returnTracking={o.return_tracking} inventoryItemId={o.inventory_item_id} inventoryItems={inventoryItems}/></td>
           </tr>;
         })}</tbody>
       </table></div>}

@@ -297,6 +297,12 @@ create table if not exists public.inventory_movements (
 );
 alter table public.inventory_movements enable row level security;
 
+-- A dispatched rental is tied to the stock record that supplied it. Keeping
+-- this on the order lets the return restore the exact same pool of devices,
+-- rather than relying on an operator to remember which SKU was sent.
+alter table public.orders add column if not exists inventory_item_id bigint references public.inventory_items(id) on delete restrict;
+create index if not exists orders_inventory_item_idx on public.orders(inventory_item_id);
+
 -- Inventory quantity and its audit record must change atomically. The admin
 -- API uses only this function for adjustments, dispatches and returns.
 create or replace function public.qy_adjust_inventory(
@@ -338,6 +344,88 @@ end;
 $$;
 revoke all on function public.qy_adjust_inventory(bigint,integer,text,text,text) from public;
 grant execute on function public.qy_adjust_inventory(bigint,integer,text,text,text) to service_role;
+
+-- The physical hand-off and receipt boundaries must update an order and its
+-- stock ledger in one transaction. A browser-side sequence of "set status",
+-- then "adjust stock" can otherwise leave a dispatched router available (or a
+-- returned router missing) if either request is interrupted.
+create or replace function public.qy_transition_pocket_wifi_order(
+  p_order_id bigint,
+  p_expected_status text,
+  p_next_status text,
+  p_courier_tracking text default null,
+  p_return_tracking text default null,
+  p_notes text default null,
+  p_inventory_item_id bigint default null
+)
+returns public.orders
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_order public.orders%rowtype;
+  v_item public.inventory_items%rowtype;
+  v_now timestamptz := now();
+  v_item_id bigint;
+begin
+  select * into v_order from public.orders where id = p_order_id for update;
+  if not found then raise exception 'order not found'; end if;
+  if v_order.product_type <> 'pocket_wifi' or v_order.payment_status <> 'paid' then
+    raise exception 'only paid Pocket WiFi orders can be transitioned here';
+  end if;
+  if v_order.fulfilment_status <> p_expected_status then
+    raise exception 'order changed since it was loaded';
+  end if;
+
+  if not (
+    p_next_status = p_expected_status or
+    (p_expected_status = 'paid' and p_next_status in ('packing', 'dispatched', 'cancelled')) or
+    (p_expected_status = 'packing' and p_next_status in ('paid', 'dispatched', 'cancelled')) or
+    (p_expected_status = 'dispatched' and p_next_status in ('packing', 'with_customer', 'return_due', 'returned')) or
+    (p_expected_status = 'with_customer' and p_next_status in ('dispatched', 'return_due', 'returned')) or
+    (p_expected_status = 'return_due' and p_next_status in ('with_customer', 'returned')) or
+    (p_expected_status = 'returned' and p_next_status = 'closed')
+  ) then raise exception 'invalid Pocket WiFi fulfilment transition'; end if;
+
+  if p_next_status = 'dispatched' and v_order.dispatched_at is null then
+    if nullif(trim(coalesce(p_courier_tracking, '')), '') is null then raise exception 'courier tracking is required before dispatch'; end if;
+    v_item_id := coalesce(p_inventory_item_id, v_order.inventory_item_id);
+    if v_item_id is null then raise exception 'a Pocket WiFi inventory item is required before dispatch'; end if;
+    select * into v_item from public.inventory_items
+    where id = v_item_id and product_type = 'pocket_wifi' for update;
+    if not found then raise exception 'Pocket WiFi inventory item not found'; end if;
+    if v_item.quantity_on_hand < 1 then raise exception 'selected Pocket WiFi inventory item is out of stock'; end if;
+    update public.inventory_items set quantity_on_hand = quantity_on_hand - 1, updated_at = v_now where id = v_item_id;
+    insert into public.inventory_movements (inventory_item_id, movement_type, quantity, reference, notes)
+    values (v_item_id, 'dispatch', -1, left(v_order.stripe_session_id, 120), nullif(left(trim(coalesce(p_courier_tracking, '')), 1000), ''));
+  elsif p_next_status = 'returned' and v_order.returned_at is null then
+    if nullif(trim(coalesce(p_return_tracking, '')), '') is null then raise exception 'return tracking is required before receipt'; end if;
+    v_item_id := v_order.inventory_item_id;
+    if v_item_id is null then raise exception 'dispatched Pocket WiFi order has no inventory item to return'; end if;
+    select * into v_item from public.inventory_items where id = v_item_id and product_type = 'pocket_wifi' for update;
+    if not found then raise exception 'assigned Pocket WiFi inventory item not found'; end if;
+    update public.inventory_items set quantity_on_hand = quantity_on_hand + 1, updated_at = v_now where id = v_item_id;
+    insert into public.inventory_movements (inventory_item_id, movement_type, quantity, reference, notes)
+    values (v_item_id, 'return', 1, left(v_order.stripe_session_id, 120), nullif(left(trim(coalesce(p_return_tracking, '')), 1000), ''));
+  end if;
+
+  update public.orders set
+    fulfilment_status = p_next_status,
+    courier_tracking = case when p_courier_tracking is null then courier_tracking else nullif(left(trim(p_courier_tracking), 200), '') end,
+    return_tracking = case when p_return_tracking is null then return_tracking else nullif(left(trim(p_return_tracking), 200), '') end,
+    notes = case when p_notes is null then notes else left(p_notes, 1000) end,
+    inventory_item_id = coalesce(v_order.inventory_item_id, case when p_next_status = 'dispatched' then p_inventory_item_id end),
+    dispatched_at = case when p_next_status = 'dispatched' and dispatched_at is null then v_now else dispatched_at end,
+    returned_at = case when p_next_status = 'returned' and returned_at is null then v_now else returned_at end,
+    updated_at = v_now
+  where id = p_order_id
+  returning * into v_order;
+  return v_order;
+end;
+$$;
+revoke all on function public.qy_transition_pocket_wifi_order(bigint,text,text,text,text,text,bigint) from public;
+grant execute on function public.qy_transition_pocket_wifi_order(bigint,text,text,text,text,text,bigint) to service_role;
 
 create table if not exists public.customers (
   id bigint generated by default as identity primary key,
