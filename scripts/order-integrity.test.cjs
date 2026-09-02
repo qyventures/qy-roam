@@ -264,6 +264,14 @@ test('Pocket WiFi checkout retries bind the complete server-priced booking', () 
   assert.match(wifiCheckoutRoute, /checkout_amount_cents:String\(rentalAmount\+courierFee\)/);
 });
 
+test('Pocket WiFi payment URLs require a durable matching reservation link', () => {
+  assert.match(wifiCheckoutRoute, /async function linkReservationToSession/);
+  assert.match(wifiCheckoutRoute, /stripe_session_id\.is\.null,stripe_session_id\.eq\.\$\{sessionId\}/);
+  assert.match(wifiCheckoutRoute, /if\(!await linkReservationToSession\(supabase,requestId,existing\.id\)\)/);
+  assert.match(wifiCheckoutRoute, /if\(!await linkReservationToSession\(supabase,requestId,session\.id\)\)/);
+  assert.match(wifiCheckoutRoute, /Live reservation confirmation is temporarily unavailable/);
+});
+
 test('operational pricing and inventory configuration is strict and fail-closed', () => {
   const saved = {
     inventory: process.env.POCKET_WIFI_INVENTORY,

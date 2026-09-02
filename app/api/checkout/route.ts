@@ -95,6 +95,22 @@ async function activeStripeHolds(stripe:Stripe,start:string,end:string,requestId
   return {holds,requestIds,existingUrl:null,existingSessionId:null,requestConflict:false};
 }
 
+// A Stripe Checkout URL is only safe to expose once its durable inventory hold
+// is tied to that exact session.  This also repairs the small interruption
+// window between session creation and the original link on a client retry.
+async function linkReservationToSession(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>,requestId:string,sessionId:string) {
+  const linked=await supabase.from('checkout_reservations')
+    .update({stripe_session_id:sessionId})
+    .eq('checkout_request_id',requestId)
+    // Never overwrite a reservation that has somehow been linked to another
+    // session. Repeating the same link is intentionally idempotent.
+    .or(`stripe_session_id.is.null,stripe_session_id.eq.${sessionId}`)
+    .select('checkout_request_id')
+    .maybeSingle();
+  if(linked.error) throw linked.error;
+  return Boolean(linked.data);
+}
+
 export async function POST(req: Request) {
  try {
   if(limited(req)) return NextResponse.json({error:'Too many checkout attempts. Please try again shortly.'},{status:429,headers:{'Retry-After':'60'}});
@@ -129,6 +145,8 @@ export async function POST(req: Request) {
   const requested={country,start,end,days,daily,rentalBeforePromo,promoCode:promo.promoCode,promoDiscount:promo.discountCents,courierFee};
   const holdState=await activeStripeHolds(stripe,start,end,requestId,requested);
   if(holdState.requestConflict) return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.',checkoutRequestConflict:true},{status:409,headers:{'Cache-Control':'no-store'}});
+  const supabase=getSupabaseAdmin();
+  if(!supabase) return NextResponse.json({error:'Live reservation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
   if(holdState.existingUrl&&holdState.existingSessionId){
     // A retry can find a session created just before a process interruption.
     // Repair its provenance before returning its URL, rather than allowing an
@@ -139,10 +157,14 @@ export async function POST(req: Request) {
     if(metadata[QY_ROAM_PROVENANCE_METADATA_KEY]!==provenance){
       await stripe.checkout.sessions.update(existing.id,{metadata:{[QY_ROAM_PROVENANCE_METADATA_KEY]:provenance}});
     }
+    if(!await linkReservationToSession(supabase,requestId,existing.id)){
+      // Do not redirect a retry to payment when its durable reservation was
+      // lost or points to a different Stripe session. Keeping the open Stripe
+      // Session unexposed preserves capacity until an operator can investigate.
+      return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
+    }
     return NextResponse.json({url:holdState.existingUrl},{headers:{'Cache-Control':'no-store'}});
   }
-  const supabase=getSupabaseAdmin();
-  if(!supabase) return NextResponse.json({error:'Live reservation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
   const expiresAt=new Date(Date.now()+HOLD_MINUTES*60_000).toISOString();
   const reservation=await supabase.rpc('qy_reserve_pocket_wifi',{
     p_checkout_request_id:requestId,
@@ -193,8 +215,11 @@ export async function POST(req: Request) {
     if(released.error) console.error('checkout_expired_reservation_release_error',released.error);
     return NextResponse.json({error:'This secure checkout session has expired. Please try again to start a new one.',checkoutExpired:true},{status:409,headers:{'Cache-Control':'no-store'}});
   }
-  const linked=await supabase.from('checkout_reservations').update({stripe_session_id:session.id}).eq('checkout_request_id',requestId);
-  if(linked.error) console.error('checkout_reservation_link_error',linked.error);
+  if(!await linkReservationToSession(supabase,requestId,session.id)){
+    // Fail closed: a payment URL without a durable session-to-reservation
+    // relationship cannot safely be reconciled by fulfilment or inventory.
+    return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
+  }
   return NextResponse.json({url:session.url},{headers:{'Cache-Control':'no-store'}});
  } catch(error){ console.error('checkout_error',error); return NextResponse.json({error:'Unable to start checkout.'},{status:500}); }
 }
