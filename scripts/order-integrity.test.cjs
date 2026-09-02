@@ -61,6 +61,7 @@ function esimSession(plan = ESIM_PLANS[0]) {
       promo_discount_percent: String(ESIM_PROMO.percent)
     }
   };
+  session.metadata.checkout_amount_cents = String(session.amount_total);
   session.metadata.qyroam_provenance = signedQyRoamProvenance(session.id, session.metadata);
   return session;
 }
@@ -92,6 +93,7 @@ function wifiSession(plan = WIFI_PLANS[0]) {
       courier_fee_sgd: '0.00'
     }
   };
+  session.metadata.checkout_amount_cents = String(session.amount_total);
   session.metadata.qyroam_provenance = signedQyRoamProvenance(session.id, session.metadata);
   return session;
 }
@@ -156,6 +158,27 @@ test('rejects unsigned, copied, and session-id-replayed checkout provenance', ()
   assert.equal(validateQyRoamSession(replayed).valid, false);
 });
 
+test('accepts an authenticated historical price snapshot after a catalogue update', () => {
+  const session = esimSession();
+  // This represents a Checkout Session issued before a legitimate reprice.
+  // Its v2 signature binds the amount snapshot and all order metadata.
+  session.amount_total += 1;
+  session.metadata.checkout_amount_cents = String(session.amount_total);
+  session.metadata.qyroam_provenance = signedQyRoamProvenance(session.id, session.metadata);
+  assert.deepEqual(validateQyRoamSession(session), { valid: true, productType: 'esim' });
+});
+
+test('accepts an authenticated historical eSIM plan after it is retired', () => {
+  const plan = ESIM_PLANS[0];
+  const session = esimSession(plan);
+  ESIM_PLANS.splice(0, 1);
+  try {
+    assert.deepEqual(validateQyRoamSession(session), { valid: true, productType: 'esim' });
+  } finally {
+    ESIM_PLANS.unshift(plan);
+  }
+});
+
 test('v2 provenance binds all checkout metadata, including same-priced travel dates', () => {
   const session = wifiSession();
   // Moving a four-day rental to another four-day period leaves the catalogue
@@ -201,6 +224,7 @@ test('eSIM checkout never redirects a reused idempotency key to another plan', (
   assert.match(esimCheckoutRoute, /checkoutRequestConflict: true/);
   assert.match(esimCheckoutRoute, /if \(!matchesRequestedEsim\(session, requestId, plan\)\)/);
   assert.match(esimPage, /data\.checkoutExpired \|\| data\.checkoutRequestConflict/);
+  assert.match(esimCheckoutRoute, /checkout_amount_cents: String\(amount\)/);
 });
 
 test('Pocket WiFi checkout retries bind the complete server-priced booking', () => {
@@ -210,6 +234,7 @@ test('Pocket WiFi checkout retries bind the complete server-priced booking', () 
   assert.match(wifiCheckoutRoute, /const sameBooking=matchesRequestedPocketWifi\(session,requestId,requested\)/);
   assert.match(wifiCheckoutRoute, /checkoutRequestConflict:true/);
   assert.match(homePage, /data\.checkoutExpired \|\| data\.checkoutRequestConflict/);
+  assert.match(wifiCheckoutRoute, /checkout_amount_cents:String\(rentalAmount\+courierFee\)/);
 });
 
 test('operational pricing and inventory configuration is strict and fail-closed', () => {

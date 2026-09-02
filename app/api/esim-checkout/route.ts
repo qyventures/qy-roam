@@ -108,6 +108,7 @@ export async function POST(req: Request) {
         promo_code: ESIM_PROMO.code,
         benchmark_price_sgd: plan.benchmarkPriceSgd.toFixed(2),
         promo_discount_percent: String(ESIM_PROMO.percent),
+        checkout_amount_cents: String(amount),
         checkout_request_id: requestId,
         source: 'qyroam.com',
         measurement_consent: body.measurementConsent === true ? 'accepted' : 'essential'
