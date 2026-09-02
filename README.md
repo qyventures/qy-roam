@@ -35,7 +35,7 @@ cd /root/qy-roam
 bash deploy/deploy.sh
 ```
 
-The script fast-forwards `main`, installs dependencies, validates public pricing, builds with the protected env file, restarts the service, then uses `HEALTH_CHECK_TOKEN` to verify launch readiness at `http://127.0.0.1:3100/api/health`.
+The script requires an already-clean `main` checkout, fast-forwards it, installs from the committed dependency lock, validates pricing, operations schema and order integrity, builds with the protected env file, restarts the service, then uses `HEALTH_CHECK_TOKEN` to verify launch readiness at `http://127.0.0.1:3100/api/health`.
 
 ## Nginx and TLS
 

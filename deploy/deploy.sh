@@ -9,8 +9,15 @@ HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3100/api/health}"
 cd "$APP_DIR"
 
 echo "[1/7] Updating source"
+if [[ "$(git branch --show-current)" != "main" ]]; then
+  echo "Refusing to deploy: production checkout must already be on main" >&2
+  exit 1
+fi
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "Refusing to deploy: production checkout has tracked local changes" >&2
+  exit 1
+fi
 git fetch --prune origin
-git checkout main
 git pull --ff-only origin main
 
 echo "[2/7] Checking environment file"
@@ -21,11 +28,11 @@ fi
 chmod 600 "$ENV_FILE"
 
 echo "[3/7] Installing locked dependencies"
-if [[ -f package-lock.json ]]; then
-  npm ci --no-audit --no-fund
-else
-  npm install --no-audit --no-fund
+if [[ ! -f package-lock.json ]]; then
+  echo "package-lock.json is required for a reproducible production deploy" >&2
+  exit 1
 fi
+npm ci --no-audit --no-fund
 
 echo "[4/7] Building"
 set -a
@@ -39,6 +46,8 @@ if [[ ${#health_check_token} -lt 24 ]]; then
 fi
 npm run check:esim-pricing
 npm run check:wifi-pricing
+npm run check:operations-schema
+npm run test:order-integrity
 npm run build
 
 echo "[5/7] Restarting service"
