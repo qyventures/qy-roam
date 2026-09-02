@@ -236,6 +236,13 @@ test('eSIM checkout fails closed when its durable post-payment order boundary is
   assert.match(productionReadiness, /export async function hasRequiredEsimOrderSchema\(\)/);
 });
 
+test('Pocket WiFi checkout fails closed when its paid-order schema is unavailable', () => {
+  assert.match(wifiCheckoutRoute, /hasRequiredPaymentSchema/);
+  assert.match(wifiCheckoutRoute, /if\(!await hasRequiredPaymentSchema\(\)\)/);
+  assert.match(wifiCheckoutRoute, /Pocket WiFi ordering is temporarily unavailable/);
+  assert.match(wifiCheckoutRoute, /'Retry-After':'30'/);
+});
+
 test('Pocket WiFi checkout retries bind the complete server-priced booking', () => {
   assert.match(wifiCheckoutRoute, /function matchesRequestedPocketWifi/);
   assert.match(wifiCheckoutRoute, /session\.metadata\?\.promo_code===requested\.promoCode/);

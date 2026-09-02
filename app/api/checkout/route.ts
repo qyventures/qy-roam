@@ -6,6 +6,7 @@ import { getSupabaseAdmin } from '../../../lib/supabaseAdmin';
 import { parseExactIsoDate, validCheckoutRequestId } from '../../../lib/checkoutValidation';
 import { QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance, validQyRoamProvenance } from '../../../lib/orderProvenance';
 import { operationalConfig } from '../../../lib/operationalConfig';
+import { hasRequiredPaymentSchema } from '../../../lib/productionReadiness';
 
 export const runtime = 'nodejs';
 
@@ -108,6 +109,11 @@ export async function POST(req: Request) {
   if(!requestId) return NextResponse.json({error:'Invalid checkout request.'},{status:400});
   const country=String(body.country||''); const wifiPlan=getWifiPlan(country); const daily=wifiPlan?.daily; const startDate=parseExactIsoDate(body.start); const endDate=parseExactIsoDate(body.end);
   if(!wifiPlan||!daily||!startDate||!endDate||endDate<startDate) return NextResponse.json({error:'Please select a valid destination and travel period.'},{status:400});
+  // A reservation alone is not enough: once payment succeeds, the webhook
+  // needs the orders and delivery/idempotency ledgers as well. Do this before
+  // creating a payable Stripe Session so an incomplete migration cannot leave
+  // a paid router booking unrecorded or unfulfillable.
+  if(!await hasRequiredPaymentSchema()) return NextResponse.json({error:'Pocket WiFi ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
   const now=new Date(); now.setUTCHours(0,0,0,0); if(startDate<now) return NextResponse.json({error:'Travel start date cannot be in the past.'},{status:400});
   const minLeadDays=config.minDeliveryLeadDays; const earliest=new Date(now); earliest.setUTCDate(earliest.getUTCDate()+minLeadDays);
   if(startDate<earliest) return NextResponse.json({error:`Please book at least ${minLeadDays} day${minLeadDays===1?'':'s'} before departure so we can arrange delivery. Contact +65 8032 7183 for urgent trips.`},{status:400});

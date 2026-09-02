@@ -1,4 +1,5 @@
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
+import crypto from 'crypto';
 
 const REQUIRED_PAYMENT_SCHEMA = [
   {
