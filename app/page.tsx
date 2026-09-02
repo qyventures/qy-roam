@@ -4,18 +4,12 @@ import { FormEvent, useMemo, useRef, useState } from 'react';
 import { LAUNCH_PROMO, validLaunchPromo } from '../lib/promotions';
 import { WIFI_PLANS } from '../lib/wifiPlans';
 import { trackMeta } from '../lib/metaClient';
+import { operationalIsoDateAfter } from '../lib/operationalDate';
 
 const plans = WIFI_PLANS;
 
 const DELIVERY_LEAD_DAYS = 2;
 type Availability = { available: boolean; remaining?: number; error?: string };
-
-function isoDateWithOffset(days: number) {
-  const date = new Date();
-  date.setHours(12, 0, 0, 0);
-  date.setDate(date.getDate() + days);
-  return date.toISOString().slice(0, 10);
-}
 
 function daysBetween(start: string, end: string) {
   if (!start || !end) return 1;
@@ -25,7 +19,8 @@ function daysBetween(start: string, end: string) {
 }
 
 export default function Home() {
-  const earliestStart = isoDateWithOffset(DELIVERY_LEAD_DAYS);
+  // Keep the picker aligned with the server's Singapore delivery calendar.
+  const earliestStart = operationalIsoDateAfter(DELIVERY_LEAD_DAYS);
   const [country, setCountry] = useState('Japan');
   const [start, setStart] = useState(earliestStart);
   const [end, setEnd] = useState(earliestStart);

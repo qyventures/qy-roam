@@ -3,6 +3,7 @@ import Stripe from 'stripe';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { parseExactIsoDate } from '@/lib/checkoutValidation';
 import { operationalConfig } from '@/lib/operationalConfig';
+import { operationalIsoDateAfter } from '@/lib/operationalDate';
 import { validQyRoamProvenance } from '@/lib/orderProvenance';
 
 export const dynamic = 'force-dynamic';
@@ -80,13 +81,12 @@ export async function GET(req: NextRequest) {
   const end = parseExactIsoDate(req.nextUrl.searchParams.get('end'));
   if (!start || !end || end < start) return NextResponse.json({ available: false, error: 'Valid start and end dates are required.' }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
 
-  const now = new Date(); now.setUTCHours(0, 0, 0, 0);
   const config = operationalConfig();
   if (!config) return NextResponse.json({ available: false, remaining: 0, inventoryMode: 'unavailable', error: 'Live availability is temporarily unavailable. Please try again shortly or contact +65 8032 7183.' }, { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '30' } });
   const minLeadDays = config.minDeliveryLeadDays;
-  const earliest = new Date(now); earliest.setUTCDate(earliest.getUTCDate() + minLeadDays);
+  const earliest = operationalIsoDateAfter(minLeadDays);
   const rentalDays = Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
-  if (start < earliest) return NextResponse.json({ available: false, error: `Please book at least ${minLeadDays} day${minLeadDays === 1 ? '' : 's'} before departure.` }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
+  if (start.toISOString().slice(0, 10) < earliest) return NextResponse.json({ available: false, error: `Please book at least ${minLeadDays} day${minLeadDays === 1 ? '' : 's'} before departure.` }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
   if (rentalDays < 1 || rentalDays > 90) return NextResponse.json({ available: false, error: 'Bookings must be between 1 and 90 days.' }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
 
   const inventory = config.pocketWifiInventory;

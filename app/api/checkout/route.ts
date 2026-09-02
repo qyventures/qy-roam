@@ -6,6 +6,7 @@ import { getSupabaseAdmin } from '../../../lib/supabaseAdmin';
 import { parseExactIsoDate, validCheckoutRequestId } from '../../../lib/checkoutValidation';
 import { QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance, validQyRoamProvenance } from '../../../lib/orderProvenance';
 import { operationalConfig } from '../../../lib/operationalConfig';
+import { operationalIsoDate, operationalIsoDateAfter } from '../../../lib/operationalDate';
 import { hasRequiredPaymentSchema } from '../../../lib/productionReadiness';
 
 export const runtime = 'nodejs';
@@ -130,11 +131,15 @@ export async function POST(req: Request) {
   // creating a payable Stripe Session so an incomplete migration cannot leave
   // a paid router booking unrecorded or unfulfillable.
   if(!await hasRequiredPaymentSchema()) return NextResponse.json({error:'Pocket WiFi ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
-  const now=new Date(); now.setUTCHours(0,0,0,0); if(startDate<now) return NextResponse.json({error:'Travel start date cannot be in the past.'},{status:400});
-  const minLeadDays=config.minDeliveryLeadDays; const earliest=new Date(now); earliest.setUTCDate(earliest.getUTCDate()+minLeadDays);
-  if(startDate<earliest) return NextResponse.json({error:`Please book at least ${minLeadDays} day${minLeadDays===1?'':'s'} before departure so we can arrange delivery. Contact +65 8032 7183 for urgent trips.`},{status:400});
-  const days=Math.floor((endDate.getTime()-startDate.getTime())/86400000)+1; if(days<1||days>90) return NextResponse.json({error:'Bookings must be between 1 and 90 days.'},{status:400});
+  // Delivery is operated in Singapore. UTC midnight can still be the previous
+  // calendar day in Singapore, which would incorrectly accept a past date or
+  // shorten the advertised lead time during the local early morning.
+  const today=operationalIsoDate();
   const start=String(body.start), end=String(body.end);
+  if(start<today) return NextResponse.json({error:'Travel start date cannot be in the past.'},{status:400});
+  const minLeadDays=config.minDeliveryLeadDays, earliest=operationalIsoDateAfter(minLeadDays);
+  if(start<earliest) return NextResponse.json({error:`Please book at least ${minLeadDays} day${minLeadDays===1?'':'s'} before departure so we can arrange delivery. Contact +65 8032 7183 for urgent trips.`},{status:400});
+  const days=Math.floor((endDate.getTime()-startDate.getTime())/86400000)+1; if(days<1||days>90) return NextResponse.json({error:'Bookings must be between 1 and 90 days.'},{status:400});
   const stripe=new Stripe(key,{apiVersion:'2024-06-20'});
   const inventory=config.pocketWifiInventory;
   if(inventory<1) return NextResponse.json({error:'Pocket WiFi is sold out for these dates. Please choose different dates or contact +65 8032 7183.'},{status:409,headers:{'Cache-Control':'no-store'}});

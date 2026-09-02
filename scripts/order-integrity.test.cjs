@@ -24,6 +24,7 @@ const { ESIM_PLANS, ESIM_PROMO } = require('../lib/esimPlans.ts');
 const { LAUNCH_PROMO } = require('../lib/promotions.ts');
 const { validateQyRoamSession } = require('../lib/qyRoamSession.ts');
 const { parseExactIsoDate, validCheckoutRequestId } = require('../lib/checkoutValidation.ts');
+const { operationalIsoDate, operationalIsoDateAfter } = require('../lib/operationalDate.ts');
 const { WIFI_BENCHMARK, WIFI_PLANS } = require('../lib/wifiPlans.ts');
 const { allowedFulfilmentStatuses, validFulfilmentTransition } = require('../lib/orderLifecycle.ts');
 const { operationalConfig } = require('../lib/operationalConfig.ts');
@@ -38,10 +39,12 @@ const adminOrderRoute = fs.readFileSync(require.resolve('../app/api/admin/orders
 const adminOrderActions = fs.readFileSync(require.resolve('../components/AdminOrderActions.tsx'), 'utf8');
 const esimCheckoutRoute = fs.readFileSync(require.resolve('../app/api/esim-checkout/route.ts'), 'utf8');
 const wifiCheckoutRoute = fs.readFileSync(require.resolve('../app/api/checkout/route.ts'), 'utf8');
+const availabilityRoute = fs.readFileSync(require.resolve('../app/api/availability/route.ts'), 'utf8');
 const esimPage = fs.readFileSync(require.resolve('../app/esim/page.tsx'), 'utf8');
 const homePage = fs.readFileSync(require.resolve('../app/page.tsx'), 'utf8');
 const adminOpsRoute = fs.readFileSync(require.resolve('../app/api/admin/ops/route.ts'), 'utf8');
 const productionReadiness = fs.readFileSync(require.resolve('../lib/productionReadiness.ts'), 'utf8');
+const operationalDate = fs.readFileSync(require.resolve('../lib/operationalDate.ts'), 'utf8');
 
 const requestId = 'checkout_request_123456';
 
@@ -212,6 +215,18 @@ test('checkout validation rejects normalized and malformed calendar dates', () =
   assert.equal(validateQyRoamSession(session).valid, false);
 });
 
+test('Pocket WiFi booking dates follow the Singapore operational calendar', () => {
+  // 16:30 UTC is already 00:30 the following day in Singapore.
+  const singaporeEarlyMorning = new Date('2026-09-01T16:30:00.000Z');
+  assert.equal(operationalIsoDate(singaporeEarlyMorning), '2026-09-02');
+  assert.equal(operationalIsoDateAfter(2, singaporeEarlyMorning), '2026-09-04');
+  assert.match(wifiCheckoutRoute, /const today=operationalIsoDate\(\)/);
+  assert.match(wifiCheckoutRoute, /const minLeadDays=config\.minDeliveryLeadDays, earliest=operationalIsoDateAfter\(minLeadDays\)/);
+  assert.match(availabilityRoute, /const earliest = operationalIsoDateAfter\(minLeadDays\)/);
+  assert.match(homePage, /const earliestStart = operationalIsoDateAfter\(DELIVERY_LEAD_DAYS\)/);
+  assert.match(operationalDate, /OPERATIONAL_TIME_ZONE = 'Asia\/Singapore'/);
+});
+
 test('checkout request ids use the same production boundary everywhere', () => {
   assert.equal(validCheckoutRequestId(requestId), requestId);
   for (const value of ['short', 'contains spaces 123456', 'bad/slashes/123456', 'x'.repeat(81)]) {
@@ -326,7 +341,6 @@ test('Pocket WiFi fulfilment follows a dispatch and return lifecycle', () => {
 
 test('Pocket WiFi capacity retains legacy post-dispatch cancellations until return', () => {
   const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
-  const availabilityRoute = fs.readFileSync(require.resolve('../app/api/availability/route.ts'), 'utf8');
   assert.match(schema, /fulfilment_status = 'cancelled' and dispatched_at is not null and returned_at is null/);
   assert.match(availabilityRoute, /fulfilment_status\.eq\.cancelled,dispatched_at\.not\.is\.null,returned_at\.is\.null/);
   assert.match(schema, /fulfilment_status not in \('cancelled', 'payment_failed', 'returned', 'closed'\)/);
@@ -335,7 +349,6 @@ test('Pocket WiFi capacity retains legacy post-dispatch cancellations until retu
 
 test('Pocket WiFi availability only counts Checkout Sessions that are still unexpired', () => {
   const checkoutRoute = fs.readFileSync(require.resolve('../app/api/checkout/route.ts'), 'utf8');
-  const availabilityRoute = fs.readFileSync(require.resolve('../app/api/availability/route.ts'), 'utf8');
   for (const source of [checkoutRoute, availabilityRoute]) {
     assert.match(source, /session\.expires_at\s*<=\s*nowSeconds/);
     assert.match(source, /!session\.expires_at/);
@@ -344,7 +357,6 @@ test('Pocket WiFi availability only counts Checkout Sessions that are still unex
 
 test('Pocket WiFi holds require server-issued checkout provenance', () => {
   const checkoutRoute = fs.readFileSync(require.resolve('../app/api/checkout/route.ts'), 'utf8');
-  const availabilityRoute = fs.readFileSync(require.resolve('../app/api/availability/route.ts'), 'utf8');
   for (const source of [checkoutRoute, availabilityRoute]) {
     assert.match(source, /validQyRoamProvenance\(session\.id,\s*session\.metadata\)/);
   }
