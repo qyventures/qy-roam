@@ -161,25 +161,35 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
 
 export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session,eventTime:number){
   if(!metaPurchaseConfigured(session)) return;
-  let existing=await supabase.from('meta_purchase_deliveries').select('status,updated_at,attempts').eq('stripe_session_id',session.id).maybeSingle();
+  // A Meta timeout can leave us unable to tell whether Meta accepted the
+  // event. Keep Stripe's signed event time on the delivery record so every
+  // retry presents exactly the same Purchase identity to Meta for dedupe.
+  const requestedEventTime=Math.floor(eventTime);
+  if(!Number.isSafeInteger(requestedEventTime)||requestedEventTime<=0) throw new Error('Invalid Meta Purchase event time');
+  let existing=await supabase.from('meta_purchase_deliveries').select('status,updated_at,attempts,event_time').eq('stripe_session_id',session.id).maybeSingle();
   if(existing.error) throw existing.error;
   if(existing.data?.status==='sent') return;
   if(!existing.data){
-    const created=await supabase.from('meta_purchase_deliveries').insert({stripe_session_id:session.id,status:'pending'});
+    const created=await supabase.from('meta_purchase_deliveries').insert({stripe_session_id:session.id,status:'pending',event_time:requestedEventTime});
     if(created.error?.code!=='23505'&&created.error) throw created.error;
-    existing=await supabase.from('meta_purchase_deliveries').select('status,updated_at,attempts').eq('stripe_session_id',session.id).single();
+    existing=await supabase.from('meta_purchase_deliveries').select('status,updated_at,attempts,event_time').eq('stripe_session_id',session.id).single();
     if(existing.error) throw existing.error;
     if(existing.data?.status==='sent') return;
   }
   const delivery=existing.data!;
+  const persistedEventTime=Number(delivery.event_time);
+  const metaEventTime=Number.isSafeInteger(persistedEventTime)&&persistedEventTime>0 ? persistedEventTime : requestedEventTime;
   const staleSending=delivery.status==='sending'&&Date.now()-new Date(delivery.updated_at).getTime()>15*60_000;
   if(delivery.status==='sending'&&!staleSending) throw new Error('Meta purchase delivery is already being sent');
   const now=new Date().toISOString();
-  const attempt=await supabase.from('meta_purchase_deliveries').update({status:'sending',attempts:Number(delivery.attempts||0)+1,last_attempt_at:now,last_error:null,updated_at:now}).eq('stripe_session_id',session.id).eq('status',delivery.status).eq('updated_at',delivery.updated_at).select('stripe_session_id');
+  // `event_time` also backfills records made before this column existed.
+  // The optimistic updated_at predicate ensures two retries cannot choose
+  // different timestamps for the same delivery.
+  const attempt=await supabase.from('meta_purchase_deliveries').update({status:'sending',event_time:metaEventTime,attempts:Number(delivery.attempts||0)+1,last_attempt_at:now,last_error:null,updated_at:now}).eq('stripe_session_id',session.id).eq('status',delivery.status).eq('updated_at',delivery.updated_at).select('stripe_session_id,event_time');
   if(attempt.error) throw attempt.error;
   if(attempt.data?.length!==1) throw new Error('Meta purchase delivery was claimed by another attempt');
   try{
-    await sendMetaPurchase(session,eventTime);
+    await sendMetaPurchase(session,Number(attempt.data[0].event_time));
     const sentAt=new Date().toISOString();
     const sent=await supabase.from('meta_purchase_deliveries').update({status:'sent',sent_at:sentAt,updated_at:sentAt}).eq('stripe_session_id',session.id).eq('status','sending');
     if(sent.error) throw sent.error;

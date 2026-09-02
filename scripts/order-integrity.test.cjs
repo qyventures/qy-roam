@@ -356,3 +356,13 @@ test('admin can safely resume failed paid-order notifications', () => {
   assert.match(adminOrderRoute, /await deliverMetaPurchase\(supabase, session/);
   assert.match(adminOrderActions, /Retry order notifications/);
 });
+
+test('Meta Purchase retries preserve one durable event timestamp for deduplication', () => {
+  const webhookRoute = fs.readFileSync(require.resolve('../app/api/stripe-webhook/route.ts'), 'utf8');
+  const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
+  assert.match(schema, /event_time bigint check \(event_time is null or event_time > 0\)/);
+  assert.match(webhookRoute, /insert\(\{stripe_session_id:session\.id,status:'pending',event_time:requestedEventTime\}\)/);
+  assert.match(webhookRoute, /await sendMetaPurchase\(session,Number\(attempt\.data\[0\]\.event_time\)\)/);
+  assert.match(adminOrderRoute, /deliverMetaPurchase\(supabase, session, session\.created\)/);
+  assert.doesNotMatch(adminOrderRoute, /deliverMetaPurchase\(supabase, session, Math\.floor\(Date\.now\(\) \/ 1000\)\)/);
+});

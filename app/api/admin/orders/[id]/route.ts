@@ -114,7 +114,10 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     }
 
     await deliverFulfilmentNotification(supabase, session);
-    await deliverMetaPurchase(supabase, session, Math.floor(Date.now() / 1000));
+    // The delivery ledger preserves the original webhook event timestamp when
+    // present. For legacy rows that predate the ledger field, session creation
+    // time is stable across every admin retry (unlike the current clock).
+    await deliverMetaPurchase(supabase, session, session.created);
     return NextResponse.json({ ok: true }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('admin_order_notification_retry_error', error);

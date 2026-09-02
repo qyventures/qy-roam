@@ -69,6 +69,9 @@ alter table public.fulfilment_notifications enable row level security;
 create table if not exists public.meta_purchase_deliveries (
   stripe_session_id text primary key,
   status text not null default 'pending' check (status in ('pending','sending','sent')),
+  -- Keep the original signed Stripe event timestamp. Retried CAPI deliveries
+  -- must use the same Purchase event identity and time for reliable dedupe.
+  event_time bigint check (event_time is null or event_time > 0),
   attempts integer not null default 0,
   last_attempt_at timestamptz,
   sent_at timestamptz,
@@ -76,6 +79,7 @@ create table if not exists public.meta_purchase_deliveries (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table public.meta_purchase_deliveries add column if not exists event_time bigint check (event_time is null or event_time > 0);
 alter table public.meta_purchase_deliveries enable row level security;
 
 -- Short-lived inventory reservations close the gap between an availability
