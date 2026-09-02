@@ -163,11 +163,11 @@ test('v2 provenance binds all checkout metadata, including same-priced travel da
   assert.equal(validateQyRoamSession(session).valid, false);
 });
 
-test('continues to verify a valid pre-v2 checkout during the rollout window', () => {
+test('rejects legacy v1 provenance because it does not bind mutable order metadata', () => {
   const session = esimSession();
   const legacyPayload = ['v1', session.id, session.metadata.source, session.metadata.product_type, session.metadata.checkout_request_id].join('|');
   session.metadata.qyroam_provenance = `v1.${crypto.createHmac('sha256', process.env.ORDER_INTEGRITY_SECRET).update(legacyPayload).digest('hex')}`;
-  assert.deepEqual(validateQyRoamSession(session), { valid: true, productType: 'esim' });
+  assert.equal(validateQyRoamSession(session).valid, false);
 });
 
 test('booking status uses full checkout-session integrity validation', () => {

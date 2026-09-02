@@ -1,16 +1,11 @@
 import crypto from 'crypto';
 
 const VERSION = 'v2';
-const LEGACY_VERSION = 'v1';
 const METADATA_KEY = 'qyroam_provenance';
 
 function secret() {
   const value = process.env.ORDER_INTEGRITY_SECRET;
   return value && value.length >= 32 ? value : null;
-}
-
-function legacyPayload(sessionId: string, metadata: Record<string, string>) {
-  return [LEGACY_VERSION, sessionId, metadata.source || '', metadata.product_type || '', metadata.checkout_request_id || ''].join('|');
 }
 
 function payload(sessionId: string, metadata: Record<string, string>) {
@@ -41,17 +36,15 @@ export function signedQyRoamProvenance(sessionId: string, metadata: Record<strin
 export function validQyRoamProvenance(sessionId: string, metadata?: Record<string, string> | null) {
   if (!metadata) return false;
   const provided = metadata[METADATA_KEY];
-  const match = provided && /^(v[12])\.([a-f0-9]{64})$/.exec(provided);
+  const match = provided && /^(v2)\.([a-f0-9]{64})$/.exec(provided);
   if (!match) return false;
   try {
-    // Preserve verification of sessions issued before v2 during rollout. New
-    // sessions are always v2; v1 support can be removed after the historical
-    // order-status and Stripe retry window is no longer needed.
+    // v1 covered only a product marker and request id, leaving mutable plan
+    // and travel metadata outside the integrity boundary. It must never
+    // authorize a paid order or inventory hold after v2 is deployed.
     const signingSecret = secret();
     if (!signingSecret) return false;
-    const expected = match[1] === LEGACY_VERSION
-      ? `${LEGACY_VERSION}.${crypto.createHmac('sha256', signingSecret).update(legacyPayload(sessionId, metadata)).digest('hex')}`
-      : signedQyRoamProvenance(sessionId, metadata);
+    const expected = signedQyRoamProvenance(sessionId, metadata);
     const left = Buffer.from(provided), right = Buffer.from(expected);
     return left.length === right.length && crypto.timingSafeEqual(left, right);
   } catch {
