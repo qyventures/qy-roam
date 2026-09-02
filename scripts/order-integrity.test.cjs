@@ -47,6 +47,9 @@ const productionReadiness = fs.readFileSync(require.resolve('../lib/productionRe
 const operationalDate = fs.readFileSync(require.resolve('../lib/operationalDate.ts'), 'utf8');
 const smtpClient = fs.readFileSync(require.resolve('../lib/smtp.ts'), 'utf8');
 const webhookRoute = fs.readFileSync(require.resolve('../app/api/stripe-webhook/route.ts'), 'utf8');
+const successPage = fs.readFileSync(require.resolve('../app/success/page.tsx'), 'utf8');
+const metaPurchase = fs.readFileSync(require.resolve('../components/MetaPurchase.tsx'), 'utf8');
+const metaClient = fs.readFileSync(require.resolve('../lib/metaClient.ts'), 'utf8');
 
 const requestId = 'checkout_request_123456';
 
@@ -435,6 +438,20 @@ test('Meta Purchase retries preserve one durable event timestamp for deduplicati
   assert.match(webhookRoute, /await sendMetaPurchase\(session,Number\(attempt\.data\[0\]\.event_time\)\)/);
   assert.match(adminOrderRoute, /deliverMetaPurchase\(supabase, session, session\.created\)/);
   assert.doesNotMatch(adminOrderRoute, /deliverMetaPurchase\(supabase, session, Math\.floor\(Date\.now\(\) \/ 1000\)\)/);
+});
+
+test('consented browser and CAPI Purchases share a stable deduplication identity', () => {
+  assert.match(successPage, /<MetaPurchase sessionId=\{sessionId\}/);
+  assert.match(successPage, /measurementConsent=\{measurementConsent\}/);
+  assert.match(metaPurchase, /metaMeasurementAllowed\(\)/);
+  assert.match(metaPurchase, /qyroam_meta_purchase_/);
+  assert.match(metaPurchase, /eventID: `stripe_\$\{sessionId\}`/);
+  assert.match(metaPurchase, /content_ids: \[contentId\]/);
+  assert.match(metaClient, /trackMetaWhenReady/);
+  assert.match(metaClient, /attemptsLeft = 20/);
+  assert.match(webhookRoute, /event_id:`stripe_\$\{session\.id\}`/);
+  assert.match(webhookRoute, /content_ids:\[contentId\]/);
+  assert.match(webhookRoute, /content_type:'product'/);
 });
 
 test('fulfilment email retries retain one safe per-order message identity', () => {

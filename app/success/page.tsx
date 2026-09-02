@@ -1,5 +1,6 @@
 import Stripe from 'stripe';
 import { validateQyRoamSession, type QyRoamProductType } from '@/lib/qyRoamSession';
+import MetaPurchase from '@/components/MetaPurchase';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,6 +19,8 @@ export default async function SuccessPage({ searchParams }: Props) {
   let amount = '';
   let productType: QyRoamProductType | null = null;
   let planName = '';
+  let planId = '';
+  let measurementConsent = false;
 
   if (sessionId && key && sessionId.startsWith('cs_')) {
     try {
@@ -31,6 +34,8 @@ export default async function SuccessPage({ searchParams }: Props) {
       start = session.metadata?.start || '';
       end = session.metadata?.end || '';
       planName = session.metadata?.plan_name || '';
+      planId = session.metadata?.plan_id || '';
+      measurementConsent = session.metadata?.measurement_consent === 'accepted';
       amount = session.amount_total != null ? `S$${(session.amount_total / 100).toFixed(2)}` : '';
     } catch (error) {
       console.error('success_session_lookup_error', error);
@@ -63,8 +68,11 @@ export default async function SuccessPage({ searchParams }: Props) {
   }
 
   const isEsim = productType === 'esim';
+  const contentId = isEsim ? `esim:${planId}` : `pocket_wifi:${destination}`;
+  const purchaseValue = amount ? Number(amount.slice(2)) : Number.NaN;
   return (
     <main className="wrap section legal">
+      {sessionId && <MetaPurchase sessionId={sessionId} measurementConsent={measurementConsent} productType={productType} contentId={contentId} value={purchaseValue} />}
       <span className="eyebrow">Order confirmed</span>
       <h1>Thank you — your QY Roam order is confirmed.</h1>
       {(destination || planName) && <p><strong>{planName || destination}</strong>{start && end ? ` · ${start} to ${end}` : ''}{amount ? ` · ${amount}` : ''}</p>}
