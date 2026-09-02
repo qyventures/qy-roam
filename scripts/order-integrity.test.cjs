@@ -236,6 +236,17 @@ test('eSIM checkout fails closed when its durable post-payment order boundary is
   assert.match(productionReadiness, /export async function hasRequiredEsimOrderSchema\(\)/);
 });
 
+test('payment-readiness checks coalesce healthy checkout probes without caching failures', () => {
+  assert.match(productionReadiness, /const READINESS_CACHE_MS = 15_000/);
+  assert.match(productionReadiness, /let paymentSchemaCheckInFlight: Promise<boolean> \| null = null/);
+  assert.match(productionReadiness, /if \(Date\.now\(\) < paymentSchemaReadyUntil\) return true/);
+  assert.match(productionReadiness, /if \(!paymentSchemaCheckInFlight\)/);
+  assert.match(productionReadiness, /if \(ready\) paymentSchemaReadyUntil = Date\.now\(\) \+ READINESS_CACHE_MS/);
+  assert.match(productionReadiness, /let esimOrderSchemaCheckInFlight: Promise<boolean> \| null = null/);
+  assert.match(productionReadiness, /if \(Date\.now\(\) < esimOrderSchemaReadyUntil\) return true/);
+  assert.match(productionReadiness, /if \(!esimOrderSchemaCheckInFlight\)/);
+});
+
 test('Pocket WiFi checkout fails closed when its paid-order schema is unavailable', () => {
   assert.match(wifiCheckoutRoute, /hasRequiredPaymentSchema/);
   assert.match(wifiCheckoutRoute, /if\(!await hasRequiredPaymentSchema\(\)\)/);

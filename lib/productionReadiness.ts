@@ -1,6 +1,18 @@
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import crypto from 'crypto';
 
+// Checkout invokes these guards immediately before creating a payable Stripe
+// Session. A healthy schema does not change between adjacent requests, while
+// repeatedly probing it adds several database round trips (and, for Pocket
+// WiFi, briefly takes the same advisory lock used to reserve inventory).
+// Cache only a successful result and only for a short interval: an outage or
+// incomplete migration is never cached and continues to fail closed.
+const READINESS_CACHE_MS = 15_000;
+let paymentSchemaReadyUntil = 0;
+let esimOrderSchemaReadyUntil = 0;
+let paymentSchemaCheckInFlight: Promise<boolean> | null = null;
+let esimOrderSchemaCheckInFlight: Promise<boolean> | null = null;
+
 const REQUIRED_PAYMENT_SCHEMA = [
   {
     table: 'orders',
@@ -51,7 +63,7 @@ const REQUIRED_OPERATIONS_SCHEMA = [
  * credentials exist is insufficient: a valid Supabase project with an older
  * schema would accept checkout and then reject the signed Stripe webhook.
  */
-export async function hasRequiredPaymentSchema() {
+async function checkRequiredPaymentSchema() {
   const supabase = getSupabaseAdmin();
   if (!supabase) return false;
 
@@ -96,13 +108,30 @@ export async function hasRequiredPaymentSchema() {
   return true;
 }
 
+export async function hasRequiredPaymentSchema() {
+  if (Date.now() < paymentSchemaReadyUntil) return true;
+  if (!paymentSchemaCheckInFlight) {
+    paymentSchemaCheckInFlight = checkRequiredPaymentSchema()
+      .then((ready) => {
+        if (ready) paymentSchemaReadyUntil = Date.now() + READINESS_CACHE_MS;
+        return ready;
+      })
+      .catch((error) => {
+        console.error('production_payment_schema_check_unexpected_error', error);
+        return false;
+      })
+      .finally(() => { paymentSchemaCheckInFlight = null; });
+  }
+  return paymentSchemaCheckInFlight;
+}
+
 /**
  * Check the durable tables a paid eSIM webhook must use. This is called before
  * creating an eSIM Checkout Session: accepting payment while these relations
  * are unavailable would leave a legitimate digital order unrecorded and
  * unfulfillable.
  */
-export async function hasRequiredEsimOrderSchema() {
+async function checkRequiredEsimOrderSchema() {
   const supabase = getSupabaseAdmin();
   if (!supabase) return false;
 
@@ -124,6 +153,23 @@ export async function hasRequiredEsimOrderSchema() {
     return false;
   }
   return true;
+}
+
+export async function hasRequiredEsimOrderSchema() {
+  if (Date.now() < esimOrderSchemaReadyUntil) return true;
+  if (!esimOrderSchemaCheckInFlight) {
+    esimOrderSchemaCheckInFlight = checkRequiredEsimOrderSchema()
+      .then((ready) => {
+        if (ready) esimOrderSchemaReadyUntil = Date.now() + READINESS_CACHE_MS;
+        return ready;
+      })
+      .catch((error) => {
+        console.error('production_esim_order_schema_check_unexpected_error', error);
+        return false;
+      })
+      .finally(() => { esimOrderSchemaCheckInFlight = null; });
+  }
+  return esimOrderSchemaCheckInFlight;
 }
 
 /**
