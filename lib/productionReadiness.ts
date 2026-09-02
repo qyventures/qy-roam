@@ -27,6 +27,13 @@ const REQUIRED_PAYMENT_SCHEMA = [
   },
 ] as const;
 
+// eSIM orders do not need the Pocket WiFi reservation RPC, but they still
+// depend on the order ledger, event idempotency and delivery ledgers after a
+// customer pays. Keep this smaller contract separately so digital checkout
+// can fail closed before creating a payable Stripe Session without coupling it
+// to router-inventory configuration.
+const REQUIRED_ESIM_ORDER_SCHEMA = REQUIRED_PAYMENT_SCHEMA.slice(0, 4);
+
 const REQUIRED_OPERATIONS_SCHEMA = [
   { table: 'inventory_items', columns: 'id,sku,quantity_on_hand,reorder_level' },
   { table: 'inventory_movements', columns: 'id,inventory_item_id,movement_type,quantity' },
@@ -83,6 +90,36 @@ export async function hasRequiredPaymentSchema() {
   });
   if (reservationProbe.error || reservationProbe.data?.[0]?.reserved !== false) {
     console.error('production_payment_reservation_rpc_check_failed');
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Check the durable tables a paid eSIM webhook must use. This is called before
+ * creating an eSIM Checkout Session: accepting payment while these relations
+ * are unavailable would leave a legitimate digital order unrecorded and
+ * unfulfillable.
+ */
+export async function hasRequiredEsimOrderSchema() {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) return false;
+
+  try {
+    const results = await Promise.all(
+      REQUIRED_ESIM_ORDER_SCHEMA.map(({ table, columns }) =>
+        supabase.from(table).select(columns).limit(1),
+      ),
+    );
+    const failures = results
+      .map((result, index) => result.error ? REQUIRED_ESIM_ORDER_SCHEMA[index].table : null)
+      .filter(Boolean);
+    if (failures.length > 0) {
+      console.error('production_esim_order_schema_check_failed', { tables: failures });
+      return false;
+    }
+  } catch {
+    console.error('production_esim_order_schema_check_unavailable');
     return false;
   }
   return true;

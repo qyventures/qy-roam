@@ -41,6 +41,7 @@ const wifiCheckoutRoute = fs.readFileSync(require.resolve('../app/api/checkout/r
 const esimPage = fs.readFileSync(require.resolve('../app/esim/page.tsx'), 'utf8');
 const homePage = fs.readFileSync(require.resolve('../app/page.tsx'), 'utf8');
 const adminOpsRoute = fs.readFileSync(require.resolve('../app/api/admin/ops/route.ts'), 'utf8');
+const productionReadiness = fs.readFileSync(require.resolve('../lib/productionReadiness.ts'), 'utf8');
 
 const requestId = 'checkout_request_123456';
 
@@ -225,6 +226,14 @@ test('eSIM checkout never redirects a reused idempotency key to another plan', (
   assert.match(esimCheckoutRoute, /if \(!matchesRequestedEsim\(session, requestId, plan\)\)/);
   assert.match(esimPage, /data\.checkoutExpired \|\| data\.checkoutRequestConflict/);
   assert.match(esimCheckoutRoute, /checkout_amount_cents: String\(amount\)/);
+});
+
+test('eSIM checkout fails closed when its durable post-payment order boundary is unavailable', () => {
+  assert.match(esimCheckoutRoute, /hasRequiredEsimOrderSchema/);
+  assert.match(esimCheckoutRoute, /if \(!await hasRequiredEsimOrderSchema\(\)\)/);
+  assert.match(esimCheckoutRoute, /status: 503/);
+  assert.match(productionReadiness, /const REQUIRED_ESIM_ORDER_SCHEMA = REQUIRED_PAYMENT_SCHEMA\.slice\(0, 4\)/);
+  assert.match(productionReadiness, /export async function hasRequiredEsimOrderSchema\(\)/);
 });
 
 test('Pocket WiFi checkout retries bind the complete server-priced booking', () => {

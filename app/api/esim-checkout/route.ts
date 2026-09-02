@@ -3,6 +3,7 @@ import Stripe from 'stripe';
 import { ESIM_PROMO, getEsimPlan } from '../../../lib/esimPlans';
 import { validCheckoutRequestId } from '../../../lib/checkoutValidation';
 import { QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance } from '../../../lib/orderProvenance';
+import { hasRequiredEsimOrderSchema } from '../../../lib/productionReadiness';
 
 export const runtime = 'nodejs';
 
@@ -74,6 +75,17 @@ export async function POST(req: Request) {
     const promoCode = String(body.promoCode || '').trim().toUpperCase();
     if (promoCode && promoCode !== ESIM_PROMO.code) {
       return NextResponse.json({ error: 'Invalid eSIM promo code.' }, { status: 400 });
+    }
+
+    // eSIM has no inventory reservation, so it must explicitly verify its
+    // post-payment persistence boundary before exposing a Stripe payment URL.
+    // Otherwise a database outage or an incomplete migration could accept a
+    // digital order that the webhook cannot record or fulfil.
+    if (!await hasRequiredEsimOrderSchema()) {
+      return NextResponse.json({ error: 'eSIM ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.' }, {
+        status: 503,
+        headers: { 'Cache-Control': 'no-store', 'Retry-After': '30' },
+      });
     }
 
     const stripe = new Stripe(key, { apiVersion: '2024-06-20' });
