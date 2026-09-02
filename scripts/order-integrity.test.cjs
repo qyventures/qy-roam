@@ -45,6 +45,8 @@ const homePage = fs.readFileSync(require.resolve('../app/page.tsx'), 'utf8');
 const adminOpsRoute = fs.readFileSync(require.resolve('../app/api/admin/ops/route.ts'), 'utf8');
 const productionReadiness = fs.readFileSync(require.resolve('../lib/productionReadiness.ts'), 'utf8');
 const operationalDate = fs.readFileSync(require.resolve('../lib/operationalDate.ts'), 'utf8');
+const smtpClient = fs.readFileSync(require.resolve('../lib/smtp.ts'), 'utf8');
+const webhookRoute = fs.readFileSync(require.resolve('../app/api/stripe-webhook/route.ts'), 'utf8');
 
 const requestId = 'checkout_request_123456';
 
@@ -417,13 +419,21 @@ test('admin can safely resume failed paid-order notifications', () => {
 });
 
 test('Meta Purchase retries preserve one durable event timestamp for deduplication', () => {
-  const webhookRoute = fs.readFileSync(require.resolve('../app/api/stripe-webhook/route.ts'), 'utf8');
   const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
   assert.match(schema, /event_time bigint check \(event_time is null or event_time > 0\)/);
   assert.match(webhookRoute, /insert\(\{stripe_session_id:session\.id,status:'pending',event_time:requestedEventTime\}\)/);
   assert.match(webhookRoute, /await sendMetaPurchase\(session,Number\(attempt\.data\[0\]\.event_time\)\)/);
   assert.match(adminOrderRoute, /deliverMetaPurchase\(supabase, session, session\.created\)/);
   assert.doesNotMatch(adminOrderRoute, /deliverMetaPurchase\(supabase, session, Math\.floor\(Date\.now\(\) \/ 1000\)\)/);
+});
+
+test('fulfilment email retries retain one safe per-order message identity', () => {
+  assert.match(webhookRoute, /function fulfilmentMessageId\(sessionId:string\)/);
+  assert.match(webhookRoute, /message_id:messageId/);
+  assert.match(webhookRoute, /messageId,timeoutMs:DELIVERY_TIMEOUT_MS/);
+  assert.match(smtpClient, /messageId\?: string/);
+  assert.match(smtpClient, /\^<\[A-Za-z0-9\._-\]\+@\[A-Za-z0-9\.-\]\+>\$/);
+  assert.match(smtpClient, /Message-ID: \$\{safeMessageId\(options\.messageId\)\}/);
 });
 
 test('expired authenticated Pocket WiFi sessions promptly release only their matching reservation', () => {

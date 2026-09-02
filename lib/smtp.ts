@@ -11,6 +11,10 @@ type SmtpOptions = {
   to: string;
   subject: string;
   text: string;
+  // A stable id lets a relay or mailbox collapse a retry that occurs after it
+  // accepted DATA but before the application could durably record success.
+  // It is deliberately optional for general SMTP callers.
+  messageId?: string;
   timeoutMs?: number;
 };
 
@@ -20,6 +24,14 @@ function encode(value: string) {
 
 function dotStuff(text: string) {
   return text.replace(/(^|\r?\n)\./g, '$1..').replace(/\r?\n/g, '\r\n');
+}
+
+function safeMessageId(value: string | undefined) {
+  // Message-ID is a header value, so reject rather than interpolate any value
+  // that could introduce a second header. The webhook generates this value
+  // from a Stripe session id; this guard keeps the low-level SMTP helper safe
+  // for future callers too.
+  return value && /^<[A-Za-z0-9._-]+@[A-Za-z0-9.-]+>$/.test(value) ? value : null;
 }
 
 function waitForResponse(socket: net.Socket | tls.TLSSocket, expected: number[]) {
@@ -94,6 +106,7 @@ async function sendMessage(socket: net.Socket | tls.TLSSocket, options: SmtpOpti
     `From: QY Roam <${options.from}>`,
     `To: ${options.to}`,
     `Subject: ${options.subject}`,
+    ...(safeMessageId(options.messageId) ? [`Message-ID: ${safeMessageId(options.messageId)}`] : []),
     'MIME-Version: 1.0',
     'Content-Type: text/plain; charset=UTF-8',
     'Content-Transfer-Encoding: 8bit',

@@ -13,6 +13,7 @@ export const runtime = 'nodejs';
 function sha256(value?: string | null) { return value ? crypto.createHash('sha256').update(value).digest('hex') : undefined; }
 function normalizeEmail(value?: string | null) { return value?.trim().toLowerCase(); }
 function normalizePhone(value?: string | null) { if (!value) return undefined; const digits=value.replace(/\D/g,''); return digits||undefined; }
+function fulfilmentMessageId(sessionId:string) { return `<qyroam-${crypto.createHash('sha256').update(sessionId).digest('hex').slice(0,32)}@qyroam.com>`; }
 const DELIVERY_TIMEOUT_MS=20_000;
 
 async function postJsonWithTimeout(url:string,body:unknown,timeoutMs=DELIVERY_TIMEOUT_MS){
@@ -51,17 +52,17 @@ async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
   if(!host||!user||!pass||!from) throw new Error('SMTP fulfilment email is not configured');
   const productType=session.metadata?.product_type;
   if(productType!=='esim'&&productType!=='pocket_wifi') throw new Error('Unknown or missing product_type on paid order');
-  const isEsim=productType==='esim', destination=session.metadata?.country||'', planName=session.metadata?.plan_name||'', start=session.metadata?.start||'', end=session.metadata?.end||'', customer=session.customer_details, amount=((session.amount_total||0)/100).toFixed(2), shipping=session.shipping_details?.address;
+  const isEsim=productType==='esim', destination=session.metadata?.country||'', planName=session.metadata?.plan_name||'', start=session.metadata?.start||'', end=session.metadata?.end||'', customer=session.customer_details, amount=((session.amount_total||0)/100).toFixed(2), shipping=session.shipping_details?.address, messageId=fulfilmentMessageId(session.id);
   const shippingText=shipping?[shipping.line1,shipping.line2,shipping.city,shipping.state,shipping.postal_code,shipping.country].filter(Boolean).join(', '):'Not applicable / not supplied';
   const subject=`[QY Roam] Paid ${isEsim?'eSIM':'Pocket WiFi'} order — ${destination||planName||session.id}`;
   const text=['A paid QY Roam order requires human fulfilment.','',`Order reference: ${session.id}`,`Product: ${isEsim?'Travel eSIM':'Pocket WiFi'}`,`Destination: ${destination||'-'}`,`Plan: ${planName||'-'}`,`Travel dates: ${start||'-'}${end?` to ${end}`:''}`,`Amount paid: S$${amount}`,`Promo code: ${session.metadata?.promo_code||'-'}`,'',`Customer name: ${customer?.name||'-'}`,`Email: ${customer?.email||'-'}`,`Phone: ${customer?.phone||'-'}`,`Delivery address: ${shippingText}`,'',isEsim?'Action: Please process the eSIM manually and send the QR code / activation instructions to the customer.':'Action: Please prepare and fulfil the Pocket WiFi order according to the travel dates and delivery details.','','Customer support: +65 8032 7183'].join('\n');
   const relayUrl=process.env.SMTP_RELAY_URL, relaySecret=process.env.SMTP_RELAY_SECRET;
   if(relayUrl&&relaySecret){
-    const response=await postJsonWithTimeout(relayUrl,{relay_secret:relaySecret,smtp_host:host,smtp_port:port,smtp_user:user,smtp_pass:pass,from,to,subject,text});
+    const response=await postJsonWithTimeout(relayUrl,{relay_secret:relaySecret,smtp_host:host,smtp_port:port,smtp_user:user,smtp_pass:pass,from,to,subject,text,message_id:messageId});
     if(!response.ok) throw new Error(`SMTP relay failed (${response.status}): ${response.responseBody.slice(0,300)}`);
     return;
   }
-  await sendSmtpMail({host,port,secure,user,pass,from,to,subject,text,timeoutMs:DELIVERY_TIMEOUT_MS});
+  await sendSmtpMail({host,port,secure,user,pass,from,to,subject,text,messageId,timeoutMs:DELIVERY_TIMEOUT_MS});
 }
 
 async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.Event.Type){
