@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { initialFulfilmentStatus, validFulfilmentStatus } from '@/lib/orderLifecycle';
 import { parseExactIsoDate } from '@/lib/checkoutValidation';
+import { operationalConfig } from '@/lib/operationalConfig';
 
 export const dynamic = 'force-dynamic';
 
@@ -64,7 +65,30 @@ export async function POST(req: NextRequest) {
         updated_at: new Date().toISOString()
       };
       if (!row.email && !row.phone) return NextResponse.json({ error: 'Customer email or phone is required' }, { status: 400 });
-      const { error } = await db.from('orders').insert(row); if (error) throw error;
+      if (product === 'pocket_wifi' && paymentStatus === 'paid') {
+        // A manual paid rental is a real inventory commitment, not merely an
+        // admin record. Let the database create it under the same advisory
+        // lock as Checkout reservations so concurrent staff entries cannot
+        // oversell an overlapping travel period.
+        const config = operationalConfig();
+        if (!config) return NextResponse.json({ error: 'Pocket WiFi inventory configuration is unavailable' }, { status: 503 });
+        const { error } = await db.rpc('qy_create_manual_pocket_wifi_order', {
+          p_stripe_session_id: row.stripe_session_id,
+          p_customer_name: row.customer_name,
+          p_email: row.email,
+          p_phone: row.phone,
+          p_amount_sgd: row.amount_sgd,
+          p_plan_name: row.plan_name,
+          p_country: row.country,
+          p_travel_start: row.travel_start,
+          p_travel_end: row.travel_end,
+          p_notes: row.notes,
+          p_inventory: config.pocketWifiInventory,
+        });
+        if (error) throw error;
+      } else {
+        const { error } = await db.from('orders').insert(row); if (error) throw error;
+      }
     } else if (action === 'inventory_create') {
       const row = {
         sku: text(body.sku, 80), name: text(body.name, 120), product_type: text(body.product_type, 40) || 'pocket_wifi',

@@ -358,6 +358,17 @@ test('manual orders cannot bypass paid-order lifecycle, pricing, or WiFi capacit
   assert.match(adminOpsRoute, /Pocket WiFi orders require a destination and valid travel start and end dates/);
 });
 
+test('manual paid Pocket WiFi orders use the same atomic capacity boundary as checkout', () => {
+  const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
+  assert.match(adminOpsRoute, /product === 'pocket_wifi' && paymentStatus === 'paid'/);
+  assert.match(adminOpsRoute, /qy_create_manual_pocket_wifi_order/);
+  assert.match(adminOpsRoute, /p_inventory: config\.pocketWifiInventory/);
+  assert.match(schema, /create or replace function public\.qy_create_manual_pocket_wifi_order/);
+  assert.match(schema, /pg_advisory_xact_lock\(hashtext\('qy_roam_pocket_wifi_checkout'\)\)/);
+  assert.match(schema, /from public\.checkout_reservations/);
+  assert.match(schema, /Pocket WiFi is sold out or reserved for these travel dates/);
+});
+
 test('eSIM lifecycle cannot use router statuses or reopen closed orders', () => {
   assert.deepEqual(allowedFulfilmentStatuses('esim', 'awaiting_fulfilment'), ['awaiting_fulfilment', 'fulfilled', 'cancelled']);
   assert.equal(validFulfilmentTransition('esim', 'awaiting_fulfilment', 'dispatched'), false);

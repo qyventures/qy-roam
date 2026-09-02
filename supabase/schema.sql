@@ -182,6 +182,78 @@ $$;
 revoke all on function public.qy_reserve_pocket_wifi(text,date,date,integer,timestamptz,integer,text[]) from public;
 grant execute on function public.qy_reserve_pocket_wifi(text,date,date,integer,timestamptz,integer,text[]) to service_role;
 
+-- Manual paid Pocket WiFi orders must share checkout's inventory boundary.
+-- Checking capacity in the admin API and then inserting separately would let
+-- two operators sell the final router at the same time. This function keeps
+-- the capacity calculation and durable order creation under the same advisory
+-- lock used for Checkout reservations.
+create or replace function public.qy_create_manual_pocket_wifi_order(
+  p_stripe_session_id text,
+  p_customer_name text,
+  p_email text,
+  p_phone text,
+  p_amount_sgd numeric,
+  p_plan_name text,
+  p_country text,
+  p_travel_start date,
+  p_travel_end date,
+  p_notes text,
+  p_inventory integer
+)
+returns public.orders
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_booked integer;
+  v_reserved integer;
+  v_order public.orders%rowtype;
+begin
+  if coalesce(length(trim(p_stripe_session_id)), 0) = 0 then raise exception 'manual order reference is required'; end if;
+  if p_amount_sgd is null or p_amount_sgd <= 0 then raise exception 'manual order amount must be positive'; end if;
+  if coalesce(length(trim(p_country)), 0) = 0 then raise exception 'Pocket WiFi destination is required'; end if;
+  if p_travel_start is null or p_travel_end is null or p_travel_end < p_travel_start then raise exception 'invalid Pocket WiFi travel dates'; end if;
+
+  perform pg_advisory_xact_lock(hashtext('qy_roam_pocket_wifi_checkout'));
+  delete from public.checkout_reservations where expires_at <= now();
+
+  select count(*)::integer into v_booked
+  from public.orders
+  where product_type = 'pocket_wifi'
+    and payment_status = 'paid'
+    and travel_start <= p_travel_end
+    and travel_end >= p_travel_start
+    and (
+      fulfilment_status not in ('cancelled', 'payment_failed', 'returned', 'closed')
+      or (fulfilment_status = 'cancelled' and dispatched_at is not null and returned_at is null)
+    );
+
+  select count(*)::integer into v_reserved
+  from public.checkout_reservations
+  where expires_at > now()
+    and travel_start <= p_travel_end
+    and travel_end >= p_travel_start;
+
+  if p_inventory < 1 or v_booked + v_reserved >= p_inventory then
+    raise exception 'Pocket WiFi is sold out or reserved for these travel dates';
+  end if;
+
+  insert into public.orders (
+    stripe_session_id, payment_status, customer_name, email, phone, amount_sgd,
+    product_type, plan_name, country, travel_start, travel_end, fulfilment_status,
+    notes, updated_at
+  ) values (
+    p_stripe_session_id, 'paid', p_customer_name, p_email, p_phone, p_amount_sgd,
+    'pocket_wifi', p_plan_name, p_country, p_travel_start, p_travel_end, 'paid',
+    p_notes, now()
+  ) returning * into v_order;
+  return v_order;
+end;
+$$;
+revoke all on function public.qy_create_manual_pocket_wifi_order(text,text,text,text,numeric,text,text,date,date,text,integer) from public;
+grant execute on function public.qy_create_manual_pocket_wifi_order(text,text,text,text,numeric,text,text,date,date,text,integer) to service_role;
+
 -- No client policies: all operational tables are server/service-role only.
 create index if not exists orders_created_at_idx on public.orders(created_at desc);
 create index if not exists orders_product_type_idx on public.orders(product_type);
