@@ -43,7 +43,12 @@ const WIFI_NEXT: Record<string, readonly string[]> = {
   dispatched: ['packing', 'with_customer', 'return_due', 'returned'],
   with_customer: ['dispatched', 'return_due', 'returned'],
   return_due: ['with_customer', 'returned'],
-  returned: ['with_customer', 'closed'],
+  // A recorded return is the capacity-release boundary. Reopening it as
+  // "with_customer" would silently reserve the router again without a fresh
+  // dispatch, delivery reference, or customer hand-off. Correct a mistaken
+  // return through an audited operational process instead; the normal order
+  // lifecycle may only close a device after physical receipt.
+  returned: ['closed'],
 };
 
 const ESIM_NEXT: Record<string, readonly string[]> = {

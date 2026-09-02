@@ -311,6 +311,7 @@ test('Pocket WiFi fulfilment follows a dispatch and return lifecycle', () => {
   assert.equal(validFulfilmentTransition('pocket_wifi', 'dispatched', 'cancelled'), false);
   assert.equal(validFulfilmentTransition('pocket_wifi', 'with_customer', 'cancelled'), false);
   assert.equal(validFulfilmentTransition('pocket_wifi', 'return_due', 'cancelled'), false);
+  assert.equal(validFulfilmentTransition('pocket_wifi', 'returned', 'with_customer'), false);
   assert.equal(validFulfilmentTransition('pocket_wifi', 'returned', 'closed'), true);
   assert.equal(validFulfilmentTransition('pocket_wifi', 'closed', 'packing'), false);
 });
