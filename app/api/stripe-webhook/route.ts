@@ -5,6 +5,8 @@ import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { sendSmtpMail } from '@/lib/smtp';
 import { getMetaCapiToken } from '@/lib/runtimeConfig';
 import { validateQyRoamSession } from '@/lib/qyRoamSession';
+import { validCheckoutRequestId } from '@/lib/checkoutValidation';
+import { validQyRoamProvenance } from '@/lib/orderProvenance';
 
 export const runtime = 'nodejs';
 
@@ -130,6 +132,22 @@ async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string
   return {status:'claimed',processingStartedAt};
 }
 
+// An expired Checkout Session can otherwise occupy the durable reservation
+// until its original timeout. Stripe's event is signed, but this application
+// may share an account with other products, so require the same server-issued
+// provenance used for live inventory holds before releasing anything.
+async function releaseExpiredPocketWifiReservation(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session) {
+  const requestId=validCheckoutRequestId(session.metadata?.checkout_request_id);
+  if(!requestId||session.metadata?.source!=='qyroam.com'||session.metadata?.product_type!=='pocket_wifi'||!validQyRoamProvenance(session.id,session.metadata)) return;
+  // A reservation can be linked only to this Checkout Session. The predicate
+  // protects a newer recovery attempt if an old expiry event is delivered late.
+  const released=await supabase.from('checkout_reservations')
+    .delete()
+    .eq('checkout_request_id',requestId)
+    .or(`stripe_session_id.is.null,stripe_session_id.eq.${session.id}`);
+  if(released.error) throw released.error;
+}
+
 export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session){
   let existing=await supabase.from('fulfilment_notifications').select('status,updated_at,attempts').eq('stripe_session_id',session.id).maybeSingle();
   if(existing.error) throw existing.error;
@@ -204,13 +222,32 @@ export async function POST(req:Request){
   const key=process.env.STRIPE_SECRET_KEY,webhookSecret=process.env.STRIPE_WEBHOOK_SECRET; if(!key||!webhookSecret) return NextResponse.json({error:'Webhook configuration incomplete'},{status:503});
   const stripe=new Stripe(key,{apiVersion:'2024-06-20'}); let event:Stripe.Event;
   try{event=stripe.webhooks.constructEvent(await req.text(),req.headers.get('stripe-signature')||'',webhookSecret);}catch{return NextResponse.json({error:'Invalid signature'},{status:400});}
-  if(!['checkout.session.completed','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed'].includes(event.type)) return NextResponse.json({received:true});
+  if(!['checkout.session.completed','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed','checkout.session.expired'].includes(event.type)) return NextResponse.json({received:true});
   const session=event.data.object as Stripe.Checkout.Session, supabase=getSupabaseAdmin(); if(!supabase) return NextResponse.json({error:'Persistence unavailable'},{status:503});
   // QY Roam can share a Stripe account with other products. A broad Checkout
   // webhook subscription must acknowledge their sessions without creating an
   // order, sending fulfilment email, or filling this app's idempotency ledger.
   // Both QY Roam checkout routes set this server-controlled marker.
   if(session.metadata?.source!=='qyroam.com') return NextResponse.json({received:true,ignored:true});
+  if(event.type==='checkout.session.expired'){
+    const eventClaimId=`stripe:${event.id}`;
+    let claimStartedAt:string|undefined;
+    try{
+      const claim=await claimOnce(supabase,eventClaimId,event.type);
+      if(claim.status==='processed') return NextResponse.json({received:true,duplicate:true});
+      if(claim.status==='in_progress') return NextResponse.json({error:'Event is still processing'},{status:500});
+      claimStartedAt=claim.processingStartedAt;
+      await releaseExpiredPocketWifiReservation(supabase,session);
+      const completed=await supabase.from('stripe_events').update({processed_at:new Date().toISOString()}).eq('event_id',eventClaimId).eq('processing_started_at',claimStartedAt).is('processed_at',null).select('event_id');
+      if(completed.error) throw completed.error;
+      if(completed.data?.length!==1) throw new Error('Stripe event claim ownership was lost');
+    }catch(error){
+      console.error('stripe_webhook_expiry_processing_error',error);
+      if(claimStartedAt) await supabase.from('stripe_events').delete().eq('event_id',eventClaimId).eq('processing_started_at',claimStartedAt).is('processed_at',null);
+      return NextResponse.json({error:'Processing failed'},{status:500});
+    }
+    return NextResponse.json({received:true});
+  }
   const validation=validateQyRoamSession(session);
   if(!validation.valid){
     // Never persist or fulfil a malformed digital order. Returning a failure is

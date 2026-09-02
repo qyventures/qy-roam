@@ -425,3 +425,15 @@ test('Meta Purchase retries preserve one durable event timestamp for deduplicati
   assert.match(adminOrderRoute, /deliverMetaPurchase\(supabase, session, session\.created\)/);
   assert.doesNotMatch(adminOrderRoute, /deliverMetaPurchase\(supabase, session, Math\.floor\(Date\.now\(\) \/ 1000\)\)/);
 });
+
+test('expired authenticated Pocket WiFi sessions promptly release only their matching reservation', () => {
+  const webhookRoute = fs.readFileSync(require.resolve('../app/api/stripe-webhook/route.ts'), 'utf8');
+  assert.match(webhookRoute, /'checkout\.session\.expired'/);
+  assert.match(webhookRoute, /async function releaseExpiredPocketWifiReservation/);
+  assert.match(webhookRoute, /session\.metadata\?\.product_type!=='pocket_wifi'/);
+  assert.match(webhookRoute, /validQyRoamProvenance\(session\.id,session\.metadata\)/);
+  assert.match(webhookRoute, /\.eq\('checkout_request_id',requestId\)/);
+  assert.match(webhookRoute, /stripe_session_id\.is\.null,stripe_session_id\.eq\.\$\{session\.id\}/);
+  assert.match(webhookRoute, /if\(event\.type==='checkout\.session\.expired'\)/);
+  assert.match(webhookRoute, /await releaseExpiredPocketWifiReservation\(supabase,session\)/);
+});

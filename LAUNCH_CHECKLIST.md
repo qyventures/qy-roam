@@ -70,7 +70,7 @@ Create a live Stripe webhook endpoint at:
 
 `https://qyroam.com/api/stripe/webhook`
 
-Subscribe to the Checkout/payment events used by the application, copy the resulting `whsec_...` into the protected VPS env file, redeploy/restart, and confirm `/api/health` becomes ready.
+Subscribe to `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, and `checkout.session.expired`. The expiry event promptly releases an authenticated Pocket WiFi reservation after a customer abandons an expired Checkout page. Copy the resulting `whsec_...` into the protected VPS env file, redeploy/restart, and confirm `/api/health` becomes ready.
 
 ## 5. End-to-end payment smoke test
 
