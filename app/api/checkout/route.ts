@@ -29,7 +29,35 @@ function limited(req: Request) {
   if(attempts.size>5000) for(const [k,v] of attempts) if(v.reset<=now) attempts.delete(k);
   return current.count>MAX_ATTEMPTS;
 }
-async function activeStripeHolds(stripe:Stripe,country:string,start:string,end:string,requestId:string|null) {
+type RequestedPocketWifi = {
+  country:string; start:string; end:string; days:number; daily:number;
+  rentalBeforePromo:number; promoCode:string; promoDiscount:number; courierFee:number;
+};
+
+// Stripe idempotency keys intentionally outlive a Checkout Session. A retry
+// must identify the full server-priced booking, not merely its travel dates.
+function matchesRequestedPocketWifi(session:Stripe.Checkout.Session,requestId:string,requested:RequestedPocketWifi) {
+  const expectedAmount=requested.rentalBeforePromo-requested.promoDiscount+requested.courierFee;
+  return session.metadata?.source==='qyroam.com' &&
+    session.metadata?.product_type==='pocket_wifi' &&
+    session.metadata?.checkout_request_id===requestId &&
+    session.metadata?.country===requested.country &&
+    session.metadata?.start===requested.start &&
+    session.metadata?.end===requested.end &&
+    session.metadata?.days===String(requested.days) &&
+    session.metadata?.plan_name===`${requested.country} Pocket WiFi` &&
+    session.metadata?.daily_rate_sgd===requested.daily.toFixed(2) &&
+    session.metadata?.benchmark_provider===WIFI_BENCHMARK.provider &&
+    session.metadata?.benchmark_rate_sgd===getWifiPlan(requested.country)?.benchmarkRateSgd.toFixed(2) &&
+    session.metadata?.benchmark_verified_on===WIFI_BENCHMARK.verifiedOn &&
+    session.metadata?.rental_before_promo_sgd===(requested.rentalBeforePromo/100).toFixed(2) &&
+    session.metadata?.promo_code===requested.promoCode &&
+    session.metadata?.promo_discount_sgd===(requested.promoDiscount/100).toFixed(2) &&
+    session.metadata?.courier_fee_sgd===(requested.courierFee/100).toFixed(2) &&
+    session.currency?.toLowerCase()==='sgd' && session.amount_total===expectedAmount;
+}
+
+async function activeStripeHolds(stripe:Stripe,start:string,end:string,requestId:string|null,requested:RequestedPocketWifi) {
   const nowSeconds=Math.floor(Date.now()/1000);
   const cutoff=nowSeconds-(HOLD_MINUTES*60);
   let startingAfter:string|undefined;
@@ -50,7 +78,7 @@ async function activeStripeHolds(stripe:Stripe,country:string,start:string,end:s
       if(session.created<cutoff||!session.expires_at||session.expires_at<=nowSeconds||session.metadata?.source!=='qyroam.com'||!validQyRoamProvenance(session.id,session.metadata)) continue;
       if(session.metadata?.product_type && session.metadata.product_type!=='pocket_wifi') continue;
       if(requestId&&session.metadata?.checkout_request_id===requestId){
-        const sameBooking=session.metadata?.product_type==='pocket_wifi'&&session.metadata?.country===country&&session.metadata?.start===start&&session.metadata?.end===end;
+        const sameBooking=matchesRequestedPocketWifi(session,requestId,requested);
         return {holds,requestIds,existingUrl:sameBooking?session.url:null,existingSessionId:sameBooking?session.id:null,requestConflict:!sameBooking};
       }
       const holdStart=session.metadata?.start, holdEnd=session.metadata?.end;
@@ -88,8 +116,13 @@ export async function POST(req: Request) {
   const stripe=new Stripe(key,{apiVersion:'2024-06-20'});
   const inventory=config.pocketWifiInventory;
   if(inventory<1) return NextResponse.json({error:'Pocket WiFi is sold out for these dates. Please choose different dates or contact +65 8032 7183.'},{status:409,headers:{'Cache-Control':'no-store'}});
-  const holdState=await activeStripeHolds(stripe,country,start,end,requestId);
-  if(holdState.requestConflict) return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.'},{status:409,headers:{'Cache-Control':'no-store'}});
+  const rentalBeforePromo=Math.max(1000,Math.round(daily*days*100));
+  const promo=applyPromoCents(rentalBeforePromo, body.promoCode);
+  const rentalAmount=promo.amountCents;
+  const courierFee=config.courierFeeCents;
+  const requested={country,start,end,days,daily,rentalBeforePromo,promoCode:promo.promoCode,promoDiscount:promo.discountCents,courierFee};
+  const holdState=await activeStripeHolds(stripe,start,end,requestId,requested);
+  if(holdState.requestConflict) return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.',checkoutRequestConflict:true},{status:409,headers:{'Cache-Control':'no-store'}});
   if(holdState.existingUrl&&holdState.existingSessionId){
     // A retry can find a session created just before a process interruption.
     // Repair its provenance before returning its URL, rather than allowing an
@@ -117,10 +150,6 @@ export async function POST(req: Request) {
   if(reservation.error) throw reservation.error;
   const reserved=reservation.data?.[0]?.reserved===true;
   if(!reserved) return NextResponse.json({error:'Pocket WiFi is sold out or currently reserved for these dates. Please try different dates or contact +65 8032 7183.'},{status:409,headers:{'Cache-Control':'no-store'}});
-  const rentalBeforePromo=Math.max(1000,Math.round(daily*days*100));
-  const promo=applyPromoCents(rentalBeforePromo, body.promoCode);
-  const rentalAmount=promo.amountCents;
-  const courierFee=config.courierFeeCents;
   const origin=siteOrigin(req);
   const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[]=[{quantity:1,price_data:{currency:'sgd',unit_amount:rentalAmount,product_data:{name:`QY Roam Pocket WiFi — ${country}`,description:`${start} to ${end} · ${days} day${days===1?'':'s'}${promo.discountCents>0?` · ${normalisePromoCode(body.promoCode)} applied`:''}`}}}];
   if(courierFee>0) lineItems.push({quantity:1,price_data:{currency:'sgd',unit_amount:courierFee,product_data:{name:'Singapore courier delivery & return handling'}}});

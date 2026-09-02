@@ -37,7 +37,9 @@ const bookingPage = fs.readFileSync(require.resolve('../app/booking/page.tsx'), 
 const adminOrderRoute = fs.readFileSync(require.resolve('../app/api/admin/orders/[id]/route.ts'), 'utf8');
 const adminOrderActions = fs.readFileSync(require.resolve('../components/AdminOrderActions.tsx'), 'utf8');
 const esimCheckoutRoute = fs.readFileSync(require.resolve('../app/api/esim-checkout/route.ts'), 'utf8');
+const wifiCheckoutRoute = fs.readFileSync(require.resolve('../app/api/checkout/route.ts'), 'utf8');
 const esimPage = fs.readFileSync(require.resolve('../app/esim/page.tsx'), 'utf8');
+const homePage = fs.readFileSync(require.resolve('../app/page.tsx'), 'utf8');
 const adminOpsRoute = fs.readFileSync(require.resolve('../app/api/admin/ops/route.ts'), 'utf8');
 
 const requestId = 'checkout_request_123456';
@@ -199,6 +201,15 @@ test('eSIM checkout never redirects a reused idempotency key to another plan', (
   assert.match(esimCheckoutRoute, /checkoutRequestConflict: true/);
   assert.match(esimCheckoutRoute, /if \(!matchesRequestedEsim\(session, requestId, plan\)\)/);
   assert.match(esimPage, /data\.checkoutExpired \|\| data\.checkoutRequestConflict/);
+});
+
+test('Pocket WiFi checkout retries bind the complete server-priced booking', () => {
+  assert.match(wifiCheckoutRoute, /function matchesRequestedPocketWifi/);
+  assert.match(wifiCheckoutRoute, /session\.metadata\?\.promo_code===requested\.promoCode/);
+  assert.match(wifiCheckoutRoute, /session\.metadata\?\.courier_fee_sgd===\(requested\.courierFee\/100\)\.toFixed\(2\)/);
+  assert.match(wifiCheckoutRoute, /const sameBooking=matchesRequestedPocketWifi\(session,requestId,requested\)/);
+  assert.match(wifiCheckoutRoute, /checkoutRequestConflict:true/);
+  assert.match(homePage, /data\.checkoutExpired \|\| data\.checkoutRequestConflict/);
 });
 
 test('operational pricing and inventory configuration is strict and fail-closed', () => {

@@ -104,8 +104,9 @@ export default function Home() {
       else {
         // Keep the idempotency key after ordinary failures: the server may have
         // created a session before a network response was lost. Rotate it only
-        // after the server has confirmed that Stripe's prior session expired.
-        if (data.checkoutExpired) checkoutAttempt.current = null;
+        // after the server has confirmed that the prior session expired or
+        // belongs to different server-priced booking details.
+        if (data.checkoutExpired || data.checkoutRequestConflict) checkoutAttempt.current = null;
         setCheckoutError(data.error || 'Checkout is temporarily unavailable. Please contact +65 8032 7183.');
       }
     } catch { setCheckoutError('Checkout is temporarily unavailable. Please contact +65 8032 7183.'); }
