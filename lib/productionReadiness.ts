@@ -48,7 +48,11 @@ const REQUIRED_PAYMENT_SCHEMA = [
 const REQUIRED_ESIM_ORDER_SCHEMA = REQUIRED_PAYMENT_SCHEMA.slice(0, 4);
 
 const REQUIRED_OPERATIONS_SCHEMA = [
-  { table: 'inventory_items', columns: 'id,sku,quantity_on_hand,reorder_level' },
+  // The order fields below are the durable evidence used by the guarded
+  // dispatch/return RPC.  A table-only probe can otherwise pass against an
+  // older deployment and leave staff unable to receive a router safely.
+  { table: 'orders', columns: 'id,product_type,payment_status,fulfilment_status,inventory_item_id,courier_tracking,return_tracking,dispatched_at,returned_at' },
+  { table: 'inventory_items', columns: 'id,sku,product_type,status,quantity_on_hand,reorder_level' },
   { table: 'inventory_movements', columns: 'id,inventory_item_id,movement_type,quantity' },
   { table: 'customers', columns: 'id,email,phone,total_orders,lifetime_value_sgd' },
   { table: 'crm_activities', columns: 'id,customer_id,activity_type,completed_at' },
@@ -226,6 +230,37 @@ export async function hasRequiredOperationsSchema() {
       .filter(Boolean);
     if (failures.length) {
       console.error('production_operations_schema_check_failed', { tables: failures });
+      return false;
+    }
+
+    // Probe the two inventory RPCs without changing any state. A zero order
+    // id is impossible for the identity-backed orders table, and a zero item
+    // id is rejected before either function writes. Their expected domain
+    // errors prove the functions, their current argument signatures, and the
+    // service-role grants are deployed. Missing-function or permission errors
+    // instead fail the launch gate before an operator needs to dispatch or
+    // receive a real device.
+    const [transitionProbe, adjustmentProbe] = await Promise.all([
+      database.rpc('qy_transition_pocket_wifi_order', {
+        p_order_id: 0,
+        p_expected_status: 'paid',
+        p_next_status: 'paid',
+        p_courier_tracking: null,
+        p_return_tracking: null,
+        p_notes: null,
+        p_inventory_item_id: null,
+      }),
+      database.rpc('qy_adjust_inventory', {
+        p_item_id: 0,
+        p_delta: 1,
+        p_type: 'readiness_probe',
+        p_reference: null,
+        p_notes: null,
+      }),
+    ]);
+    if (!transitionProbe.error || !/order not found/i.test(transitionProbe.error.message || '') ||
+      !adjustmentProbe.error || !/invalid inventory item/i.test(adjustmentProbe.error.message || '')) {
+      console.error('production_operations_inventory_rpc_check_failed');
       return false;
     }
   } catch {

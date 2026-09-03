@@ -473,6 +473,15 @@ test('Pocket WiFi dispatch and return atomically reconcile the assigned stock it
   assert.match(adminOrderActions, /Select the Pocket WiFi inventory item being dispatched/);
 });
 
+test('production readiness verifies the deployed Pocket WiFi dispatch and return contract', () => {
+  assert.match(productionReadiness, /inventory_item_id,courier_tracking,return_tracking,dispatched_at,returned_at/);
+  assert.match(productionReadiness, /database\.rpc\('qy_transition_pocket_wifi_order'/);
+  assert.match(productionReadiness, /database\.rpc\('qy_adjust_inventory'/);
+  assert.match(productionReadiness, /p_order_id: 0/);
+  assert.match(productionReadiness, /p_item_id: 0/);
+  assert.match(productionReadiness, /production_operations_inventory_rpc_check_failed/);
+});
+
 test('Pocket WiFi receipt cannot create stock unless the outbound hand-off was recorded', () => {
   assert.match(schema, /Pocket WiFi order cannot be returned without a recorded dispatch/);
   assert.match(schema, /if v_order\.dispatched_at is null then raise exception 'Pocket WiFi order cannot be returned without a recorded dispatch'/);
