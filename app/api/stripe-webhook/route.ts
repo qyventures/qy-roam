@@ -10,6 +10,44 @@ import { validQyRoamProvenance } from '@/lib/orderProvenance';
 
 export const runtime = 'nodejs';
 
+// Stripe Checkout events are small, but this is a public endpoint and the
+// signature cannot be checked until the exact raw payload has been read. Keep
+// the memory used by an invalid request bounded rather than relying on a proxy
+// body-size setting that may differ between production environments.
+const MAX_STRIPE_WEBHOOK_BODY_BYTES = 1_000_000;
+
+async function readStripeWebhookBody(req: Request): Promise<Buffer> {
+  const contentLength = req.headers.get('content-length');
+  if (contentLength !== null) {
+    // Do not let a malformed header quietly bypass the early rejection. The
+    // stream limit below remains the authority when a proxy omits this header.
+    if (!/^\d+$/.test(contentLength) || Number(contentLength) > MAX_STRIPE_WEBHOOK_BODY_BYTES) {
+      throw new RangeError('Stripe webhook payload is too large');
+    }
+  }
+
+  if (!req.body) return Buffer.alloc(0);
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > MAX_STRIPE_WEBHOOK_BODY_BYTES) {
+        await reader.cancel();
+        throw new RangeError('Stripe webhook payload is too large');
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, total);
+}
+
 function sha256(value?: string | null) { return value ? crypto.createHash('sha256').update(value).digest('hex') : undefined; }
 function normalizeEmail(value?: string | null) { return value?.trim().toLowerCase(); }
 function normalizePhone(value?: string | null) { if (!value) return undefined; const digits=value.replace(/\D/g,''); return digits||undefined; }
@@ -224,7 +262,13 @@ export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof
 export async function POST(req:Request){
   const key=process.env.STRIPE_SECRET_KEY,webhookSecret=process.env.STRIPE_WEBHOOK_SECRET; if(!key||!webhookSecret) return NextResponse.json({error:'Webhook configuration incomplete'},{status:503});
   const stripe=new Stripe(key,{apiVersion:'2024-06-20'}); let event:Stripe.Event;
-  try{event=stripe.webhooks.constructEvent(await req.text(),req.headers.get('stripe-signature')||'',webhookSecret);}catch{return NextResponse.json({error:'Invalid signature'},{status:400});}
+  let payload:Buffer;
+  try { payload=await readStripeWebhookBody(req); }
+  catch(error) {
+    if (error instanceof RangeError) return NextResponse.json({error:'Webhook payload too large'},{status:413});
+    return NextResponse.json({error:'Invalid webhook payload'},{status:400});
+  }
+  try{event=stripe.webhooks.constructEvent(payload,req.headers.get('stripe-signature')||'',webhookSecret);}catch{return NextResponse.json({error:'Invalid signature'},{status:400});}
   if(!['checkout.session.completed','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed','checkout.session.expired'].includes(event.type)) return NextResponse.json({received:true});
   const session=event.data.object as Stripe.Checkout.Session, supabase=getSupabaseAdmin(); if(!supabase) return NextResponse.json({error:'Persistence unavailable'},{status:503});
   // QY Roam can share a Stripe account with other products. A broad Checkout

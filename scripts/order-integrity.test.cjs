@@ -508,6 +508,15 @@ test('fulfilment email retries retain one safe per-order message identity', () =
   assert.match(smtpClient, /Message-ID: \$\{safeMessageId\(options\.messageId\)\}/);
 });
 
+test('Stripe webhook bounds raw payload memory before signature verification', () => {
+  assert.match(webhookRoute, /const MAX_STRIPE_WEBHOOK_BODY_BYTES = 1_000_000/);
+  assert.match(webhookRoute, /async function readStripeWebhookBody\(req: Request\): Promise<Buffer>/);
+  assert.match(webhookRoute, /Number\(contentLength\) > MAX_STRIPE_WEBHOOK_BODY_BYTES/);
+  assert.match(webhookRoute, /total > MAX_STRIPE_WEBHOOK_BODY_BYTES/);
+  assert.match(webhookRoute, /Webhook payload too large/);
+  assert.match(webhookRoute, /stripe\.webhooks\.constructEvent\(payload,req\.headers\.get\('stripe-signature'\)/);
+});
+
 test('expired authenticated Pocket WiFi sessions promptly release only their matching reservation', () => {
   const webhookRoute = fs.readFileSync(require.resolve('../app/api/stripe-webhook/route.ts'), 'utf8');
   assert.match(webhookRoute, /'checkout\.session\.expired'/);
