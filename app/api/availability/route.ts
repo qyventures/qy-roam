@@ -5,6 +5,7 @@ import { parseExactIsoDate } from '@/lib/checkoutValidation';
 import { operationalConfig } from '@/lib/operationalConfig';
 import { operationalIsoDateAfter } from '@/lib/operationalDate';
 import { validQyRoamProvenance } from '@/lib/orderProvenance';
+import { hasRequiredPaymentSchema } from '@/lib/productionReadiness';
 
 export const dynamic = 'force-dynamic';
 
@@ -92,6 +93,17 @@ export async function GET(req: NextRequest) {
   const rentalDays = Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
   if (start.toISOString().slice(0, 10) < earliest) return NextResponse.json({ available: false, error: `Please book at least ${minLeadDays} day${minLeadDays === 1 ? '' : 's'} before departure.` }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
   if (rentalDays < 1 || rentalDays > 90) return NextResponse.json({ available: false, error: 'Bookings must be between 1 and 90 days.' }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
+
+  // Availability is a promise that a customer can proceed to payment. Use the
+  // same cached, fail-closed post-payment schema check as checkout so an
+  // incomplete migration cannot show a purchasable router only for checkout
+  // to reject it moments later.
+  if (!await hasRequiredPaymentSchema()) {
+    return NextResponse.json({ available: false, remaining: 0, inventoryMode: 'unavailable', error: 'Live availability is temporarily unavailable. Please try again shortly or contact +65 8032 7183.' }, {
+      status: 503,
+      headers: { 'Cache-Control': 'no-store', 'Retry-After': '30' },
+    });
+  }
 
   const inventory = config.pocketWifiInventory;
   const stripeKey = process.env.STRIPE_SECRET_KEY;

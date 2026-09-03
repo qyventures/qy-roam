@@ -331,6 +331,13 @@ test('Pocket WiFi checkout fails closed when its paid-order schema is unavailabl
   assert.match(wifiCheckoutRoute, /'Retry-After':'30'/);
 });
 
+test('Pocket WiFi availability does not promise stock when checkout cannot safely accept payment', () => {
+  assert.match(availabilityRoute, /hasRequiredPaymentSchema/);
+  assert.match(availabilityRoute, /if \(!await hasRequiredPaymentSchema\(\)\)/);
+  assert.match(availabilityRoute, /Live availability is temporarily unavailable/);
+  assert.match(availabilityRoute, /'Retry-After': '30'/);
+});
+
 test('Pocket WiFi checkout retries bind the complete server-priced booking', () => {
   assert.match(wifiCheckoutRoute, /function matchesRequestedPocketWifi/);
   assert.match(wifiCheckoutRoute, /session\.metadata\?\.promo_code===requested\.promoCode/);
