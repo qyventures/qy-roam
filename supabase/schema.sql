@@ -13,6 +13,10 @@ create table if not exists public.orders (
   travel_end date,
   shipping_address jsonb,
   fulfilment_status text not null default 'awaiting_payment',
+  -- The signed Stripe event time that first confirmed payment. This is kept
+  -- separately from created_at so operational recovery and CAPI retries do
+  -- not mistake Checkout Session creation for payment confirmation.
+  payment_confirmed_at timestamptz,
   courier_tracking text,
   return_tracking text,
   dispatched_at timestamptz,
@@ -24,6 +28,7 @@ create table if not exists public.orders (
 
 alter table public.orders add column if not exists product_type text not null default 'pocket_wifi';
 alter table public.orders add column if not exists plan_name text;
+alter table public.orders add column if not exists payment_confirmed_at timestamptz;
 alter table public.orders add column if not exists courier_tracking text;
 alter table public.orders add column if not exists return_tracking text;
 alter table public.orders add column if not exists dispatched_at timestamptz;

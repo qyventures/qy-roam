@@ -495,10 +495,15 @@ test('admin can safely resume failed paid-order notifications', () => {
 test('Meta Purchase retries preserve one durable event timestamp for deduplication', () => {
   const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
   assert.match(schema, /event_time bigint check \(event_time is null or event_time > 0\)/);
+  assert.match(schema, /payment_confirmed_at timestamptz/);
   assert.match(webhookRoute, /insert\(\{stripe_session_id:session\.id,status:'pending',event_time:requestedEventTime\}\)/);
+  assert.match(webhookRoute, /async function persistSession\(session:Stripe\.Checkout\.Session,eventType:Stripe\.Event\.Type,eventCreated:number\)/);
+  assert.match(webhookRoute, /payment_confirmed_at:confirmedAt/);
   assert.match(webhookRoute, /await sendMetaPurchase\(session,Number\(attempt\.data\[0\]\.event_time\)\)/);
-  assert.match(adminOrderRoute, /deliverMetaPurchase\(supabase, session, session\.created\)/);
-  assert.doesNotMatch(adminOrderRoute, /deliverMetaPurchase\(supabase, session, Math\.floor\(Date\.now\(\) \/ 1000\)\)/);
+  assert.match(adminOrderRoute, /select\('stripe_session_id,payment_status,payment_confirmed_at'\)/);
+  assert.match(adminOrderRoute, /const metaEventTime=Number\.isFinite\(confirmedAtMs\)/);
+  assert.match(adminOrderRoute, /await deliverMetaPurchase\(supabase, session, metaEventTime\)/);
+  assert.doesNotMatch(adminOrderRoute, /Math\.floor\(Date\.now\(\) \/ 1000\)/);
 });
 
 test('consented browser and CAPI Purchases share a stable deduplication identity', () => {

@@ -16,7 +16,7 @@ let esimOrderSchemaCheckInFlight: Promise<boolean> | null = null;
 const REQUIRED_PAYMENT_SCHEMA = [
   {
     table: 'orders',
-    columns: 'stripe_session_id,payment_status,product_type,travel_start,travel_end,fulfilment_status,shipping_address',
+    columns: 'stripe_session_id,payment_status,product_type,travel_start,travel_end,fulfilment_status,payment_confirmed_at,shipping_address',
   },
   {
     table: 'stripe_events',

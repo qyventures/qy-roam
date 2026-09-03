@@ -105,15 +105,23 @@ async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
   await sendSmtpMail({host,port,secure,user,pass,from,to,subject,text,messageId,timeoutMs:DELIVERY_TIMEOUT_MS});
 }
 
-async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.Event.Type){
+async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.Event.Type,eventCreated:number){
   const supabase=getSupabaseAdmin(); if(!supabase) throw new Error('Order persistence unavailable');
   const paid=session.payment_status==='paid', failed=eventType==='checkout.session.async_payment_failed';
-  const existing=await supabase.from('orders').select('payment_status,fulfilment_status').eq('stripe_session_id',session.id).maybeSingle(); if(existing.error) throw existing.error;
+  const existing=await supabase.from('orders').select('payment_status,fulfilment_status,payment_confirmed_at').eq('stripe_session_id',session.id).maybeSingle(); if(existing.error) throw existing.error;
   const current=existing.data?.fulfilment_status, productType=session.metadata?.product_type;
   if(productType!=='esim'&&productType!=='pocket_wifi') throw new Error('Unknown or missing product_type on Stripe session');
   const defaultPaidStatus=productType==='esim'?'awaiting_fulfilment':'paid';
   const fulfilment=paid?(current&&!['awaiting_payment','payment_failed'].includes(current)?current:defaultPaidStatus):failed?(current&&!['awaiting_payment','payment_failed'].includes(current)?current:'payment_failed'):(current||'awaiting_payment');
-  const order={stripe_session_id:session.id,payment_status:session.payment_status,customer_name:session.customer_details?.name,email:session.customer_details?.email,phone:session.customer_details?.phone,amount_sgd:(session.amount_total||0)/100,product_type:productType,plan_name:session.metadata?.plan_name||null,country:session.metadata?.country,travel_start:session.metadata?.start||null,travel_end:session.metadata?.end||null,fulfilment_status:fulfilment,shipping_address:session.shipping_details?.address||null,updated_at:new Date().toISOString()};
+  // A Checkout Session can be created well before an asynchronous payment is
+  // confirmed. Retain the first signed event time so a later protected retry
+  // has a stable payment timestamp for Meta CAPI rather than falling back to
+  // session creation time. Never replace an existing value with a later,
+  // duplicate webhook event.
+  const confirmedAt=paid
+    ? (existing.data?.payment_confirmed_at || new Date(eventCreated*1000).toISOString())
+    : (existing.data?.payment_confirmed_at || null);
+  const order={stripe_session_id:session.id,payment_status:session.payment_status,customer_name:session.customer_details?.name,email:session.customer_details?.email,phone:session.customer_details?.phone,amount_sgd:(session.amount_total||0)/100,product_type:productType,plan_name:session.metadata?.plan_name||null,country:session.metadata?.country,travel_start:session.metadata?.start||null,travel_end:session.metadata?.end||null,fulfilment_status:fulfilment,payment_confirmed_at:confirmedAt,shipping_address:session.shipping_details?.address||null,updated_at:new Date().toISOString()};
 
   // Checkout events can arrive out of order. Once a session is recorded as paid,
   // an older `completed` snapshot or a late async failure must not make inventory
@@ -310,7 +318,7 @@ export async function POST(req:Request){
     if(claim.status==='processed') return NextResponse.json({received:true,duplicate:true});
     if(claim.status==='in_progress') return NextResponse.json({error:'Event is still processing'},{status:500});
     claimStartedAt=claim.processingStartedAt;
-    await persistSession(session,event.type);
+    await persistSession(session,event.type,event.created);
     // A paid or failed terminal event supersedes the temporary checkout hold.
     // Keeping pending async-payment reservations until expiry prevents the same
     // router being sold while Stripe is still confirming payment.

@@ -132,7 +132,7 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   try {
     const { data: order, error } = await supabase
       .from('orders')
-      .select('stripe_session_id,payment_status')
+      .select('stripe_session_id,payment_status,payment_confirmed_at')
       .eq('id', id)
       .maybeSingle();
     if (error) throw error;
@@ -151,9 +151,14 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
 
     await deliverFulfilmentNotification(supabase, session);
     // The delivery ledger preserves the original webhook event timestamp when
-    // present. For legacy rows that predate the ledger field, session creation
-    // time is stable across every admin retry (unlike the current clock).
-    await deliverMetaPurchase(supabase, session, session.created);
+    // present. If a previous attempt failed before it created that row, use
+    // the first signed payment-confirmation time persisted by the webhook.
+    // Session creation remains a stable fallback only for legacy orders.
+    const confirmedAtMs=order.payment_confirmed_at ? new Date(order.payment_confirmed_at).getTime() : Number.NaN;
+    const metaEventTime=Number.isFinite(confirmedAtMs) && confirmedAtMs>0
+      ? Math.floor(confirmedAtMs/1000)
+      : session.created;
+    await deliverMetaPurchase(supabase, session, metaEventTime);
     return NextResponse.json({ ok: true }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('admin_order_notification_retry_error', error);
