@@ -167,6 +167,33 @@ test('rejects unsigned, copied, and session-id-replayed checkout provenance', ()
   assert.equal(validateQyRoamSession(replayed).valid, false);
 });
 
+test('accepts only the immediately previous checkout-integrity key during a controlled rotation', () => {
+  const current = process.env.ORDER_INTEGRITY_SECRET;
+  const previous = 'previous-order-integrity-secret-that-is-at-least-32-characters';
+  process.env.ORDER_INTEGRITY_SECRET_PREVIOUS = previous;
+  try {
+    const inFlight = esimSession();
+    const fields = Object.keys(inFlight.metadata)
+      .filter((key) => key !== 'qyroam_provenance')
+      .sort()
+      .map((key) => [key, inFlight.metadata[key]]);
+    const digest = crypto.createHmac('sha256', previous)
+      .update(JSON.stringify(['v2', inFlight.id, fields]))
+      .digest('hex');
+    inFlight.metadata.qyroam_provenance = `v2.${digest}`;
+    assert.deepEqual(validateQyRoamSession(inFlight), { valid: true, productType: 'esim' });
+
+    const newSession = esimSession();
+    assert.notEqual(newSession.metadata.qyroam_provenance, inFlight.metadata.qyroam_provenance);
+    const forged = esimSession();
+    forged.metadata.qyroam_provenance = `v2.${crypto.createHmac('sha256', 'untrusted-secret-that-is-at-least-32-characters').update(JSON.stringify(['v2', forged.id, Object.keys(forged.metadata).filter((key) => key !== 'qyroam_provenance').sort().map((key) => [key, forged.metadata[key]])])).digest('hex')}`;
+    assert.equal(validateQyRoamSession(forged).valid, false);
+  } finally {
+    delete process.env.ORDER_INTEGRITY_SECRET_PREVIOUS;
+    process.env.ORDER_INTEGRITY_SECRET = current;
+  }
+});
+
 test('accepts an authenticated historical price snapshot after a catalogue update', () => {
   const session = esimSession();
   // This represents a Checkout Session issued before a legitimate reprice.

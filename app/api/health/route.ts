@@ -45,6 +45,15 @@ function isMetaCapiConfigured() {
   return Boolean(token && token.length >= 20);
 }
 
+function isOrderIntegrityConfigured() {
+  const current = process.env.ORDER_INTEGRITY_SECRET;
+  const previous = process.env.ORDER_INTEGRITY_SECRET_PREVIOUS;
+  // A previous key is optional, but if an operator sets it for a rotation it
+  // must be a real signing secret rather than silently disabling recovery for
+  // in-flight Checkout Sessions.
+  return Boolean(current && current.length >= 32 && (!previous || previous.length >= 32));
+}
+
 function constantTimeEqual(a: string, b: string) {
   const encoder = new TextEncoder();
   const left = encoder.encode(a), right = encoder.encode(b);
@@ -81,7 +90,7 @@ export async function GET(req: Request) {
     publishableKey: hasPrefix(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY, ['pk_live_']),
     siteUrl: isProductionSiteUrl(process.env.NEXT_PUBLIC_SITE_URL),
     webhook: hasPrefix(process.env.STRIPE_WEBHOOK_SECRET, ['whsec_']),
-    orderIntegrity: Boolean(process.env.ORDER_INTEGRITY_SECRET && process.env.ORDER_INTEGRITY_SECRET.length >= 32),
+    orderIntegrity: isOrderIntegrityConfigured(),
     supabase: Boolean(process.env.SUPABASE_URL?.startsWith('https://') && process.env.SUPABASE_SERVICE_ROLE_KEY && process.env.SUPABASE_SERVICE_ROLE_KEY.length >= 32),
     paymentSchema,
     operationsSchema,

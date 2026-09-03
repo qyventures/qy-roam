@@ -29,6 +29,16 @@ Optional until measurement launch:
 
 Never place live credentials in GitHub.
 
+### Checkout-integrity secret rotation
+
+Rotate this secret without invalidating a customer who has already reached
+Stripe Checkout: set the new value as `ORDER_INTEGRITY_SECRET`, keep the old
+32+ character value temporarily as `ORDER_INTEGRITY_SECRET_PREVIOUS`, then
+restart/redeploy. New sessions use only the new key; the prior key validates
+only already-issued sessions. Remove `ORDER_INTEGRITY_SECRET_PREVIOUS` after
+all sessions issued before the rotation have expired and Stripe's webhook retry
+window has cleared.
+
 ## 2. Deploy privately on VPS
 
 From the privileged VPS account:

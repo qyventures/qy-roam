@@ -3,9 +3,23 @@ import crypto from 'crypto';
 const VERSION = 'v2';
 const METADATA_KEY = 'qyroam_provenance';
 
-function secret() {
+function activeSecret() {
   const value = process.env.ORDER_INTEGRITY_SECRET;
   return value && value.length >= 32 ? value : null;
+}
+
+// Checkout Sessions can remain payable for a short period and Stripe can retry
+// a webhook after an operational key rotation. Accept exactly one prior key
+// during that handover, while continuing to issue every new signature with the
+// active key. Keeping this to one explicitly named value avoids an unbounded
+// collection of old credentials remaining payment authorities indefinitely.
+function verificationSecrets() {
+  const current = activeSecret();
+  if (!current) return [];
+  const previous = process.env.ORDER_INTEGRITY_SECRET_PREVIOUS;
+  return previous && previous.length >= 32 && previous !== current
+    ? [current, previous]
+    : [current];
 }
 
 function payload(sessionId: string, metadata: Record<string, string>) {
@@ -27,10 +41,14 @@ function payload(sessionId: string, metadata: Record<string, string>) {
  * lookalike session manually created in a shared Stripe account.
  */
 export function signedQyRoamProvenance(sessionId: string, metadata: Record<string, string>) {
-  const signingSecret = secret();
+  const signingSecret = activeSecret();
   if (!signingSecret) throw new Error('ORDER_INTEGRITY_SECRET is not configured');
-  const digest = crypto.createHmac('sha256', signingSecret).update(payload(sessionId, metadata)).digest('hex');
+  const digest = provenanceDigest(sessionId, metadata, signingSecret);
   return `${VERSION}.${digest}`;
+}
+
+function provenanceDigest(sessionId: string, metadata: Record<string, string>, signingSecret: string) {
+  return crypto.createHmac('sha256', signingSecret).update(payload(sessionId, metadata)).digest('hex');
 }
 
 export function validQyRoamProvenance(sessionId: string, metadata?: Record<string, string> | null) {
@@ -42,11 +60,16 @@ export function validQyRoamProvenance(sessionId: string, metadata?: Record<strin
     // v1 covered only a product marker and request id, leaving mutable plan
     // and travel metadata outside the integrity boundary. It must never
     // authorize a paid order or inventory hold after v2 is deployed.
-    const signingSecret = secret();
-    if (!signingSecret) return false;
-    const expected = signedQyRoamProvenance(sessionId, metadata);
-    const left = Buffer.from(provided), right = Buffer.from(expected);
-    return left.length === right.length && crypto.timingSafeEqual(left, right);
+    const left = Buffer.from(provided);
+    // Evaluate each configured handover key. New sessions are always signed
+    // with the active one, but a valid in-flight session signed immediately
+    // before rotation remains eligible for fulfilment until the previous key
+    // is deliberately removed after Stripe's retry window.
+    return verificationSecrets().some((signingSecret) => {
+      const expected = `${VERSION}.${provenanceDigest(sessionId, metadata, signingSecret)}`;
+      const right = Buffer.from(expected);
+      return left.length === right.length && crypto.timingSafeEqual(left, right);
+    });
   } catch {
     return false;
   }
