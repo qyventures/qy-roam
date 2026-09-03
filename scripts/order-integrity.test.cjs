@@ -329,6 +329,16 @@ test('Pocket WiFi payment URLs require a durable matching reservation link', () 
   assert.match(wifiCheckoutRoute, /Live reservation confirmation is temporarily unavailable/);
 });
 
+test('ambiguous Stripe creation failures retain the Pocket WiFi reservation', () => {
+  // A Stripe timeout can happen after Checkout created a payable session. The
+  // reservation must remain the capacity boundary until retry/expiry resolves
+  // that ambiguity; deleting it here would permit an uncounted router sale.
+  assert.match(wifiCheckoutRoute, /A network failure is ambiguous: Stripe may have created a payable/);
+  assert.match(wifiCheckoutRoute, /Keep it until its short expiry \(or Stripe's signed terminal/);
+  assert.doesNotMatch(wifiCheckoutRoute, /checkout_reservation_release_error/);
+  assert.doesNotMatch(wifiCheckoutRoute, /checkout_provenance_reservation_release_error/);
+});
+
 test('Pocket WiFi dispatch requires an operationally available inventory item at the database boundary', () => {
   assert.match(schema, /and status = 'available'/);
   assert.match(schema, /selected Pocket WiFi inventory item is not available for dispatch/);
