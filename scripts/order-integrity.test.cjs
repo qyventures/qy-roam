@@ -285,6 +285,15 @@ test('eSIM checkout fails closed when its durable post-payment order boundary is
   assert.match(productionReadiness, /export async function hasRequiredEsimOrderSchema\(\)/);
 });
 
+test('post-payment readiness checks every webhook-persisted delivery field', () => {
+  // A table-only (or partial-column) probe can pass before an additive schema
+  // migration is deployed. Checkout must fail closed rather than accepting a
+  // payment whose webhook cannot persist its retry and deduplication state.
+  assert.match(productionReadiness, /customer_name,email,phone,amount_sgd,product_type,plan_name,country/);
+  assert.match(productionReadiness, /last_attempt_at,sent_at,last_error/);
+  assert.match(productionReadiness, /status,event_time,attempts,last_attempt_at,sent_at,last_error,updated_at/);
+});
+
 test('checkout never exposes payment when human fulfilment email is not configured', () => {
   assert.match(esimCheckoutRoute, /hasRequiredFulfilmentEmailConfig/);
   assert.match(esimCheckoutRoute, /if \(!hasRequiredFulfilmentEmailConfig\(\)\)/);

@@ -16,7 +16,11 @@ let esimOrderSchemaCheckInFlight: Promise<boolean> | null = null;
 const REQUIRED_PAYMENT_SCHEMA = [
   {
     table: 'orders',
-    columns: 'stripe_session_id,payment_status,product_type,travel_start,travel_end,fulfilment_status,payment_confirmed_at,shipping_address',
+    // This is the complete persisted Checkout Session snapshot, not merely
+    // the fields used to list orders.  A partial migration must fail before
+    // checkout exposes a payment URL instead of failing after Stripe accepts
+    // a real order in persistSession.
+    columns: 'stripe_session_id,payment_status,customer_name,email,phone,amount_sgd,product_type,plan_name,country,travel_start,travel_end,fulfilment_status,payment_confirmed_at,shipping_address,updated_at',
   },
   {
     table: 'stripe_events',
@@ -24,11 +28,16 @@ const REQUIRED_PAYMENT_SCHEMA = [
   },
   {
     table: 'fulfilment_notifications',
-    columns: 'stripe_session_id,status,attempts,updated_at',
+    // The webhook claims, retries, records errors and marks this ledger sent.
+    // Probe every column in that write contract before accepting payment.
+    columns: 'stripe_session_id,status,attempts,last_attempt_at,sent_at,last_error,updated_at',
   },
   {
     table: 'meta_purchase_deliveries',
-    columns: 'stripe_session_id,status,attempts,updated_at',
+    // event_time is essential to CAPI retry deduplication. Its migration was
+    // deliberately additive, so include it here to prevent an older schema
+    // from passing checkout readiness and failing only after payment.
+    columns: 'stripe_session_id,status,event_time,attempts,last_attempt_at,sent_at,last_error,updated_at',
   },
   {
     // Pocket WiFi checkout relies on this durable hold ledger to make the
