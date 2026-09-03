@@ -431,6 +431,14 @@ test('Pocket WiFi holds require server-issued checkout provenance', () => {
   }
 });
 
+test('Pocket WiFi holds require an explicit Pocket WiFi product identity', () => {
+  const checkoutRoute = fs.readFileSync(require.resolve('../app/api/checkout/route.ts'), 'utf8');
+  for (const source of [checkoutRoute, availabilityRoute]) {
+    assert.match(source, /session\.metadata\?\.product_type\s*!==?\s*['"]pocket_wifi['"]/);
+    assert.doesNotMatch(source, /session\.metadata\?\.product_type\s*&&\s*session\.metadata\.product_type\s*!==?\s*['"]pocket_wifi['"]/);
+  }
+});
+
 test('manual orders cannot bypass paid-order lifecycle, pricing, or WiFi capacity fields', () => {
   assert.match(adminOpsRoute, /\['paid', 'unpaid', 'pending', 'failed'\]\.includes\(paymentStatus\)/);
   assert.match(adminOpsRoute, /function money\(value: unknown\)/);

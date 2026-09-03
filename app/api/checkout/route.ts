@@ -78,7 +78,11 @@ async function activeStripeHolds(stripe:Stripe,start:string,end:string,requestId
       // account consume scarce router capacity. Holds use the same
       // server-authored provenance boundary as paid-order fulfilment.
       if(session.created<cutoff||!session.expires_at||session.expires_at<=nowSeconds||session.metadata?.source!=='qyroam.com'||!validQyRoamProvenance(session.id,session.metadata)) continue;
-      if(session.metadata?.product_type && session.metadata.product_type!=='pocket_wifi') continue;
+      // A signed QY Roam session is not necessarily a router reservation.
+      // Require the explicit server-authored product identity; treating an
+      // absent type as Pocket WiFi could reserve stock for another product
+      // during a metadata migration or an operational recovery.
+      if(session.metadata?.product_type!=='pocket_wifi') continue;
       if(requestId&&session.metadata?.checkout_request_id===requestId){
         const sameBooking=matchesRequestedPocketWifi(session,requestId,requested);
         return {holds,requestIds,existingUrl:sameBooking?session.url:null,existingSessionId:sameBooking?session.id:null,requestConflict:!sameBooking};
