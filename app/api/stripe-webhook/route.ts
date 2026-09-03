@@ -322,10 +322,16 @@ export async function POST(req:Request){
     // A paid or failed terminal event supersedes the temporary checkout hold.
     // Keeping pending async-payment reservations until expiry prevents the same
     // router being sold while Stripe is still confirming payment.
-    if(session.payment_status==='paid'||event.type==='checkout.session.async_payment_failed'){
+    if(validation.productType==='pocket_wifi'&&(session.payment_status==='paid'||event.type==='checkout.session.async_payment_failed')){
       const checkoutRequestId=session.metadata?.checkout_request_id;
       if(checkoutRequestId){
-        const released=await supabase.from('checkout_reservations').delete().eq('checkout_request_id',checkoutRequestId);
+        // eSIM and Pocket WiFi Checkout Sessions deliberately use different
+        // Stripe idempotency namespaces, but a caller can still reuse the
+        // same client request id across them. Only a terminal event for this
+        // exact router session may release its durable inventory hold.
+        const released=await supabase.from('checkout_reservations').delete()
+          .eq('checkout_request_id',checkoutRequestId)
+          .eq('stripe_session_id',session.id);
         if(released.error) throw released.error;
       }
     }

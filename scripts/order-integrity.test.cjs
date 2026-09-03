@@ -549,3 +549,12 @@ test('expired authenticated Pocket WiFi sessions promptly release only their mat
   assert.match(webhookRoute, /if\(event\.type==='checkout\.session\.expired'\)/);
   assert.match(webhookRoute, /await releaseExpiredPocketWifiReservation\(supabase,session\)/);
 });
+
+test('only the matching Pocket WiFi terminal event can release a checkout reservation', () => {
+  const webhookRoute = fs.readFileSync(require.resolve('../app/api/stripe-webhook/route.ts'), 'utf8');
+  // eSIM and Pocket WiFi have separate Stripe idempotency namespaces, so the
+  // shared request-id syntax alone must never make an eSIM payment release a
+  // router held by another checkout.
+  assert.match(webhookRoute, /validation\.productType==='pocket_wifi'/);
+  assert.match(webhookRoute, /\.eq\('checkout_request_id',checkoutRequestId\)\s*\.eq\('stripe_session_id',session\.id\)/);
+});
