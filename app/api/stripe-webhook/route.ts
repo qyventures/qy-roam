@@ -197,6 +197,22 @@ async function releaseExpiredPocketWifiReservation(supabase:NonNullable<ReturnTy
   if(released.error) throw released.error;
 }
 
+// Delayed payment can create an awaiting-payment order before Stripe later
+// expires the Checkout Session. Do not leave it looking actionable once the
+// signed terminal event arrives. Stripe's payment_status remains its canonical
+// snapshot; only the provisional fulfilment state is closed. The narrow
+// predicate prevents an out-of-order expiry event from changing a paid,
+// cancelled, or otherwise operator-handled order.
+async function closeExpiredAwaitingPaymentOrder(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session) {
+  if(!validQyRoamProvenance(session.id,session.metadata)) return;
+  const expired=await supabase.from('orders')
+    .update({fulfilment_status:'payment_failed',updated_at:new Date().toISOString()})
+    .eq('stripe_session_id',session.id)
+    .eq('fulfilment_status','awaiting_payment')
+    .or('payment_status.is.null,payment_status.neq.paid');
+  if(expired.error) throw expired.error;
+}
+
 export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session){
   let existing=await supabase.from('fulfilment_notifications').select('status,updated_at,attempts').eq('stripe_session_id',session.id).maybeSingle();
   if(existing.error) throw existing.error;
@@ -293,6 +309,7 @@ export async function POST(req:Request){
       if(claim.status==='in_progress') return NextResponse.json({error:'Event is still processing'},{status:500});
       claimStartedAt=claim.processingStartedAt;
       await releaseExpiredPocketWifiReservation(supabase,session);
+      await closeExpiredAwaitingPaymentOrder(supabase,session);
       const completed=await supabase.from('stripe_events').update({processed_at:new Date().toISOString()}).eq('event_id',eventClaimId).eq('processing_started_at',claimStartedAt).is('processed_at',null).select('event_id');
       if(completed.error) throw completed.error;
       if(completed.data?.length!==1) throw new Error('Stripe event claim ownership was lost');

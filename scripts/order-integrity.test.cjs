@@ -602,6 +602,16 @@ test('expired authenticated Pocket WiFi sessions promptly release only their mat
   assert.match(webhookRoute, /await releaseExpiredPocketWifiReservation\(supabase,session\)/);
 });
 
+test('expired checkout sessions close only their provisional pending orders', () => {
+  // A delayed payment may have created an awaiting-payment order before its
+  // Checkout Session reaches Stripe's terminal expiry state.
+  assert.match(webhookRoute, /async function closeExpiredAwaitingPaymentOrder/);
+  assert.match(webhookRoute, /fulfilment_status:'payment_failed'/);
+  assert.match(webhookRoute, /\.eq\('fulfilment_status','awaiting_payment'\)/);
+  assert.match(webhookRoute, /payment_status\.is\.null,payment_status\.neq\.paid/);
+  assert.match(webhookRoute, /await closeExpiredAwaitingPaymentOrder\(supabase,session\)/);
+});
+
 test('only the matching Pocket WiFi terminal event can release a checkout reservation', () => {
   const webhookRoute = fs.readFileSync(require.resolve('../app/api/stripe-webhook/route.ts'), 'utf8');
   // eSIM and Pocket WiFi have separate Stripe idempotency namespaces, so the
