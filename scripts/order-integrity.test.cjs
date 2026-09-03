@@ -557,6 +557,16 @@ test('admin order visibility identifies the specific Meta CAPI delivery needing 
   assert.match(adminPage, /Not requested \/ not recorded/);
 });
 
+test('admin email exceptions include paid Stripe orders missing their notification ledger', () => {
+  assert.match(adminPage, /const notificationExceptions = orders\.filter/);
+  assert.match(adminPage, /isStripeCheckoutOrder\(order\)/);
+  assert.match(adminPage, /notificationBySession\.get\(order\.stripe_session_id\)\?\.status !== 'sent'/);
+  assert.match(adminPage, /notificationExceptions\.length/);
+  assert.match(adminPage, /canRetryNotifications/);
+  assert.match(adminOrderActions, /canRetryNotifications = false/);
+  assert.match(adminOrderActions, /\{canRetryNotifications && <button/);
+});
+
 test('admin can safely resume failed paid-order notifications', () => {
   assert.match(adminOrderRoute, /export async function POST/);
   assert.match(adminOrderRoute, /validateQyRoamSession\(session\)/);

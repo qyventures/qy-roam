@@ -20,6 +20,7 @@ function daysFromToday(value: string | null | undefined) {
 
 function isEsim(order: any) { return order.product_type === 'esim'; }
 function money(value: number) { return `S$${Number(value || 0).toFixed(2)}`; }
+function isStripeCheckoutOrder(order: any) { return typeof order.stripe_session_id === 'string' && order.stripe_session_id.startsWith('cs_'); }
 function customerKey(order: any) {
   return String(order.email || order.phone || order.customer_name || order.stripe_session_id || '').trim().toLowerCase();
 }
@@ -69,7 +70,15 @@ export default async function AdminPage() {
   const inventoryItems: any[] = inventoryResult.data ?? [];
   const notifications: any[] = notificationResult.data ?? [];
   const notificationBySession = new Map(notifications.map((n:any)=>[n.stripe_session_id,n]));
-  const pendingNotifications = notifications.filter((n:any)=>n.status !== 'sent');
+  // A webhook failure before the notification ledger is created leaves no row
+  // to count here. Include every paid Stripe order without a confirmed send so
+  // the attention total agrees with the per-order warning and staff do not
+  // mistake a zero metric for a healthy fulfilment queue.
+  const notificationExceptions = orders.filter((order:any) =>
+    order.payment_status === 'paid' &&
+    isStripeCheckoutOrder(order) &&
+    notificationBySession.get(order.stripe_session_id)?.status !== 'sent',
+  );
   const metaDeliveries: any[] = metaDeliveryResult.data ?? [];
   const metaDeliveryBySession = new Map(metaDeliveries.map((delivery:any)=>[delivery.stripe_session_id,delivery]));
   const pendingMetaDeliveries = metaDeliveries.filter((delivery:any)=>delivery.status !== 'sent');
@@ -152,7 +161,7 @@ export default async function AdminPage() {
           <div style={cardStyle}><small>WiFi dispatch exceptions</small><div style={metricStyle}>{wifiDispatchExceptions.length}</div><small>departing within 2 days / unresolved</small></div>
           <div style={cardStyle}><small>eSIM fulfilment exceptions</small><div style={metricStyle}>{esimExceptions.length}</div><small>departing within 2 days / unresolved</small></div>
           <div style={cardStyle}><small>Overdue WiFi returns</small><div style={metricStyle}>{returnExceptions.length}</div><small>more than 5 days past trip end</small></div>
-          <div style={cardStyle}><small>Ops email exceptions</small><div style={metricStyle}>{pendingNotifications.length}</div><small>paid-order notifications not confirmed sent</small></div>
+          <div style={cardStyle}><small>Ops email exceptions</small><div style={metricStyle}>{notificationExceptions.length}</div><small>paid Stripe-order notifications not confirmed sent</small></div>
           <div style={cardStyle}><small>Meta CAPI exceptions</small><div style={metricStyle}>{pendingMetaDeliveries.length}</div><small>consented purchases not confirmed delivered</small></div>
         </div>
       </section>
@@ -168,6 +177,7 @@ export default async function AdminPage() {
           const product = isEsim(o) ? 'eSIM' : 'Pocket WiFi';
           const notification:any = notificationBySession.get(o.stripe_session_id);
           const metaDelivery:any = metaDeliveryBySession.get(o.stripe_session_id);
+          const canRetryNotifications = o.payment_status === 'paid' && isStripeCheckoutOrder(o) && notification?.status !== 'sent';
           return <tr key={o.id} style={{borderTop:'1px solid #e5e8ed',verticalAlign:'top'}}>
             <td style={{padding:'14px 10px'}}><strong>{String(o.stripe_session_id || o.id).slice(-10)}</strong><br/><small>{o.created_at ? new Date(o.created_at).toLocaleDateString('en-SG') : ''}</small></td>
             <td style={{padding:'14px 8px'}}>{o.customer_name || '-'}<br/><small>{o.phone || '-'}</small>{o.email && <><br/><small>{o.email}</small></>}</td>
@@ -176,7 +186,7 @@ export default async function AdminPage() {
             <td style={{padding:'14px 8px'}}><strong>{money(o.amount_sgd)}</strong></td>
             <td style={{padding:'14px 8px'}}>{notification?.status === 'sent' ? '✓ Sent' : notification ? `⚠ ${notification.status}` : o.payment_status === 'paid' ? '⚠ Not recorded' : '-'}{notification?.last_error && <><br/><small>{String(notification.last_error).slice(0,120)}</small></>}</td>
             <td style={{padding:'14px 8px'}}>{metaDelivery?.status === 'sent' ? '✓ Sent' : metaDelivery ? `⚠ ${metaDelivery.status}` : o.payment_status === 'paid' ? 'Not requested / not recorded' : '-'}{metaDelivery?.last_error && <><br/><small>{String(metaDelivery.last_error).slice(0,120)}</small></>}</td>
-            <td style={{padding:'14px 8px'}}><AdminOrderActions id={o.id} initialStatus={o.fulfilment_status} productType={o.product_type} courierTracking={o.courier_tracking} returnTracking={o.return_tracking} inventoryItemId={o.inventory_item_id} inventoryItems={inventoryItems}/></td>
+            <td style={{padding:'14px 8px'}}><AdminOrderActions id={o.id} initialStatus={o.fulfilment_status} productType={o.product_type} courierTracking={o.courier_tracking} returnTracking={o.return_tracking} inventoryItemId={o.inventory_item_id} inventoryItems={inventoryItems} canRetryNotifications={canRetryNotifications}/></td>
           </tr>;
         })}</tbody>
       </table></div>}

@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { allowedFulfilmentStatuses } from '@/lib/orderLifecycle';
 
-export default function AdminOrderActions({ id, initialStatus, productType = 'pocket_wifi', courierTracking = '', returnTracking = '', inventoryItemId = null, inventoryItems = [] }: { id: number; initialStatus: string; productType?: string | null; courierTracking?: string | null; returnTracking?: string | null; inventoryItemId?: number | null; inventoryItems?: { id: number; name: string; sku: string; quantity_on_hand: number; status: string }[] }) {
+export default function AdminOrderActions({ id, initialStatus, productType = 'pocket_wifi', courierTracking = '', returnTracking = '', inventoryItemId = null, inventoryItems = [], canRetryNotifications = false }: { id: number; initialStatus: string; productType?: string | null; courierTracking?: string | null; returnTracking?: string | null; inventoryItemId?: number | null; inventoryItems?: { id: number; name: string; sku: string; quantity_on_hand: number; status: string }[]; canRetryNotifications?: boolean }) {
   const isEsim = productType === 'esim';
   const [currentStatus, setCurrentStatus] = useState(initialStatus);
   const [status, setStatus] = useState(initialStatus);
@@ -70,7 +70,7 @@ export default function AdminOrderActions({ id, initialStatus, productType = 'po
     </>}
     {isEsim && <small>Mark fulfilled after the QR code / activation instructions have been sent to the customer.</small>}
     <button type="button" onClick={save} disabled={saving || statuses.length < 2}>{saving ? 'Saving…' : 'Save'}</button>
-    <button type="button" onClick={retryNotifications} disabled={retrying}>{retrying ? 'Retrying notifications…' : 'Retry order notifications'}</button>
+    {canRetryNotifications && <button type="button" onClick={retryNotifications} disabled={retrying}>{retrying ? 'Retrying notifications…' : 'Retry order notifications'}</button>}
     {message && <small aria-live="polite">{message}</small>}
   </div>;
 }
