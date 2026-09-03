@@ -484,6 +484,13 @@ test('admin actions advance their transition baseline after each save', () => {
   assert.match(adminOrderActions, /setCurrentStatus\(result\.fulfilment_status\)/);
 });
 
+test('admin order visibility fails loudly instead of presenting a database failure as no orders', () => {
+  assert.match(adminPage, /await Promise\.all\(\[/);
+  assert.match(adminPage, /const failedPanels = \[/);
+  assert.match(adminPage, /Operational data is currently unavailable:/);
+  assert.match(adminPage, /Do not treat empty panels as no orders/);
+});
+
 test('admin can safely resume failed paid-order notifications', () => {
   assert.match(adminOrderRoute, /export async function POST/);
   assert.match(adminOrderRoute, /validateQyRoamSession\(session\)/);

@@ -52,25 +52,32 @@ const metricStyle = {fontSize:30,fontWeight:800,lineHeight:1.1,marginTop:6} as c
 
 export default async function AdminPage() {
   const supabase = getSupabaseAdmin();
-  const result = supabase
-    ? await supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(500)
-    : { data: [] as any[] };
+  // An admin dashboard that quietly turns a failed query into an empty table
+  // is dangerous: staff can conclude there are no orders to fulfil. Fetch the
+  // independent panels together, but preserve each failure so the UI fails
+  // loudly while leaving any successfully loaded operational data visible.
+  const unavailable = { data: [] as any[], error: new Error('Order database is not configured') };
+  const [result, inventoryResult, notificationResult, metaDeliveryResult] = supabase
+    ? await Promise.all([
+        supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(500),
+        supabase.from('inventory_items').select('id,sku,name,quantity_on_hand,status').eq('product_type', 'pocket_wifi').order('name'),
+        supabase.from('fulfilment_notifications').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('updated_at', { ascending: false }).limit(500),
+        supabase.from('meta_purchase_deliveries').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('updated_at', { ascending: false }).limit(500),
+      ])
+    : [unavailable, unavailable, unavailable, unavailable];
   const orders: any[] = result.data ?? [];
-  const inventoryResult = supabase
-    ? await supabase.from('inventory_items').select('id,sku,name,quantity_on_hand,status').eq('product_type', 'pocket_wifi').order('name')
-    : { data: [] as any[] };
   const inventoryItems: any[] = inventoryResult.data ?? [];
-  const notificationResult = supabase
-    ? await supabase.from('fulfilment_notifications').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('updated_at', { ascending: false }).limit(500)
-    : { data: [] as any[] };
   const notifications: any[] = notificationResult.data ?? [];
   const notificationBySession = new Map(notifications.map((n:any)=>[n.stripe_session_id,n]));
   const pendingNotifications = notifications.filter((n:any)=>n.status !== 'sent');
-  const metaDeliveryResult = supabase
-    ? await supabase.from('meta_purchase_deliveries').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('updated_at', { ascending: false }).limit(500)
-    : { data: [] as any[] };
   const metaDeliveries: any[] = metaDeliveryResult.data ?? [];
   const pendingMetaDeliveries = metaDeliveries.filter((delivery:any)=>delivery.status !== 'sent');
+  const failedPanels = [
+    result.error && 'orders',
+    inventoryResult.error && 'inventory',
+    notificationResult.error && 'fulfilment notifications',
+    metaDeliveryResult.error && 'Meta delivery status',
+  ].filter(Boolean) as string[];
 
   const paid = orders.filter((o:any)=>o.payment_status === 'paid');
   const active = orders.filter((o:any)=>!['closed','cancelled','payment_failed'].includes(o.fulfilment_status));
@@ -116,6 +123,10 @@ export default async function AdminPage() {
 
     {!supabase && <div style={cardStyle}><strong>Order database is not configured yet.</strong></div>}
     {supabase && <>
+      {failedPanels.length > 0 && <div role="alert" style={{...cardStyle,borderColor:'#dc2626',background:'#fef2f2',marginBottom:20}}>
+        <strong>Operational data is currently unavailable: {failedPanels.join(', ')}.</strong>
+        <div style={{marginTop:6}}>Do not treat empty panels as no orders. Restore the database/schema connection and refresh before taking fulfilment or inventory decisions.</div>
+      </div>}
       <nav style={{display:'flex',gap:10,flexWrap:'wrap',margin:'22px 0'}}>
         <a className="secondary" href="#dashboard">Dashboard</a>
         <a className="secondary" href="#orders">Orders</a>
