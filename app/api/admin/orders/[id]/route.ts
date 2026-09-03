@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import Stripe from 'stripe';
+import { createStripeClient } from '@/lib/stripeClient';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { validFulfilmentStatus, validFulfilmentTransition } from '@/lib/orderLifecycle';
 import { validateQyRoamSession } from '@/lib/qyRoamSession';
@@ -142,7 +142,7 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
       return NextResponse.json({ error: 'Manual orders do not have a Stripe fulfilment notification to retry' }, { status: 409 });
     }
 
-    const stripe = new Stripe(stripeKey, { apiVersion: '2024-06-20' });
+    const stripe = createStripeClient(stripeKey);
     const session = await stripe.checkout.sessions.retrieve(order.stripe_session_id);
     const validation = validateQyRoamSession(session);
     if (!validation.valid || session.payment_status !== 'paid') {

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import Stripe from 'stripe';
+import type Stripe from 'stripe';
+import { createStripeClient } from '../../../lib/stripeClient';
 import { ESIM_PROMO, getEsimPlan } from '../../../lib/esimPlans';
 import { validCheckoutRequestId } from '../../../lib/checkoutValidation';
 import { QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance } from '../../../lib/orderProvenance';
@@ -94,7 +95,7 @@ export async function POST(req: Request) {
       });
     }
 
-    const stripe = new Stripe(key, { apiVersion: '2024-06-20' });
+    const stripe = createStripeClient(key);
     const origin = siteOrigin(req);
     const amount = Math.max(50, Math.round(plan.qyPriceSgd * 100));
 

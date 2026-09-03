@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import Stripe from 'stripe';
+import type Stripe from 'stripe';
+import { createStripeClient } from '../../../lib/stripeClient';
 import { applyPromoCents, normalisePromoCode } from '../../../lib/promotions';
 import { getWifiPlan, WIFI_BENCHMARK } from '../../../lib/wifiPlans';
 import { getSupabaseAdmin } from '../../../lib/supabaseAdmin';
@@ -145,7 +146,7 @@ export async function POST(req: Request) {
   const minLeadDays=config.minDeliveryLeadDays, earliest=operationalIsoDateAfter(minLeadDays);
   if(start<earliest) return NextResponse.json({error:`Please book at least ${minLeadDays} day${minLeadDays===1?'':'s'} before departure so we can arrange delivery. Contact +65 8032 7183 for urgent trips.`},{status:400});
   const days=Math.floor((endDate.getTime()-startDate.getTime())/86400000)+1; if(days<1||days>90) return NextResponse.json({error:'Bookings must be between 1 and 90 days.'},{status:400});
-  const stripe=new Stripe(key,{apiVersion:'2024-06-20'});
+  const stripe=createStripeClient(key);
   const inventory=config.pocketWifiInventory;
   if(inventory<1) return NextResponse.json({error:'Pocket WiFi is sold out for these dates. Please choose different dates or contact +65 8032 7183.'},{status:409,headers:{'Cache-Control':'no-store'}});
   const rentalBeforePromo=Math.max(1000,Math.round(daily*days*100));

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
+import { createStripeClient } from '../../../lib/stripeClient';
 import crypto from 'crypto';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { sendSmtpMail } from '@/lib/smtp';
@@ -285,7 +286,7 @@ export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof
 
 export async function POST(req:Request){
   const key=process.env.STRIPE_SECRET_KEY,webhookSecret=process.env.STRIPE_WEBHOOK_SECRET; if(!key||!webhookSecret) return NextResponse.json({error:'Webhook configuration incomplete'},{status:503});
-  const stripe=new Stripe(key,{apiVersion:'2024-06-20'}); let event:Stripe.Event;
+  const stripe=createStripeClient(key); let event:Stripe.Event;
   let payload:Buffer;
   try { payload=await readStripeWebhookBody(req); }
   catch(error) {

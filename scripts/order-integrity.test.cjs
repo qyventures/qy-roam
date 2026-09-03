@@ -51,6 +51,7 @@ const webhookRoute = fs.readFileSync(require.resolve('../app/api/stripe-webhook/
 const successPage = fs.readFileSync(require.resolve('../app/success/page.tsx'), 'utf8');
 const metaPurchase = fs.readFileSync(require.resolve('../components/MetaPurchase.tsx'), 'utf8');
 const metaClient = fs.readFileSync(require.resolve('../lib/metaClient.ts'), 'utf8');
+const stripeClient = fs.readFileSync(require.resolve('../lib/stripeClient.ts'), 'utf8');
 const adminPage = fs.readFileSync(require.resolve('../app/admin/page.tsx'), 'utf8');
 const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
 
@@ -608,6 +609,17 @@ test('Stripe webhook bounds raw payload memory before signature verification', (
   assert.match(webhookRoute, /total > MAX_STRIPE_WEBHOOK_BODY_BYTES/);
   assert.match(webhookRoute, /Webhook payload too large/);
   assert.match(webhookRoute, /stripe\.webhooks\.constructEvent\(payload,req\.headers\.get\('stripe-signature'\)/);
+});
+
+test('Stripe network calls use a bounded shared production client', () => {
+  assert.match(stripeClient, /STRIPE_REQUEST_TIMEOUT_MS = 15_000/);
+  assert.match(stripeClient, /STRIPE_MAX_NETWORK_RETRIES = 1/);
+  assert.match(stripeClient, /timeout: STRIPE_REQUEST_TIMEOUT_MS/);
+  assert.match(stripeClient, /maxNetworkRetries: STRIPE_MAX_NETWORK_RETRIES/);
+  for (const route of [wifiCheckoutRoute, esimCheckoutRoute, availabilityRoute, webhookRoute, adminOrderRoute, successPage, bookingPage]) {
+    assert.match(route, /createStripeClient\(/);
+    assert.doesNotMatch(route, /new Stripe\(/);
+  }
 });
 
 test('expired authenticated Pocket WiFi sessions promptly release only their matching reservation', () => {

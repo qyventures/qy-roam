@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import Stripe from 'stripe';
+import { createStripeClient } from '@/lib/stripeClient';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { initialFulfilmentStatus } from '@/lib/orderLifecycle';
 import { validateQyRoamSession } from '@/lib/qyRoamSession';
@@ -47,7 +47,7 @@ export default async function BookingPage({ searchParams }: Props) {
   }
 
   try {
-    const stripe = new Stripe(key, { apiVersion: '2024-06-20' });
+    const stripe = createStripeClient(key);
     const session = await stripe.checkout.sessions.retrieve(sessionId);
     // Treat the customer-facing status page as the same trust boundary as the
     // success page and webhook. A source marker alone is not enough because a

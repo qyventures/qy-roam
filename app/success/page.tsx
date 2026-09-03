@@ -1,4 +1,4 @@
-import Stripe from 'stripe';
+import { createStripeClient } from '@/lib/stripeClient';
 import { validateQyRoamSession, type QyRoamProductType } from '@/lib/qyRoamSession';
 import MetaPurchase from '@/components/MetaPurchase';
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
@@ -25,7 +25,7 @@ export default async function SuccessPage({ searchParams }: Props) {
 
   if (sessionId && key) {
     try {
-      const stripe = new Stripe(key, { apiVersion: '2024-06-20' });
+      const stripe = createStripeClient(key);
       const session = await stripe.checkout.sessions.retrieve(sessionId);
       const validation = validateQyRoamSession(session);
       if (!validation.valid) throw new Error(`Invalid QY Roam Checkout Session: ${validation.reason}`);

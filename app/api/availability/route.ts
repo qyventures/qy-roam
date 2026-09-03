@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Stripe from 'stripe';
+import type Stripe from 'stripe';
+import { createStripeClient } from '../../../lib/stripeClient';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { parseExactIsoDate } from '@/lib/checkoutValidation';
 import { operationalConfig } from '@/lib/operationalConfig';
@@ -112,7 +113,7 @@ export async function GET(req: NextRequest) {
   const from = start.toISOString().slice(0, 10);
   const to = end.toISOString().slice(0, 10);
   try {
-    const stripeHolds = await activeStripeHolds(new Stripe(stripeKey, { apiVersion: '2024-06-20' }), from, to);
+    const stripeHolds = await activeStripeHolds(createStripeClient(stripeKey), from, to);
     const booked = await committedInventory(from, to, stripeHolds.requestIds);
     const committed = booked + stripeHolds.holds;
     const remaining = Math.max(0, inventory - committed);
