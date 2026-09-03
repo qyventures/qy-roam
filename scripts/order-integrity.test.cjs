@@ -517,6 +517,14 @@ test('admin order visibility fails loudly instead of presenting a database failu
   assert.match(adminPage, /Do not treat empty panels as no orders/);
 });
 
+test('admin order visibility identifies the specific Meta CAPI delivery needing recovery', () => {
+  assert.match(adminPage, /const metaDeliveryBySession = new Map/);
+  assert.match(adminPage, /const metaDelivery:any = metaDeliveryBySession\.get\(o\.stripe_session_id\)/);
+  assert.match(adminPage, /Meta CAPI/);
+  assert.match(adminPage, /metaDelivery\?\.last_error/);
+  assert.match(adminPage, /Not requested \/ not recorded/);
+});
+
 test('admin can safely resume failed paid-order notifications', () => {
   assert.match(adminOrderRoute, /export async function POST/);
   assert.match(adminOrderRoute, /validateQyRoamSession\(session\)/);

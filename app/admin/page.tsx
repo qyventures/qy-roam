@@ -71,6 +71,7 @@ export default async function AdminPage() {
   const notificationBySession = new Map(notifications.map((n:any)=>[n.stripe_session_id,n]));
   const pendingNotifications = notifications.filter((n:any)=>n.status !== 'sent');
   const metaDeliveries: any[] = metaDeliveryResult.data ?? [];
+  const metaDeliveryBySession = new Map(metaDeliveries.map((delivery:any)=>[delivery.stripe_session_id,delivery]));
   const pendingMetaDeliveries = metaDeliveries.filter((delivery:any)=>delivery.status !== 'sent');
   const failedPanels = [
     result.error && 'orders',
@@ -160,12 +161,13 @@ export default async function AdminPage() {
     <section id="orders" style={{marginTop:34}}>
       <h2>Orders</h2>
       {supabase && orders.length === 0 && <p>No orders yet.</p>}
-      {orders.length > 0 && <div style={{overflowX:'auto',...cardStyle,padding:0}}><table style={{width:'100%',borderCollapse:'collapse',minWidth:920}}>
-        <thead><tr style={{background:'#f8fafc'}}><th align="left" style={{padding:'12px 10px'}}>Order</th><th align="left">Customer</th><th align="left">Product / trip</th><th align="left">Payment</th><th align="left">Amount</th><th align="left">Ops email</th><th align="left">Fulfilment</th></tr></thead>
+      {orders.length > 0 && <div style={{overflowX:'auto',...cardStyle,padding:0}}><table style={{width:'100%',borderCollapse:'collapse',minWidth:1040}}>
+        <thead><tr style={{background:'#f8fafc'}}><th align="left" style={{padding:'12px 10px'}}>Order</th><th align="left">Customer</th><th align="left">Product / trip</th><th align="left">Payment</th><th align="left">Amount</th><th align="left">Ops email</th><th align="left">Meta CAPI</th><th align="left">Fulfilment</th></tr></thead>
         <tbody>{orders.map((o:any)=>{
           const flag = tripFlag(o);
           const product = isEsim(o) ? 'eSIM' : 'Pocket WiFi';
           const notification:any = notificationBySession.get(o.stripe_session_id);
+          const metaDelivery:any = metaDeliveryBySession.get(o.stripe_session_id);
           return <tr key={o.id} style={{borderTop:'1px solid #e5e8ed',verticalAlign:'top'}}>
             <td style={{padding:'14px 10px'}}><strong>{String(o.stripe_session_id || o.id).slice(-10)}</strong><br/><small>{o.created_at ? new Date(o.created_at).toLocaleDateString('en-SG') : ''}</small></td>
             <td style={{padding:'14px 8px'}}>{o.customer_name || '-'}<br/><small>{o.phone || '-'}</small>{o.email && <><br/><small>{o.email}</small></>}</td>
@@ -173,6 +175,7 @@ export default async function AdminPage() {
             <td style={{padding:'14px 8px'}}>{o.payment_status || '-'}</td>
             <td style={{padding:'14px 8px'}}><strong>{money(o.amount_sgd)}</strong></td>
             <td style={{padding:'14px 8px'}}>{notification?.status === 'sent' ? '✓ Sent' : notification ? `⚠ ${notification.status}` : o.payment_status === 'paid' ? '⚠ Not recorded' : '-'}{notification?.last_error && <><br/><small>{String(notification.last_error).slice(0,120)}</small></>}</td>
+            <td style={{padding:'14px 8px'}}>{metaDelivery?.status === 'sent' ? '✓ Sent' : metaDelivery ? `⚠ ${metaDelivery.status}` : o.payment_status === 'paid' ? 'Not requested / not recorded' : '-'}{metaDelivery?.last_error && <><br/><small>{String(metaDelivery.last_error).slice(0,120)}</small></>}</td>
             <td style={{padding:'14px 8px'}}><AdminOrderActions id={o.id} initialStatus={o.fulfilment_status} productType={o.product_type} courierTracking={o.courier_tracking} returnTracking={o.return_tracking} inventoryItemId={o.inventory_item_id} inventoryItems={inventoryItems}/></td>
           </tr>;
         })}</tbody>
