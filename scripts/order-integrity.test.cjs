@@ -473,6 +473,12 @@ test('Pocket WiFi dispatch and return atomically reconcile the assigned stock it
   assert.match(adminOrderActions, /Select the Pocket WiFi inventory item being dispatched/);
 });
 
+test('Pocket WiFi receipt cannot create stock unless the outbound hand-off was recorded', () => {
+  assert.match(schema, /Pocket WiFi order cannot be returned without a recorded dispatch/);
+  assert.match(schema, /if v_order\.dispatched_at is null then raise exception 'Pocket WiFi order cannot be returned without a recorded dispatch'/);
+  assert.match(adminOrderRoute, /cannot be returned without a recorded dispatch/);
+});
+
 test('admin actions advance their transition baseline after each save', () => {
   assert.match(adminOrderActions, /allowedFulfilmentStatuses\(productType, currentStatus\)/);
   assert.match(adminOrderActions, /setCurrentStatus\(result\.fulfilment_status\)/);

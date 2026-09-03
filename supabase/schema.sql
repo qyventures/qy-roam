@@ -414,6 +414,13 @@ begin
     values (v_item_id, 'dispatch', -1, left(v_order.stripe_session_id, 120), nullif(left(trim(coalesce(p_courier_tracking, '')), 1000), ''));
   elsif p_next_status = 'returned' and v_order.returned_at is null then
     if nullif(trim(coalesce(p_return_tracking, '')), '') is null then raise exception 'return tracking is required before receipt'; end if;
+    -- Receiving a device increases saleable stock. Never infer that the
+    -- corresponding dispatch happened merely from an editable status label:
+    -- legacy/manual data can carry `dispatched` (or a later status) without a
+    -- recorded hand-off. Releasing stock in that state would inflate inventory
+    -- and allow an overlapping rental to be sold. Resolve that exception by
+    -- auditing the physical hand-off first.
+    if v_order.dispatched_at is null then raise exception 'Pocket WiFi order cannot be returned without a recorded dispatch'; end if;
     v_item_id := v_order.inventory_item_id;
     if v_item_id is null then raise exception 'dispatched Pocket WiFi order has no inventory item to return'; end if;
     select * into v_item from public.inventory_items where id = v_item_id and product_type = 'pocket_wifi' for update;

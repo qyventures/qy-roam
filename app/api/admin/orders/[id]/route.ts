@@ -20,7 +20,7 @@ function transitionErrorStatus(message: string) {
   // Expected operational conflicts are actionable by staff and should not be
   // reported as a server failure. The database remains the authority because
   // another operator can change stock after this request has loaded the order.
-  return /changed since it was loaded|out of stock|not available for dispatch|inventory item not found|required before dispatch|required before receipt|has no inventory item|invalid Pocket WiFi fulfilment transition/i.test(message) ? 409 : 500;
+  return /changed since it was loaded|out of stock|not available for dispatch|inventory item not found|required before dispatch|required before receipt|cannot be returned without a recorded dispatch|has no inventory item|invalid Pocket WiFi fulfilment transition/i.test(message) ? 409 : 500;
 }
 
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
