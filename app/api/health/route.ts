@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getAdminCredentials, getMetaCapiToken } from '@/lib/runtimeConfig';
-import { hasRequiredOperationsSchema, hasRequiredPaymentSchema } from '@/lib/productionReadiness';
+import { hasRequiredFulfilmentEmailConfig, hasRequiredOperationsSchema, hasRequiredPaymentSchema } from '@/lib/productionReadiness';
 import { operationalConfig } from '@/lib/operationalConfig';
 
 export const dynamic = 'force-dynamic';
@@ -23,17 +23,6 @@ function hasPrefix(value: string | undefined, prefixes: string[]) {
 function isStrongAdminPassword(value?: string) {
   if (!value || value.length < 16) return false;
   return /[a-z]/.test(value) && /[A-Z]/.test(value) && /\d/.test(value) && /[^A-Za-z0-9]/.test(value);
-}
-
-function isSmtpConfigured() {
-  const port = Number(process.env.SMTP_PORT || '587');
-  const recipient = process.env.ORDER_FULFILMENT_EMAIL || 'qyventures@gmail.com';
-  return Boolean(
-    process.env.SMTP_HOST &&
-    Number.isInteger(port) && port > 0 && port <= 65535 &&
-    process.env.SMTP_USER && process.env.SMTP_PASS && process.env.SMTP_FROM &&
-    recipient.includes('@')
-  );
 }
 
 function isMetaPixelConfigured() {
@@ -98,7 +87,7 @@ export async function GET(req: Request) {
     inventory: Boolean(config && config.pocketWifiInventory > 0),
     deliveryLeadDays: Boolean(config),
     courierFee: Boolean(config),
-    fulfilmentEmail: isSmtpConfigured(),
+    fulfilmentEmail: hasRequiredFulfilmentEmailConfig(),
   };
   const paidAcquisitionChecks = {
     metaPixel: isMetaPixelConfigured(),

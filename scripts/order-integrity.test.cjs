@@ -285,6 +285,14 @@ test('eSIM checkout fails closed when its durable post-payment order boundary is
   assert.match(productionReadiness, /export async function hasRequiredEsimOrderSchema\(\)/);
 });
 
+test('checkout never exposes payment when human fulfilment email is not configured', () => {
+  assert.match(esimCheckoutRoute, /hasRequiredFulfilmentEmailConfig/);
+  assert.match(esimCheckoutRoute, /if \(!hasRequiredFulfilmentEmailConfig\(\)\)/);
+  assert.match(wifiCheckoutRoute, /if\(!hasRequiredFulfilmentEmailConfig\(\)\)/);
+  assert.match(productionReadiness, /export function hasRequiredFulfilmentEmailConfig\(\)/);
+  assert.match(productionReadiness, /ORDER_FULFILMENT_EMAIL \|\| process\.env\.FULFILMENT_TO/);
+});
+
 test('payment-readiness checks coalesce healthy checkout probes without caching failures', () => {
   assert.match(productionReadiness, /const READINESS_CACHE_MS = 15_000/);
   assert.match(productionReadiness, /let paymentSchemaCheckInFlight: Promise<boolean> \| null = null/);

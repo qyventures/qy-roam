@@ -58,6 +58,35 @@ const REQUIRED_OPERATIONS_SCHEMA = [
   { table: 'sales_daily_summary', columns: 'sales_date,product_type,paid_orders,revenue_sgd' },
 ] as const;
 
+function isSafeMailbox(value: string | undefined) {
+  // These values become SMTP envelope/header inputs. Besides catching an
+  // incomplete deployment, reject control characters so a malformed
+  // environment value cannot turn a paid-order notification into a malformed
+  // message.
+  return Boolean(value && /^[^\s@\r\n]+@[^\s@\r\n]+\.[^\s@\r\n]+$/.test(value));
+}
+
+/**
+ * A Checkout Session must not be exposed unless paid orders can reach the
+ * human fulfilment queue. The webhook intentionally retries failed delivery,
+ * but accepting payment with no configured transport would leave every order
+ * needing manual database recovery.
+ */
+export function hasRequiredFulfilmentEmailConfig() {
+  const port = Number(process.env.SMTP_PORT || '587');
+  const host = process.env.SMTP_HOST?.trim();
+  const user = process.env.SMTP_USER?.trim();
+  const pass = process.env.SMTP_PASS;
+  const from = (process.env.SMTP_FROM || user || '').trim();
+  const recipient = (process.env.ORDER_FULFILMENT_EMAIL || process.env.FULFILMENT_TO || 'enquiries@sgsimshop.com').trim();
+  return Boolean(
+    host && !/[\r\n]/.test(host) &&
+    Number.isInteger(port) && port > 0 && port <= 65535 &&
+    user && !/[\r\n]/.test(user) && pass &&
+    isSafeMailbox(from) && isSafeMailbox(recipient),
+  );
+}
+
 /**
  * Verify the database contract needed after a customer pays. Checking only that
  * credentials exist is insufficient: a valid Supabase project with an older

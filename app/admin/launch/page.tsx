@@ -1,5 +1,5 @@
 import { getMetaCapiToken } from '@/lib/runtimeConfig';
-import { hasRequiredOperationsSchema, hasRequiredPaymentSchema } from '@/lib/productionReadiness';
+import { hasRequiredFulfilmentEmailConfig, hasRequiredOperationsSchema, hasRequiredPaymentSchema } from '@/lib/productionReadiness';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,7 +10,7 @@ export default async function LaunchPage(){
  const [paymentDbOk, operationsDbOk]=await Promise.all([hasRequiredPaymentSchema(),hasRequiredOperationsSchema()]);
  const stripe=Boolean(process.env.STRIPE_SECRET_KEY);
  const webhook=Boolean(process.env.STRIPE_WEBHOOK_SECRET);
- const smtp=Boolean(process.env.SMTP_HOST&&process.env.SMTP_USER&&process.env.SMTP_PASS);
+ const smtp=hasRequiredFulfilmentEmailConfig();
  const pixel=Boolean(process.env.NEXT_PUBLIC_META_PIXEL_ID);
  const capi=Boolean(getMetaCapiToken());
  const site=true;
