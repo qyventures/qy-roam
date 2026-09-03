@@ -16,6 +16,13 @@ function trackingValue(value: unknown, existing: string | null) {
   return value.trim().slice(0, 200);
 }
 
+function transitionErrorStatus(message: string) {
+  // Expected operational conflicts are actionable by staff and should not be
+  // reported as a server failure. The database remains the authority because
+  // another operator can change stock after this request has loaded the order.
+  return /changed since it was loaded|out of stock|not available for dispatch|inventory item not found|required before dispatch|required before receipt|has no inventory item|invalid Pocket WiFi fulfilment transition/i.test(message) ? 409 : 500;
+}
+
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
   const supabase = getSupabaseAdmin();
   if (!supabase) return NextResponse.json({ error: 'Order database not configured' }, { status: 503 });
@@ -70,8 +77,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       p_inventory_item_id: selectedInventoryItemId,
     });
     if (error) {
-      const conflict = /changed since it was loaded/i.test(error.message || '');
-      return NextResponse.json({ error: conflict ? 'Order changed since it was loaded. Refresh before updating it.' : error.message || 'Unable to update order' }, { status: conflict ? 409 : 500 });
+      const message = error.message || 'Unable to update order';
+      const conflict = /changed since it was loaded/i.test(message);
+      return NextResponse.json({ error: conflict ? 'Order changed since it was loaded. Refresh before updating it.' : message }, { status: transitionErrorStatus(message) });
     }
     const order = Array.isArray(data) ? data[0] : data;
     if (!order?.id) return NextResponse.json({ error: 'Unable to update order' }, { status: 500 });

@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { allowedFulfilmentStatuses } from '@/lib/orderLifecycle';
 
-export default function AdminOrderActions({ id, initialStatus, productType = 'pocket_wifi', courierTracking = '', returnTracking = '', inventoryItemId = null, inventoryItems = [] }: { id: number; initialStatus: string; productType?: string | null; courierTracking?: string | null; returnTracking?: string | null; inventoryItemId?: number | null; inventoryItems?: { id: number; name: string; sku: string; quantity_on_hand: number }[] }) {
+export default function AdminOrderActions({ id, initialStatus, productType = 'pocket_wifi', courierTracking = '', returnTracking = '', inventoryItemId = null, inventoryItems = [] }: { id: number; initialStatus: string; productType?: string | null; courierTracking?: string | null; returnTracking?: string | null; inventoryItemId?: number | null; inventoryItems?: { id: number; name: string; sku: string; quantity_on_hand: number; status: string }[] }) {
   const isEsim = productType === 'esim';
   const [currentStatus, setCurrentStatus] = useState(initialStatus);
   const [status, setStatus] = useState(initialStatus);
@@ -62,7 +62,10 @@ export default function AdminOrderActions({ id, initialStatus, productType = 'po
       <input aria-label="Return tracking" placeholder="Return tracking / receipt reference" value={returned} onChange={e=>setReturned(e.target.value)} />
       <select aria-label="Pocket WiFi inventory item" value={inventoryItem} onChange={e=>setInventoryItem(e.target.value)} disabled={Boolean(inventoryItemId)}>
         <option value="">Select device / stock item</option>
-        {inventoryItems.map(item => <option key={item.id} value={item.id} disabled={item.quantity_on_hand < 1 && item.id !== inventoryItemId}>{item.sku} · {item.name} ({item.quantity_on_hand} available)</option>)}
+        {inventoryItems.map(item => {
+          const dispatchable = item.quantity_on_hand > 0 && item.status === 'available';
+          return <option key={item.id} value={item.id} disabled={!dispatchable && item.id !== inventoryItemId}>{item.sku} · {item.name} ({item.quantity_on_hand} on hand · {item.status})</option>;
+        })}
       </select>
     </>}
     {isEsim && <small>Mark fulfilled after the QR code / activation instructions have been sent to the customer.</small>}

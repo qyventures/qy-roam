@@ -392,9 +392,22 @@ begin
     if nullif(trim(coalesce(p_courier_tracking, '')), '') is null then raise exception 'courier tracking is required before dispatch'; end if;
     v_item_id := coalesce(p_inventory_item_id, v_order.inventory_item_id);
     if v_item_id is null then raise exception 'a Pocket WiFi inventory item is required before dispatch'; end if;
+    -- Quantity alone is not sufficient evidence that a router may leave the
+    -- warehouse. An operator can deliberately quarantine a stock record for
+    -- damage, cleaning or maintenance while it still has a positive balance.
+    -- Enforce its operational availability inside this transaction, rather
+    -- than trusting the admin UI's filtered device list.
     select * into v_item from public.inventory_items
-    where id = v_item_id and product_type = 'pocket_wifi' for update;
-    if not found then raise exception 'Pocket WiFi inventory item not found'; end if;
+    where id = v_item_id
+      and product_type = 'pocket_wifi'
+      and status = 'available'
+    for update;
+    if not found then
+      if exists (select 1 from public.inventory_items where id = v_item_id and product_type = 'pocket_wifi') then
+        raise exception 'selected Pocket WiFi inventory item is not available for dispatch';
+      end if;
+      raise exception 'Pocket WiFi inventory item not found';
+    end if;
     if v_item.quantity_on_hand < 1 then raise exception 'selected Pocket WiFi inventory item is out of stock'; end if;
     update public.inventory_items set quantity_on_hand = quantity_on_hand - 1, updated_at = v_now where id = v_item_id;
     insert into public.inventory_movements (inventory_item_id, movement_type, quantity, reference, notes)

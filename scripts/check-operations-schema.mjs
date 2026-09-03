@@ -8,6 +8,8 @@ const requiredContracts = [
   'create table if not exists public.inventory_movements',
   'create or replace function public.qy_adjust_inventory',
   'create or replace function public.qy_transition_pocket_wifi_order',
+  "and status = 'available'",
+  'selected Pocket WiFi inventory item is not available for dispatch',
   'create or replace function public.qy_create_manual_pocket_wifi_order',
   'create table if not exists public.customers',
   'create table if not exists public.crm_activities',

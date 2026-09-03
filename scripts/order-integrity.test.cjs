@@ -50,6 +50,8 @@ const webhookRoute = fs.readFileSync(require.resolve('../app/api/stripe-webhook/
 const successPage = fs.readFileSync(require.resolve('../app/success/page.tsx'), 'utf8');
 const metaPurchase = fs.readFileSync(require.resolve('../components/MetaPurchase.tsx'), 'utf8');
 const metaClient = fs.readFileSync(require.resolve('../lib/metaClient.ts'), 'utf8');
+const adminPage = fs.readFileSync(require.resolve('../app/admin/page.tsx'), 'utf8');
+const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
 
 const requestId = 'checkout_request_123456';
 
@@ -317,6 +319,14 @@ test('Pocket WiFi payment URLs require a durable matching reservation link', () 
   assert.match(wifiCheckoutRoute, /if\(!await linkReservationToSession\(supabase,requestId,existing\.id\)\)/);
   assert.match(wifiCheckoutRoute, /if\(!await linkReservationToSession\(supabase,requestId,session\.id\)\)/);
   assert.match(wifiCheckoutRoute, /Live reservation confirmation is temporarily unavailable/);
+});
+
+test('Pocket WiFi dispatch requires an operationally available inventory item at the database boundary', () => {
+  assert.match(schema, /and status = 'available'/);
+  assert.match(schema, /selected Pocket WiFi inventory item is not available for dispatch/);
+  assert.match(adminOrderRoute, /not available for dispatch/);
+  assert.match(adminPage, /quantity_on_hand,status/);
+  assert.match(adminOrderActions, /item\.status === 'available'/);
 });
 
 test('operational pricing and inventory configuration is strict and fail-closed', () => {

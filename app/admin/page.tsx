@@ -57,7 +57,7 @@ export default async function AdminPage() {
     : { data: [] as any[] };
   const orders: any[] = result.data ?? [];
   const inventoryResult = supabase
-    ? await supabase.from('inventory_items').select('id,sku,name,quantity_on_hand').eq('product_type', 'pocket_wifi').order('name')
+    ? await supabase.from('inventory_items').select('id,sku,name,quantity_on_hand,status').eq('product_type', 'pocket_wifi').order('name')
     : { data: [] as any[] };
   const inventoryItems: any[] = inventoryResult.data ?? [];
   const notificationResult = supabase
