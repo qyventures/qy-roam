@@ -28,6 +28,7 @@ const { operationalIsoDate, operationalIsoDateAfter } = require('../lib/operatio
 const { WIFI_BENCHMARK, WIFI_PLANS } = require('../lib/wifiPlans.ts');
 const { allowedFulfilmentStatuses, validFulfilmentTransition } = require('../lib/orderLifecycle.ts');
 const { operationalConfig } = require('../lib/operationalConfig.ts');
+const { validStripeCheckoutSessionId } = require('../lib/stripeSessionId.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -266,6 +267,16 @@ test('checkout request ids use the same production boundary everywhere', () => {
   for (const value of ['short', 'contains spaces 123456', 'bad/slashes/123456', 'x'.repeat(81)]) {
     assert.equal(validCheckoutRequestId(value), null);
   }
+});
+
+test('customer-facing Stripe session lookups accept only one bounded Checkout Session id', () => {
+  assert.equal(validStripeCheckoutSessionId('cs_test_abc123'), 'cs_test_abc123');
+  assert.equal(validStripeCheckoutSessionId(' cs_live_ABC123 '), 'cs_live_ABC123');
+  assert.equal(validStripeCheckoutSessionId(['cs_test_abc123', 'cs_test_def456']), null);
+  assert.equal(validStripeCheckoutSessionId('cs_test_'), null);
+  assert.equal(validStripeCheckoutSessionId(`cs_test_${'a'.repeat(300)}`), null);
+  assert.match(bookingPage, /validStripeCheckoutSessionId\(searchParams\?\.session_id\)/);
+  assert.match(successPage, /validStripeCheckoutSessionId\(searchParams\?\.session_id\)/);
 });
 
 test('eSIM checkout never redirects a reused idempotency key to another plan', () => {

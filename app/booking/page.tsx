@@ -3,6 +3,7 @@ import Stripe from 'stripe';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { initialFulfilmentStatus } from '@/lib/orderLifecycle';
 import { validateQyRoamSession } from '@/lib/qyRoamSession';
+import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,7 +13,7 @@ export const metadata: Metadata = {
 };
 
 type Props = {
-  searchParams?: { session_id?: string };
+  searchParams?: { session_id?: string | string[] };
 };
 
 const statusLabels: Record<string, string> = {
@@ -30,10 +31,10 @@ const statusLabels: Record<string, string> = {
 };
 
 export default async function BookingPage({ searchParams }: Props) {
-  const sessionId = searchParams?.session_id?.trim();
+  const sessionId = validStripeCheckoutSessionId(searchParams?.session_id);
   const key = process.env.STRIPE_SECRET_KEY;
 
-  if (!sessionId || !sessionId.startsWith('cs_') || !key) {
+  if (!sessionId || !key) {
     return (
       <main className="wrap section legal">
         <span className="eyebrow">Order status</span>

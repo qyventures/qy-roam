@@ -1,15 +1,16 @@
 import Stripe from 'stripe';
 import { validateQyRoamSession, type QyRoamProductType } from '@/lib/qyRoamSession';
 import MetaPurchase from '@/components/MetaPurchase';
+import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
 
 export const dynamic = 'force-dynamic';
 
 type Props = {
-  searchParams?: { session_id?: string };
+  searchParams?: { session_id?: string | string[] };
 };
 
 export default async function SuccessPage({ searchParams }: Props) {
-  const sessionId = searchParams?.session_id;
+  const sessionId = validStripeCheckoutSessionId(searchParams?.session_id);
   const key = process.env.STRIPE_SECRET_KEY;
 
   let paid = false;
@@ -22,7 +23,7 @@ export default async function SuccessPage({ searchParams }: Props) {
   let planId = '';
   let measurementConsent = false;
 
-  if (sessionId && key && sessionId.startsWith('cs_')) {
+  if (sessionId && key) {
     try {
       const stripe = new Stripe(key, { apiVersion: '2024-06-20' });
       const session = await stripe.checkout.sessions.retrieve(sessionId);
