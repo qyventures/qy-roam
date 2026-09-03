@@ -39,6 +39,7 @@ export default function EsimPage() {
       });
       const data = await res.json();
       if (data.url) window.location.href = data.url;
+      else if (data.completed && typeof data.sessionId === 'string') window.location.href = `/success?session_id=${encodeURIComponent(data.sessionId)}`;
       else {
         // Do not rotate an idempotency key on a transient failure, since Stripe
         // may already have created the session. An explicit expiry or a

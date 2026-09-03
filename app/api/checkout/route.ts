@@ -203,6 +203,15 @@ export async function POST(req: Request) {
     // and links this existing reservation before its URL is returned.
     throw error;
   }
+  // The open-session lookup above intentionally sees only active Stripe
+  // holds. An idempotency key can also replay a completed or expired Session,
+  // so validate the response from the create call itself before linking the
+  // newly-created reservation or returning any checkout state to the browser.
+  if(!matchesRequestedPocketWifi(session,requestId,requested)){
+    const released=await supabase.from('checkout_reservations').delete().eq('checkout_request_id',requestId).is('stripe_session_id',null);
+    if(released.error) throw released.error;
+    return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.',checkoutRequestConflict:true},{status:409,headers:{'Cache-Control':'no-store'}});
+  }
   // The id-specific provenance is written before the checkout URL is exposed.
   // Retrying the same idempotency key also repairs a session if a process died
   // between Stripe creation and this metadata update.
@@ -218,15 +227,39 @@ export async function POST(req: Request) {
       throw error;
     }
   }
+  // A completed paid Session may be returned when a browser retries after its
+  // original response was lost. Do not send the customer back to Stripe or
+  // hold capacity unnecessarily after the webhook has already persisted the
+  // order. If persistence is still catching up, link the reservation first so
+  // the terminal webhook can release it once it records the paid booking.
+  if(session.status==='complete'&&session.payment_status==='paid'){
+    const order=await supabase.from('orders').select('payment_status').eq('stripe_session_id',session.id).maybeSingle();
+    if(order.error) throw order.error;
+    if(order.data?.payment_status==='paid'){
+      const released=await supabase.from('checkout_reservations').delete().eq('checkout_request_id',requestId).is('stripe_session_id',null);
+      if(released.error) throw released.error;
+    }else if(!await linkReservationToSession(supabase,requestId,session.id)){
+      return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
+    }
+    return NextResponse.json({completed:true,sessionId:session.id},{headers:{'Cache-Control':'no-store'}});
+  }
   // Stripe retains idempotency keys after a Checkout Session expires. A client
   // retry using that key can therefore receive the old session, whose URL is
   // null. Do not link its new inventory reservation or report a false success.
   // The browser receives an explicit recoverable signal and creates a fresh
   // checkout request id for the next attempt.
-  if(!session.url){
+  if(session.status==='expired'){
     const released=await supabase.from('checkout_reservations').delete().eq('checkout_request_id',requestId).is('stripe_session_id',null);
     if(released.error) console.error('checkout_expired_reservation_release_error',released.error);
     return NextResponse.json({error:'This secure checkout session has expired. Please try again to start a new one.',checkoutExpired:true},{status:409,headers:{'Cache-Control':'no-store'}});
+  }
+  // A completed asynchronous payment may not yet be paid. Preserve its
+  // reservation and let the signed terminal webhook decide when stock can be
+  // released, rather than turning a payment-in-progress retry into an
+  // uncounted router booking.
+  if(session.status!=='open'||!session.url){
+    if(!await linkReservationToSession(supabase,requestId,session.id)) return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
+    return NextResponse.json({error:'Your payment is still being confirmed. Please wait for confirmation before trying again.',paymentPending:true},{status:409,headers:{'Cache-Control':'no-store'}});
   }
   if(!await linkReservationToSession(supabase,requestId,session.id)){
     // Fail closed: a payment URL without a durable session-to-reservation

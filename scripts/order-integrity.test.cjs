@@ -341,6 +341,19 @@ test('Pocket WiFi checkout retries bind the complete server-priced booking', () 
   assert.match(wifiCheckoutRoute, /checkout_amount_cents:String\(rentalAmount\+courierFee\)/);
 });
 
+test('idempotent checkout replays recover paid orders without a second payment attempt', () => {
+  assert.match(wifiCheckoutRoute, /if\(!matchesRequestedPocketWifi\(session,requestId,requested\)\)/);
+  assert.match(wifiCheckoutRoute, /session\.status==='complete'&&session\.payment_status==='paid'/);
+  assert.match(wifiCheckoutRoute, /\{completed:true,sessionId:session\.id\}/);
+  assert.match(wifiCheckoutRoute, /\.eq\('stripe_session_id',session\.id\)\.maybeSingle\(\)/);
+  assert.match(wifiCheckoutRoute, /paymentPending:true/);
+  assert.match(esimCheckoutRoute, /session\.status === 'complete' && session\.payment_status === 'paid'/);
+  assert.match(esimCheckoutRoute, /\{ completed: true, sessionId: session\.id \}/);
+  assert.match(esimCheckoutRoute, /paymentPending: true/);
+  assert.match(homePage, /data\.completed && typeof data\.sessionId === 'string'/);
+  assert.match(esimPage, /data\.completed && typeof data\.sessionId === 'string'/);
+});
+
 test('Pocket WiFi payment URLs require a durable matching reservation link', () => {
   assert.match(wifiCheckoutRoute, /async function linkReservationToSession/);
   assert.match(wifiCheckoutRoute, /stripe_session_id\.is\.null,stripe_session_id\.eq\.\$\{sessionId\}/);

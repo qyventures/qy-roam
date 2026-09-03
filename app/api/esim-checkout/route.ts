@@ -153,11 +153,23 @@ export async function POST(req: Request) {
       await stripe.checkout.sessions.update(session.id, { metadata: { [QY_ROAM_PROVENANCE_METADATA_KEY]: provenance } });
     }
 
+    // A browser can retry after Stripe accepted payment but before it received
+    // the original response. The durable idempotency key must lead to the
+    // existing order confirmation, never a second attempted purchase.
+    if (session.status === 'complete' && session.payment_status === 'paid') {
+      return NextResponse.json({ completed: true, sessionId: session.id }, { headers: { 'Cache-Control': 'no-store' } });
+    }
     // Stripe can return the prior response for this idempotency key after its
     // Checkout Session has expired. That response has no usable URL, so make
     // the recovery path explicit instead of returning a misleading success.
-    if (!session.url) {
+    if (session.status === 'expired') {
       return NextResponse.json({ error: 'This secure checkout session has expired. Please try again to start a new one.', checkoutExpired: true }, {
+        status: 409,
+        headers: { 'Cache-Control': 'no-store' }
+      });
+    }
+    if (session.status !== 'open' || !session.url) {
+      return NextResponse.json({ error: 'Your payment is still being confirmed. Please wait for confirmation before trying again.', paymentPending: true }, {
         status: 409,
         headers: { 'Cache-Control': 'no-store' }
       });

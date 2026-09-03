@@ -96,6 +96,7 @@ export default function Home() {
       const res = await fetch('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ country, start, end, promoCode, measurementConsent, checkoutRequestId: checkoutAttempt.current.requestId }) });
       const data = await res.json();
       if (data.url) window.location.href = data.url;
+      else if (data.completed && typeof data.sessionId === 'string') window.location.href = `/success?session_id=${encodeURIComponent(data.sessionId)}`;
       else {
         // Keep the idempotency key after ordinary failures: the server may have
         // created a session before a network response was lost. Rotate it only
