@@ -314,6 +314,14 @@ test('checkout never exposes payment when human fulfilment email is not configur
   assert.match(productionReadiness, /ORDER_FULFILMENT_EMAIL \|\| process\.env\.FULFILMENT_TO/);
 });
 
+test('fulfilment recipients are explicitly configured and never fall back to a historical mailbox', () => {
+  assert.match(productionReadiness, /ORDER_FULFILMENT_EMAIL \|\| process\.env\.FULFILMENT_TO \|\| ''/);
+  assert.match(webhookRoute, /to=process\.env\.ORDER_FULFILMENT_EMAIL\|\|process\.env\.FULFILMENT_TO/);
+  assert.match(webhookRoute, /if\(!host\|\|!user\|\|!pass\|\|!from\|\|!to\)/);
+  assert.doesNotMatch(productionReadiness, /enquiries@sgsimshop\.com/);
+  assert.doesNotMatch(webhookRoute, /enquiries@sgsimshop\.com/);
+});
+
 test('payment-readiness checks coalesce healthy checkout probes without caching failures', () => {
   assert.match(productionReadiness, /const READINESS_CACHE_MS = 15_000/);
   assert.match(productionReadiness, /let paymentSchemaCheckInFlight: Promise<boolean> \| null = null/);

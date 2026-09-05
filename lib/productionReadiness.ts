@@ -91,7 +91,10 @@ export function hasRequiredFulfilmentEmailConfig() {
   const user = process.env.SMTP_USER?.trim();
   const pass = process.env.SMTP_PASS;
   const from = (process.env.SMTP_FROM || user || '').trim();
-  const recipient = (process.env.ORDER_FULFILMENT_EMAIL || process.env.FULFILMENT_TO || 'enquiries@sgsimshop.com').trim();
+  // Fulfilment contains paid-order PII and must always have an explicitly
+  // configured destination. A historical fallback mailbox can silently route
+  // customer details to the wrong operations team on a fresh deployment.
+  const recipient = (process.env.ORDER_FULFILMENT_EMAIL || process.env.FULFILMENT_TO || '').trim();
   return Boolean(
     host && !/[\r\n]/.test(host) &&
     Number.isInteger(port) && port > 0 && port <= 65535 &&
