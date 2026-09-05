@@ -18,6 +18,32 @@ type SmtpOptions = {
   timeoutMs?: number;
 };
 
+// Fulfilment delivery is retried independently from checkout, including for
+// sessions created before a deployment changes its environment validation.
+// Keep the transport boundary defensive as well: these values are interpolated
+// into SMTP envelope commands and message headers, so trimming alone is not a
+// sufficient safeguard against malformed configuration or header injection.
+export function isSafeSmtpMailbox(value: string | undefined) {
+  return Boolean(value && value.length <= 254 && /^[^\s@\r\n]+@[^\s@\r\n]+\.[^\s@\r\n]+$/.test(value));
+}
+
+function normalizedMailbox(value: string, field: 'from' | 'to') {
+  const mailbox = value.trim();
+  if (!isSafeSmtpMailbox(mailbox)) throw new Error(`Invalid SMTP ${field} mailbox`);
+  return mailbox;
+}
+
+function safeSmtpHost(value: string) {
+  const host = value.trim();
+  if (!host || host.length > 253 || /[\s\r\n]/.test(host)) throw new Error('Invalid SMTP host');
+  return host;
+}
+
+function safeSmtpSubject(value: string) {
+  if (!value || value.length > 998 || /[\r\n]/.test(value)) throw new Error('Invalid SMTP subject');
+  return value;
+}
+
 function encode(value: string) {
   return Buffer.from(value, 'utf8').toString('base64');
 }
@@ -66,10 +92,17 @@ async function command(socket: net.Socket | tls.TLSSocket, value: string, expect
 }
 
 export async function sendSmtpMail(options: SmtpOptions) {
+  const host = safeSmtpHost(options.host);
+  const from = normalizedMailbox(options.from, 'from');
+  const to = normalizedMailbox(options.to, 'to');
+  const subject = safeSmtpSubject(options.subject);
+  if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535) throw new Error('Invalid SMTP port');
   const timeoutMs = options.timeoutMs ?? 20_000;
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 1) throw new Error('Invalid SMTP timeout');
+  const safeOptions = { ...options, host, from, to, subject };
   let activeSocket: net.Socket | tls.TLSSocket = options.secure
-    ? tls.connect({ host: options.host, port: options.port, servername: options.host })
-    : net.connect({ host: options.host, port: options.port });
+    ? tls.connect({ host, port: options.port, servername: host })
+    : net.connect({ host, port: options.port });
   activeSocket.setTimeout(timeoutMs);
   // Bound the whole SMTP conversation, not every command independently. Without
   // this guard a silent relay can consume one full socket timeout per protocol
@@ -82,7 +115,7 @@ export async function sendSmtpMail(options: SmtpOptions) {
 
     if (!options.secure && options.port === 587) {
       await command(activeSocket, 'STARTTLS', [220]);
-      activeSocket = tls.connect({ socket: activeSocket, servername: options.host });
+      activeSocket = tls.connect({ socket: activeSocket, servername: host });
       activeSocket.setTimeout(timeoutMs);
       await command(activeSocket, 'EHLO qyroam.com', [250]);
     }
@@ -90,7 +123,7 @@ export async function sendSmtpMail(options: SmtpOptions) {
     await command(activeSocket, 'AUTH LOGIN', [334]);
     await command(activeSocket, encode(options.user), [334]);
     await command(activeSocket, encode(options.pass), [235]);
-    await sendMessage(activeSocket, options);
+    await sendMessage(activeSocket, safeOptions);
   } finally {
     clearTimeout(deadline);
     activeSocket.destroy();

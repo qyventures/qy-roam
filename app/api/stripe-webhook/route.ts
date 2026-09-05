@@ -89,7 +89,7 @@ async function sendMetaPurchase(session: Stripe.Checkout.Session, eventTime: num
 
 async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
   if(session.payment_status!=='paid') return;
-  const host=process.env.SMTP_HOST, port=Number(process.env.SMTP_PORT||'587'), secure=process.env.SMTP_SECURE==='true'||port===465, user=process.env.SMTP_USER, pass=process.env.SMTP_PASS, from=process.env.SMTP_FROM||user, to=process.env.ORDER_FULFILMENT_EMAIL||process.env.FULFILMENT_TO||'';
+  const host=process.env.SMTP_HOST?.trim(), port=Number(process.env.SMTP_PORT||'587'), secure=process.env.SMTP_SECURE==='true'||port===465, user=process.env.SMTP_USER?.trim(), pass=process.env.SMTP_PASS, from=(process.env.SMTP_FROM||user||'').trim(), to=(process.env.ORDER_FULFILMENT_EMAIL||process.env.FULFILMENT_TO||'').trim();
   if(!host||!user||!pass||!from||!to) throw new Error('SMTP fulfilment email is not configured');
   const productType=session.metadata?.product_type;
   if(productType!=='esim'&&productType!=='pocket_wifi') throw new Error('Unknown or missing product_type on paid order');

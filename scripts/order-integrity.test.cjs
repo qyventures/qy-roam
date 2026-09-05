@@ -317,10 +317,25 @@ test('checkout never exposes payment when human fulfilment email is not configur
 
 test('fulfilment recipients are explicitly configured and never fall back to a historical mailbox', () => {
   assert.match(productionReadiness, /ORDER_FULFILMENT_EMAIL \|\| process\.env\.FULFILMENT_TO \|\| ''/);
-  assert.match(webhookRoute, /to=process\.env\.ORDER_FULFILMENT_EMAIL\|\|process\.env\.FULFILMENT_TO/);
+  assert.match(webhookRoute, /to=\(process\.env\.ORDER_FULFILMENT_EMAIL\|\|process\.env\.FULFILMENT_TO\|\|''\)\.trim\(\)/);
   assert.match(webhookRoute, /if\(!host\|\|!user\|\|!pass\|\|!from\|\|!to\)/);
   assert.doesNotMatch(productionReadiness, /enquiries@sgsimshop\.com/);
   assert.doesNotMatch(webhookRoute, /enquiries@sgsimshop\.com/);
+});
+
+test('SMTP transport independently validates the envelope and message header boundary', () => {
+  // Checkout readiness is intentionally not the sole guard: older paid orders
+  // can be retried after an environment edit, directly invoking this sender.
+  assert.match(smtpClient, /export function isSafeSmtpMailbox/);
+  assert.match(smtpClient, /function normalizedMailbox\(value: string, field: 'from' \| 'to'\)/);
+  assert.match(smtpClient, /function safeSmtpSubject\(value: string\)/);
+  assert.match(smtpClient, /normalizedMailbox\(options\.from, 'from'\)/);
+  assert.match(smtpClient, /normalizedMailbox\(options\.to, 'to'\)/);
+  assert.match(smtpClient, /Invalid SMTP subject/);
+  assert.match(smtpClient, /const safeOptions = \{ \.\.\.options, host, from, to, subject \}/);
+  assert.match(productionReadiness, /import \{ isSafeSmtpMailbox \} from '@\/lib\/smtp'/);
+  assert.match(webhookRoute, /from=\(process\.env\.SMTP_FROM\|\|user\|\|''\)\.trim\(\)/);
+  assert.match(webhookRoute, /to=\(process\.env\.ORDER_FULFILMENT_EMAIL\|\|process\.env\.FULFILMENT_TO\|\|''\)\.trim\(\)/);
 });
 
 test('payment-readiness checks coalesce healthy checkout probes without caching failures', () => {
