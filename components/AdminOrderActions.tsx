@@ -10,6 +10,7 @@ export default function AdminOrderActions({ id, initialStatus, productType = 'po
   const statuses = allowedFulfilmentStatuses(productType, currentStatus);
   const [courier, setCourier] = useState(courierTracking || '');
   const [returned, setReturned] = useState(returnTracking || '');
+  const [returnDisposition, setReturnDisposition] = useState('restock');
   const [inventoryItem, setInventoryItem] = useState(inventoryItemId ? String(inventoryItemId) : '');
   const [saving, setSaving] = useState(false);
   const [retrying, setRetrying] = useState(false);
@@ -31,6 +32,7 @@ export default function AdminOrderActions({ id, initialStatus, productType = 'po
       if (!isEsim) {
         body.courier_tracking = courier;
         body.return_tracking = returned;
+        body.return_disposition = returnDisposition;
         if (inventoryItem) body.inventory_item_id = inventoryItem;
       }
       const res = await fetch(`/api/admin/orders/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -60,6 +62,11 @@ export default function AdminOrderActions({ id, initialStatus, productType = 'po
     {!isEsim && <>
       <input aria-label="Courier tracking" placeholder="Courier tracking / delivery reference" value={courier} onChange={e=>setCourier(e.target.value)} />
       <input aria-label="Return tracking" placeholder="Return tracking / receipt reference" value={returned} onChange={e=>setReturned(e.target.value)} />
+      {status === 'returned' && <select aria-label="Return disposition" value={returnDisposition} onChange={e=>setReturnDisposition(e.target.value)}>
+        <option value="restock">Restock after receipt</option>
+        <option value="quarantine">Quarantine for inspection</option>
+        <option value="damaged">Damaged — do not restock</option>
+      </select>}
       <select aria-label="Pocket WiFi inventory item" value={inventoryItem} onChange={e=>setInventoryItem(e.target.value)} disabled={Boolean(inventoryItemId)}>
         <option value="">Select device / stock item</option>
         {inventoryItems.map(item => {

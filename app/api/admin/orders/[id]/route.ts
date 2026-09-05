@@ -47,6 +47,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
   const courierTracking = trackingValue(body.courier_tracking, existing.data.courier_tracking);
   const returnTracking = trackingValue(body.return_tracking, existing.data.return_tracking);
+  const returnDisposition = typeof body.return_disposition === 'string' ? body.return_disposition.trim().toLowerCase() : 'restock';
   if (existing.data.product_type === 'pocket_wifi' && status === 'dispatched' && !courierTracking) {
     return NextResponse.json({ error: 'Courier tracking or delivery reference is required before dispatching a Pocket WiFi order' }, { status: 400 });
   }
@@ -55,6 +56,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   // accidentally made available for another overlapping booking.
   if (existing.data.product_type === 'pocket_wifi' && status === 'returned' && !returnTracking) {
     return NextResponse.json({ error: 'Return tracking or receipt reference is required before marking a Pocket WiFi order returned' }, { status: 400 });
+  }
+  if (existing.data.product_type === 'pocket_wifi' && status === 'returned' && !['restock', 'quarantine', 'damaged'].includes(returnDisposition)) {
+    return NextResponse.json({ error: 'Choose whether the returned Pocket WiFi unit is restocked, quarantined, or damaged' }, { status: 400 });
   }
 
   if (existing.data.product_type === 'pocket_wifi') {
@@ -75,6 +79,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       p_return_tracking: typeof body.return_tracking === 'string' ? returnTracking : null,
       p_notes: typeof body.notes === 'string' ? body.notes.slice(0, 1000) : null,
       p_inventory_item_id: selectedInventoryItemId,
+      p_return_disposition: returnDisposition,
     });
     if (error) {
       const message = error.message || 'Unable to update order';

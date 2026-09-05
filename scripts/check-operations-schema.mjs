@@ -20,7 +20,10 @@ const requiredContracts = [
   'alter table public.inventory_items enable row level security',
   'alter table public.customers enable row level security',
   'grant execute on function public.qy_adjust_inventory(bigint,integer,text,text,text) to service_role',
-  'grant execute on function public.qy_transition_pocket_wifi_order(bigint,text,text,text,text,text,bigint) to service_role',
+  'return_disposition text',
+  "return_quarantined', 'return_damaged",
+  "p_return_disposition text default 'restock'",
+  'grant execute on function public.qy_transition_pocket_wifi_order(bigint,text,text,text,text,text,bigint,text) to service_role',
   'grant execute on function public.qy_create_manual_pocket_wifi_order(text,text,text,text,numeric,text,text,date,date,text,integer) to service_role',
 ];
 

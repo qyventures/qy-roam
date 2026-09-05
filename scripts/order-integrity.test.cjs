@@ -526,13 +526,26 @@ test('Pocket WiFi dispatch and return atomically reconcile the assigned stock it
   assert.match(schema, /add column if not exists inventory_item_id bigint references public\.inventory_items/);
   assert.match(schema, /create or replace function public\.qy_transition_pocket_wifi_order/);
   assert.match(schema, /movement_type, quantity, reference, notes\)\s*\n    values \(v_item_id, 'dispatch', -1/);
-  assert.match(schema, /movement_type, quantity, reference, notes\)\s*\n    values \(v_item_id, 'return', 1/);
+  assert.match(schema, /case v_return_disposition when 'restock' then 'return'/);
+  assert.match(schema, /case when v_return_disposition = 'restock' then 1 else 0 end/);
   assert.match(adminOrderRoute, /rpc\('qy_transition_pocket_wifi_order'/);
   assert.match(adminOrderActions, /Select the Pocket WiFi inventory item being dispatched/);
 });
 
+test('Pocket WiFi returns explicitly quarantine damaged or inspection-required units instead of silently restocking them', () => {
+  assert.match(schema, /return_disposition text/);
+  assert.match(schema, /p_return_disposition text default 'restock'/);
+  assert.match(schema, /v_return_disposition not in \('restock', 'quarantine', 'damaged'\)/);
+  assert.match(schema, /case when v_return_disposition = 'restock' then 1 else 0 end/);
+  assert.match(schema, /return_quarantined/);
+  assert.match(adminOrderRoute, /\['restock', 'quarantine', 'damaged'\]/);
+  assert.match(adminOrderActions, /Quarantine for inspection/);
+  assert.match(adminOrderActions, /Damaged — do not restock/);
+  assert.match(productionReadiness, /return_disposition/);
+});
+
 test('production readiness verifies the deployed Pocket WiFi dispatch and return contract', () => {
-  assert.match(productionReadiness, /inventory_item_id,courier_tracking,return_tracking,dispatched_at,returned_at/);
+  assert.match(productionReadiness, /inventory_item_id,courier_tracking,return_tracking,return_disposition,dispatched_at,returned_at/);
   assert.match(productionReadiness, /database\.rpc\('qy_transition_pocket_wifi_order'/);
   assert.match(productionReadiness, /database\.rpc\('qy_adjust_inventory'/);
   assert.match(productionReadiness, /p_order_id: 0/);
