@@ -53,6 +53,7 @@ const metaPurchase = fs.readFileSync(require.resolve('../components/MetaPurchase
 const metaClient = fs.readFileSync(require.resolve('../lib/metaClient.ts'), 'utf8');
 const stripeClient = fs.readFileSync(require.resolve('../lib/stripeClient.ts'), 'utf8');
 const adminPage = fs.readFileSync(require.resolve('../app/admin/page.tsx'), 'utf8');
+const inventoryPage = fs.readFileSync(require.resolve('../app/admin/inventory/page.tsx'), 'utf8');
 const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
 
 const requestId = 'checkout_request_123456';
@@ -555,6 +556,16 @@ test('admin order visibility fails loudly instead of presenting a database failu
   assert.match(adminPage, /const failedPanels = \[/);
   assert.match(adminPage, /Operational data is currently unavailable:/);
   assert.match(adminPage, /Do not treat empty panels as no orders/);
+});
+
+test('inventory visibility distinguishes unavailable data from zero stock and exposes saleable router stock', () => {
+  assert.match(inventoryPage, /await Promise\.all\(\[/);
+  assert.match(inventoryPage, /const failedPanels=\[itemsResult\.error&&'inventory register',movesResult\.error&&'movement audit trail'\]/);
+  assert.match(inventoryPage, /Operational inventory data is currently unavailable/);
+  assert.match(inventoryPage, /Do not treat empty lists or totals as current stock/);
+  assert.match(inventoryPage, /x\.product_type==='pocket_wifi'&&x\.status==='available'/);
+  assert.match(inventoryPage, /Saleable Pocket WiFi units/);
+  assert.match(inventoryPage, /Quarantined Pocket WiFi units/);
 });
 
 test('admin order visibility identifies the specific Meta CAPI delivery needing recovery', () => {
