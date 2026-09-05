@@ -234,11 +234,19 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
   if(attempt.data?.length!==1) throw new Error('Fulfilment notification was claimed by another delivery attempt');
   try{
     await sendHumanFulfilmentEmail(session);
-    const sent=await supabase.from('fulfilment_notifications').update({status:'sent',sent_at:new Date().toISOString(),updated_at:new Date().toISOString()}).eq('stripe_session_id',session.id);
+    // The sending lease can be reclaimed after a timed-out worker. Only its
+    // owner may settle it: an older worker must never mark a newer delivery
+    // sent (or later reset it to pending in the catch below).
+    const sentAt=new Date().toISOString();
+    const sent=await supabase.from('fulfilment_notifications').update({status:'sent',sent_at:sentAt,updated_at:sentAt}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',now).select('stripe_session_id');
     if(sent.error) throw sent.error;
+    if(sent.data?.length!==1) throw new Error('Fulfilment notification delivery lease was lost');
   }catch(error){
     const message=error instanceof Error?error.message:'SMTP delivery failed';
-    await supabase.from('fulfilment_notifications').update({status:'pending',last_error:message.slice(0,500),updated_at:new Date().toISOString()}).eq('stripe_session_id',session.id);
+    // Keep a newer worker's lease intact if this worker was reclaimed while
+    // its provider call was still in flight.
+    const failed=await supabase.from('fulfilment_notifications').update({status:'pending',last_error:message.slice(0,500),updated_at:new Date().toISOString()}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',now).select('stripe_session_id');
+    if(failed.error) console.error('fulfilment_notification_failure_record_error',failed.error);
     throw error;
   }
 }
@@ -275,11 +283,16 @@ export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof
   try{
     await sendMetaPurchase(session,Number(attempt.data[0].event_time));
     const sentAt=new Date().toISOString();
-    const sent=await supabase.from('meta_purchase_deliveries').update({status:'sent',sent_at:sentAt,updated_at:sentAt}).eq('stripe_session_id',session.id).eq('status','sending');
+    // As with SMTP, do not let a stale CAPI worker settle a lease that a
+    // newer retry has reclaimed. Meta's event_id deduplicates the provider
+    // event, while this predicate preserves an accurate local delivery state.
+    const sent=await supabase.from('meta_purchase_deliveries').update({status:'sent',sent_at:sentAt,updated_at:sentAt}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',now).select('stripe_session_id');
     if(sent.error) throw sent.error;
+    if(sent.data?.length!==1) throw new Error('Meta purchase delivery lease was lost');
   }catch(error){
     const message=error instanceof Error?error.message:'Meta CAPI delivery failed';
-    await supabase.from('meta_purchase_deliveries').update({status:'pending',last_error:message.slice(0,500),updated_at:new Date().toISOString()}).eq('stripe_session_id',session.id).eq('status','sending');
+    const failed=await supabase.from('meta_purchase_deliveries').update({status:'pending',last_error:message.slice(0,500),updated_at:new Date().toISOString()}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',now).select('stripe_session_id');
+    if(failed.error) console.error('meta_purchase_failure_record_error',failed.error);
     throw error;
   }
 }

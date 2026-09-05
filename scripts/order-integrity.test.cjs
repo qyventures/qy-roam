@@ -575,6 +575,15 @@ test('admin can safely resume failed paid-order notifications', () => {
   assert.match(adminOrderActions, /Retry order notifications/);
 });
 
+test('SMTP and Meta delivery settlement retain ownership of their sending leases', () => {
+  // A worker can outlive the stale-lease timeout while its provider call is
+  // in flight. Its completion or failure must not overwrite the newer retry.
+  assert.match(webhookRoute, /Fulfilment notification delivery lease was lost/);
+  assert.match(webhookRoute, /Meta purchase delivery lease was lost/);
+  assert.match(webhookRoute, /from\('fulfilment_notifications'\)[\s\S]{0,700}\.eq\('status','sending'\)\.eq\('updated_at',now\)/);
+  assert.match(webhookRoute, /from\('meta_purchase_deliveries'\)[\s\S]{0,700}\.eq\('status','sending'\)\.eq\('updated_at',now\)/);
+});
+
 test('Meta Purchase retries preserve one durable event timestamp for deduplication', () => {
   const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
   assert.match(schema, /event_time bigint check \(event_time is null or event_time > 0\)/);
