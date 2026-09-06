@@ -30,6 +30,7 @@ const { allowedFulfilmentStatuses, validFulfilmentTransition } = require('../lib
 const { operationalConfig } = require('../lib/operationalConfig.ts');
 const { validStripeCheckoutSessionId } = require('../lib/stripeSessionId.ts');
 const { readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError } = require('../lib/requestBody.ts');
+const { createCheckoutAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -305,6 +306,22 @@ test('both checkout endpoints use the bounded streaming body reader', () => {
     assert.match(source, /RequestBodyTimeoutError/);
     assert.doesNotMatch(source, /await req\.text\(\)/);
   }
+});
+
+test('checkout attempt rate limiting keeps per-client limits while bounding unique client state', () => {
+  const limit = createCheckoutAttemptLimiter(1_000, 2, 3);
+  const requestFor = (ip) => new Request('https://qyroam.test/api/checkout', { headers: { 'cf-connecting-ip': ip } });
+  assert.equal(limit(requestFor('198.51.100.1'), 100), false);
+  assert.equal(limit(requestFor('198.51.100.1'), 101), false);
+  assert.equal(limit(requestFor('198.51.100.1'), 102), true);
+  // Filling the bounded registry evicts its oldest key rather than growing
+  // process memory for every new, attacker-controlled client identifier.
+  assert.equal(limit(requestFor('198.51.100.2'), 103), false);
+  assert.equal(limit(requestFor('198.51.100.3'), 104), false);
+  assert.equal(limit(requestFor('198.51.100.4'), 105), false);
+  assert.equal(limit(requestFor('198.51.100.1'), 106), false);
+  // A retained client still receives a fresh window after expiry.
+  assert.equal(limit(requestFor('198.51.100.1'), 1_200), false);
 });
 
 test('customer-facing Stripe session lookups accept only one bounded Checkout Session id', () => {

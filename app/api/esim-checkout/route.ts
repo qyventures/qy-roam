@@ -6,23 +6,13 @@ import { validCheckoutRequestId } from '../../../lib/checkoutValidation';
 import { QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance } from '../../../lib/orderProvenance';
 import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig } from '../../../lib/productionReadiness';
 import { InvalidRequestBodyLengthError, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
+import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
 
 export const runtime = 'nodejs';
 
 const MAX_BODY_BYTES = 4096;
 const CHECKOUT_BODY_TIMEOUT_MS = 15_000;
-const WINDOW_MS = 60_000;
-const MAX_ATTEMPTS = 12;
-const attempts = new Map<string, { count: number; reset: number }>();
-
-function clientKey(req: Request) { return (req.headers.get('cf-connecting-ip') || req.headers.get('x-real-ip') || req.headers.get('x-forwarded-for')?.split(',')[0] || 'unknown').trim(); }
-function limited(req: Request) {
-  const key = clientKey(req), now = Date.now(), current = attempts.get(key);
-  if (!current || current.reset <= now) { attempts.set(key, { count: 1, reset: now + WINDOW_MS }); return false; }
-  current.count += 1;
-  if (attempts.size > 5000) for (const [attemptKey, value] of attempts) if (value.reset <= now) attempts.delete(attemptKey);
-  return current.count > MAX_ATTEMPTS;
-}
+const limited = createCheckoutAttemptLimiter();
 
 function siteOrigin(req: Request) {
   const configured = process.env.NEXT_PUBLIC_SITE_URL;

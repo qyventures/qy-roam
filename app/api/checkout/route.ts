@@ -10,29 +10,20 @@ import { operationalConfig } from '../../../lib/operationalConfig';
 import { operationalIsoDate, operationalIsoDateAfter } from '../../../lib/operationalDate';
 import { hasRequiredFulfilmentEmailConfig, hasRequiredPaymentSchema } from '../../../lib/productionReadiness';
 import { InvalidRequestBodyLengthError, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
+import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
 
 export const runtime = 'nodejs';
 
 const MAX_BODY_BYTES=4096;
 const CHECKOUT_BODY_TIMEOUT_MS=15_000;
-const WINDOW_MS=60_000;
-const MAX_ATTEMPTS=12;
 const HOLD_MINUTES=30;
-const attempts=new Map<string,{count:number;reset:number}>();
+const limited=createCheckoutAttemptLimiter();
 
 function siteOrigin(req: Request) {
   const configured = process.env.NEXT_PUBLIC_SITE_URL;
   if (configured) { try { return new URL(configured).origin; } catch { throw new Error('Invalid NEXT_PUBLIC_SITE_URL'); } }
   if (process.env.NODE_ENV === 'production') throw new Error('NEXT_PUBLIC_SITE_URL is required in production');
   return new URL(req.url).origin;
-}
-function clientKey(req: Request) { return (req.headers.get('cf-connecting-ip')||req.headers.get('x-real-ip')||req.headers.get('x-forwarded-for')?.split(',')[0]||'unknown').trim(); }
-function limited(req: Request) {
-  const key=clientKey(req), now=Date.now(), current=attempts.get(key);
-  if(!current||current.reset<=now){ attempts.set(key,{count:1,reset:now+WINDOW_MS}); return false; }
-  current.count+=1;
-  if(attempts.size>5000) for(const [k,v] of attempts) if(v.reset<=now) attempts.delete(k);
-  return current.count>MAX_ATTEMPTS;
 }
 type RequestedPocketWifi = {
   country:string; start:string; end:string; days:number; daily:number;
