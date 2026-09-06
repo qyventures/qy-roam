@@ -59,11 +59,14 @@ async function activeStripeHolds(stripe:Stripe,start:string,end:string,requestId
   let startingAfter:string|undefined;
   let holds=0;
   const requestIds:string[]=[];
-  // Every still-valid QY Roam Checkout Session is an inventory hold. Do not cap
-  // pagination here: stopping after an arbitrary number of pages can undercount
-  // holds during a busy period and oversell the final routers.
+  // Every still-valid QY Roam Checkout Session is an inventory hold. Keep
+  // paginating through the complete hold window: stopping after an arbitrary
+  // number of pages can undercount holds during a busy period and oversell the
+  // final routers. The server always gives these sessions a 30-minute expiry,
+  // so Stripe can filter out historical open sessions before pagination rather
+  // than making a customer-facing checkout scan the whole account.
   for(;;){
-    const sessions=await stripe.checkout.sessions.list({status:'open',limit:100,...(startingAfter?{starting_after:startingAfter}:{})});
+    const sessions=await stripe.checkout.sessions.list({status:'open',limit:100,created:{gte:cutoff},...(startingAfter?{starting_after:startingAfter}:{})});
     for(const session of sessions.data){
       // Stripe normally removes expired sessions from the "open" list, but
       // expiry is the inventory boundary. Check it explicitly so a session

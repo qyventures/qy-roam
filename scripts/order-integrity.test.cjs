@@ -550,6 +550,14 @@ test('Pocket WiFi availability only counts Checkout Sessions that are still unex
   }
 });
 
+test('Pocket WiFi Stripe-hold scans paginate every recent session without reading historical account data', () => {
+  for (const source of [wifiCheckoutRoute, availabilityRoute]) {
+    assert.match(source, /created:\s*\{\s*gte:\s*cutoff\s*\}/);
+    assert.match(source, /starting_after/);
+    assert.doesNotMatch(source, /limit:\s*(?:[1-9]|[1-9]\d)(?!\d)/);
+  }
+});
+
 test('Pocket WiFi holds require server-issued checkout provenance', () => {
   const checkoutRoute = fs.readFileSync(require.resolve('../app/api/checkout/route.ts'), 'utf8');
   for (const source of [checkoutRoute, availabilityRoute]) {
