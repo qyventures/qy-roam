@@ -47,6 +47,7 @@ fi
 npm run check:esim-pricing
 npm run check:wifi-pricing
 npm run check:operations-schema
+npm run check:deploy-safety
 npm run test:order-integrity
 npm run build
 
