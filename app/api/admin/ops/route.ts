@@ -101,6 +101,23 @@ export async function POST(req: NextRequest) {
       const { error } = await db.from('inventory_items').insert(row); if (error) throw error;
     } else if (action === 'inventory_adjust') {
       const { error } = await db.rpc('qy_adjust_inventory', { p_item_id: int(body.item_id), p_delta: int(body.delta), p_type: text(body.movement_type, 40) || 'adjustment', p_reference: text(body.reference, 120) || null, p_notes: text(body.notes, 1000) || null }); if (error) throw error;
+    } else if (action === 'inventory_status') {
+      const itemId = int(body.item_id);
+      const status = text(body.status, 40).toLowerCase();
+      // Status is intentionally separate from a quantity adjustment. Returning
+      // a quarantined unit to service requires staff to both record the
+      // inspection decision here and post the physical stock movement above.
+      if (!itemId) return NextResponse.json({ error: 'Choose an inventory item' }, { status: 400 });
+      if (!['available', 'quarantined', 'damaged', 'maintenance'].includes(status)) {
+        return NextResponse.json({ error: 'Choose a valid inventory status' }, { status: 400 });
+      }
+      const { data, error } = await db.from('inventory_items')
+        .update({ status, updated_at: new Date().toISOString() })
+        .eq('id', itemId)
+        .select('id')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) return NextResponse.json({ error: 'Inventory item not found' }, { status: 404 });
     } else if (action === 'customer_create') {
       const row = { email: text(body.email, 200).toLowerCase() || null, phone: text(body.phone, 60) || null, name: text(body.name, 120) || null, status: text(body.status, 40) || 'lead', source: text(body.source, 80) || 'manual', notes: text(body.notes, 1500) || null, updated_at: new Date().toISOString() };
       if (!row.email && !row.phone) return NextResponse.json({ error: 'Email or phone is required' }, { status: 400 });

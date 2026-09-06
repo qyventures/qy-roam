@@ -450,8 +450,21 @@ begin
     if v_item_id is null then raise exception 'dispatched Pocket WiFi order has no inventory item to return'; end if;
     select * into v_item from public.inventory_items where id = v_item_id and product_type = 'pocket_wifi' for update;
     if not found then raise exception 'assigned Pocket WiFi inventory item not found'; end if;
+    -- A non-restocked return must also leave the dispatchable inventory pool.
+    -- Keeping its previous `available` status would let a later stock
+    -- adjustment accidentally make a quarantined or damaged unit eligible for
+    -- dispatch without a deliberate inspection decision.
     if v_return_disposition = 'restock' then
-      update public.inventory_items set quantity_on_hand = quantity_on_hand + 1, updated_at = v_now where id = v_item_id;
+      update public.inventory_items
+      set quantity_on_hand = quantity_on_hand + 1,
+          status = 'available',
+          updated_at = v_now
+      where id = v_item_id;
+    else
+      update public.inventory_items
+      set status = case when v_return_disposition = 'damaged' then 'damaged' else 'quarantined' end,
+          updated_at = v_now
+      where id = v_item_id;
     end if;
     insert into public.inventory_movements (inventory_item_id, movement_type, quantity, reference, notes)
     values (

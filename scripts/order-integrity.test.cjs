@@ -637,6 +637,14 @@ test('Pocket WiFi returns explicitly quarantine damaged or inspection-required u
   assert.match(productionReadiness, /return_disposition/);
 });
 
+test('Pocket WiFi non-restock returns remove the exact device from dispatchable stock until inspection clears it', () => {
+  assert.match(schema, /set status = case when v_return_disposition = 'damaged' then 'damaged' else 'quarantined' end/);
+  assert.match(schema, /status = 'available'/);
+  assert.match(adminOpsRoute, /action === 'inventory_status'/);
+  assert.match(adminOpsRoute, /\['available', 'quarantined', 'damaged', 'maintenance'\]/);
+  assert.match(inventoryPage, /InventoryStatusForm items=\{items\}/);
+});
+
 test('production readiness verifies the deployed Pocket WiFi dispatch and return contract', () => {
   assert.match(productionReadiness, /inventory_item_id,courier_tracking,return_tracking,return_disposition,dispatched_at,returned_at/);
   assert.match(productionReadiness, /database\.rpc\('qy_transition_pocket_wifi_order'/);
