@@ -96,6 +96,15 @@ export function hasRequiredFulfilmentEmailConfig() {
   );
 }
 
+// Stripe Checkout can accept payment without this application being able to
+// persist the signed completion event. Keep this small configuration gate next
+// to the other pre-payment guards so the public checkout routes fail closed
+// instead of creating an order that requires dashboard recovery.
+export function hasRequiredStripeWebhookConfig() {
+  const secret = process.env.STRIPE_WEBHOOK_SECRET;
+  return Boolean(secret && /^whsec_[A-Za-z0-9]+$/.test(secret) && secret.length >= 20);
+}
+
 /**
  * Verify the database contract needed after a customer pays. Checking only that
  * credentials exist is insufficient: a valid Supabase project with an older

@@ -56,6 +56,7 @@ const metaClient = fs.readFileSync(require.resolve('../lib/metaClient.ts'), 'utf
 const stripeClient = fs.readFileSync(require.resolve('../lib/stripeClient.ts'), 'utf8');
 const adminPage = fs.readFileSync(require.resolve('../app/admin/page.tsx'), 'utf8');
 const inventoryPage = fs.readFileSync(require.resolve('../app/admin/inventory/page.tsx'), 'utf8');
+const launchPage = fs.readFileSync(require.resolve('../app/admin/launch/page.tsx'), 'utf8');
 const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
 
 const requestId = 'checkout_request_123456';
@@ -368,6 +369,15 @@ test('checkout never exposes payment when human fulfilment email is not configur
   assert.match(productionReadiness, /ORDER_FULFILMENT_EMAIL \|\| process\.env\.FULFILMENT_TO/);
 });
 
+test('checkout never exposes payment when signed Stripe webhook processing is not configured', () => {
+  for (const route of [esimCheckoutRoute, wifiCheckoutRoute]) {
+    assert.match(route, /hasRequiredStripeWebhookConfig/);
+    assert.match(route, /if\s*\(!hasRequiredStripeWebhookConfig\(\)\)/);
+  }
+  assert.match(productionReadiness, /export function hasRequiredStripeWebhookConfig\(\)/);
+  assert.match(productionReadiness, /\^whsec_\[A-Za-z0-9\]\+\$/);
+});
+
 test('fulfilment recipients are explicitly configured and never fall back to a historical mailbox', () => {
   assert.match(productionReadiness, /ORDER_FULFILMENT_EMAIL \|\| process\.env\.FULFILMENT_TO \|\| ''/);
   assert.match(webhookRoute, /to=\(process\.env\.ORDER_FULFILMENT_EMAIL\|\|process\.env\.FULFILMENT_TO\|\|''\)\.trim\(\)/);
@@ -637,6 +647,23 @@ test('admin order visibility fails loudly instead of presenting a database failu
   assert.match(adminPage, /const failedPanels = \[/);
   assert.match(adminPage, /Operational data is currently unavailable:/);
   assert.match(adminPage, /Do not treat empty panels as no orders/);
+});
+
+test('launch control reports the same checkout prerequisites that protect real orders', () => {
+  // The launch dashboard is an operational decision surface. It must not show
+  // a green storefront state based only on a Stripe key and partial schema
+  // probe while either public checkout route would reject a customer.
+  assert.match(launchPage, /function isProductionSiteUrl/);
+  assert.match(launchPage, /function hasLiveStripeSecret/);
+  assert.match(launchPage, /hasRequiredStripeWebhookConfig\(\)/);
+  assert.match(launchPage, /function hasOrderIntegritySecret/);
+  assert.match(launchPage, /const storefrontReady=stripe&&webhook&&site&&orderIntegrity&&paymentDbOk&&smtp/);
+  assert.match(launchPage, /const wifiReady=storefrontReady&&wifiInventory/);
+  assert.match(launchPage, /const paidReady=esimReady&&wifiReady&&pixel&&capi/);
+  assert.match(launchPage, /eSIM checkout/);
+  assert.match(launchPage, /Pocket WiFi checkout/);
+  assert.doesNotMatch(launchPage, /const site=true/);
+  assert.doesNotMatch(launchPage, /const organicReady=stripe&&paymentDbOk/);
 });
 
 test('inventory visibility distinguishes unavailable data from zero stock and exposes saleable router stock', () => {
