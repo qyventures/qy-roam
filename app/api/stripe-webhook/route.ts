@@ -71,6 +71,40 @@ function normalizeEmail(value?: string | null) { return value?.trim().toLowerCas
 function normalizePhone(value?: string | null) { if (!value) return undefined; const digits=value.replace(/\D/g,''); return digits||undefined; }
 function fulfilmentMessageId(sessionId:string) { return `<qyroam-${crypto.createHash('sha256').update(sessionId).digest('hex').slice(0,32)}@qyroam.com>`; }
 const DELIVERY_TIMEOUT_MS=20_000;
+// Meta and an optional SMTP relay return tiny JSON responses. Bound their
+// bodies as well as the request deadline: a misbehaving upstream must not be
+// able to consume an unbounded amount of webhook-worker memory while we only
+// need a short diagnostic snippet for the retry record.
+const MAX_DELIVERY_RESPONSE_BODY_BYTES=64 * 1024;
+
+async function readDeliveryResponseBody(response: Response) {
+  const contentLength=response.headers.get('content-length');
+  if(contentLength!==null&&(!/^\d+$/.test(contentLength)||Number(contentLength)>MAX_DELIVERY_RESPONSE_BODY_BYTES)) {
+    throw new RangeError('Delivery response body is too large');
+  }
+  if(!response.body) return '';
+  const reader=response.body.getReader();
+  const chunks:Uint8Array[]=[];
+  let total=0;
+  try {
+    for (;;) {
+      const {done,value}=await reader.read();
+      if(done) break;
+      if(!value) continue;
+      total+=value.byteLength;
+      if(total>MAX_DELIVERY_RESPONSE_BODY_BYTES) {
+        // Do not wait for an upstream that ignores cancellation; the request
+        // deadline remains in force and the caller will retry safely.
+        void reader.cancel().catch(()=>undefined);
+        throw new RangeError('Delivery response body is too large');
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks,total).toString('utf8');
+}
 
 async function postJsonWithTimeout(url:string,body:unknown,timeoutMs=DELIVERY_TIMEOUT_MS){
   const controller=new AbortController();
@@ -79,7 +113,7 @@ async function postJsonWithTimeout(url:string,body:unknown,timeoutMs=DELIVERY_TI
     const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:controller.signal});
     // Consume the response while the deadline is still active. A provider that
     // sends headers and then stalls its body must not hold the webhook open.
-    const responseBody=await response.text();
+    const responseBody=await readDeliveryResponseBody(response);
     return {ok:response.ok,status:response.status,responseBody};
   }finally{
     clearTimeout(deadline);

@@ -682,6 +682,14 @@ test('Stripe webhook bounds raw payload memory before signature verification', (
   assert.match(webhookRoute, /stripe\.webhooks\.constructEvent\(payload,req\.headers\.get\('stripe-signature'\)/);
 });
 
+test('Stripe webhook bounds third-party delivery responses as well as request time', () => {
+  assert.match(webhookRoute, /const MAX_DELIVERY_RESPONSE_BODY_BYTES=64 \* 1024/);
+  assert.match(webhookRoute, /async function readDeliveryResponseBody\(response: Response\)/);
+  assert.match(webhookRoute, /total>MAX_DELIVERY_RESPONSE_BODY_BYTES/);
+  assert.match(webhookRoute, /await readDeliveryResponseBody\(response\)/);
+  assert.doesNotMatch(webhookRoute, /const responseBody=await response\.text\(\)/);
+});
+
 test('Stripe network calls use a bounded shared production client', () => {
   assert.match(stripeClient, /STRIPE_REQUEST_TIMEOUT_MS = 15_000/);
   assert.match(stripeClient, /STRIPE_MAX_NETWORK_RETRIES = 1/);
