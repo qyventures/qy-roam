@@ -701,6 +701,9 @@ test('inventory visibility distinguishes unavailable data from zero stock and ex
 
 test('admin order visibility identifies the specific Meta CAPI delivery needing recovery', () => {
   assert.match(adminPage, /const metaDeliveryBySession = new Map/);
+  assert.match(adminPage, /const metaDeliveryExceptions = orders\.filter/);
+  assert.match(adminPage, /order\.measurement_consent === 'accepted'/);
+  assert.match(adminPage, /metaDeliveryExceptions\.length/);
   assert.match(adminPage, /const metaDelivery:any = metaDeliveryBySession\.get\(o\.stripe_session_id\)/);
   assert.match(adminPage, /Meta CAPI/);
   assert.match(adminPage, /metaDelivery\?\.last_error/);
@@ -717,12 +720,21 @@ test('admin email exceptions include paid Stripe orders missing their notificati
   assert.match(adminOrderActions, /\{canRetryNotifications && <button/);
 });
 
+test('admin CAPI recovery is limited to consented purchases and remains available after email delivery', () => {
+  assert.match(schema, /measurement_consent text/);
+  assert.match(productionReadiness, /measurement_consent/);
+  assert.match(webhookRoute, /const measurementConsent=session\.metadata\?\.measurement_consent==='accepted'\?'accepted':'essential'/);
+  assert.match(webhookRoute, /measurement_consent:measurementConsent/);
+  assert.match(adminPage, /notification\?\.status !== 'sent' \|\|[\s\S]{0,180}o\.measurement_consent === 'accepted' && metaDelivery\?\.status !== 'sent'/);
+  assert.match(adminOrderActions, /Retry order deliveries/);
+});
+
 test('admin can safely resume failed paid-order notifications', () => {
   assert.match(adminOrderRoute, /export async function POST/);
   assert.match(adminOrderRoute, /validateQyRoamSession\(session\)/);
   assert.match(adminOrderRoute, /await deliverFulfilmentNotification\(supabase, session\)/);
   assert.match(adminOrderRoute, /await deliverMetaPurchase\(supabase, session/);
-  assert.match(adminOrderActions, /Retry order notifications/);
+  assert.match(adminOrderActions, /Retry order deliveries/);
 });
 
 test('SMTP and Meta delivery settlement retain ownership of their sending leases', () => {

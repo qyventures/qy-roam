@@ -17,6 +17,10 @@ create table if not exists public.orders (
   -- separately from created_at so operational recovery and CAPI retries do
   -- not mistake Checkout Session creation for payment confirmation.
   payment_confirmed_at timestamptz,
+  -- Keep the checkout's measurement choice with the paid-order record. This
+  -- lets operations distinguish a deliberately untracked order from a
+  -- consented Purchase whose server-side CAPI delivery needs recovery.
+  measurement_consent text,
   courier_tracking text,
   return_tracking text,
   -- A received router is not necessarily ready for its next rental. Preserve
@@ -33,6 +37,7 @@ create table if not exists public.orders (
 alter table public.orders add column if not exists product_type text not null default 'pocket_wifi';
 alter table public.orders add column if not exists plan_name text;
 alter table public.orders add column if not exists payment_confirmed_at timestamptz;
+alter table public.orders add column if not exists measurement_consent text;
 alter table public.orders add column if not exists courier_tracking text;
 alter table public.orders add column if not exists return_tracking text;
 alter table public.orders add column if not exists return_disposition text;

@@ -52,7 +52,7 @@ export default function AdminOrderActions({ id, initialStatus, productType = 'po
       const res = await fetch(`/api/admin/orders/${id}`, { method: 'POST' });
       const result = await res.json().catch(() => null) as { error?: string } | null;
       if (!res.ok) throw new Error(result?.error || 'Notification retry failed');
-      setMessage('Notification retry started');
+      setMessage('Order delivery retry started');
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Could not retry notifications'); }
     finally { setRetrying(false); }
   }
@@ -77,7 +77,7 @@ export default function AdminOrderActions({ id, initialStatus, productType = 'po
     </>}
     {isEsim && <small>Mark fulfilled after the QR code / activation instructions have been sent to the customer.</small>}
     <button type="button" onClick={save} disabled={saving || statuses.length < 2}>{saving ? 'Saving…' : 'Save'}</button>
-    {canRetryNotifications && <button type="button" onClick={retryNotifications} disabled={retrying}>{retrying ? 'Retrying notifications…' : 'Retry order notifications'}</button>}
+    {canRetryNotifications && <button type="button" onClick={retryNotifications} disabled={retrying}>{retrying ? 'Retrying deliveries…' : 'Retry order deliveries'}</button>}
     {message && <small aria-live="polite">{message}</small>}
   </div>;
 }

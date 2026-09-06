@@ -81,7 +81,15 @@ export default async function AdminPage() {
   );
   const metaDeliveries: any[] = metaDeliveryResult.data ?? [];
   const metaDeliveryBySession = new Map(metaDeliveries.map((delivery:any)=>[delivery.stripe_session_id,delivery]));
-  const pendingMetaDeliveries = metaDeliveries.filter((delivery:any)=>delivery.status !== 'sent');
+  // A missing CAPI ledger is actionable only when the buyer gave measurement
+  // consent. Without this persisted marker, an absent record is ambiguous:
+  // it can mean either a deliberately untracked purchase or a failed webhook.
+  const metaDeliveryExceptions = orders.filter((order:any) =>
+    order.payment_status === 'paid' &&
+    isStripeCheckoutOrder(order) &&
+    order.measurement_consent === 'accepted' &&
+    metaDeliveryBySession.get(order.stripe_session_id)?.status !== 'sent',
+  );
   const failedPanels = [
     result.error && 'orders',
     inventoryResult.error && 'inventory',
@@ -162,7 +170,7 @@ export default async function AdminPage() {
           <div style={cardStyle}><small>eSIM fulfilment exceptions</small><div style={metricStyle}>{esimExceptions.length}</div><small>departing within 2 days / unresolved</small></div>
           <div style={cardStyle}><small>Overdue WiFi returns</small><div style={metricStyle}>{returnExceptions.length}</div><small>more than 5 days past trip end</small></div>
           <div style={cardStyle}><small>Ops email exceptions</small><div style={metricStyle}>{notificationExceptions.length}</div><small>paid Stripe-order notifications not confirmed sent</small></div>
-          <div style={cardStyle}><small>Meta CAPI exceptions</small><div style={metricStyle}>{pendingMetaDeliveries.length}</div><small>consented purchases not confirmed delivered</small></div>
+          <div style={cardStyle}><small>Meta CAPI exceptions</small><div style={metricStyle}>{metaDeliveryExceptions.length}</div><small>consented purchases not confirmed delivered</small></div>
         </div>
       </section>
     </>}
@@ -177,7 +185,13 @@ export default async function AdminPage() {
           const product = isEsim(o) ? 'eSIM' : 'Pocket WiFi';
           const notification:any = notificationBySession.get(o.stripe_session_id);
           const metaDelivery:any = metaDeliveryBySession.get(o.stripe_session_id);
-          const canRetryNotifications = o.payment_status === 'paid' && isStripeCheckoutOrder(o) && notification?.status !== 'sent';
+          // The recovery endpoint retries both delivery ledgers idempotently.
+          // Expose it for a missing/failed Meta event even after the ops email
+          // was successfully sent, which is the common post-Stripe-retry case.
+          const canRetryNotifications = o.payment_status === 'paid' && isStripeCheckoutOrder(o) && (
+            notification?.status !== 'sent' ||
+            (o.measurement_consent === 'accepted' && metaDelivery?.status !== 'sent')
+          );
           return <tr key={o.id} style={{borderTop:'1px solid #e5e8ed',verticalAlign:'top'}}>
             <td style={{padding:'14px 10px'}}><strong>{String(o.stripe_session_id || o.id).slice(-10)}</strong><br/><small>{o.created_at ? new Date(o.created_at).toLocaleDateString('en-SG') : ''}</small></td>
             <td style={{padding:'14px 8px'}}>{o.customer_name || '-'}<br/><small>{o.phone || '-'}</small>{o.email && <><br/><small>{o.email}</small></>}</td>

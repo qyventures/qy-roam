@@ -175,7 +175,11 @@ async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.E
   const confirmedAt=paid
     ? (existing.data?.payment_confirmed_at || new Date(eventCreated*1000).toISOString())
     : (existing.data?.payment_confirmed_at || null);
-  const order={stripe_session_id:session.id,payment_status:session.payment_status,customer_name:session.customer_details?.name,email:session.customer_details?.email,phone:session.customer_details?.phone,amount_sgd:(session.amount_total||0)/100,product_type:productType,plan_name:session.metadata?.plan_name||null,country:session.metadata?.country,travel_start:session.metadata?.start||null,travel_end:session.metadata?.end||null,fulfilment_status:fulfilment,payment_confirmed_at:confirmedAt,shipping_address:session.shipping_details?.address||null,updated_at:new Date().toISOString()};
+  // The checkout routes set this marker server-side. Persist a conservative
+  // value for historical/manual Stripe metadata so only explicit consent can
+  // make an order appear in the CAPI recovery queue.
+  const measurementConsent=session.metadata?.measurement_consent==='accepted'?'accepted':'essential';
+  const order={stripe_session_id:session.id,payment_status:session.payment_status,customer_name:session.customer_details?.name,email:session.customer_details?.email,phone:session.customer_details?.phone,amount_sgd:(session.amount_total||0)/100,product_type:productType,plan_name:session.metadata?.plan_name||null,country:session.metadata?.country,travel_start:session.metadata?.start||null,travel_end:session.metadata?.end||null,fulfilment_status:fulfilment,payment_confirmed_at:confirmedAt,measurement_consent:measurementConsent,shipping_address:session.shipping_details?.address||null,updated_at:new Date().toISOString()};
 
   // Checkout events can arrive out of order. Once a session is recorded as paid,
   // an older `completed` snapshot or a late async failure must not make inventory
