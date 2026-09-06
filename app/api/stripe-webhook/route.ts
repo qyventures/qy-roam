@@ -16,6 +16,12 @@ export const runtime = 'nodejs';
 // the memory used by an invalid request bounded rather than relying on a proxy
 // body-size setting that may differ between production environments.
 const MAX_STRIPE_WEBHOOK_BODY_BYTES = 1_000_000;
+// Do not let a peer that sends headers and then stalls its upload pin a
+// webhook worker indefinitely. Stripe will retry a timed-out delivery, while
+// the bounded body size below continues to protect memory for completed reads.
+const STRIPE_WEBHOOK_BODY_TIMEOUT_MS = 15_000;
+
+class StripeWebhookBodyTimeoutError extends Error {}
 
 async function readStripeWebhookBody(req: Request): Promise<Buffer> {
   const contentLength = req.headers.get('content-length');
@@ -31,9 +37,19 @@ async function readStripeWebhookBody(req: Request): Promise<Buffer> {
   const reader = req.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const bodyTimeout = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      // Cancelling wakes a pending read in compliant runtimes before the
+      // timeout is surfaced. Do not await it here: a broken peer must not
+      // extend the deadline while its stream is being torn down.
+      void reader.cancel().catch(() => undefined);
+      reject(new StripeWebhookBodyTimeoutError('Stripe webhook body timed out'));
+    }, STRIPE_WEBHOOK_BODY_TIMEOUT_MS);
+  });
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      const { done, value } = await Promise.race([reader.read(), bodyTimeout]);
       if (done) break;
       if (!value) continue;
       total += value.byteLength;
@@ -44,6 +60,7 @@ async function readStripeWebhookBody(req: Request): Promise<Buffer> {
       chunks.push(value);
     }
   } finally {
+    if (timeout) clearTimeout(timeout);
     reader.releaseLock();
   }
   return Buffer.concat(chunks, total);
@@ -304,6 +321,7 @@ export async function POST(req:Request){
   try { payload=await readStripeWebhookBody(req); }
   catch(error) {
     if (error instanceof RangeError) return NextResponse.json({error:'Webhook payload too large'},{status:413});
+    if (error instanceof StripeWebhookBodyTimeoutError) return NextResponse.json({error:'Webhook payload timed out'},{status:408});
     return NextResponse.json({error:'Invalid webhook payload'},{status:400});
   }
   try{event=stripe.webhooks.constructEvent(payload,req.headers.get('stripe-signature')||'',webhookSecret);}catch{return NextResponse.json({error:'Invalid signature'},{status:400});}

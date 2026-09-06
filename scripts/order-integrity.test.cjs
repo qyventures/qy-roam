@@ -670,9 +670,14 @@ test('fulfilment email retries retain one safe per-order message identity', () =
 
 test('Stripe webhook bounds raw payload memory before signature verification', () => {
   assert.match(webhookRoute, /const MAX_STRIPE_WEBHOOK_BODY_BYTES = 1_000_000/);
+  assert.match(webhookRoute, /const STRIPE_WEBHOOK_BODY_TIMEOUT_MS = 15_000/);
+  assert.match(webhookRoute, /class StripeWebhookBodyTimeoutError extends Error/);
   assert.match(webhookRoute, /async function readStripeWebhookBody\(req: Request\): Promise<Buffer>/);
   assert.match(webhookRoute, /Number\(contentLength\) > MAX_STRIPE_WEBHOOK_BODY_BYTES/);
   assert.match(webhookRoute, /total > MAX_STRIPE_WEBHOOK_BODY_BYTES/);
+  assert.match(webhookRoute, /await Promise\.race\(\[reader\.read\(\), bodyTimeout\]\)/);
+  assert.match(webhookRoute, /void reader\.cancel\(\)\.catch\(\(\) => undefined\)/);
+  assert.match(webhookRoute, /Webhook payload timed out/);
   assert.match(webhookRoute, /Webhook payload too large/);
   assert.match(webhookRoute, /stripe\.webhooks\.constructEvent\(payload,req\.headers\.get\('stripe-signature'\)/);
 });
