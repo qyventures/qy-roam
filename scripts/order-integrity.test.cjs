@@ -449,6 +449,13 @@ test('idempotent checkout replays recover paid orders without a second payment a
   assert.match(esimPage, /data\.completed && typeof data\.sessionId === 'string'/);
 });
 
+test('paid Pocket WiFi checkout replays release only their own linked hold', () => {
+  // A response can be lost after the webhook persists payment but before it
+  // removes the temporary reservation. The idempotent replay must clear that
+  // stale hold promptly, without releasing another session's reservation.
+  assert.match(wifiCheckoutRoute, /if\(order\.data\?\.payment_status==='paid'\)\{[\s\S]*?\.eq\('checkout_request_id',requestId\)\s*\.eq\('stripe_session_id',session\.id\)/);
+});
+
 test('Pocket WiFi payment URLs require a durable matching reservation link', () => {
   assert.match(wifiCheckoutRoute, /async function linkReservationToSession/);
   assert.match(wifiCheckoutRoute, /stripe_session_id\.is\.null,stripe_session_id\.eq\.\$\{sessionId\}/);

@@ -237,7 +237,14 @@ export async function POST(req: Request) {
     const order=await supabase.from('orders').select('payment_status').eq('stripe_session_id',session.id).maybeSingle();
     if(order.error) throw order.error;
     if(order.data?.payment_status==='paid'){
-      const released=await supabase.from('checkout_reservations').delete().eq('checkout_request_id',requestId).is('stripe_session_id',null);
+      // The normal terminal webhook releases this hold. A lost response can
+      // make this replay observe the paid order after persistence but before
+      // that cleanup finished. Release only the reservation bound to this
+      // exact paid Checkout Session: deleting an unlinked row here could
+      // otherwise free a later recovery attempt that reused the request id.
+      const released=await supabase.from('checkout_reservations').delete()
+        .eq('checkout_request_id',requestId)
+        .eq('stripe_session_id',session.id);
       if(released.error) throw released.error;
     }else if(!await linkReservationToSession(supabase,requestId,session.id)){
       return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
