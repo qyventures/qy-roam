@@ -40,11 +40,13 @@ async function readStripeWebhookBody(req: Request): Promise<Buffer> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const bodyTimeout = new Promise<never>((_, reject) => {
     timeout = setTimeout(() => {
+      reject(new StripeWebhookBodyTimeoutError('Stripe webhook body timed out'));
       // Cancelling wakes a pending read in compliant runtimes before the
-      // timeout is surfaced. Do not await it here: a broken peer must not
+      // timeout is surfaced. Reject first: cancellation can resolve the
+      // pending read as done, which must not turn an expired deadline into an
+      // accepted empty body. Do not await it here: a broken peer must not
       // extend the deadline while its stream is being torn down.
       void reader.cancel().catch(() => undefined);
-      reject(new StripeWebhookBodyTimeoutError('Stripe webhook body timed out'));
     }, STRIPE_WEBHOOK_BODY_TIMEOUT_MS);
   });
   try {

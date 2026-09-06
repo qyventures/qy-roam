@@ -29,6 +29,7 @@ const { WIFI_BENCHMARK, WIFI_PLANS } = require('../lib/wifiPlans.ts');
 const { allowedFulfilmentStatuses, validFulfilmentTransition } = require('../lib/orderLifecycle.ts');
 const { operationalConfig } = require('../lib/operationalConfig.ts');
 const { validStripeCheckoutSessionId } = require('../lib/stripeSessionId.ts');
+const { readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError } = require('../lib/requestBody.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -268,6 +269,41 @@ test('checkout request ids use the same production boundary everywhere', () => {
   assert.equal(validCheckoutRequestId(requestId), requestId);
   for (const value of ['short', 'contains spaces 123456', 'bad/slashes/123456', 'x'.repeat(81)]) {
     assert.equal(validCheckoutRequestId(value), null);
+  }
+});
+
+test('checkout request bodies are bounded for chunked, malformed, and slow uploads', async () => {
+  const complete = new Request('https://qyroam.test/api/checkout', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ checkoutRequestId: requestId }),
+  });
+  assert.equal(await readLimitedRequestText(complete, 4096, 100), JSON.stringify({ checkoutRequestId: requestId }));
+
+  await assert.rejects(
+    () => readLimitedRequestText(new Request('https://qyroam.test', { method: 'POST', headers: { 'content-length': '5000' }, body: 'x' }), 4096, 100),
+    RequestBodyTooLargeError,
+  );
+  await assert.rejects(
+    () => readLimitedRequestText(new Request('https://qyroam.test', { method: 'POST', headers: { 'content-length': 'not-a-number' }, body: 'x' }), 4096, 100),
+    InvalidRequestBodyLengthError,
+  );
+  await assert.rejects(
+    () => readLimitedRequestText(new Request('https://qyroam.test', { method: 'POST', body: '12345' }), 4, 100),
+    RequestBodyTooLargeError,
+  );
+  const stalled = {
+    headers: new Headers(),
+    body: new ReadableStream({ pull() { return new Promise(() => {}); } }),
+  };
+  await assert.rejects(() => readLimitedRequestText(stalled, 4096, 20), RequestBodyTimeoutError);
+});
+
+test('both checkout endpoints use the bounded streaming body reader', () => {
+  for (const source of [wifiCheckoutRoute, esimCheckoutRoute]) {
+    assert.match(source, /readLimitedRequestText\(req,\s*MAX_BODY_BYTES,\s*CHECKOUT_BODY_TIMEOUT_MS\)/);
+    assert.match(source, /RequestBodyTimeoutError/);
+    assert.doesNotMatch(source, /await req\.text\(\)/);
   }
 });
 
@@ -676,6 +712,7 @@ test('Stripe webhook bounds raw payload memory before signature verification', (
   assert.match(webhookRoute, /Number\(contentLength\) > MAX_STRIPE_WEBHOOK_BODY_BYTES/);
   assert.match(webhookRoute, /total > MAX_STRIPE_WEBHOOK_BODY_BYTES/);
   assert.match(webhookRoute, /await Promise\.race\(\[reader\.read\(\), bodyTimeout\]\)/);
+  assert.match(webhookRoute, /reject\(new StripeWebhookBodyTimeoutError\('Stripe webhook body timed out'\)\);[\s\S]{0,500}void reader\.cancel\(\)/);
   assert.match(webhookRoute, /void reader\.cancel\(\)\.catch\(\(\) => undefined\)/);
   assert.match(webhookRoute, /Webhook payload timed out/);
   assert.match(webhookRoute, /Webhook payload too large/);

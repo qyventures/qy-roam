@@ -9,10 +9,12 @@ import { QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance, validQyRoamPro
 import { operationalConfig } from '../../../lib/operationalConfig';
 import { operationalIsoDate, operationalIsoDateAfter } from '../../../lib/operationalDate';
 import { hasRequiredFulfilmentEmailConfig, hasRequiredPaymentSchema } from '../../../lib/productionReadiness';
+import { InvalidRequestBodyLengthError, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
 
 export const runtime = 'nodejs';
 
 const MAX_BODY_BYTES=4096;
+const CHECKOUT_BODY_TIMEOUT_MS=15_000;
 const WINDOW_MS=60_000;
 const MAX_ATTEMPTS=12;
 const HOLD_MINUTES=30;
@@ -121,12 +123,18 @@ export async function POST(req: Request) {
  try {
   if(limited(req)) return NextResponse.json({error:'Too many checkout attempts. Please try again shortly.'},{status:429,headers:{'Retry-After':'60'}});
   const type=req.headers.get('content-type')||''; if(!type.toLowerCase().startsWith('application/json')) return NextResponse.json({error:'Expected JSON request.'},{status:415});
-  const length=Number(req.headers.get('content-length')||0); if(length>MAX_BODY_BYTES) return NextResponse.json({error:'Request too large.'},{status:413});
   const key=process.env.STRIPE_SECRET_KEY; if(!key) return NextResponse.json({error:'Payment configuration incomplete.'},{status:503});
   if(!process.env.ORDER_INTEGRITY_SECRET||process.env.ORDER_INTEGRITY_SECRET.length<32) return NextResponse.json({error:'Order configuration incomplete.'},{status:503});
   if(!hasRequiredFulfilmentEmailConfig()) return NextResponse.json({error:'Pocket WiFi ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
   const config=operationalConfig(); if(!config) return NextResponse.json({error:'Order configuration incomplete.'},{status:503});
-  const raw=await req.text(); if(new TextEncoder().encode(raw).length>MAX_BODY_BYTES) return NextResponse.json({error:'Request too large.'},{status:413});
+  let raw:string;
+  try { raw=await readLimitedRequestText(req,MAX_BODY_BYTES,CHECKOUT_BODY_TIMEOUT_MS); }
+  catch(error) {
+    if(error instanceof RequestBodyTooLargeError) return NextResponse.json({error:'Request too large.'},{status:413});
+    if(error instanceof InvalidRequestBodyLengthError) return NextResponse.json({error:'Invalid request.'},{status:400});
+    if(error instanceof RequestBodyTimeoutError) return NextResponse.json({error:'Request timed out. Please try again.'},{status:408});
+    return NextResponse.json({error:'Invalid request.'},{status:400});
+  }
   let body:Record<string,unknown>; try { body=JSON.parse(raw); } catch { return NextResponse.json({error:'Invalid request.'},{status:400}); }
   const requestId=validCheckoutRequestId(body.checkoutRequestId);
   if(!requestId) return NextResponse.json({error:'Invalid checkout request.'},{status:400});

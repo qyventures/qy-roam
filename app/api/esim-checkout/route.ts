@@ -5,10 +5,12 @@ import { ESIM_PROMO, getEsimPlan } from '../../../lib/esimPlans';
 import { validCheckoutRequestId } from '../../../lib/checkoutValidation';
 import { QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance } from '../../../lib/orderProvenance';
 import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig } from '../../../lib/productionReadiness';
+import { InvalidRequestBodyLengthError, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
 
 export const runtime = 'nodejs';
 
 const MAX_BODY_BYTES = 4096;
+const CHECKOUT_BODY_TIMEOUT_MS = 15_000;
 const WINDOW_MS = 60_000;
 const MAX_ATTEMPTS = 12;
 const attempts = new Map<string, { count: number; reset: number }>();
@@ -67,10 +69,14 @@ export async function POST(req: Request) {
       });
     }
 
-    const length = Number(req.headers.get('content-length') || 0);
-    if (length > MAX_BODY_BYTES) return NextResponse.json({ error: 'Request too large.' }, { status: 413 });
-    const raw = await req.text();
-    if (new TextEncoder().encode(raw).length > MAX_BODY_BYTES) return NextResponse.json({ error: 'Request too large.' }, { status: 413 });
+    let raw: string;
+    try { raw = await readLimitedRequestText(req, MAX_BODY_BYTES, CHECKOUT_BODY_TIMEOUT_MS); }
+    catch (error) {
+      if (error instanceof RequestBodyTooLargeError) return NextResponse.json({ error: 'Request too large.' }, { status: 413 });
+      if (error instanceof InvalidRequestBodyLengthError) return NextResponse.json({ error: 'Invalid request.' }, { status: 400 });
+      if (error instanceof RequestBodyTimeoutError) return NextResponse.json({ error: 'Request timed out. Please try again.' }, { status: 408 });
+      return NextResponse.json({ error: 'Invalid request.' }, { status: 400 });
+    }
     let body: Record<string, unknown>;
     try { body = JSON.parse(raw) as Record<string, unknown>; }
     catch { return NextResponse.json({ error: 'Invalid request.' }, { status: 400 }); }
