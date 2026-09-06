@@ -6,11 +6,26 @@ import { parseExactIsoDate } from '@/lib/checkoutValidation';
 import { operationalConfig } from '@/lib/operationalConfig';
 import { operationalIsoDateAfter } from '@/lib/operationalDate';
 import { validQyRoamProvenance } from '@/lib/orderProvenance';
-import { hasRequiredPaymentSchema } from '@/lib/productionReadiness';
+import {
+  hasRequiredFulfilmentEmailConfig,
+  hasRequiredPaymentSchema,
+  hasRequiredStripeWebhookConfig,
+} from '@/lib/productionReadiness';
 
 export const dynamic = 'force-dynamic';
 
 const HOLD_MINUTES = 30;
+
+// Availability is a purchase promise, rather than a rough stock estimate.
+// Keep its unavailable response identical across prerequisite failures so the
+// endpoint neither leaks configuration detail nor tells a traveller to begin
+// a checkout that will be rejected before Stripe can create a payment page.
+function unavailableAvailability() {
+  return NextResponse.json({ available: false, remaining: 0, inventoryMode: 'unavailable', error: 'Live availability is temporarily unavailable. Please try again shortly or contact +65 8032 7183.' }, {
+    status: 503,
+    headers: { 'Cache-Control': 'no-store', 'Retry-After': '30' },
+  });
+}
 
 async function activeStripeHolds(stripe: Stripe, start: string, end: string) {
   const nowSeconds = Math.floor(Date.now() / 1000);
@@ -97,20 +112,25 @@ export async function GET(req: NextRequest) {
   if (start.toISOString().slice(0, 10) < earliest) return NextResponse.json({ available: false, error: `Please book at least ${minLeadDays} day${minLeadDays === 1 ? '' : 's'} before departure.` }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
   if (rentalDays < 1 || rentalDays > 90) return NextResponse.json({ available: false, error: 'Bookings must be between 1 and 90 days.' }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
 
-  // Availability is a promise that a customer can proceed to payment. Use the
-  // same cached, fail-closed post-payment schema check as checkout so an
-  // incomplete migration cannot show a purchasable router only for checkout
+  // Availability is a promise that a customer can proceed to payment. Match
+  // every non-request-specific checkout prerequisite before calculating stock:
+  // missing webhook, fulfilment, or signing configuration used to leave the
+  // product shown as available even though checkout had to refuse the order.
+  const stripeKey = process.env.STRIPE_SECRET_KEY;
+  const orderIntegritySecret = process.env.ORDER_INTEGRITY_SECRET;
+  if (!stripeKey || !orderIntegritySecret || orderIntegritySecret.length < 32 ||
+    !hasRequiredStripeWebhookConfig() || !hasRequiredFulfilmentEmailConfig() || !getSupabaseAdmin()) {
+    return unavailableAvailability();
+  }
+
+  // The same cached, fail-closed post-payment schema check prevents an
+  // incomplete migration from showing a purchasable router only for checkout
   // to reject it moments later.
   if (!await hasRequiredPaymentSchema()) {
-    return NextResponse.json({ available: false, remaining: 0, inventoryMode: 'unavailable', error: 'Live availability is temporarily unavailable. Please try again shortly or contact +65 8032 7183.' }, {
-      status: 503,
-      headers: { 'Cache-Control': 'no-store', 'Retry-After': '30' },
-    });
+    return unavailableAvailability();
   }
 
   const inventory = config.pocketWifiInventory;
-  const stripeKey = process.env.STRIPE_SECRET_KEY;
-  if (!stripeKey || !getSupabaseAdmin()) return NextResponse.json({ available: false, remaining: 0, inventoryMode: 'unavailable', error: 'Live availability is not configured yet. Please try again shortly or contact +65 8032 7183.' }, { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '30' } });
 
   const from = start.toISOString().slice(0, 10);
   const to = end.toISOString().slice(0, 10);
