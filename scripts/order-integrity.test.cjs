@@ -840,8 +840,7 @@ test('admin CAPI recovery is limited to consented purchases and remains availabl
 test('admin can safely resume failed paid-order notifications', () => {
   assert.match(adminOrderRoute, /export async function POST/);
   assert.match(adminOrderRoute, /validateQyRoamSession\(session\)/);
-  assert.match(adminOrderRoute, /await deliverFulfilmentNotification\(supabase, session\)/);
-  assert.match(adminOrderRoute, /await deliverMetaPurchase\(supabase, session/);
+  assert.match(adminOrderRoute, /await deliverPaidOrderSideEffects\(supabase, session, metaEventTime\)/);
   assert.match(adminOrderActions, /Retry order deliveries/);
 });
 
@@ -875,7 +874,7 @@ test('Meta Purchase retries preserve one durable event timestamp for deduplicati
   assert.match(webhookRoute, /await sendMetaPurchase\(session,Number\(attempt\.data\[0\]\.event_time\)\)/);
   assert.match(adminOrderRoute, /select\('stripe_session_id,payment_status,payment_confirmed_at'\)/);
   assert.match(adminOrderRoute, /const metaEventTime=Number\.isFinite\(confirmedAtMs\)/);
-  assert.match(adminOrderRoute, /await deliverMetaPurchase\(supabase, session, metaEventTime\)/);
+  assert.match(adminOrderRoute, /await deliverPaidOrderSideEffects\(supabase, session, metaEventTime\)/);
   assert.doesNotMatch(adminOrderRoute, /Math\.floor\(Date\.now\(\) \/ 1000\)/);
 });
 
@@ -886,6 +885,8 @@ test('paid-order email and Meta deliveries are attempted independently', () => {
   assert.match(webhookRoute, /Promise\.allSettled\(\[\s*deliverFulfilmentNotification\(supabase,session\),\s*deliverMetaPurchase\(supabase,session,eventTime\),\s*\]\)/);
   assert.match(webhookRoute, /if\(failures\.length\) throw new AggregateError/);
   assert.match(webhookRoute, /await deliverPaidOrderSideEffects\(supabase,session,event\.created\)/);
+  assert.match(adminOrderRoute, /await deliverPaidOrderSideEffects\(supabase, session, metaEventTime\)/);
+  assert.doesNotMatch(adminOrderRoute, /await deliverFulfilmentNotification\(supabase, session\)[\s\S]{0,800}await deliverMetaPurchase\(supabase, session/);
 });
 
 test('consented browser and CAPI Purchases share a stable deduplication identity', () => {

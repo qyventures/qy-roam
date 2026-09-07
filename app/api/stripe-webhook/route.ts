@@ -359,7 +359,7 @@ export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof
   }
 }
 
-async function deliverPaidOrderSideEffects(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session,eventTime:number){
+export async function deliverPaidOrderSideEffects(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session,eventTime:number){
   // Human fulfilment and consented analytics have independent durable ledgers.
   // Attempt both even when one provider is unavailable: serial delivery would
   // let a persistent SMTP outage indefinitely suppress an otherwise valid CAPI

@@ -3,7 +3,7 @@ import { createStripeClient } from '@/lib/stripeClient';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { validFulfilmentStatus, validFulfilmentTransition } from '@/lib/orderLifecycle';
 import { validateQyRoamSession } from '@/lib/qyRoamSession';
-import { deliverFulfilmentNotification, deliverMetaPurchase } from '@/app/api/stripe-webhook/route';
+import { deliverPaidOrderSideEffects } from '@/app/api/stripe-webhook/route';
 import { InvalidRequestBodyLengthError, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '@/lib/requestBody';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 
@@ -176,16 +176,19 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
       return NextResponse.json({ error: 'The linked Stripe session is not a valid paid QY Roam order' }, { status: 409 });
     }
 
-    await deliverFulfilmentNotification(supabase, session);
-    // The delivery ledger preserves the original webhook event timestamp when
-    // present. If a previous attempt failed before it created that row, use
-    // the first signed payment-confirmation time persisted by the webhook.
-    // Session creation remains a stable fallback only for legacy orders.
+    // The delivery ledgers preserve the original webhook event timestamp and
+    // make each side effect independently retry-safe. Attempt email and Meta
+    // together so an outage at either provider cannot starve recovery of the
+    // other after Stripe's automatic retry window has ended.
+    //
+    // If a previous attempt failed before it created the Meta row, use the
+    // first signed payment-confirmation time persisted by the webhook. Session
+    // creation remains a stable fallback only for legacy orders.
     const confirmedAtMs=order.payment_confirmed_at ? new Date(order.payment_confirmed_at).getTime() : Number.NaN;
     const metaEventTime=Number.isFinite(confirmedAtMs) && confirmedAtMs>0
       ? Math.floor(confirmedAtMs/1000)
       : session.created;
-    await deliverMetaPurchase(supabase, session, metaEventTime);
+    await deliverPaidOrderSideEffects(supabase, session, metaEventTime);
     return NextResponse.json({ ok: true }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('admin_order_notification_retry_error', error);
