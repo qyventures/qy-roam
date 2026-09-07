@@ -324,6 +324,16 @@ test('both checkout endpoints use the bounded streaming body reader', () => {
   }
 });
 
+test('public checkout endpoints reject JSON primitives and arrays before reading order fields', () => {
+  // JSON null, strings and arrays are syntactically valid but cannot be
+  // checkout requests. Reject them here instead of letting a null property
+  // read escape to the outer handler as a misleading server error.
+  for (const source of [wifiCheckoutRoute, esimCheckoutRoute]) {
+    assert.match(source, /!parsed\s*\|\|\s*typeof parsed\s*!==\s*['"]object['"]\s*\|\|\s*Array\.isArray\(parsed\)/);
+    assert.match(source, /body\s*=\s*parsed\s+as\s+Record<string,\s*unknown>/);
+  }
+});
+
 test('admin operational mutations bound and validate their JSON request bodies', () => {
   assert.match(adminOpsRoute, /readLimitedRequestText\(req,\s*MAX_ADMIN_OPS_BODY_BYTES,\s*ADMIN_OPS_BODY_TIMEOUT_MS\)/);
   assert.match(adminOpsRoute, /RequestBodyTimeoutError/);

@@ -81,8 +81,11 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Invalid request.' }, { status: 400 });
     }
     let body: Record<string, unknown>;
-    try { body = JSON.parse(raw) as Record<string, unknown>; }
-    catch { return NextResponse.json({ error: 'Invalid request.' }, { status: 400 }); }
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid JSON object');
+      body = parsed as Record<string, unknown>;
+    } catch { return NextResponse.json({ error: 'Invalid request.' }, { status: 400 }); }
     const requestId = validCheckoutRequestId(body.checkoutRequestId);
     if (!requestId) return NextResponse.json({ error: 'Invalid checkout request.' }, { status: 400 });
     const plan = getEsimPlan(body.planId);

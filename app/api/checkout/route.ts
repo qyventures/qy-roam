@@ -131,7 +131,12 @@ export async function POST(req: Request) {
     if(error instanceof RequestBodyTimeoutError) return NextResponse.json({error:'Request timed out. Please try again.'},{status:408});
     return NextResponse.json({error:'Invalid request.'},{status:400});
   }
-  let body:Record<string,unknown>; try { body=JSON.parse(raw); } catch { return NextResponse.json({error:'Invalid request.'},{status:400}); }
+  let body:Record<string,unknown>;
+  try {
+    const parsed:unknown=JSON.parse(raw);
+    if(!parsed||typeof parsed!=='object'||Array.isArray(parsed)) throw new Error('Invalid JSON object');
+    body=parsed as Record<string,unknown>;
+  } catch { return NextResponse.json({error:'Invalid request.'},{status:400}); }
   const requestId=validCheckoutRequestId(body.checkoutRequestId);
   if(!requestId) return NextResponse.json({error:'Invalid checkout request.'},{status:400});
   const country=String(body.country||''); const wifiPlan=getWifiPlan(country); const daily=wifiPlan?.daily; const startDate=parseExactIsoDate(body.start); const endDate=parseExactIsoDate(body.end);
