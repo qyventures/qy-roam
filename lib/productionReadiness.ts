@@ -10,10 +10,31 @@ export { hasRequiredStripeCheckoutConfig } from '@/lib/stripeCheckoutConfig';
 // Cache only a successful result and only for a short interval: an outage or
 // incomplete migration is never cached and continues to fail closed.
 const READINESS_CACHE_MS = 15_000;
+// A readiness check sits directly on the customer checkout path. Supabase's
+// normal request timeout is intentionally generous, but waiting that long
+// here can exhaust server workers during a network partition. Abort the
+// probe itself (rather than only racing its result) so a failed dependency
+// produces the existing fail-closed response within a bounded time.
+const READINESS_PROBE_TIMEOUT_MS = 8_000;
 let paymentSchemaReadyUntil = 0;
 let esimOrderSchemaReadyUntil = 0;
 let paymentSchemaCheckInFlight: Promise<boolean> | null = null;
 let esimOrderSchemaCheckInFlight: Promise<boolean> | null = null;
+
+class ReadinessProbeTimeoutError extends Error {}
+
+async function runReadinessProbe<T>(probe: (signal: AbortSignal) => Promise<T>) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), READINESS_PROBE_TIMEOUT_MS);
+  try {
+    return await probe(controller.signal);
+  } catch (error) {
+    if (controller.signal.aborted) throw new ReadinessProbeTimeoutError('Production readiness probe timed out');
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 const REQUIRED_PAYMENT_SCHEMA = [
   {
@@ -122,45 +143,45 @@ async function checkRequiredPaymentSchema() {
   const supabase = getSupabaseAdmin();
   if (!supabase) return false;
 
-  let results;
   try {
-    results = await Promise.all(
-      REQUIRED_PAYMENT_SCHEMA.map(({ table, columns }) =>
-        supabase.from(table).select(columns).limit(1),
-      ),
-    );
+    return await runReadinessProbe(async (signal) => {
+      const results = await Promise.all(
+        REQUIRED_PAYMENT_SCHEMA.map(({ table, columns }) =>
+          supabase.from(table).select(columns).limit(1).abortSignal(signal),
+        ),
+      );
+      const failures = results
+        .map((result, index) => result.error ? REQUIRED_PAYMENT_SCHEMA[index].table : null)
+        .filter(Boolean);
+      if (failures.length > 0) {
+        console.error('production_payment_schema_check_failed', { tables: failures });
+        return false;
+      }
+
+      // The table checks above are not enough for Pocket WiFi sales: checkout uses
+      // this RPC as the atomic inventory boundary. Probe it with zero inventory so
+      // it can never create a reservation while still verifying that the function,
+      // its current signature, and the service-role grant are all deployed.
+      const today = new Date().toISOString().slice(0, 10);
+      const reservationProbe = await supabase.rpc('qy_reserve_pocket_wifi', {
+        p_checkout_request_id: `readiness_${crypto.randomUUID().replaceAll('-', '')}`,
+        p_travel_start: today,
+        p_travel_end: today,
+        p_inventory: 0,
+        p_expires_at: new Date(Date.now() + 60_000).toISOString(),
+        p_stripe_hold_count: 0,
+        p_stripe_hold_request_ids: [],
+      }).abortSignal(signal);
+      if (reservationProbe.error || reservationProbe.data?.[0]?.reserved !== false) {
+        console.error('production_payment_reservation_rpc_check_failed');
+        return false;
+      }
+      return true;
+    });
   } catch {
     console.error('production_payment_schema_check_unavailable');
     return false;
   }
-
-  const failures = results
-    .map((result, index) => result.error ? REQUIRED_PAYMENT_SCHEMA[index].table : null)
-    .filter(Boolean);
-  if (failures.length > 0) {
-    console.error('production_payment_schema_check_failed', { tables: failures });
-    return false;
-  }
-
-  // The table checks above are not enough for Pocket WiFi sales: checkout uses
-  // this RPC as the atomic inventory boundary. Probe it with zero inventory so
-  // it can never create a reservation while still verifying that the function,
-  // its current signature, and the service-role grant are all deployed.
-  const today = new Date().toISOString().slice(0, 10);
-  const reservationProbe = await supabase.rpc('qy_reserve_pocket_wifi', {
-    p_checkout_request_id: `readiness_${crypto.randomUUID().replaceAll('-', '')}`,
-    p_travel_start: today,
-    p_travel_end: today,
-    p_inventory: 0,
-    p_expires_at: new Date(Date.now() + 60_000).toISOString(),
-    p_stripe_hold_count: 0,
-    p_stripe_hold_request_ids: [],
-  });
-  if (reservationProbe.error || reservationProbe.data?.[0]?.reserved !== false) {
-    console.error('production_payment_reservation_rpc_check_failed');
-    return false;
-  }
-  return true;
 }
 
 export async function hasRequiredPaymentSchema() {
@@ -191,23 +212,25 @@ async function checkRequiredEsimOrderSchema() {
   if (!supabase) return false;
 
   try {
-    const results = await Promise.all(
-      REQUIRED_ESIM_ORDER_SCHEMA.map(({ table, columns }) =>
-        supabase.from(table).select(columns).limit(1),
-      ),
-    );
-    const failures = results
-      .map((result, index) => result.error ? REQUIRED_ESIM_ORDER_SCHEMA[index].table : null)
-      .filter(Boolean);
-    if (failures.length > 0) {
-      console.error('production_esim_order_schema_check_failed', { tables: failures });
-      return false;
-    }
+    return await runReadinessProbe(async (signal) => {
+      const results = await Promise.all(
+        REQUIRED_ESIM_ORDER_SCHEMA.map(({ table, columns }) =>
+          supabase.from(table).select(columns).limit(1).abortSignal(signal),
+        ),
+      );
+      const failures = results
+        .map((result, index) => result.error ? REQUIRED_ESIM_ORDER_SCHEMA[index].table : null)
+        .filter(Boolean);
+      if (failures.length > 0) {
+        console.error('production_esim_order_schema_check_failed', { tables: failures });
+        return false;
+      }
+      return true;
+    });
   } catch {
     console.error('production_esim_order_schema_check_unavailable');
     return false;
   }
-  return true;
 }
 
 export async function hasRequiredEsimOrderSchema() {
@@ -242,53 +265,55 @@ export async function hasRequiredOperationsSchema() {
     // when probing many operational relations at once. These are deliberately
     // runtime schema probes, so keep the query surface untyped here.
     const database: any = supabase;
-    const results = await Promise.all(
-      REQUIRED_OPERATIONS_SCHEMA.map(({ table, columns }) =>
-        database.from(table).select(columns).limit(1),
-      ),
-    );
-    const failures = results
-      .map((result, index) => result.error ? REQUIRED_OPERATIONS_SCHEMA[index].table : null)
-      .filter(Boolean);
-    if (failures.length) {
-      console.error('production_operations_schema_check_failed', { tables: failures });
-      return false;
-    }
+    return await runReadinessProbe(async (signal) => {
+      const results = await Promise.all(
+        REQUIRED_OPERATIONS_SCHEMA.map(({ table, columns }) =>
+          database.from(table).select(columns).limit(1).abortSignal(signal),
+        ),
+      );
+      const failures = results
+        .map((result, index) => result.error ? REQUIRED_OPERATIONS_SCHEMA[index].table : null)
+        .filter(Boolean);
+      if (failures.length) {
+        console.error('production_operations_schema_check_failed', { tables: failures });
+        return false;
+      }
 
-    // Probe the two inventory RPCs without changing any state. A zero order
-    // id is impossible for the identity-backed orders table, and a zero item
-    // id is rejected before either function writes. Their expected domain
-    // errors prove the functions, their current argument signatures, and the
-    // service-role grants are deployed. Missing-function or permission errors
-    // instead fail the launch gate before an operator needs to dispatch or
-    // receive a real device.
-    const [transitionProbe, adjustmentProbe] = await Promise.all([
-      database.rpc('qy_transition_pocket_wifi_order', {
-        p_order_id: 0,
-        p_expected_status: 'paid',
-        p_next_status: 'paid',
-        p_courier_tracking: null,
-        p_return_tracking: null,
-        p_notes: null,
-        p_inventory_item_id: null,
-        p_return_disposition: 'restock',
-      }),
-      database.rpc('qy_adjust_inventory', {
-        p_item_id: 0,
-        p_delta: 1,
-        p_type: 'readiness_probe',
-        p_reference: null,
-        p_notes: null,
-      }),
-    ]);
-    if (!transitionProbe.error || !/order not found/i.test(transitionProbe.error.message || '') ||
-      !adjustmentProbe.error || !/invalid inventory item/i.test(adjustmentProbe.error.message || '')) {
-      console.error('production_operations_inventory_rpc_check_failed');
-      return false;
-    }
+      // Probe the two inventory RPCs without changing any state. A zero order
+      // id is impossible for the identity-backed orders table, and a zero item
+      // id is rejected before either function writes. Their expected domain
+      // errors prove the functions, their current argument signatures, and the
+      // service-role grants are deployed. Missing-function or permission errors
+      // instead fail the launch gate before an operator needs to dispatch or
+      // receive a real device.
+      const [transitionProbe, adjustmentProbe] = await Promise.all([
+        database.rpc('qy_transition_pocket_wifi_order', {
+          p_order_id: 0,
+          p_expected_status: 'paid',
+          p_next_status: 'paid',
+          p_courier_tracking: null,
+          p_return_tracking: null,
+          p_notes: null,
+          p_inventory_item_id: null,
+          p_return_disposition: 'restock',
+        }).abortSignal(signal),
+        database.rpc('qy_adjust_inventory', {
+          p_item_id: 0,
+          p_delta: 1,
+          p_type: 'readiness_probe',
+          p_reference: null,
+          p_notes: null,
+        }).abortSignal(signal),
+      ]);
+      if (!transitionProbe.error || !/order not found/i.test(transitionProbe.error.message || '') ||
+        !adjustmentProbe.error || !/invalid inventory item/i.test(adjustmentProbe.error.message || '')) {
+        console.error('production_operations_inventory_rpc_check_failed');
+        return false;
+      }
+      return true;
+    });
   } catch {
     console.error('production_operations_schema_check_unavailable');
     return false;
   }
-  return true;
 }

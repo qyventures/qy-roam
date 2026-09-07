@@ -412,6 +412,21 @@ test('post-payment readiness checks every webhook-persisted delivery field', () 
   assert.match(productionReadiness, /status,event_time,attempts,last_attempt_at,sent_at,last_error,updated_at/);
 });
 
+test('production readiness aborts stalled database probes instead of holding checkout workers', () => {
+  // Readiness is evaluated on the public checkout path. A timeout must abort
+  // the underlying PostgREST request, not merely race its promise and leave
+  // unbounded background requests alive during a database/network incident.
+  assert.match(productionReadiness, /const READINESS_PROBE_TIMEOUT_MS = 8_000/);
+  assert.match(productionReadiness, /class ReadinessProbeTimeoutError extends Error/);
+  assert.match(productionReadiness, /const controller = new AbortController\(\)/);
+  assert.match(productionReadiness, /setTimeout\(\(\) => controller\.abort\(\), READINESS_PROBE_TIMEOUT_MS\)/);
+  assert.match(productionReadiness, /throw new ReadinessProbeTimeoutError\('Production readiness probe timed out'\)/);
+  assert.match(productionReadiness, /\.select\(columns\)\.limit\(1\)\.abortSignal\(signal\)/);
+  assert.match(productionReadiness, /qy_reserve_pocket_wifi[\s\S]{0,500}\.abortSignal\(signal\)/);
+  assert.match(productionReadiness, /qy_transition_pocket_wifi_order[\s\S]{0,500}\.abortSignal\(signal\)/);
+  assert.match(productionReadiness, /qy_adjust_inventory[\s\S]{0,300}\.abortSignal\(signal\)/);
+});
+
 test('checkout never exposes payment when human fulfilment email is not configured', () => {
   assert.match(esimCheckoutRoute, /hasRequiredFulfilmentEmailConfig/);
   assert.match(esimCheckoutRoute, /if \(!hasRequiredFulfilmentEmailConfig\(\)\)/);
