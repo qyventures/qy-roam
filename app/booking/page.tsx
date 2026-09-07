@@ -56,15 +56,21 @@ export default async function BookingPage({ searchParams }: Props) {
     if (!validation.valid) throw new Error(`Invalid QY Roam Checkout Session: ${validation.reason}`);
     const productType = validation.productType;
     const supabase = getSupabaseAdmin();
-    const order = supabase
+    const orderResult = supabase
       ? await supabase
           .from('orders')
           .select('fulfilment_status,courier_tracking,return_tracking,dispatched_at,returned_at')
           .eq('stripe_session_id', sessionId)
           .maybeSingle()
       : null;
+    // Stripe is the payment authority, but an unavailable order ledger is not
+    // the same as an order that has not yet been persisted. Do not present the
+    // normal fulfilment message in that state: it could tell a paid traveller
+    // that their order is queued while the signed webhook is still retrying.
+    const orderLookupFailed = Boolean(orderResult?.error);
+    const order = orderResult?.data;
 
-    const fulfilment = order?.data?.fulfilment_status || initialFulfilmentStatus(productType, session.payment_status);
+    const fulfilment = order?.fulfilment_status || initialFulfilmentStatus(productType, session.payment_status);
     const destination = session.metadata?.country || 'your destination';
     const planName = session.metadata?.plan_name || destination;
     const isEsim = productType === 'esim';
@@ -79,7 +85,12 @@ export default async function BookingPage({ searchParams }: Props) {
         <h1>{paid ? statusLabels[fulfilment] || 'Order confirmed' : 'Payment not yet confirmed'}</h1>
         <p><strong>{planName}</strong>{start && end ? ` · ${start} to ${end}` : ''}{amount ? ` · ${amount}` : ''}</p>
 
-        {paid ? (
+        {paid && orderLookupFailed ? (
+          <div role="alert">
+            <p><strong>Your payment is confirmed.</strong> We’re temporarily finalising the order record, so fulfilment details are not available just yet.</p>
+            <p>Please do not place a second order. Refresh this page shortly; if this message remains, contact us at <a href="tel:+6580327183"><strong>+65 8032 7183</strong></a> and quote your checkout confirmation.</p>
+          </div>
+        ) : paid ? (
           isEsim ? (
             <>
               <p>{fulfilment === 'fulfilled' ? 'Your eSIM order has been marked fulfilled.' : 'Your payment is confirmed. Your eSIM order is queued for digital fulfilment to the email address used at checkout.'}</p>
@@ -88,8 +99,8 @@ export default async function BookingPage({ searchParams }: Props) {
           ) : (
             <>
               <p>Your payment is confirmed. We’ll use the Singapore delivery details from checkout to fulfil your order.</p>
-              {order?.data?.courier_tracking && <p><strong>Delivery tracking:</strong> {order.data.courier_tracking}</p>}
-              {order?.data?.return_tracking && <p><strong>Return tracking:</strong> {order.data.return_tracking}</p>}
+              {order?.courier_tracking && <p><strong>Delivery tracking:</strong> {order.courier_tracking}</p>}
+              {order?.return_tracking && <p><strong>Return tracking:</strong> {order.return_tracking}</p>}
               {fulfilment === 'return_due' && <p>Please hand the complete device kit to the return courier within 5 calendar days after your rental ends and keep the tracking receipt until QY Roam confirms receipt.</p>}
             </>
           )

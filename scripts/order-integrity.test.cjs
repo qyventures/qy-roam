@@ -250,6 +250,15 @@ test('booking status uses full checkout-session integrity validation', () => {
   assert.doesNotMatch(bookingPage, /qyRoamProductType\(session\)/);
 });
 
+test('booking status distinguishes an unavailable order ledger from an unpersisted order', () => {
+  // A Stripe-confirmed payment remains trustworthy, but a database query error
+  // must not be rendered as the normal "queued for fulfilment" state.
+  assert.match(bookingPage, /const orderLookupFailed = Boolean\(orderResult\?\.error\)/);
+  assert.match(bookingPage, /paid && orderLookupFailed/);
+  assert.match(bookingPage, /temporarily finalising the order record/);
+  assert.match(bookingPage, /Please do not place a second order/);
+});
+
 test('checkout validation rejects normalized and malformed calendar dates', () => {
   assert.equal(parseExactIsoDate('2026-09-10')?.toISOString().slice(0, 10), '2026-09-10');
   for (const value of ['2026-02-29', '2026-04-31', '2026-13-01', '2026-9-10', '', null]) {
