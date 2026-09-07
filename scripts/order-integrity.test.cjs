@@ -60,6 +60,7 @@ const stripeClient = fs.readFileSync(require.resolve('../lib/stripeClient.ts'), 
 const adminPage = fs.readFileSync(require.resolve('../app/admin/page.tsx'), 'utf8');
 const inventoryPage = fs.readFileSync(require.resolve('../app/admin/inventory/page.tsx'), 'utf8');
 const launchPage = fs.readFileSync(require.resolve('../app/admin/launch/page.tsx'), 'utf8');
+const middleware = fs.readFileSync(require.resolve('../middleware.ts'), 'utf8');
 const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
 
 const requestId = 'checkout_request_123456';
@@ -933,4 +934,17 @@ test('only the matching Pocket WiFi terminal event can release a checkout reserv
   // router held by another checkout.
   assert.match(webhookRoute, /validation\.productType==='pocket_wifi'/);
   assert.match(webhookRoute, /\.eq\('checkout_request_id',checkoutRequestId\)\s*\.eq\('stripe_session_id',session\.id\)/);
+});
+
+test('authenticated admin browser mutations reject cross-site request triggering', () => {
+  // Basic Auth can be retained by a browser. Protect every mutating admin API
+  // route centrally so a hostile page cannot submit an order/stock change or
+  // trigger paid-order delivery retries with those cached credentials.
+  assert.match(middleware, /req\.nextUrl\.pathname\.startsWith\('\/api\/admin'\)/);
+  assert.match(middleware, /!\['GET', 'HEAD', 'OPTIONS'\]\.includes/);
+  assert.match(middleware, /req\.headers\.get\('sec-fetch-site'\) === 'cross-site'/);
+  assert.match(middleware, /new URL\(origin\)\.origin === req\.nextUrl\.origin/);
+  assert.match(middleware, /if \(!isTrustedAdminMutation\(req\)\)/);
+  assert.match(middleware, /status: 403/);
+  assert.match(middleware, /'Cache-Control': 'no-store'/);
 });
