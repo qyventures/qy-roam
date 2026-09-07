@@ -3,8 +3,16 @@ import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { initialFulfilmentStatus, validFulfilmentStatus } from '@/lib/orderLifecycle';
 import { parseExactIsoDate } from '@/lib/checkoutValidation';
 import { operationalConfig } from '@/lib/operationalConfig';
+import { InvalidRequestBodyLengthError, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '@/lib/requestBody';
 
 export const dynamic = 'force-dynamic';
+
+// Admin requests can include reconciliation notes, but should remain small.
+// Basic authentication is not a worker-safety boundary: a malformed or
+// stalled authenticated request must not be able to retain a Node worker
+// indefinitely while awaiting req.json().
+const MAX_ADMIN_OPS_BODY_BYTES = 16 * 1024;
+const ADMIN_OPS_BODY_TIMEOUT_MS = 15_000;
 
 function text(v: unknown, max = 500) { return String(v ?? '').trim().slice(0, max); }
 function num(v: unknown, fallback = 0) { const n = Number(v); return Number.isFinite(n) ? n : fallback; }
@@ -29,7 +37,26 @@ function optionalTravelDates(body: Record<string, unknown>) {
 export async function POST(req: NextRequest) {
   const db = getSupabaseAdmin();
   if (!db) return NextResponse.json({ error: 'Database unavailable' }, { status: 503 });
-  const body = await req.json().catch(() => ({}));
+  if (!(req.headers.get('content-type') || '').toLowerCase().startsWith('application/json')) {
+    return NextResponse.json({ error: 'Expected JSON request' }, { status: 415 });
+  }
+  let raw: string;
+  try {
+    raw = await readLimitedRequestText(req, MAX_ADMIN_OPS_BODY_BYTES, ADMIN_OPS_BODY_TIMEOUT_MS);
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) return NextResponse.json({ error: 'Request too large' }, { status: 413 });
+    if (error instanceof InvalidRequestBodyLengthError) return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+    if (error instanceof RequestBodyTimeoutError) return NextResponse.json({ error: 'Request timed out. Please try again.' }, { status: 408 });
+    return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+  }
+  let body: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error('Invalid request body');
+    body = parsed as Record<string, unknown>;
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON request' }, { status: 400 });
+  }
   const action = text(body.action, 60);
 
   try {
