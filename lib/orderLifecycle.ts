@@ -56,7 +56,12 @@ const WIFI_NEXT: Record<string, readonly string[]> = {
 
 const ESIM_NEXT: Record<string, readonly string[]> = {
   awaiting_fulfilment: ['fulfilled', 'cancelled'],
-  fulfilled: ['awaiting_fulfilment', 'closed', 'cancelled'],
+  // Sending the QR code / activation instructions is the irreversible digital
+  // hand-off. Reopening the order can cause a second fulfilment, while
+  // cancelling it would falsely imply that delivered access was withdrawn.
+  // Corrections after delivery belong in the support/refund record; the
+  // normal fulfilment lifecycle may only close the completed order.
+  fulfilled: ['closed'],
 };
 
 export function allowedFulfilmentStatuses(productType: string | null | undefined, current: string) {

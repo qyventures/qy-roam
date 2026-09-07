@@ -743,6 +743,14 @@ test('eSIM lifecycle cannot use router statuses or reopen closed orders', () => 
   assert.equal(validFulfilmentTransition('esim', 'closed', 'awaiting_fulfilment'), false);
 });
 
+test('fulfilled eSIM orders cannot be reopened or cancelled after digital delivery', () => {
+  assert.equal(validFulfilmentTransition('esim', 'awaiting_fulfilment', 'fulfilled'), true);
+  assert.equal(validFulfilmentTransition('esim', 'awaiting_fulfilment', 'cancelled'), true);
+  assert.equal(validFulfilmentTransition('esim', 'fulfilled', 'closed'), true);
+  assert.equal(validFulfilmentTransition('esim', 'fulfilled', 'awaiting_fulfilment'), false);
+  assert.equal(validFulfilmentTransition('esim', 'fulfilled', 'cancelled'), false);
+});
+
 test('admin fulfilment writes reject stale concurrent order state', () => {
   assert.match(adminOrderRoute, /\.eq\('fulfilment_status', existing\.data\.fulfilment_status\)/);
   assert.match(adminOrderRoute, /\.eq\('payment_status', 'paid'\)/);
