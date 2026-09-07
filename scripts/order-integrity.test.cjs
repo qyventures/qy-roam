@@ -31,6 +31,7 @@ const { operationalConfig } = require('../lib/operationalConfig.ts');
 const { validStripeCheckoutSessionId } = require('../lib/stripeSessionId.ts');
 const { readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError } = require('../lib/requestBody.ts');
 const { createCheckoutAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
+const { hasRequiredStripeCheckoutConfig } = require('../lib/stripeCheckoutConfig.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -47,9 +48,11 @@ const esimPage = fs.readFileSync(require.resolve('../app/esim/page.tsx'), 'utf8'
 const homePage = fs.readFileSync(require.resolve('../app/page.tsx'), 'utf8');
 const adminOpsRoute = fs.readFileSync(require.resolve('../app/api/admin/ops/route.ts'), 'utf8');
 const productionReadiness = fs.readFileSync(require.resolve('../lib/productionReadiness.ts'), 'utf8');
+const stripeCheckoutConfig = fs.readFileSync(require.resolve('../lib/stripeCheckoutConfig.ts'), 'utf8');
 const operationalDate = fs.readFileSync(require.resolve('../lib/operationalDate.ts'), 'utf8');
 const smtpClient = fs.readFileSync(require.resolve('../lib/smtp.ts'), 'utf8');
 const webhookRoute = fs.readFileSync(require.resolve('../app/api/stripe-webhook/route.ts'), 'utf8');
+const healthRoute = fs.readFileSync(require.resolve('../app/api/health/route.ts'), 'utf8');
 const successPage = fs.readFileSync(require.resolve('../app/success/page.tsx'), 'utf8');
 const metaPurchase = fs.readFileSync(require.resolve('../components/MetaPurchase.tsx'), 'utf8');
 const metaClient = fs.readFileSync(require.resolve('../lib/metaClient.ts'), 'utf8');
@@ -392,6 +395,34 @@ test('checkout never exposes payment when signed Stripe webhook processing is no
   }
   assert.match(productionReadiness, /export function hasRequiredStripeWebhookConfig\(\)/);
   assert.match(productionReadiness, /\^whsec_\[A-Za-z0-9\]\+\$/);
+});
+
+test('production checkout and recovery reject test-mode Stripe server credentials', () => {
+  const previousKey = process.env.STRIPE_SECRET_KEY;
+  const previousNodeEnv = process.env.NODE_ENV;
+  try {
+    process.env.NODE_ENV = 'production';
+    process.env.STRIPE_SECRET_KEY = 'sk_test_not_for_a_production_storefront';
+    assert.equal(hasRequiredStripeCheckoutConfig(), false);
+    process.env.STRIPE_SECRET_KEY = 'sk_live_production_checkout_key';
+    assert.equal(hasRequiredStripeCheckoutConfig(), true);
+    process.env.STRIPE_SECRET_KEY = 'rk_live_production_checkout_key';
+    assert.equal(hasRequiredStripeCheckoutConfig(), true);
+    process.env.NODE_ENV = 'test';
+    process.env.STRIPE_SECRET_KEY = 'sk_test_local_test_key';
+    assert.equal(hasRequiredStripeCheckoutConfig(), true);
+  } finally {
+    if (previousKey === undefined) delete process.env.STRIPE_SECRET_KEY;
+    else process.env.STRIPE_SECRET_KEY = previousKey;
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+  }
+  for (const source of [esimCheckoutRoute, wifiCheckoutRoute, webhookRoute, adminOrderRoute]) {
+    assert.match(source, /hasRequiredStripeCheckoutConfig/);
+  }
+  assert.match(healthRoute, /stripe: hasRequiredStripeCheckoutConfig\(\)/);
+  assert.match(productionReadiness, /export \{ hasRequiredStripeCheckoutConfig \} from '@\/lib\/stripeCheckoutConfig';/);
+  assert.match(stripeCheckoutConfig, /key\.startsWith\('sk_live_'\).*key\.startsWith\('rk_live_'\)/);
 });
 
 test('fulfilment recipients are explicitly configured and never fall back to a historical mailbox', () => {

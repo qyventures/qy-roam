@@ -8,6 +8,7 @@ import { getMetaCapiToken } from '@/lib/runtimeConfig';
 import { validateQyRoamSession } from '@/lib/qyRoamSession';
 import { validCheckoutRequestId } from '@/lib/checkoutValidation';
 import { validQyRoamProvenance } from '@/lib/orderProvenance';
+import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 
 export const runtime = 'nodejs';
 
@@ -356,7 +357,7 @@ export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof
 }
 
 export async function POST(req:Request){
-  const key=process.env.STRIPE_SECRET_KEY,webhookSecret=process.env.STRIPE_WEBHOOK_SECRET; if(!key||!webhookSecret) return NextResponse.json({error:'Webhook configuration incomplete'},{status:503});
+  const key=process.env.STRIPE_SECRET_KEY,webhookSecret=process.env.STRIPE_WEBHOOK_SECRET; if(!hasRequiredStripeCheckoutConfig()||!key||!webhookSecret) return NextResponse.json({error:'Webhook configuration incomplete'},{status:503});
   const stripe=createStripeClient(key); let event:Stripe.Event;
   let payload:Buffer;
   try { payload=await readStripeWebhookBody(req); }

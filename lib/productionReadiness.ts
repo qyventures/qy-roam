@@ -1,6 +1,7 @@
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import crypto from 'crypto';
 import { isSafeSmtpMailbox } from '@/lib/smtp';
+export { hasRequiredStripeCheckoutConfig } from '@/lib/stripeCheckoutConfig';
 
 // Checkout invokes these guards immediately before creating a payable Stripe
 // Session. A healthy schema does not change between adjacent requests, while

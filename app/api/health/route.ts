@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getAdminCredentials, getMetaCapiToken } from '@/lib/runtimeConfig';
-import { hasRequiredFulfilmentEmailConfig, hasRequiredOperationsSchema, hasRequiredPaymentSchema } from '@/lib/productionReadiness';
+import { hasRequiredFulfilmentEmailConfig, hasRequiredOperationsSchema, hasRequiredPaymentSchema, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '@/lib/productionReadiness';
 import { operationalConfig } from '@/lib/operationalConfig';
 
 export const dynamic = 'force-dynamic';
@@ -75,10 +75,10 @@ export async function GET(req: Request) {
     hasRequiredOperationsSchema(),
   ]);
   const checks = {
-    stripe: hasPrefix(process.env.STRIPE_SECRET_KEY, ['sk_live_', 'rk_live_']),
+    stripe: hasRequiredStripeCheckoutConfig(),
     publishableKey: hasPrefix(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY, ['pk_live_']),
     siteUrl: isProductionSiteUrl(process.env.NEXT_PUBLIC_SITE_URL),
-    webhook: hasPrefix(process.env.STRIPE_WEBHOOK_SECRET, ['whsec_']),
+    webhook: hasRequiredStripeWebhookConfig(),
     orderIntegrity: isOrderIntegrityConfigured(),
     supabase: Boolean(process.env.SUPABASE_URL?.startsWith('https://') && process.env.SUPABASE_SERVICE_ROLE_KEY && process.env.SUPABASE_SERVICE_ROLE_KEY.length >= 32),
     paymentSchema,

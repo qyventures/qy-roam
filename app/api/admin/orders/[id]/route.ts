@@ -5,6 +5,7 @@ import { validFulfilmentStatus, validFulfilmentTransition } from '@/lib/orderLif
 import { validateQyRoamSession } from '@/lib/qyRoamSession';
 import { deliverFulfilmentNotification, deliverMetaPurchase } from '@/app/api/stripe-webhook/route';
 import { InvalidRequestBodyLengthError, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '@/lib/requestBody';
+import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 
 export const runtime = 'nodejs';
 
@@ -150,7 +151,7 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   const supabase = getSupabaseAdmin();
   if (!supabase) return NextResponse.json({ error: 'Order database not configured' }, { status: 503 });
   const stripeKey = process.env.STRIPE_SECRET_KEY;
-  if (!stripeKey) return NextResponse.json({ error: 'Stripe is not configured' }, { status: 503 });
+  if (!stripeKey || !hasRequiredStripeCheckoutConfig()) return NextResponse.json({ error: 'Stripe is not configured' }, { status: 503 });
 
   const id = Number(params.id);
   if (!Number.isSafeInteger(id) || id < 1) return NextResponse.json({ error: 'Invalid order id' }, { status: 400 });
