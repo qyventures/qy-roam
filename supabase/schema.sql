@@ -130,6 +130,8 @@ declare
   v_booked integer;
   v_reserved integer;
   v_committed integer;
+  v_saleable_inventory integer;
+  v_effective_inventory integer;
 begin
   if p_checkout_request_id is null or p_checkout_request_id !~ '^[A-Za-z0-9_-]{16,80}$' then
     raise exception 'invalid checkout request id';
@@ -142,6 +144,16 @@ begin
   -- atomic across every application instance.
   perform pg_advisory_xact_lock(hashtext('qy_roam_pocket_wifi_checkout'));
   delete from public.checkout_reservations where expires_at <= now();
+
+  -- The configured fleet limit protects against an accidental over-count in
+  -- the stock register, but physical saleable stock is the hard ceiling. A
+  -- unit in quarantine, maintenance or with no on-hand balance must never be
+  -- promised by checkout simply because the environment still says "10".
+  select coalesce(sum(quantity_on_hand), 0)::integer into v_saleable_inventory
+  from public.inventory_items
+  where product_type = 'pocket_wifi'
+    and status = 'available';
+  v_effective_inventory := least(greatest(0, p_inventory), v_saleable_inventory);
 
   select * into v_existing
   from public.checkout_reservations
@@ -180,8 +192,8 @@ begin
     and not (checkout_request_id = any(coalesce(p_stripe_hold_request_ids, array[]::text[])));
 
   v_committed := v_booked + v_reserved + greatest(0, coalesce(p_stripe_hold_count, 0));
-  if p_inventory < 1 or v_committed >= p_inventory then
-    return query select false, greatest(0, p_inventory - v_committed);
+  if v_effective_inventory < 1 or v_committed >= v_effective_inventory then
+    return query select false, greatest(0, v_effective_inventory - v_committed);
     return;
   end if;
 
@@ -190,7 +202,7 @@ begin
   ) values (
     p_checkout_request_id, p_travel_start, p_travel_end, p_expires_at
   );
-  return query select true, greatest(0, p_inventory - v_committed - 1);
+  return query select true, greatest(0, v_effective_inventory - v_committed - 1);
 end;
 $$;
 
@@ -223,6 +235,8 @@ as $$
 declare
   v_booked integer;
   v_reserved integer;
+  v_saleable_inventory integer;
+  v_effective_inventory integer;
   v_order public.orders%rowtype;
 begin
   if coalesce(length(trim(p_stripe_session_id)), 0) = 0 then raise exception 'manual order reference is required'; end if;
@@ -232,6 +246,15 @@ begin
 
   perform pg_advisory_xact_lock(hashtext('qy_roam_pocket_wifi_checkout'));
   delete from public.checkout_reservations where expires_at <= now();
+
+  -- Apply the same physical-stock ceiling used by public checkout. Manual
+  -- paid orders are genuine rental commitments and cannot bypass a
+  -- quarantined, maintenance, or empty router fleet.
+  select coalesce(sum(quantity_on_hand), 0)::integer into v_saleable_inventory
+  from public.inventory_items
+  where product_type = 'pocket_wifi'
+    and status = 'available';
+  v_effective_inventory := least(greatest(0, p_inventory), v_saleable_inventory);
 
   select count(*)::integer into v_booked
   from public.orders
@@ -250,7 +273,7 @@ begin
     and travel_start <= p_travel_end
     and travel_end >= p_travel_start;
 
-  if p_inventory < 1 or v_booked + v_reserved >= p_inventory then
+  if v_effective_inventory < 1 or v_booked + v_reserved >= v_effective_inventory then
     raise exception 'Pocket WiFi is sold out or reserved for these travel dates';
   end if;
 

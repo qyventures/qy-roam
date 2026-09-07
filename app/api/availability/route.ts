@@ -71,7 +71,7 @@ async function committedInventory(start: string, end: string, stripeHoldRequestI
   if (!supabase) throw new Error('Supabase is not configured');
 
   const now = new Date().toISOString();
-  const [orders, reservations] = await Promise.all([
+  const [orders, reservations, saleableItems] = await Promise.all([
     supabase.from('orders').select('id', { count: 'exact', head: true })
       .eq('product_type', 'pocket_wifi')
       .eq('payment_status', 'paid')
@@ -87,16 +87,27 @@ async function committedInventory(start: string, end: string, stripeHoldRequestI
       .gt('expires_at', now)
       .lte('travel_start', end)
       .gte('travel_end', start),
+    // The configured fleet size is a safety cap, not evidence that a router
+    // is physically dispatchable. Keep the public availability promise tied
+    // to the same available-status, on-hand inventory pool used at dispatch.
+    supabase.from('inventory_items').select('quantity_on_hand')
+      .eq('product_type', 'pocket_wifi')
+      .eq('status', 'available')
+      .gt('quantity_on_hand', 0),
   ]);
   if (orders.error) throw orders.error;
   if (reservations.error) throw reservations.error;
+  if (saleableItems.error) throw saleableItems.error;
 
   // A checkout session normally has a matching reservation. Count that session
   // once via Stripe, then add only reservations that have no open session yet.
   const unlinkedReservations = (reservations.data || []).filter(
     ({ checkout_request_id }) => !stripeHoldRequestIds.has(checkout_request_id),
   ).length;
-  return (orders.count || 0) + unlinkedReservations;
+  return {
+    committed: (orders.count || 0) + unlinkedReservations,
+    saleableInventory: (saleableItems.data || []).reduce((total, item) => total + Number(item.quantity_on_hand || 0), 0),
+  };
 }
 
 export async function GET(req: NextRequest) {
@@ -136,9 +147,13 @@ export async function GET(req: NextRequest) {
   const to = end.toISOString().slice(0, 10);
   try {
     const stripeHolds = await activeStripeHolds(createStripeClient(stripeKey), from, to);
-    const booked = await committedInventory(from, to, stripeHolds.requestIds);
-    const committed = booked + stripeHolds.holds;
-    const remaining = Math.max(0, inventory - committed);
+    const inventoryState = await committedInventory(from, to, stripeHolds.requestIds);
+    const committed = inventoryState.committed + stripeHolds.holds;
+    // This must mirror qy_reserve_pocket_wifi: the lower of the configured
+    // operating cap and current saleable stock is the only capacity we can
+    // truthfully show to a customer.
+    const effectiveInventory = Math.min(inventory, inventoryState.saleableInventory);
+    const remaining = Math.max(0, effectiveInventory - committed);
     return NextResponse.json({ available: remaining > 0, remaining, inventoryMode: 'live', temporaryHolds: stripeHolds.holds }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('availability check failed', error);

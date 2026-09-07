@@ -419,6 +419,20 @@ test('Pocket WiFi checkout fails closed when its paid-order schema is unavailabl
   assert.match(wifiCheckoutRoute, /'Retry-After':'30'/);
 });
 
+test('Pocket WiFi capacity cannot exceed physically saleable inventory', () => {
+  // The configured fleet number is only an upper bound. Both the atomic
+  // reservation paths and customer-facing availability must apply the
+  // available-status on-hand ledger so quarantined or empty units are not
+  // sold before dispatch discovers the shortage.
+  assert.match(schema, /v_effective_inventory := least\(greatest\(0, p_inventory\), v_saleable_inventory\)/);
+  assert.match(schema, /from public\.inventory_items[\s\S]*?status = 'available'/);
+  assert.match(schema, /if v_effective_inventory < 1 or v_committed >= v_effective_inventory then/);
+  assert.match(schema, /if v_effective_inventory < 1 or v_booked \+ v_reserved >= v_effective_inventory then/);
+  assert.match(productionReadiness, /table: 'inventory_items',[\s\S]*?columns: 'id,product_type,status,quantity_on_hand'/);
+  assert.match(availabilityRoute, /supabase\.from\('inventory_items'\)\.select\('quantity_on_hand'\)/);
+  assert.match(availabilityRoute, /const effectiveInventory = Math\.min\(inventory, inventoryState\.saleableInventory\)/);
+});
+
 test('Pocket WiFi availability does not promise stock when checkout cannot safely accept payment', () => {
   assert.match(availabilityRoute, /hasRequiredPaymentSchema/);
   assert.match(availabilityRoute, /if \(!await hasRequiredPaymentSchema\(\)\)/);

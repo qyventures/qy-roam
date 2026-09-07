@@ -48,6 +48,13 @@ const REQUIRED_PAYMENT_SCHEMA = [
     table: 'checkout_reservations',
     columns: 'checkout_request_id,stripe_session_id,travel_start,travel_end,expires_at',
   },
+  {
+    // The reservation RPC caps bookings at saleable, physical router stock.
+    // Ensure a pre-inventory schema cannot pass checkout readiness and then
+    // fail only after a traveller starts paying.
+    table: 'inventory_items',
+    columns: 'id,product_type,status,quantity_on_hand',
+  },
 ] as const;
 
 // eSIM orders do not need the Pocket WiFi reservation RPC, but they still
