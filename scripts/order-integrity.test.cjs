@@ -879,6 +879,15 @@ test('Meta Purchase retries preserve one durable event timestamp for deduplicati
   assert.doesNotMatch(adminOrderRoute, /Math\.floor\(Date\.now\(\) \/ 1000\)/);
 });
 
+test('paid-order email and Meta deliveries are attempted independently', () => {
+  // A persistent failure in either external provider must not starve the
+  // other's durable delivery attempt. Promise.allSettled guarantees both are
+  // invoked while the rejected result still causes Stripe to retry the event.
+  assert.match(webhookRoute, /Promise\.allSettled\(\[\s*deliverFulfilmentNotification\(supabase,session\),\s*deliverMetaPurchase\(supabase,session,eventTime\),\s*\]\)/);
+  assert.match(webhookRoute, /if\(failures\.length\) throw new AggregateError/);
+  assert.match(webhookRoute, /await deliverPaidOrderSideEffects\(supabase,session,event\.created\)/);
+});
+
 test('consented browser and CAPI Purchases share a stable deduplication identity', () => {
   assert.match(successPage, /<MetaPurchase sessionId=\{sessionId\}/);
   assert.match(successPage, /measurementConsent=\{measurementConsent\}/);

@@ -359,6 +359,20 @@ export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof
   }
 }
 
+async function deliverPaidOrderSideEffects(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session,eventTime:number){
+  // Human fulfilment and consented analytics have independent durable ledgers.
+  // Attempt both even when one provider is unavailable: serial delivery would
+  // let a persistent SMTP outage indefinitely suppress an otherwise valid CAPI
+  // Purchase (and vice versa). Each delivery remains retry-safe on Stripe's
+  // next attempt, while any failure still keeps the event itself unprocessed.
+  const results=await Promise.allSettled([
+    deliverFulfilmentNotification(supabase,session),
+    deliverMetaPurchase(supabase,session,eventTime),
+  ]);
+  const failures=results.filter((result):result is PromiseRejectedResult=>result.status==='rejected');
+  if(failures.length) throw new AggregateError(failures.map((failure)=>failure.reason),'One or more paid-order deliveries failed');
+}
+
 export async function POST(req:Request){
   const key=process.env.STRIPE_SECRET_KEY,webhookSecret=process.env.STRIPE_WEBHOOK_SECRET; if(!hasRequiredStripeCheckoutConfig()||!key||!webhookSecret) return NextResponse.json({error:'Webhook configuration incomplete'},{status:503});
   const stripe=createStripeClient(key); let event:Stripe.Event;
@@ -430,10 +444,9 @@ export async function POST(req:Request){
       }
     }
     if(event.type!=='checkout.session.async_payment_failed'&&session.payment_status==='paid'){
-      await deliverFulfilmentNotification(supabase,session);
       // Use the signed Stripe event timestamp: the Checkout Session may have
       // been created well before an asynchronous payment actually succeeded.
-      await deliverMetaPurchase(supabase,session,event.created);
+      await deliverPaidOrderSideEffects(supabase,session,event.created);
     }
     const completed=await supabase.from('stripe_events').update({processed_at:new Date().toISOString()}).eq('event_id',eventClaimId).eq('processing_started_at',claimStartedAt).is('processed_at',null).select('event_id');
     if(completed.error)throw completed.error;
