@@ -7,6 +7,7 @@ import { QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance } from '../../.
 import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '../../../lib/productionReadiness';
 import { InvalidRequestBodyLengthError, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
 import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
+import { metaAttributionFromRequest } from '@/lib/metaAttribution';
 
 export const runtime = 'nodejs';
 
@@ -132,7 +133,8 @@ export async function POST(req: Request) {
         checkout_amount_cents: String(amount),
         checkout_request_id: requestId,
         source: 'qyroam.com',
-        measurement_consent: body.measurementConsent === true ? 'accepted' : 'essential'
+        measurement_consent: body.measurementConsent === true ? 'accepted' : 'essential',
+        ...(body.measurementConsent === true ? metaAttributionFromRequest(body.attribution, req.headers.get('user-agent')) : {})
       },
       consent_collection: { terms_of_service: 'required' }
     }, { idempotencyKey: `qyroam_esim_${requestId}` });

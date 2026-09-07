@@ -32,6 +32,7 @@ const { validStripeCheckoutSessionId } = require('../lib/stripeSessionId.ts');
 const { readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError } = require('../lib/requestBody.ts');
 const { createCheckoutAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { hasRequiredStripeCheckoutConfig } = require('../lib/stripeCheckoutConfig.ts');
+const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -57,6 +58,7 @@ const successPage = fs.readFileSync(require.resolve('../app/success/page.tsx'), 
 const metaPurchase = fs.readFileSync(require.resolve('../components/MetaPurchase.tsx'), 'utf8');
 const metaClient = fs.readFileSync(require.resolve('../lib/metaClient.ts'), 'utf8');
 const stripeClient = fs.readFileSync(require.resolve('../lib/stripeClient.ts'), 'utf8');
+const metaAttribution = fs.readFileSync(require.resolve('../lib/metaAttribution.ts'), 'utf8');
 const adminPage = fs.readFileSync(require.resolve('../app/admin/page.tsx'), 'utf8');
 const inventoryPage = fs.readFileSync(require.resolve('../app/admin/inventory/page.tsx'), 'utf8');
 const launchPage = fs.readFileSync(require.resolve('../app/admin/launch/page.tsx'), 'utf8');
@@ -870,6 +872,25 @@ test('consented browser and CAPI Purchases share a stable deduplication identity
   assert.match(webhookRoute, /event_id:`stripe_\$\{session\.id\}`/);
   assert.match(webhookRoute, /content_ids:\[contentId\]/);
   assert.match(webhookRoute, /content_type:'product'/);
+});
+
+test('consented CAPI Purchases retain only safe browser matching context', () => {
+  const validFbp = 'fb.1.1725000000000.123456789012345';
+  const validFbc = 'fb.1.1725000000000.AbCdEf_123-xyz';
+  assert.deepEqual(metaAttributionFromRequest({ fbp: validFbp, fbc: validFbc }, 'Mozilla/5.0\r\nInjected'), {
+    meta_fbp: validFbp,
+    meta_fbc: validFbc,
+    meta_client_user_agent: 'Mozilla/5.0Injected',
+  });
+  assert.deepEqual(metaAttributionFromRequest({ fbp: 'not-a-meta-id', fbc: '<script>' }, null), {});
+  assert.match(metaAttribution, /const META_BROWSER_ID =/);
+  assert.match(metaClient, /export function metaAttribution\(\)/);
+  assert.match(esimCheckoutRoute, /metaAttributionFromRequest\(body\.attribution, req\.headers\.get\('user-agent'\)\)/);
+  assert.match(wifiCheckoutRoute, /metaAttributionFromRequest\(body\.attribution,req\.headers\.get\('user-agent'\)\)/);
+  assert.match(esimCheckoutRoute, /body\.measurementConsent === true \? metaAttributionFromRequest/);
+  assert.match(wifiCheckoutRoute, /body\.measurementConsent===true\?metaAttributionFromRequest/);
+  assert.match(webhookRoute, /session\.metadata\?\.meta_fbp/);
+  assert.match(webhookRoute, /client_user_agent:clientUserAgent/);
 });
 
 test('fulfilment email retries retain one safe per-order message identity', () => {

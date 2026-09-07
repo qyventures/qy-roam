@@ -3,7 +3,7 @@
 import { FormEvent, useMemo, useRef, useState } from 'react';
 import { LAUNCH_PROMO, validLaunchPromo } from '../lib/promotions';
 import { WIFI_PLANS } from '../lib/wifiPlans';
-import { trackMeta } from '../lib/metaClient';
+import { metaAttribution, trackMeta } from '../lib/metaClient';
 import { operationalIsoDateAfter } from '../lib/operationalDate';
 
 const plans = WIFI_PLANS;
@@ -93,7 +93,7 @@ export default function Home() {
     }
     setCheckingOut(true);
     try {
-      const res = await fetch('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ country, start, end, promoCode, measurementConsent, checkoutRequestId: checkoutAttempt.current.requestId }) });
+      const res = await fetch('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ country, start, end, promoCode, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: checkoutAttempt.current.requestId }) });
       const data = await res.json();
       if (data.url) window.location.href = data.url;
       else if (data.completed && typeof data.sessionId === 'string') window.location.href = `/success?session_id=${encodeURIComponent(data.sessionId)}`;

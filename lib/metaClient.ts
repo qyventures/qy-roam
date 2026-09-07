@@ -3,6 +3,22 @@ export function metaMeasurementAllowed() {
   return window.localStorage.getItem('qyroam_consent') === 'accepted';
 }
 
+function cookieValue(name: string) {
+  if (typeof document === 'undefined') return undefined;
+  const prefix = `${name}=`;
+  const cookie = document.cookie.split(';').map((part) => part.trim()).find((part) => part.startsWith(prefix));
+  if (!cookie) return undefined;
+  try { return decodeURIComponent(cookie.slice(prefix.length)); }
+  catch { return undefined; }
+}
+
+// Capture these only after the customer has opted in. They are passed to the
+// server solely to improve consented browser/CAPI Purchase matching.
+export function metaAttribution() {
+  if (!metaMeasurementAllowed()) return undefined;
+  return { fbp: cookieValue('_fbp'), fbc: cookieValue('_fbc') };
+}
+
 export function trackMeta(event: string, params: Record<string, unknown> = {}) {
   if (!metaMeasurementAllowed() || typeof window === 'undefined') return;
   const fbq = (window as Window & { fbq?: (...args: any[]) => void }).fbq;

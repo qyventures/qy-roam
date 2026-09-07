@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from 'react';
 import { ESIM_PLANS, ESIM_PROMO } from '../../lib/esimPlans';
-import { trackMeta } from '../../lib/metaClient';
+import { metaAttribution, trackMeta } from '../../lib/metaClient';
 
 export default function EsimPage() {
   const [planId, setPlanId] = useState<string>(ESIM_PLANS[0].id);
@@ -35,7 +35,7 @@ export default function EsimPage() {
       const res = await fetch('/api/esim-checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ planId, measurementConsent, checkoutRequestId: checkoutAttempt.current.requestId })
+        body: JSON.stringify({ planId, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: checkoutAttempt.current.requestId })
       });
       const data = await res.json();
       if (data.url) window.location.href = data.url;
