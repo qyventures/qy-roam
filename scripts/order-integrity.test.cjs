@@ -775,6 +775,17 @@ test('SMTP and Meta delivery settlement retain ownership of their sending leases
   assert.match(webhookRoute, /from\('meta_purchase_deliveries'\)[\s\S]{0,700}\.eq\('status','sending'\)\.eq\('updated_at',now\)/);
 });
 
+test('Stripe order persistence cannot overwrite concurrent fulfilment progress', () => {
+  // An operator or another webhook can change either field after the initial
+  // read. The update must compare both values and retry from the winning row.
+  assert.match(webhookRoute, /for\(let attempt=0;attempt<5;attempt\+=1\)/);
+  assert.match(webhookRoute, /\.eq\('fulfilment_status',existing\.data\.fulfilment_status\)/);
+  assert.match(webhookRoute, /update\.is\('payment_status',null\)/);
+  assert.match(webhookRoute, /update\.eq\('payment_status',existing\.data\.payment_status\)/);
+  assert.match(webhookRoute, /if\(updated\.data\?\.length===1\) return/);
+  assert.doesNotMatch(webhookRoute, /if\(inserted\.error\.code!==['"]23505['"]\)[\s\S]{0,300}from\('orders'\)\.update\(order\)/);
+});
+
 test('Meta Purchase retries preserve one durable event timestamp for deduplication', () => {
   const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
   assert.match(schema, /event_time bigint check \(event_time is null or event_time > 0\)/);

@@ -162,47 +162,48 @@ async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
 async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.Event.Type,eventCreated:number){
   const supabase=getSupabaseAdmin(); if(!supabase) throw new Error('Order persistence unavailable');
   const paid=session.payment_status==='paid', failed=eventType==='checkout.session.async_payment_failed';
-  const existing=await supabase.from('orders').select('payment_status,fulfilment_status,payment_confirmed_at').eq('stripe_session_id',session.id).maybeSingle(); if(existing.error) throw existing.error;
-  const current=existing.data?.fulfilment_status, productType=session.metadata?.product_type;
+  const productType=session.metadata?.product_type;
   if(productType!=='esim'&&productType!=='pocket_wifi') throw new Error('Unknown or missing product_type on Stripe session');
   const defaultPaidStatus=productType==='esim'?'awaiting_fulfilment':'paid';
-  const fulfilment=paid?(current&&!['awaiting_payment','payment_failed'].includes(current)?current:defaultPaidStatus):failed?(current&&!['awaiting_payment','payment_failed'].includes(current)?current:'payment_failed'):(current||'awaiting_payment');
-  // A Checkout Session can be created well before an asynchronous payment is
-  // confirmed. Retain the first signed event time so a later protected retry
-  // has a stable payment timestamp for Meta CAPI rather than falling back to
-  // session creation time. Never replace an existing value with a later,
-  // duplicate webhook event.
-  const confirmedAt=paid
-    ? (existing.data?.payment_confirmed_at || new Date(eventCreated*1000).toISOString())
-    : (existing.data?.payment_confirmed_at || null);
-  // The checkout routes set this marker server-side. Persist a conservative
-  // value for historical/manual Stripe metadata so only explicit consent can
-  // make an order appear in the CAPI recovery queue.
+  const paymentConfirmedAt=new Date(eventCreated*1000).toISOString();
   const measurementConsent=session.metadata?.measurement_consent==='accepted'?'accepted':'essential';
-  const order={stripe_session_id:session.id,payment_status:session.payment_status,customer_name:session.customer_details?.name,email:session.customer_details?.email,phone:session.customer_details?.phone,amount_sgd:(session.amount_total||0)/100,product_type:productType,plan_name:session.metadata?.plan_name||null,country:session.metadata?.country,travel_start:session.metadata?.start||null,travel_end:session.metadata?.end||null,fulfilment_status:fulfilment,payment_confirmed_at:confirmedAt,measurement_consent:measurementConsent,shipping_address:session.shipping_details?.address||null,updated_at:new Date().toISOString()};
 
-  // Checkout events can arrive out of order. Once a session is recorded as paid,
-  // an older `completed` snapshot or a late async failure must not make inventory
-  // available again. The database-side filter also closes the race between this
-  // read and a concurrent paid-event write.
-  if(existing.data){
-    if(!paid&&existing.data.payment_status==='paid') return;
-    let update=supabase.from('orders').update(order).eq('stripe_session_id',session.id);
-    if(!paid) update=update.or('payment_status.is.null,payment_status.neq.paid');
-    const {error}=await update;
-    if(error) throw error;
-    return;
+  // Stripe can deliver distinct events for one Checkout Session concurrently,
+  // while an operator may advance fulfilment at the same time. Use the current
+  // payment and fulfilment values as an optimistic-concurrency token. A stale
+  // webhook then retries from the new row instead of overwriting `packing`,
+  // `fulfilled`, dispatch/return progress, or a newer paid payment snapshot.
+  for(let attempt=0;attempt<5;attempt+=1){
+    const existing=await supabase.from('orders').select('payment_status,fulfilment_status,payment_confirmed_at').eq('stripe_session_id',session.id).maybeSingle();
+    if(existing.error) throw existing.error;
+    const current=existing.data?.fulfilment_status;
+    if(!paid&&existing.data?.payment_status==='paid') return;
+    const fulfilment=paid?(current&&!['awaiting_payment','payment_failed'].includes(current)?current:defaultPaidStatus):failed?(current&&!['awaiting_payment','payment_failed'].includes(current)?current:'payment_failed'):(current||'awaiting_payment');
+    // Retain the first signed payment time so CAPI recovery uses one stable
+    // event timestamp even when a later paid event refreshes customer details.
+    const confirmedAt=paid?(existing.data?.payment_confirmed_at||paymentConfirmedAt):(existing.data?.payment_confirmed_at||null);
+    const order={stripe_session_id:session.id,payment_status:session.payment_status,customer_name:session.customer_details?.name,email:session.customer_details?.email,phone:session.customer_details?.phone,amount_sgd:(session.amount_total||0)/100,product_type:productType,plan_name:session.metadata?.plan_name||null,country:session.metadata?.country,travel_start:session.metadata?.start||null,travel_end:session.metadata?.end||null,fulfilment_status:fulfilment,payment_confirmed_at:confirmedAt,measurement_consent:measurementConsent,shipping_address:session.shipping_details?.address||null,updated_at:new Date().toISOString()};
+
+    if(!existing.data){
+      const inserted=await supabase.from('orders').insert(order);
+      if(!inserted.error) return;
+      // Another event inserted the row after our read. Re-read it so all of
+      // the same paid and fulfilment-state guards apply to the retry.
+      if(inserted.error.code==='23505') continue;
+      throw inserted.error;
+    }
+
+    let update=supabase.from('orders').update(order)
+      .eq('stripe_session_id',session.id)
+      .eq('fulfilment_status',existing.data.fulfilment_status);
+    update=existing.data.payment_status===null
+      ? update.is('payment_status',null)
+      : update.eq('payment_status',existing.data.payment_status);
+    const updated=await update.select('stripe_session_id');
+    if(updated.error) throw updated.error;
+    if(updated.data?.length===1) return;
   }
-
-  const inserted=await supabase.from('orders').insert(order);
-  if(!inserted.error) return;
-  // A concurrent event may have created the row after our initial read. Paid
-  // events may overwrite it; unpaid events remain guarded against paid rows.
-  if(inserted.error.code!=='23505') throw inserted.error;
-  let update=supabase.from('orders').update(order).eq('stripe_session_id',session.id);
-  if(!paid) update=update.or('payment_status.is.null,payment_status.neq.paid');
-  const {error}=await update;
-  if(error) throw error;
+  throw new Error('Order changed repeatedly while applying Stripe event');
 }
 
 type EventClaim =
