@@ -13,6 +13,12 @@ export const runtime = 'nodejs';
 
 const MAX_BODY_BYTES = 4096;
 const CHECKOUT_BODY_TIMEOUT_MS = 15_000;
+// Digital plans have no physical-stock hold, but a Checkout Session is still
+// a signed price and fulfilment commitment. Keep an abandoned payment link
+// short-lived so a customer cannot complete a stale checkout many hours after
+// the selection, pricing and operational readiness checks ran. The client
+// already treats an expired idempotent session as a recoverable fresh attempt.
+const ESIM_CHECKOUT_HOLD_MINUTES = 30;
 const limited = createCheckoutAttemptLimiter();
 
 function siteOrigin(req: Request) {
@@ -101,9 +107,11 @@ export async function POST(req: Request) {
     const stripe = createStripeClient(key);
     const origin = siteOrigin(req);
     const amount = Math.max(50, Math.round(plan.qyPriceSgd * 100));
+    const expiresAt = Math.floor(Date.now() / 1000) + ESIM_CHECKOUT_HOLD_MINUTES * 60;
 
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
+      expires_at: expiresAt,
       line_items: [{
         quantity: 1,
         price_data: {

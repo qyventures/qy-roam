@@ -375,6 +375,16 @@ test('eSIM checkout never redirects a reused idempotency key to another plan', (
   assert.match(esimCheckoutRoute, /checkout_amount_cents: String\(amount\)/);
 });
 
+test('eSIM Checkout Sessions use a bounded, recoverable payment window', () => {
+  // A digital plan has no inventory hold, but it still carries a signed price
+  // and fulfilment commitment. Do not leave its Checkout URL payable for the
+  // much longer Stripe default window after the readiness checks ran.
+  assert.match(esimCheckoutRoute, /const ESIM_CHECKOUT_HOLD_MINUTES = 30/);
+  assert.match(esimCheckoutRoute, /const expiresAt = Math\.floor\(Date\.now\(\) \/ 1000\) \+ ESIM_CHECKOUT_HOLD_MINUTES \* 60/);
+  assert.match(esimCheckoutRoute, /mode: 'payment',\s*expires_at: expiresAt,/);
+  assert.match(esimPage, /data\.checkoutExpired \|\| data\.checkoutRequestConflict/);
+});
+
 test('eSIM checkout fails closed when its durable post-payment order boundary is unavailable', () => {
   assert.match(esimCheckoutRoute, /hasRequiredEsimOrderSchema/);
   assert.match(esimCheckoutRoute, /if \(!await hasRequiredEsimOrderSchema\(\)\)/);
