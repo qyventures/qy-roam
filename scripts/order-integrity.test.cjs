@@ -433,6 +433,17 @@ test('Pocket WiFi capacity cannot exceed physically saleable inventory', () => {
   assert.match(availabilityRoute, /const effectiveInventory = Math\.min\(inventory, inventoryState\.saleableInventory\)/);
 });
 
+test('Pocket WiFi capacity does not double-count dispatched routers', () => {
+  // Dispatch atomically decrements the available inventory ledger. Both the
+  // checkout RPC and public availability exclude assigned dispatched orders,
+  // otherwise each dispatched router reduces capacity twice. Legacy rows with
+  // no assigned inventory item remain conservatively committed.
+  const dispatchBoundaries = schema.match(/and \(dispatched_at is null or inventory_item_id is null\)/g) || [];
+  assert.equal(dispatchBoundaries.length, 2);
+  assert.match(availabilityRoute, /\.or\('dispatched_at\.is\.null,inventory_item_id\.is\.null'\)/);
+  assert.match(availabilityRoute, /inventory_item_id\.is\.null/);
+});
+
 test('Pocket WiFi availability does not promise stock when checkout cannot safely accept payment', () => {
   assert.match(availabilityRoute, /hasRequiredPaymentSchema/);
   assert.match(availabilityRoute, /if \(!await hasRequiredPaymentSchema\(\)\)/);

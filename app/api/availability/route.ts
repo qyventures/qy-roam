@@ -77,12 +77,13 @@ async function committedInventory(start: string, end: string, stripeHoldRequestI
       .eq('payment_status', 'paid')
       .lte('travel_start', end)
       .gte('travel_end', start)
-      // Keep legacy post-dispatch cancellations committed until a physical
-      // return is recorded. New lifecycle rules prevent that transition, but
-      // this protects capacity while older orders are still active. A returned
-      // router is deliberately excluded: physical receipt, not later admin
-      // closure, is the point at which it becomes rentable again.
-      .or('fulfilment_status.not.in.(cancelled,payment_failed,returned,closed),and(fulfilment_status.eq.cancelled,dispatched_at.not.is.null,returned_at.is.null)'),
+      // Dispatch atomically removes an assigned router from quantity_on_hand.
+      // The saleable-inventory query below already reflects that hand-off, so
+      // excluding it here avoids double-counting. Keep legacy dispatched rows
+      // with no assigned stock item committed: there is no evidence their
+      // inventory was decremented. This mirrors the reservation RPC.
+      .or('dispatched_at.is.null,inventory_item_id.is.null')
+      .or('fulfilment_status.not.in.(cancelled,payment_failed,returned,closed),and(fulfilment_status.eq.cancelled,dispatched_at.not.is.null,returned_at.is.null,inventory_item_id.is.null)'),
     supabase.from('checkout_reservations').select('checkout_request_id')
       .gt('expires_at', now)
       .lte('travel_start', end)

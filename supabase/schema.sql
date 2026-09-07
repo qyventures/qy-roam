@@ -172,14 +172,15 @@ begin
     and payment_status = 'paid'
     and travel_start <= p_travel_end
     and travel_end >= p_travel_start
-    -- A legacy order may have been marked cancelled after dispatch. It is
-    -- still physically committed until the return is recorded, so it must not
-    -- make a router available to an overlapping booking. Conversely, a
-    -- recorded return is physical proof that the router is available again;
-    -- do not wait for a separate administrative close to release capacity.
+    -- A recorded dispatch with an assigned stock item already decrements
+    -- quantity_on_hand, which is the saleable inventory ceiling above. Do not
+    -- count it again here. Legacy dispatched rows without an assigned item
+    -- have no evidence of that stock movement, so conservatively retain them
+    -- as commitments until reconciled or returned.
+    and (dispatched_at is null or inventory_item_id is null)
     and (
       fulfilment_status not in ('cancelled', 'payment_failed', 'returned', 'closed')
-      or (fulfilment_status = 'cancelled' and dispatched_at is not null and returned_at is null)
+      or (fulfilment_status = 'cancelled' and dispatched_at is not null and returned_at is null and inventory_item_id is null)
     );
 
   -- Stripe holds passed by the app are counted once. Reservations already
@@ -262,9 +263,13 @@ begin
     and payment_status = 'paid'
     and travel_start <= p_travel_end
     and travel_end >= p_travel_start
+    -- Match public checkout: an assigned dispatched device is already removed
+    -- from the saleable on-hand balance. Legacy rows with no assigned device
+    -- remain committed until an operator reconciles the missing hand-off.
+    and (dispatched_at is null or inventory_item_id is null)
     and (
       fulfilment_status not in ('cancelled', 'payment_failed', 'returned', 'closed')
-      or (fulfilment_status = 'cancelled' and dispatched_at is not null and returned_at is null)
+      or (fulfilment_status = 'cancelled' and dispatched_at is not null and returned_at is null and inventory_item_id is null)
     );
 
   select count(*)::integer into v_reserved
