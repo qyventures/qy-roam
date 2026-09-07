@@ -317,6 +317,14 @@ test('admin operational mutations bound and validate their JSON request bodies',
   assert.doesNotMatch(adminOpsRoute, /await req\.json\(\)/);
 });
 
+test('admin order transitions bound and validate their JSON request bodies', () => {
+  assert.match(adminOrderRoute, /readLimitedRequestText\(req,\s*MAX_ADMIN_ORDER_BODY_BYTES,\s*ADMIN_ORDER_BODY_TIMEOUT_MS\)/);
+  assert.match(adminOrderRoute, /RequestBodyTimeoutError/);
+  assert.match(adminOrderRoute, /Expected JSON request/);
+  assert.match(adminOrderRoute, /Array\.isArray\(parsed\)/);
+  assert.doesNotMatch(adminOrderRoute, /await req\.json\(\)/);
+});
+
 test('checkout attempt rate limiting keeps per-client limits while bounding unique client state', () => {
   const limit = createCheckoutAttemptLimiter(1_000, 2, 3);
   const requestFor = (ip) => new Request('https://qyroam.test/api/checkout', { headers: { 'cf-connecting-ip': ip } });

@@ -4,8 +4,16 @@ import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { validFulfilmentStatus, validFulfilmentTransition } from '@/lib/orderLifecycle';
 import { validateQyRoamSession } from '@/lib/qyRoamSession';
 import { deliverFulfilmentNotification, deliverMetaPurchase } from '@/app/api/stripe-webhook/route';
+import { InvalidRequestBodyLengthError, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '@/lib/requestBody';
 
 export const runtime = 'nodejs';
+
+// Order transitions have a deliberately small, fixed payload. Do not rely on
+// an upstream proxy limit here: this authenticated route is still reachable by
+// a stale browser session, and an unbounded `req.json()` can exhaust an admin
+// worker before the request is rejected.
+const MAX_ADMIN_ORDER_BODY_BYTES = 8_192;
+const ADMIN_ORDER_BODY_TIMEOUT_MS = 15_000;
 
 function trackingValue(value: unknown, existing: string | null) {
   // Keep an already-recorded reference when an older admin client submits no
@@ -27,8 +35,21 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const supabase = getSupabaseAdmin();
   if (!supabase) return NextResponse.json({ error: 'Order database not configured' }, { status: 503 });
 
-  let body: any;
-  try { body = await req.json(); } catch { return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 }); }
+  if (!(req.headers.get('content-type') || '').toLowerCase().startsWith('application/json')) {
+    return NextResponse.json({ error: 'Expected JSON request' }, { status: 415 });
+  }
+  let body: Record<string, unknown>;
+  try {
+    const raw = await readLimitedRequestText(req, MAX_ADMIN_ORDER_BODY_BYTES, ADMIN_ORDER_BODY_TIMEOUT_MS);
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid JSON object');
+    body = parsed as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) return NextResponse.json({ error: 'Request too large' }, { status: 413 });
+    if (error instanceof InvalidRequestBodyLengthError) return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+    if (error instanceof RequestBodyTimeoutError) return NextResponse.json({ error: 'Request timed out. Please try again.' }, { status: 408 });
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
 
   const status = String(body.status || '');
   const id = Number(params.id);
