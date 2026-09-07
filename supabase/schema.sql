@@ -438,9 +438,12 @@ begin
     p_next_status = p_expected_status or
     (p_expected_status = 'paid' and p_next_status in ('packing', 'dispatched', 'cancelled')) or
     (p_expected_status = 'packing' and p_next_status in ('paid', 'dispatched', 'cancelled')) or
-    (p_expected_status = 'dispatched' and p_next_status in ('packing', 'with_customer', 'return_due', 'returned')) or
-    (p_expected_status = 'with_customer' and p_next_status in ('dispatched', 'return_due', 'returned')) or
-    (p_expected_status = 'return_due' and p_next_status in ('with_customer', 'returned')) or
+    -- Dispatch is a physical, audited boundary. A router cannot move back to
+    -- packing or be cancelled after hand-off; it must remain in the return
+    -- workflow until physical receipt reconciles the assigned stock item.
+    (p_expected_status = 'dispatched' and p_next_status in ('with_customer', 'return_due', 'returned')) or
+    (p_expected_status = 'with_customer' and p_next_status in ('return_due', 'returned')) or
+    (p_expected_status = 'return_due' and p_next_status = 'returned') or
     (p_expected_status = 'returned' and p_next_status = 'closed')
   ) then raise exception 'invalid Pocket WiFi fulfilment transition'; end if;
 

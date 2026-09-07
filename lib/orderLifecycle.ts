@@ -40,9 +40,12 @@ const WIFI_NEXT: Record<string, readonly string[]> = {
   // dispatched, it remains committed to the trip until a physical return is
   // recorded; otherwise an operator could accidentally sell the same router
   // to an overlapping booking.
-  dispatched: ['packing', 'with_customer', 'return_due', 'returned'],
-  with_customer: ['dispatched', 'return_due', 'returned'],
-  return_due: ['with_customer', 'returned'],
+  // Dispatch is a physical, audited boundary. Never move an order back to a
+  // pre-dispatch state: doing so would expose `cancelled` on the next step and
+  // strand the checked-out device outside the return workflow.
+  dispatched: ['with_customer', 'return_due', 'returned'],
+  with_customer: ['return_due', 'returned'],
+  return_due: ['returned'],
   // A recorded return is the capacity-release boundary. Reopening it as
   // "with_customer" would silently reserve the router again without a fresh
   // dispatch, delivery reference, or customer hand-off. Correct a mistaken

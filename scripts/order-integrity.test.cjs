@@ -657,6 +657,27 @@ test('Pocket WiFi fulfilment follows a dispatch and return lifecycle', () => {
   assert.equal(validFulfilmentTransition('pocket_wifi', 'closed', 'packing'), false);
 });
 
+test('Pocket WiFi cannot leave the return workflow after physical dispatch', () => {
+  assert.deepEqual(allowedFulfilmentStatuses('pocket_wifi', 'dispatched'), [
+    'dispatched', 'with_customer', 'return_due', 'returned'
+  ]);
+  assert.deepEqual(allowedFulfilmentStatuses('pocket_wifi', 'with_customer'), [
+    'with_customer', 'return_due', 'returned'
+  ]);
+  assert.deepEqual(allowedFulfilmentStatuses('pocket_wifi', 'return_due'), [
+    'return_due', 'returned'
+  ]);
+  for (const [current, next] of [
+    ['dispatched', 'packing'],
+    ['with_customer', 'dispatched'],
+    ['return_due', 'with_customer'],
+  ]) assert.equal(validFulfilmentTransition('pocket_wifi', current, next), false);
+
+  assert.doesNotMatch(schema, /p_expected_status = 'dispatched' and p_next_status in \('packing'/);
+  assert.doesNotMatch(schema, /p_expected_status = 'with_customer' and p_next_status in \('dispatched'/);
+  assert.doesNotMatch(schema, /p_expected_status = 'return_due' and p_next_status in \('with_customer'/);
+});
+
 test('Pocket WiFi capacity retains legacy post-dispatch cancellations until return', () => {
   const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
   assert.match(schema, /fulfilment_status = 'cancelled' and dispatched_at is not null and returned_at is null/);
