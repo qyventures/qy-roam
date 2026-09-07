@@ -766,6 +766,16 @@ test('launch control reports the same checkout prerequisites that protect real o
   assert.doesNotMatch(launchPage, /const organicReady=stripe&&paymentDbOk/);
 });
 
+test('authenticated health readiness fails when any order-critical dependency is unavailable', () => {
+  // Public unauthenticated probes intentionally report process liveness, but
+  // the token-authenticated response is used as the production readiness
+  // boundary and must not return 200 for a service unable to take orders.
+  assert.match(healthRoute, /const launchReady = Object\.values\(checks\)\.every\(Boolean\)/);
+  assert.match(healthRoute, /ok: launchReady/);
+  assert.match(healthRoute, /status: launchReady \? 200 : 503/);
+  assert.doesNotMatch(healthRoute, /const coreReady/);
+});
+
 test('inventory visibility distinguishes unavailable data from zero stock and exposes saleable router stock', () => {
   assert.match(inventoryPage, /await Promise\.all\(\[/);
   assert.match(inventoryPage, /const failedPanels=\[itemsResult\.error&&'inventory register',movesResult\.error&&'movement audit trail'\]/);

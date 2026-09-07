@@ -93,7 +93,6 @@ export async function GET(req: Request) {
     metaPixel: isMetaPixelConfigured(),
     metaCapi: isMetaCapiConfigured(),
   };
-  const coreReady = checks.stripe && checks.publishableKey && checks.siteUrl;
   const launchReady = Object.values(checks).every(Boolean);
   const paidAcquisitionReady = launchReady && Object.values(paidAcquisitionChecks).every(Boolean);
 
@@ -102,7 +101,12 @@ export async function GET(req: Request) {
     .filter(([, configured]) => !configured)
     .map(([name]) => name);
   return NextResponse.json({
-    ok: coreReady,
+    // This authenticated endpoint is the production readiness signal. A 200
+    // must mean the service can safely accept and fulfil a real order, not
+    // merely that its Stripe keys and public URL look plausible. The public
+    // branch above remains a dependency-free liveness probe for process
+    // supervision.
+    ok: launchReady,
     launchReady,
     paidAcquisitionReady,
     service: 'qy-roam',
@@ -111,5 +115,5 @@ export async function GET(req: Request) {
     missing,
     paidAcquisitionMissing,
     timestamp: new Date().toISOString()
-  }, { status: coreReady ? 200 : 503, headers });
+  }, { status: launchReady ? 200 : 503, headers });
 }
