@@ -43,7 +43,7 @@ const REQUIRED_PAYMENT_SCHEMA = [
     // the fields used to list orders.  A partial migration must fail before
     // checkout exposes a payment URL instead of failing after Stripe accepts
     // a real order in persistSession.
-    columns: 'stripe_session_id,payment_status,customer_name,email,phone,amount_sgd,product_type,plan_name,country,travel_start,travel_end,fulfilment_status,payment_confirmed_at,measurement_consent,shipping_address,updated_at',
+    columns: 'stripe_session_id,payment_status,customer_name,email,phone,amount_sgd,product_type,plan_id,plan_name,data_allowance,country,travel_start,travel_end,fulfilment_status,payment_confirmed_at,measurement_consent,shipping_address,updated_at',
   },
   {
     table: 'stripe_events',

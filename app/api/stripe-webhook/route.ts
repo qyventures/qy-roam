@@ -9,6 +9,7 @@ import { validateQyRoamSession } from '@/lib/qyRoamSession';
 import { validCheckoutRequestId } from '@/lib/checkoutValidation';
 import { validQyRoamProvenance } from '@/lib/orderProvenance';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
+import { getEsimPlan } from '@/lib/esimPlans';
 
 export const runtime = 'nodejs';
 
@@ -150,10 +151,10 @@ async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
   if(!host||!user||!pass||!from||!to) throw new Error('SMTP fulfilment email is not configured');
   const productType=session.metadata?.product_type;
   if(productType!=='esim'&&productType!=='pocket_wifi') throw new Error('Unknown or missing product_type on paid order');
-  const isEsim=productType==='esim', destination=session.metadata?.country||'', planName=session.metadata?.plan_name||'', start=session.metadata?.start||'', end=session.metadata?.end||'', customer=session.customer_details, amount=((session.amount_total||0)/100).toFixed(2), shipping=session.shipping_details?.address, messageId=fulfilmentMessageId(session.id);
+  const isEsim=productType==='esim', destination=session.metadata?.country||'', planName=session.metadata?.plan_name||'', planId=session.metadata?.plan_id||'', esimPlan=isEsim?getEsimPlan(planId):undefined, dataAllowance=session.metadata?.data_allowance||esimPlan?.data||'', start=session.metadata?.start||'', end=session.metadata?.end||'', customer=session.customer_details, amount=((session.amount_total||0)/100).toFixed(2), shipping=session.shipping_details?.address, messageId=fulfilmentMessageId(session.id);
   const shippingText=shipping?[shipping.line1,shipping.line2,shipping.city,shipping.state,shipping.postal_code,shipping.country].filter(Boolean).join(', '):'Not applicable / not supplied';
   const subject=`[QY Roam] Paid ${isEsim?'eSIM':'Pocket WiFi'} order — ${destination||planName||session.id}`;
-  const text=['A paid QY Roam order requires human fulfilment.','',`Order reference: ${session.id}`,`Product: ${isEsim?'Travel eSIM':'Pocket WiFi'}`,`Destination: ${destination||'-'}`,`Plan: ${planName||'-'}`,`Travel dates: ${start||'-'}${end?` to ${end}`:''}`,`Amount paid: S$${amount}`,`Promo code: ${session.metadata?.promo_code||'-'}`,'',`Customer name: ${customer?.name||'-'}`,`Email: ${customer?.email||'-'}`,`Phone: ${customer?.phone||'-'}`,`Delivery address: ${shippingText}`,'',isEsim?'Action: Please process the eSIM manually and send the QR code / activation instructions to the customer.':'Action: Please prepare and fulfil the Pocket WiFi order according to the travel dates and delivery details.','','Customer support: +65 8032 7183'].join('\n');
+  const text=['A paid QY Roam order requires human fulfilment.','',`Order reference: ${session.id}`,`Product: ${isEsim?'Travel eSIM':'Pocket WiFi'}`,`Destination: ${destination||'-'}`,`Plan: ${planName||'-'}`,...(isEsim?[`Plan ID: ${planId||'-'}`,`Data allowance: ${dataAllowance||'-'}`]:[]),`Travel dates: ${start||'-'}${end?` to ${end}`:''}`,`Amount paid: S$${amount}`,`Promo code: ${session.metadata?.promo_code||'-'}`,'',`Customer name: ${customer?.name||'-'}`,`Email: ${customer?.email||'-'}`,`Phone: ${customer?.phone||'-'}`,`Delivery address: ${shippingText}`,'',isEsim?'Action: Please process the eSIM manually and send the QR code / activation instructions to the customer.':'Action: Please prepare and fulfil the Pocket WiFi order according to the travel dates and delivery details.','','Customer support: +65 8032 7183'].join('\n');
   const relayUrl=process.env.SMTP_RELAY_URL, relaySecret=process.env.SMTP_RELAY_SECRET;
   if(relayUrl&&relaySecret){
     const response=await postJsonWithTimeout(relayUrl,{relay_secret:relaySecret,smtp_host:host,smtp_port:port,smtp_user:user,smtp_pass:pass,from,to,subject,text,message_id:messageId});
@@ -186,7 +187,8 @@ async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.E
     // Retain the first signed payment time so CAPI recovery uses one stable
     // event timestamp even when a later paid event refreshes customer details.
     const confirmedAt=paid?(existing.data?.payment_confirmed_at||paymentConfirmedAt):(existing.data?.payment_confirmed_at||null);
-    const order={stripe_session_id:session.id,payment_status:session.payment_status,customer_name:session.customer_details?.name,email:session.customer_details?.email,phone:session.customer_details?.phone,amount_sgd:(session.amount_total||0)/100,product_type:productType,plan_name:session.metadata?.plan_name||null,country:session.metadata?.country,travel_start:session.metadata?.start||null,travel_end:session.metadata?.end||null,fulfilment_status:fulfilment,payment_confirmed_at:confirmedAt,measurement_consent:measurementConsent,shipping_address:session.shipping_details?.address||null,updated_at:new Date().toISOString()};
+    const esimPlan=productType==='esim'?getEsimPlan(session.metadata?.plan_id):undefined;
+    const order={stripe_session_id:session.id,payment_status:session.payment_status,customer_name:session.customer_details?.name,email:session.customer_details?.email,phone:session.customer_details?.phone,amount_sgd:(session.amount_total||0)/100,product_type:productType,plan_id:session.metadata?.plan_id||null,plan_name:session.metadata?.plan_name||null,data_allowance:session.metadata?.data_allowance||esimPlan?.data||null,country:session.metadata?.country,travel_start:session.metadata?.start||null,travel_end:session.metadata?.end||null,fulfilment_status:fulfilment,payment_confirmed_at:confirmedAt,measurement_consent:measurementConsent,shipping_address:session.shipping_details?.address||null,updated_at:new Date().toISOString()};
 
     if(!existing.data){
       const inserted=await supabase.from('orders').insert(order);

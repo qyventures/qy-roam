@@ -195,7 +195,7 @@ export default async function AdminPage() {
           return <tr key={o.id} style={{borderTop:'1px solid #e5e8ed',verticalAlign:'top'}}>
             <td style={{padding:'14px 10px'}}><strong>{String(o.stripe_session_id || o.id).slice(-10)}</strong><br/><small>{o.created_at ? new Date(o.created_at).toLocaleDateString('en-SG') : ''}</small></td>
             <td style={{padding:'14px 8px'}}>{o.customer_name || '-'}<br/><small>{o.phone || '-'}</small>{o.email && <><br/><small>{o.email}</small></>}</td>
-            <td style={{padding:'14px 8px'}}><strong>{product}</strong>{o.plan_name && <><br/><small>{o.plan_name}</small></>}<br/>{o.country || '-'}<br/><small>{o.travel_start || '-'} → {o.travel_end || '-'}</small>{flag && <><br/><small><strong>{flag}</strong></small></>}</td>
+            <td style={{padding:'14px 8px'}}><strong>{product}</strong>{o.plan_name && <><br/><small>{o.plan_name}</small></>}{isEsim(o) && o.plan_id && <><br/><small>Plan ID: {o.plan_id}</small></>}{isEsim(o) && o.data_allowance && <><br/><small>Data: {o.data_allowance}</small></>}<br/>{o.country || '-'}<br/><small>{o.travel_start || '-'} → {o.travel_end || '-'}</small>{flag && <><br/><small><strong>{flag}</strong></small></>}</td>
             <td style={{padding:'14px 8px'}}>{o.payment_status || '-'}</td>
             <td style={{padding:'14px 8px'}}><strong>{money(o.amount_sgd)}</strong></td>
             <td style={{padding:'14px 8px'}}>{notification?.status === 'sent' ? '✓ Sent' : notification ? `⚠ ${notification.status}` : o.payment_status === 'paid' ? '⚠ Not recorded' : '-'}{notification?.last_error && <><br/><small>{String(notification.last_error).slice(0,120)}</small></>}</td>

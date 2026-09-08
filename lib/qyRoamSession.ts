@@ -53,11 +53,13 @@ function historicalEsimSnapshotIsConsistent(session: Stripe.Checkout.Session) {
   const country = metadata?.country || '';
   const planName = metadata?.plan_name || '';
   const checkoutAmount = Number(metadata?.checkout_amount_cents);
+  const dataAllowance = metadata?.data_allowance;
   // The checkout provenance authenticates this immutable-at-creation snapshot.
   // These checks still reject malformed records if a historic plan has since
   // been retired or repriced in the live catalogue.
   return /^[a-z0-9][a-z0-9-]{1,80}$/.test(planId) && country.length > 0 && country.length <= 100 &&
     planName.startsWith(`${country} · `) && / · [1-9]\d{0,2} days$/.test(planName) &&
+    (dataAllowance === undefined || (dataAllowance.length > 0 && dataAllowance.length <= 200)) &&
     metadata?.promo_code === ESIM_PROMO.code && metadata?.promo_discount_percent === String(ESIM_PROMO.percent) &&
     moneyMetadataCents(metadata?.benchmark_price_sgd) !== null &&
     Number.isSafeInteger(checkoutAmount) && checkoutAmount >= 50 &&
@@ -156,6 +158,7 @@ export function validateQyRoamSession(session: Stripe.Checkout.Session): QyRoamS
     if (
       session.metadata?.country !== plan.destination ||
       session.metadata?.plan_name !== `${plan.destination} · ${plan.days} days` ||
+      (session.metadata?.data_allowance !== undefined && session.metadata.data_allowance !== plan.data) ||
       session.metadata?.promo_code !== ESIM_PROMO.code ||
       session.metadata?.benchmark_price_sgd !== plan.benchmarkPriceSgd.toFixed(2) ||
       session.metadata?.promo_discount_percent !== String(ESIM_PROMO.percent)

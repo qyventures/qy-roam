@@ -7,7 +7,9 @@ create table if not exists public.orders (
   phone text,
   amount_sgd numeric(10,2),
   product_type text not null default 'pocket_wifi',
+  plan_id text,
   plan_name text,
+  data_allowance text,
   country text,
   travel_start date,
   travel_end date,
@@ -35,7 +37,9 @@ create table if not exists public.orders (
 );
 
 alter table public.orders add column if not exists product_type text not null default 'pocket_wifi';
+alter table public.orders add column if not exists plan_id text;
 alter table public.orders add column if not exists plan_name text;
+alter table public.orders add column if not exists data_allowance text;
 alter table public.orders add column if not exists payment_confirmed_at timestamptz;
 alter table public.orders add column if not exists measurement_consent text;
 alter table public.orders add column if not exists courier_tracking text;

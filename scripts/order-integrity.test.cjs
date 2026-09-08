@@ -78,6 +78,7 @@ function esimSession(plan = ESIM_PLANS[0]) {
       checkout_request_id: requestId,
       plan_id: plan.id,
       plan_name: `${plan.destination} · ${plan.days} days`,
+      data_allowance: plan.data,
       country: plan.destination,
       promo_code: ESIM_PROMO.code,
       benchmark_price_sgd: plan.benchmarkPriceSgd.toFixed(2),
@@ -131,6 +132,7 @@ test('rejects eSIM amount, identity, and catalogue metadata tampering', () => {
     (s) => { s.metadata.product_type = 'pocket_wifi'; },
     (s) => { s.metadata.checkout_request_id = 'short'; },
     (s) => { s.metadata.plan_name = 'Different plan'; },
+    (s) => { s.metadata.data_allowance = 'Different data package'; },
     (s) => { s.metadata.benchmark_price_sgd = '0.01'; },
     (s) => { s.metadata.promo_discount_percent = '99'; }
   ]) {
@@ -227,6 +229,27 @@ test('accepts an authenticated historical eSIM plan after it is retired', () => 
   } finally {
     ESIM_PLANS.unshift(plan);
   }
+});
+
+test('accepts a signed legacy eSIM session opened before data allowance snapshots', () => {
+  const session = esimSession();
+  delete session.metadata.data_allowance;
+  session.metadata.qyroam_provenance = signedQyRoamProvenance(session.id, session.metadata);
+  assert.deepEqual(validateQyRoamSession(session), { valid: true, productType: 'esim' });
+});
+
+test('eSIM fulfilment preserves the exact plan identity and data allowance', () => {
+  assert.match(esimCheckoutRoute, /data_allowance: plan\.data/);
+  assert.match(esimCheckoutRoute, /session\.metadata\?\.data_allowance === plan\.data/);
+  assert.match(webhookRoute, /plan_id:session\.metadata\?\.plan_id\|\|null/);
+  assert.match(webhookRoute, /data_allowance:session\.metadata\?\.data_allowance\|\|esimPlan\?\.data\|\|null/);
+  assert.match(webhookRoute, /`Plan ID: \$\{planId\|\|'-'\}`/);
+  assert.match(webhookRoute, /`Data allowance: \$\{dataAllowance\|\|'-'\}`/);
+  assert.match(productionReadiness, /product_type,plan_id,plan_name,data_allowance,country/);
+  assert.match(schema, /alter table public\.orders add column if not exists plan_id text/);
+  assert.match(schema, /alter table public\.orders add column if not exists data_allowance text/);
+  assert.match(adminPage, /Plan ID: \{o\.plan_id\}/);
+  assert.match(adminPage, /Data: \{o\.data_allowance\}/);
 });
 
 test('v2 provenance binds all checkout metadata, including same-priced travel dates', () => {
@@ -407,7 +430,7 @@ test('post-payment readiness checks every webhook-persisted delivery field', () 
   // A table-only (or partial-column) probe can pass before an additive schema
   // migration is deployed. Checkout must fail closed rather than accepting a
   // payment whose webhook cannot persist its retry and deduplication state.
-  assert.match(productionReadiness, /customer_name,email,phone,amount_sgd,product_type,plan_name,country/);
+  assert.match(productionReadiness, /customer_name,email,phone,amount_sgd,product_type,plan_id,plan_name,data_allowance,country/);
   assert.match(productionReadiness, /last_attempt_at,sent_at,last_error/);
   assert.match(productionReadiness, /status,event_time,attempts,last_attempt_at,sent_at,last_error,updated_at/);
 });

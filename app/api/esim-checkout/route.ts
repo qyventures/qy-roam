@@ -41,6 +41,7 @@ function matchesRequestedEsim(session: Stripe.Checkout.Session, requestId: strin
     session.metadata?.checkout_request_id === requestId &&
     session.metadata?.plan_id === plan.id &&
     session.metadata?.plan_name === `${plan.destination} · ${plan.days} days` &&
+    session.metadata?.data_allowance === plan.data &&
     session.metadata?.country === plan.destination &&
     session.metadata?.promo_code === ESIM_PROMO.code &&
     session.metadata?.benchmark_price_sgd === plan.benchmarkPriceSgd.toFixed(2) &&
@@ -137,6 +138,7 @@ export async function POST(req: Request) {
         product_type: 'esim',
         plan_id: plan.id,
         plan_name: `${plan.destination} · ${plan.days} days`,
+        data_allowance: plan.data,
         country: plan.destination,
         promo_code: ESIM_PROMO.code,
         benchmark_price_sgd: plan.benchmarkPriceSgd.toFixed(2),
