@@ -555,6 +555,14 @@ test('payment-readiness checks coalesce healthy checkout probes without caching 
   assert.match(productionReadiness, /let esimOrderSchemaCheckInFlight: Promise<boolean> \| null = null/);
   assert.match(productionReadiness, /if \(Date\.now\(\) < esimOrderSchemaReadyUntil\) return true/);
   assert.match(productionReadiness, /if \(!esimOrderSchemaCheckInFlight\)/);
+  // Authenticated health monitoring can run concurrently on several workers.
+  // Its operations contract probe is expensive but must retain the same
+  // fail-closed, success-only caching semantics as checkout readiness.
+  assert.match(productionReadiness, /let operationsSchemaCheckInFlight: Promise<boolean> \| null = null/);
+  assert.match(productionReadiness, /if \(Date\.now\(\) < operationsSchemaReadyUntil\) return true/);
+  assert.match(productionReadiness, /if \(!operationsSchemaCheckInFlight\)/);
+  assert.match(productionReadiness, /if \(ready\) operationsSchemaReadyUntil = Date\.now\(\) \+ READINESS_CACHE_MS/);
+  assert.match(productionReadiness, /async function checkRequiredOperationsSchema\(\)/);
 });
 
 test('Pocket WiFi checkout fails closed when its paid-order schema is unavailable', () => {

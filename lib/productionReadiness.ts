@@ -18,8 +18,10 @@ const READINESS_CACHE_MS = 15_000;
 const READINESS_PROBE_TIMEOUT_MS = 8_000;
 let paymentSchemaReadyUntil = 0;
 let esimOrderSchemaReadyUntil = 0;
+let operationsSchemaReadyUntil = 0;
 let paymentSchemaCheckInFlight: Promise<boolean> | null = null;
 let esimOrderSchemaCheckInFlight: Promise<boolean> | null = null;
+let operationsSchemaCheckInFlight: Promise<boolean> | null = null;
 
 class ReadinessProbeTimeoutError extends Error {}
 
@@ -256,7 +258,7 @@ export async function hasRequiredEsimOrderSchema() {
  * operators can distinguish an order-taking issue from an incomplete admin
  * migration.
  */
-export async function hasRequiredOperationsSchema() {
+async function checkRequiredOperationsSchema() {
   const supabase = getSupabaseAdmin();
   if (!supabase) return false;
 
@@ -316,4 +318,25 @@ export async function hasRequiredOperationsSchema() {
     console.error('production_operations_schema_check_unavailable');
     return false;
   }
+}
+
+// Health checks commonly run on a short interval and this operations probe is
+// intentionally comprehensive (nine relations plus two RPC contracts). Keep
+// it responsive under multiple health-check workers without hiding a failed
+// migration or outage: only a successful result is cached, and only briefly.
+export async function hasRequiredOperationsSchema() {
+  if (Date.now() < operationsSchemaReadyUntil) return true;
+  if (!operationsSchemaCheckInFlight) {
+    operationsSchemaCheckInFlight = checkRequiredOperationsSchema()
+      .then((ready) => {
+        if (ready) operationsSchemaReadyUntil = Date.now() + READINESS_CACHE_MS;
+        return ready;
+      })
+      .catch((error) => {
+        console.error('production_operations_schema_check_unexpected_error', error);
+        return false;
+      })
+      .finally(() => { operationsSchemaCheckInFlight = null; });
+  }
+  return operationsSchemaCheckInFlight;
 }
