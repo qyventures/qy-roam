@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { validateQyRoamSession, type QyRoamProductType } from '@/lib/qyRoamSession';
 import MetaPurchase from '@/components/MetaPurchase';
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
+import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,7 +27,11 @@ export default async function SuccessPage({ searchParams }: Props) {
   let orderPersisted = false;
   let orderLookupFailed = false;
 
-  if (sessionId && key) {
+  // Keep the confirmation page on the same Stripe credential boundary as
+  // checkout and webhook processing. In production, a mistakenly deployed
+  // test key must not be able to render a test-mode session as a customer
+  // payment confirmation while the real order pipeline is unavailable.
+  if (sessionId && key && hasRequiredStripeCheckoutConfig()) {
     try {
       const stripe = createStripeClient(key);
       const session = await stripe.checkout.sessions.retrieve(sessionId);

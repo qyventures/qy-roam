@@ -501,7 +501,7 @@ test('production checkout and recovery reject test-mode Stripe server credential
     if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = previousNodeEnv;
   }
-  for (const source of [esimCheckoutRoute, wifiCheckoutRoute, webhookRoute, adminOrderRoute]) {
+  for (const source of [esimCheckoutRoute, wifiCheckoutRoute, webhookRoute, adminOrderRoute, bookingPage, successPage]) {
     assert.match(source, /hasRequiredStripeCheckoutConfig/);
   }
   assert.match(healthRoute, /stripe: hasRequiredStripeCheckoutConfig\(\)/);
