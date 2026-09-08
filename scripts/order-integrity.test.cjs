@@ -30,7 +30,7 @@ const { allowedFulfilmentStatuses, validFulfilmentTransition } = require('../lib
 const { operationalConfig } = require('../lib/operationalConfig.ts');
 const { validStripeCheckoutSessionId } = require('../lib/stripeSessionId.ts');
 const { readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError } = require('../lib/requestBody.ts');
-const { createCheckoutAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
+const { checkoutClientKey, createCheckoutAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = require('../lib/stripeCheckoutConfig.ts');
 const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
 
@@ -401,6 +401,28 @@ test('checkout attempt rate limiting keeps per-client limits while bounding uniq
   assert.equal(limit(requestFor('198.51.100.1'), 106), false);
   // A retained client still receives a fresh window after expiry.
   assert.equal(limit(requestFor('198.51.100.1'), 1_200), false);
+});
+
+test('checkout rate limiting uses only bounded valid proxy client identities', () => {
+  const request = (headers) => new Request('https://qyroam.com/api/checkout', { headers });
+
+  // Nginx overwrites X-Real-IP in production. Spoofable forwarding headers
+  // must not take precedence over that trusted socket-peer identity.
+  assert.equal(checkoutClientKey(request({
+    'x-real-ip': '203.0.113.8',
+    'cf-connecting-ip': '198.51.100.7',
+    'x-forwarded-for': '192.0.2.4, 203.0.113.8',
+  })), '203.0.113.8');
+
+  assert.equal(checkoutClientKey(request({ 'x-real-ip': '2001:db8::17' })), '2001:db8::17');
+  assert.equal(checkoutClientKey(request({ 'x-real-ip': 'not-an-ip', 'cf-connecting-ip': '198.51.100.7' })), '198.51.100.7');
+  assert.equal(checkoutClientKey(request({ 'x-real-ip': 'not-an-ip', 'cf-connecting-ip': 'x'.repeat(4_000), 'x-forwarded-for': 'also-invalid' })), 'unknown');
+
+  // Invalid caller-controlled identities collapse into one rate-limit bucket
+  // instead of bypassing the guard by changing arbitrary header strings.
+  const limited = createCheckoutAttemptLimiter(60_000, 1, 10);
+  assert.equal(limited(request({ 'cf-connecting-ip': 'forged-a' }), 0), false);
+  assert.equal(limited(request({ 'cf-connecting-ip': 'forged-b' }), 1), true);
 });
 
 test('customer-facing Stripe session lookups accept only one bounded Checkout Session id', () => {

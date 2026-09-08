@@ -1,3 +1,5 @@
+import { isIP } from 'node:net';
+
 // Checkout is intentionally rate-limited per application instance. This is a
 // lightweight guard ahead of the payment provider, not a substitute for an
 // edge/WAF limit. Its bookkeeping must remain bounded: a stream of spoofed or
@@ -8,8 +10,21 @@ export const CHECKOUT_RATE_LIMIT_MAX_CLIENTS = 5_000;
 
 type Attempt = { count: number; reset: number };
 
+function validClientIp(value?: string | null) {
+  const candidate = value?.trim();
+  return candidate && candidate.length <= 45 && isIP(candidate) !== 0 ? candidate : null;
+}
+
 export function checkoutClientKey(req: Request) {
-  return (req.headers.get('cf-connecting-ip') || req.headers.get('x-real-ip') || req.headers.get('x-forwarded-for')?.split(',')[0] || 'unknown').trim();
+  // Production Nginx overwrites X-Real-IP with the socket peer, while
+  // X-Forwarded-For appends to any caller-supplied chain and arbitrary request
+  // headers can otherwise create unlimited apparent identities. Prefer that
+  // trusted single-IP boundary and accept only real, bounded IP literals from
+  // every fallback. Invalid or absent provenance shares one conservative key.
+  return validClientIp(req.headers.get('x-real-ip'))
+    || validClientIp(req.headers.get('cf-connecting-ip'))
+    || validClientIp(req.headers.get('x-forwarded-for')?.split(',')[0])
+    || 'unknown';
 }
 
 export function createCheckoutAttemptLimiter(
