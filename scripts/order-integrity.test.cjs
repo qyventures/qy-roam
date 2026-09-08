@@ -869,9 +869,14 @@ test('launch control reports the same checkout prerequisites that protect real o
   assert.match(launchPage, /function hasLiveStripeSecret/);
   assert.match(launchPage, /hasRequiredStripeWebhookConfig\(\)/);
   assert.match(launchPage, /function hasOrderIntegritySecret/);
-  assert.match(launchPage, /const storefrontReady=stripe&&webhook&&site&&orderIntegrity&&paymentDbOk&&smtp/);
-  assert.match(launchPage, /const wifiReady=storefrontReady&&wifiInventory/);
+  assert.match(launchPage, /hasRequiredEsimOrderSchema\(\)/);
+  assert.match(launchPage, /const commonCheckoutReady=stripe&&webhook&&site&&orderIntegrity&&smtp/);
+  assert.match(launchPage, /const esimReady=commonCheckoutReady&&esimOrderDbOk/);
+  assert.match(launchPage, /const wifiReady=commonCheckoutReady&&paymentDbOk&&wifiInventory/);
+  assert.doesNotMatch(launchPage, /const esimReady=.*paymentDbOk/);
   assert.match(launchPage, /const paidReady=esimReady&&wifiReady&&pixel&&capi/);
+  assert.match(launchPage, /eSIM checkout blockers/);
+  assert.match(launchPage, /Pocket WiFi checkout blockers/);
   assert.match(launchPage, /eSIM checkout/);
   assert.match(launchPage, /Pocket WiFi checkout/);
   assert.doesNotMatch(launchPage, /const site=true/);
