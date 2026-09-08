@@ -220,10 +220,10 @@ type EventClaim =
 
 const EVENT_CLAIM_STALE_MS = 30 * 60_000;
 
-async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string, type:string):Promise<EventClaim> {
+async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string, type:string, sessionId:string):Promise<EventClaim> {
   if(!supabase) throw new Error('Persistence unavailable');
   const processingStartedAt=new Date().toISOString();
-  const claimed=await supabase.from('stripe_events').insert({event_id:id,event_type:type,processing_started_at:processingStartedAt});
+  const claimed=await supabase.from('stripe_events').insert({event_id:id,event_type:type,stripe_session_id:sessionId,processing_started_at:processingStartedAt});
   if(claimed.error?.code==='23505'){
     const existing=await supabase.from('stripe_events').select('processed_at,processing_started_at,last_error,attempts').eq('event_id',id).maybeSingle();
     if(existing.error) throw existing.error;
@@ -237,7 +237,7 @@ async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string
     // A process can die after inserting the event but before completing it. Reclaim
     // only the exact stale version so concurrent Stripe retries cannot both proceed.
     const reclaimed=await supabase.from('stripe_events')
-      .update({event_type:type,processing_started_at:processingStartedAt,last_error:null,attempts:Number(existing.data?.attempts||1)+1})
+      .update({event_type:type,stripe_session_id:sessionId,processing_started_at:processingStartedAt,last_error:null,attempts:Number(existing.data?.attempts||1)+1})
       .eq('event_id',id)
       .is('processed_at',null)
       .eq('processing_started_at',previousStartedAt)
@@ -435,7 +435,7 @@ export async function POST(req:Request){
     const eventClaimId=`stripe:${event.id}`;
     let claimStartedAt:string|undefined;
     try{
-      const claim=await claimOnce(supabase,eventClaimId,event.type);
+      const claim=await claimOnce(supabase,eventClaimId,event.type,session.id);
       if(claim.status==='processed') return NextResponse.json({received:true,duplicate:true});
       if(claim.status==='in_progress') return NextResponse.json({error:'Event is still processing'},{status:500});
       claimStartedAt=claim.processingStartedAt;
@@ -462,7 +462,7 @@ export async function POST(req:Request){
   const eventClaimId=`stripe:${event.id}`;
   let claimStartedAt:string|undefined;
   try{
-    const claim=await claimOnce(supabase,eventClaimId,event.type);
+    const claim=await claimOnce(supabase,eventClaimId,event.type,session.id);
     if(claim.status==='processed') return NextResponse.json({received:true,duplicate:true});
     if(claim.status==='in_progress') return NextResponse.json({error:'Event is still processing'},{status:500});
     claimStartedAt=claim.processingStartedAt;

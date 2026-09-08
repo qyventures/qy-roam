@@ -84,6 +84,9 @@ create index if not exists orders_inventory_item_idx on public.orders(inventory_
 create table if not exists public.stripe_events (
   event_id text primary key,
   event_type text not null,
+  -- Preserve the affected Checkout Session so an operator can reconcile a
+  -- failed event directly in Stripe without guessing from an opaque event id.
+  stripe_session_id text,
   received_at timestamptz not null default now(),
   processing_started_at timestamptz not null default now(),
   processed_at timestamptz,
@@ -91,6 +94,7 @@ create table if not exists public.stripe_events (
   last_failed_at timestamptz,
   last_error text
 );
+alter table public.stripe_events add column if not exists stripe_session_id text;
 alter table public.stripe_events add column if not exists received_at timestamptz not null default now();
 alter table public.stripe_events add column if not exists processing_started_at timestamptz not null default now();
 alter table public.stripe_events alter column processed_at drop default;

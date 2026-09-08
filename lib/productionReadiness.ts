@@ -52,7 +52,7 @@ const REQUIRED_PAYMENT_SCHEMA = [
     // Failed claims remain visible and immediately retryable. Probe the full
     // recovery contract so checkout cannot accept payment against an older
     // event ledger that would hide or temporarily strand a failed webhook.
-    columns: 'event_id,event_type,processing_started_at,processed_at,attempts,last_failed_at,last_error',
+    columns: 'event_id,event_type,stripe_session_id,processing_started_at,processed_at,attempts,last_failed_at,last_error',
   },
   {
     table: 'fulfilment_notifications',

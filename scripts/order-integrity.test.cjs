@@ -1038,6 +1038,16 @@ test('failed Stripe webhook claims remain visible and immediately retryable', ()
   assert.match(adminPage, /failed events awaiting a signed retry/);
 });
 
+test('failed Stripe webhook records identify the affected Checkout Session for recovery', () => {
+  assert.match(schema, /stripe_session_id text/);
+  assert.match(productionReadiness, /event_id,event_type,stripe_session_id,processing_started_at/);
+  assert.match(webhookRoute, /claimOnce\(supabase:ReturnType<[^>]+>, id:string, type:string, sessionId:string\)/);
+  assert.match(webhookRoute, /stripe_session_id:sessionId/);
+  assert.match(webhookRoute, /claimOnce\(supabase,eventClaimId,event\.type,session\.id\)/);
+  assert.match(adminPage, /event_id,event_type,stripe_session_id,attempts/);
+  assert.match(adminPage, /failure\.stripe_session_id/);
+});
+
 test('Meta Purchase retries preserve one durable event timestamp for deduplication', () => {
   const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
   assert.match(schema, /event_time bigint check \(event_time is null or event_time > 0\)/);
@@ -1162,7 +1172,7 @@ test('expired lookalike sessions are ignored before claiming the webhook event',
     webhookRoute.indexOf('const validation=validateQyRoamSession(session)'),
   );
   const provenanceGuard = expiryBranch.indexOf('if(!validQyRoamProvenance(session.id,session.metadata))');
-  const eventClaim = expiryBranch.indexOf('await claimOnce(supabase,eventClaimId,event.type)');
+  const eventClaim = expiryBranch.indexOf('await claimOnce(supabase,eventClaimId,event.type,session.id)');
   assert.notEqual(provenanceGuard, -1);
   assert.notEqual(eventClaim, -1);
   assert.ok(provenanceGuard < eventClaim);
