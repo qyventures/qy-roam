@@ -282,6 +282,20 @@ test('booking status distinguishes an unavailable order ledger from an unpersist
   assert.match(bookingPage, /Please do not place a second order/);
 });
 
+test('success confirmation does not imply fulfilment is durable before the paid order snapshot exists', () => {
+  // Stripe is the payment authority, but a paid session can reach this page
+  // before the webhook has persisted it (or while the ledger is unavailable).
+  // The recovery instruction must prevent a duplicate purchase in either case.
+  assert.match(successPage, /getSupabaseAdmin/);
+  assert.match(successPage, /let orderPersisted = false/);
+  assert.match(successPage, /let orderLookupFailed = false/);
+  assert.match(successPage, /select\('payment_status'\)/);
+  assert.match(successPage, /orderPersisted = orderResult\.data\?\.payment_status === 'paid'/);
+  assert.match(successPage, /orderPersisted \? 'Order confirmed' : 'Payment confirmed'/);
+  assert.match(successPage, /Please do not place a second order/);
+  assert.match(successPage, /orderLookupFailed \? 'temporarily unable to verify' : 'finalising'/);
+});
+
 test('checkout validation rejects normalized and malformed calendar dates', () => {
   assert.equal(parseExactIsoDate('2026-09-10')?.toISOString().slice(0, 10), '2026-09-10');
   for (const value of ['2026-02-29', '2026-04-31', '2026-13-01', '2026-9-10', '', null]) {

@@ -1,4 +1,5 @@
 import { createStripeClient } from '@/lib/stripeClient';
+import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { validateQyRoamSession, type QyRoamProductType } from '@/lib/qyRoamSession';
 import MetaPurchase from '@/components/MetaPurchase';
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
@@ -22,6 +23,8 @@ export default async function SuccessPage({ searchParams }: Props) {
   let planName = '';
   let planId = '';
   let measurementConsent = false;
+  let orderPersisted = false;
+  let orderLookupFailed = false;
 
   if (sessionId && key) {
     try {
@@ -38,6 +41,30 @@ export default async function SuccessPage({ searchParams }: Props) {
       planId = session.metadata?.plan_id || '';
       measurementConsent = session.metadata?.measurement_consent === 'accepted';
       amount = session.amount_total != null ? `S$${(session.amount_total / 100).toFixed(2)}` : '';
+
+      // Stripe remains the authority for payment, but do not imply that
+      // fulfilment has already received the order while its durable ledger is
+      // unavailable or the signed webhook is still being processed. This is
+      // especially important when a shopper reloads the success URL after a
+      // network interruption: placing a second order would be the wrong
+      // recovery action for a payment that Stripe has already accepted.
+      if (paid) {
+        const supabase = getSupabaseAdmin();
+        if (!supabase) {
+          orderLookupFailed = true;
+        } else {
+          const orderResult = await supabase
+            .from('orders')
+            .select('payment_status')
+            .eq('stripe_session_id', session.id)
+            .maybeSingle();
+          // A previously received asynchronous-completion event can have
+          // created an awaiting-payment row. The success page must wait for
+          // the paid snapshot, not merely any row for this Checkout Session.
+          orderPersisted = orderResult.data?.payment_status === 'paid';
+          orderLookupFailed = Boolean(orderResult.error);
+        }
+      }
     } catch (error) {
       console.error('success_session_lookup_error', error);
     }
@@ -74,17 +101,25 @@ export default async function SuccessPage({ searchParams }: Props) {
   return (
     <main className="wrap section legal">
       {sessionId && <MetaPurchase sessionId={sessionId} measurementConsent={measurementConsent} productType={productType} contentId={contentId} value={purchaseValue} />}
-      <span className="eyebrow">Order confirmed</span>
-      <h1>Thank you — your QY Roam order is confirmed.</h1>
+      <span className="eyebrow">{orderPersisted ? 'Order confirmed' : 'Payment confirmed'}</span>
+      <h1>{orderPersisted ? 'Thank you — your QY Roam order is confirmed.' : 'Thank you — your payment is confirmed.'}</h1>
       {(destination || planName) && <p><strong>{planName || destination}</strong>{start && end ? ` · ${start} to ${end}` : ''}{amount ? ` · ${amount}` : ''}</p>}
       {isEsim ? (
         <>
-          <p>Your payment is confirmed. We’ll process your eSIM fulfilment using the email address from checkout.</p>
+          {orderPersisted ? (
+            <p>Your payment is confirmed. We’ll process your eSIM fulfilment using the email address from checkout.</p>
+          ) : (
+            <p>Your payment is confirmed, and we’re {orderLookupFailed ? 'temporarily unable to verify' : 'finalising'} the order record for eSIM fulfilment. Please do not place a second order; refresh this page in a moment or contact our support team if you need help.</p>
+          )}
           <p>Please make sure your device supports eSIM before installation. If you need help with setup, contact our Singapore support team.</p>
         </>
       ) : (
         <>
-          <p>We’ll use the contact and Singapore delivery details from your checkout to arrange your pocket WiFi delivery before your trip.</p>
+          {orderPersisted ? (
+            <p>We’ll use the contact and Singapore delivery details from your checkout to arrange your pocket WiFi delivery before your trip.</p>
+          ) : (
+            <p>Your payment is confirmed, and we’re {orderLookupFailed ? 'temporarily unable to verify' : 'finalising'} the order record before arranging Pocket WiFi delivery. Please do not place a second order; refresh this page in a moment or contact our support team if you need help.</p>
+          )}
           <p>Please keep the device, cable and pouch together during your rental. Return instructions will be supplied with the order.</p>
         </>
       )}
