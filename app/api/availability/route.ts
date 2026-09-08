@@ -9,6 +9,7 @@ import { validQyRoamProvenance } from '@/lib/orderProvenance';
 import {
   hasRequiredFulfilmentEmailConfig,
   hasRequiredPaymentSchema,
+  hasRequiredStripeCheckoutConfig,
   hasRequiredStripeWebhookConfig,
 } from '@/lib/productionReadiness';
 
@@ -130,7 +131,7 @@ export async function GET(req: NextRequest) {
   // product shown as available even though checkout had to refuse the order.
   const stripeKey = process.env.STRIPE_SECRET_KEY;
   const orderIntegritySecret = process.env.ORDER_INTEGRITY_SECRET;
-  if (!stripeKey || !orderIntegritySecret || orderIntegritySecret.length < 32 ||
+  if (!stripeKey || !hasRequiredStripeCheckoutConfig() || !orderIntegritySecret || orderIntegritySecret.length < 32 ||
     !hasRequiredStripeWebhookConfig() || !hasRequiredFulfilmentEmailConfig() || !getSupabaseAdmin()) {
     return unavailableAvailability();
   }

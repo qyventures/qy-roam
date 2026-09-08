@@ -523,9 +523,13 @@ test('production checkout and recovery reject test-mode Stripe server credential
     if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = previousNodeEnv;
   }
-  for (const source of [esimCheckoutRoute, wifiCheckoutRoute, webhookRoute, adminOrderRoute, bookingPage, successPage]) {
+  // Availability is a purchase promise, so it must not report a router as
+  // purchasable when the production checkout gate will reject test-mode
+  // Stripe credentials.
+  for (const source of [esimCheckoutRoute, wifiCheckoutRoute, availabilityRoute, webhookRoute, adminOrderRoute, bookingPage, successPage]) {
     assert.match(source, /hasRequiredStripeCheckoutConfig/);
   }
+  assert.match(availabilityRoute, /!hasRequiredStripeCheckoutConfig\(\)/);
   assert.match(healthRoute, /stripe: hasRequiredStripeCheckoutConfig\(\)/);
   assert.match(productionReadiness, /export \{ hasRequiredStripeCheckoutConfig \} from '@\/lib\/stripeCheckoutConfig';/);
   assert.match(stripeCheckoutConfig, /key\.startsWith\('sk_live_'\).*key\.startsWith\('rk_live_'\)/);
