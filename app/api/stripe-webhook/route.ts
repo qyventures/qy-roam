@@ -225,17 +225,19 @@ async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string
   const processingStartedAt=new Date().toISOString();
   const claimed=await supabase.from('stripe_events').insert({event_id:id,event_type:type,processing_started_at:processingStartedAt});
   if(claimed.error?.code==='23505'){
-    const existing=await supabase.from('stripe_events').select('processed_at,processing_started_at').eq('event_id',id).maybeSingle();
+    const existing=await supabase.from('stripe_events').select('processed_at,processing_started_at,last_error,attempts').eq('event_id',id).maybeSingle();
     if(existing.error) throw existing.error;
     if(existing.data?.processed_at) return {status:'processed'};
     const previousStartedAt=existing.data?.processing_started_at;
     const previousStartedMs=previousStartedAt ? new Date(previousStartedAt).getTime() : Number.NaN;
-    if(!previousStartedAt||!Number.isFinite(previousStartedMs)||Date.now()-previousStartedMs<=EVENT_CLAIM_STALE_MS) return {status:'in_progress'};
+    // A settled failure is no longer in flight and can be retried immediately.
+    // Otherwise retain the stale lease for a worker that may still complete.
+    if(!existing.data?.last_error&&(!previousStartedAt||!Number.isFinite(previousStartedMs)||Date.now()-previousStartedMs<=EVENT_CLAIM_STALE_MS)) return {status:'in_progress'};
 
     // A process can die after inserting the event but before completing it. Reclaim
     // only the exact stale version so concurrent Stripe retries cannot both proceed.
     const reclaimed=await supabase.from('stripe_events')
-      .update({event_type:type,processing_started_at:processingStartedAt})
+      .update({event_type:type,processing_started_at:processingStartedAt,last_error:null,attempts:Number(existing.data?.attempts||1)+1})
       .eq('event_id',id)
       .is('processed_at',null)
       .eq('processing_started_at',previousStartedAt)
@@ -245,6 +247,22 @@ async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string
   }
   if(claimed.error) throw claimed.error;
   return {status:'claimed',processingStartedAt};
+}
+
+async function recordEventFailure(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>,eventId:string,processingStartedAt:string,error:unknown){
+  const message=error instanceof Error?error.message:'Stripe webhook processing failed';
+  // Keep the claim as an operational audit record, but mark it settled so the
+  // next signed Stripe retry can reclaim it immediately rather than waiting
+  // for the abandoned-worker timeout. The ownership predicate prevents an old
+  // worker from overwriting a newer retry's claim.
+  const failedAt=new Date().toISOString();
+  const failed=await supabase.from('stripe_events')
+    .update({last_failed_at:failedAt,last_error:message.slice(0,500)})
+    .eq('event_id',eventId)
+    .eq('processing_started_at',processingStartedAt)
+    .is('processed_at',null)
+    .select('event_id');
+  if(failed.error||failed.data?.length!==1) console.error('stripe_webhook_failure_record_error',failed.error||'event claim ownership was lost');
 }
 
 // An expired Checkout Session can otherwise occupy the durable reservation
@@ -428,7 +446,7 @@ export async function POST(req:Request){
       if(completed.data?.length!==1) throw new Error('Stripe event claim ownership was lost');
     }catch(error){
       console.error('stripe_webhook_expiry_processing_error',error);
-      if(claimStartedAt) await supabase.from('stripe_events').delete().eq('event_id',eventClaimId).eq('processing_started_at',claimStartedAt).is('processed_at',null);
+      if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error);
       return NextResponse.json({error:'Processing failed'},{status:500});
     }
     return NextResponse.json({received:true});
@@ -475,9 +493,7 @@ export async function POST(req:Request){
     if(completed.data?.length!==1) throw new Error('Stripe event claim ownership was lost');
   }catch(error){
     console.error('stripe_webhook_processing_error',error);
-    // Delete only the claim owned by this invocation. A stale worker must never
-    // erase a newer retry's reclaimed lease.
-    if(claimStartedAt) await supabase.from('stripe_events').delete().eq('event_id',eventClaimId).eq('processing_started_at',claimStartedAt).is('processed_at',null);
+    if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error);
     return NextResponse.json({error:'Processing failed'},{status:500});
   }
   return NextResponse.json({received:true});

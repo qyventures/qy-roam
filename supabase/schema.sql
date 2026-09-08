@@ -86,12 +86,18 @@ create table if not exists public.stripe_events (
   event_type text not null,
   received_at timestamptz not null default now(),
   processing_started_at timestamptz not null default now(),
-  processed_at timestamptz
+  processed_at timestamptz,
+  attempts integer not null default 1 check (attempts > 0),
+  last_failed_at timestamptz,
+  last_error text
 );
 alter table public.stripe_events add column if not exists received_at timestamptz not null default now();
 alter table public.stripe_events add column if not exists processing_started_at timestamptz not null default now();
 alter table public.stripe_events alter column processed_at drop default;
 alter table public.stripe_events alter column processed_at drop not null;
+alter table public.stripe_events add column if not exists attempts integer not null default 1 check (attempts > 0);
+alter table public.stripe_events add column if not exists last_failed_at timestamptz;
+alter table public.stripe_events add column if not exists last_error text;
 alter table public.stripe_events enable row level security;
 
 -- Durable human-fulfilment notification ledger. One row per paid checkout.
@@ -335,6 +341,7 @@ create index if not exists orders_product_type_idx on public.orders(product_type
 create index if not exists orders_fulfilment_status_idx on public.orders(fulfilment_status);
 create index if not exists orders_travel_start_idx on public.orders(travel_start);
 create index if not exists stripe_events_processed_at_idx on public.stripe_events(processed_at desc);
+create index if not exists stripe_events_failed_at_idx on public.stripe_events(last_failed_at desc) where processed_at is null and last_error is not null;
 create index if not exists fulfilment_notifications_status_idx on public.fulfilment_notifications(status, updated_at);
 create index if not exists meta_purchase_deliveries_status_idx on public.meta_purchase_deliveries(status, updated_at);
 create index if not exists checkout_reservations_dates_idx on public.checkout_reservations(travel_start, travel_end, expires_at);

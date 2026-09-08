@@ -1025,6 +1025,19 @@ test('Stripe order persistence cannot overwrite concurrent fulfilment progress',
   assert.doesNotMatch(webhookRoute, /if\(inserted\.error\.code!==['"]23505['"]\)[\s\S]{0,300}from\('orders'\)\.update\(order\)/);
 });
 
+test('failed Stripe webhook claims remain visible and immediately retryable', () => {
+  assert.match(schema, /stripe_events add column if not exists attempts integer not null default 1/);
+  assert.match(schema, /stripe_events add column if not exists last_failed_at timestamptz/);
+  assert.match(schema, /stripe_events add column if not exists last_error text/);
+  assert.match(productionReadiness, /processing_started_at,processed_at,attempts,last_failed_at,last_error/);
+  assert.match(webhookRoute, /async function recordEventFailure/);
+  assert.match(webhookRoute, /last_error:message\.slice\(0,500\)/);
+  assert.match(webhookRoute, /!existing\.data\?\.last_error/);
+  assert.doesNotMatch(webhookRoute, /from\('stripe_events'\)\.delete\(\)/);
+  assert.match(adminPage, /Stripe webhook failures/);
+  assert.match(adminPage, /failed events awaiting a signed retry/);
+});
+
 test('Meta Purchase retries preserve one durable event timestamp for deduplication', () => {
   const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
   assert.match(schema, /event_time bigint check \(event_time is null or event_time > 0\)/);

@@ -58,14 +58,15 @@ export default async function AdminPage() {
   // independent panels together, but preserve each failure so the UI fails
   // loudly while leaving any successfully loaded operational data visible.
   const unavailable = { data: [] as any[], error: new Error('Order database is not configured') };
-  const [result, inventoryResult, notificationResult, metaDeliveryResult] = supabase
+  const [result, inventoryResult, notificationResult, metaDeliveryResult, stripeEventResult] = supabase
     ? await Promise.all([
         supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(500),
         supabase.from('inventory_items').select('id,sku,name,quantity_on_hand,status').eq('product_type', 'pocket_wifi').order('name'),
         supabase.from('fulfilment_notifications').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('updated_at', { ascending: false }).limit(500),
         supabase.from('meta_purchase_deliveries').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('updated_at', { ascending: false }).limit(500),
+        supabase.from('stripe_events').select('event_id,event_type,attempts,last_failed_at,last_error').is('processed_at', null).not('last_error', 'is', null).order('last_failed_at', { ascending: false }).limit(50),
       ])
-    : [unavailable, unavailable, unavailable, unavailable];
+    : [unavailable, unavailable, unavailable, unavailable, unavailable];
   const orders: any[] = result.data ?? [];
   const inventoryItems: any[] = inventoryResult.data ?? [];
   const notifications: any[] = notificationResult.data ?? [];
@@ -90,11 +91,13 @@ export default async function AdminPage() {
     order.measurement_consent === 'accepted' &&
     metaDeliveryBySession.get(order.stripe_session_id)?.status !== 'sent',
   );
+  const webhookFailures: any[] = stripeEventResult.data ?? [];
   const failedPanels = [
     result.error && 'orders',
     inventoryResult.error && 'inventory',
     notificationResult.error && 'fulfilment notifications',
     metaDeliveryResult.error && 'Meta delivery status',
+    stripeEventResult.error && 'Stripe webhook failures',
   ].filter(Boolean) as string[];
 
   const paid = orders.filter((o:any)=>o.payment_status === 'paid');
@@ -171,7 +174,13 @@ export default async function AdminPage() {
           <div style={cardStyle}><small>Overdue WiFi returns</small><div style={metricStyle}>{returnExceptions.length}</div><small>more than 5 days past trip end</small></div>
           <div style={cardStyle}><small>Ops email exceptions</small><div style={metricStyle}>{notificationExceptions.length}</div><small>paid Stripe-order notifications not confirmed sent</small></div>
           <div style={cardStyle}><small>Meta CAPI exceptions</small><div style={metricStyle}>{metaDeliveryExceptions.length}</div><small>consented purchases not confirmed delivered</small></div>
+          <div style={cardStyle}><small>Stripe webhook failures</small><div style={metricStyle}>{webhookFailures.length}</div><small>failed events awaiting a signed retry</small></div>
         </div>
+        {webhookFailures.length > 0 && <div role="alert" style={{...cardStyle,borderColor:'#dc2626',background:'#fef2f2',marginTop:14}}>
+          <strong>Payment processing needs attention.</strong>
+          <div style={{marginTop:6}}>Stripe will retry these events automatically. Check the order and delivery ledgers before asking a customer to pay again.</div>
+          <ul>{webhookFailures.slice(0,10).map((failure:any)=><li key={failure.event_id}><code>{failure.event_type}</code> · attempt {failure.attempts} · {String(failure.last_error||'Processing failed').slice(0,180)}</li>)}</ul>
+        </div>}
       </section>
     </>}
 
