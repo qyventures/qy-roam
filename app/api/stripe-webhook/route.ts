@@ -404,6 +404,16 @@ export async function POST(req:Request){
   // Both QY Roam checkout routes set this server-controlled marker.
   if(session.metadata?.source!=='qyroam.com') return NextResponse.json({received:true,ignored:true});
   if(event.type==='checkout.session.expired'){
+    // Expiry does not persist a paid order, but it still writes to the event
+    // ledger and can release inventory or close a provisional order. The
+    // public source marker alone is not an authority: this Stripe account may
+    // be shared, and a lookalike Session must not be able to pollute the
+    // idempotency ledger. Legitimate checkouts receive this server-only HMAC
+    // before their URL is exposed.
+    if(!validQyRoamProvenance(session.id,session.metadata)){
+      console.error('stripe_webhook_expiry_integrity_error',{sessionId:session.id});
+      return NextResponse.json({received:true,ignored:true});
+    }
     const eventClaimId=`stripe:${event.id}`;
     let claimStartedAt:string|undefined;
     try{

@@ -1136,6 +1136,23 @@ test('expired authenticated Pocket WiFi sessions promptly release only their mat
   assert.match(webhookRoute, /await releaseExpiredPocketWifiReservation\(supabase,session\)/);
 });
 
+test('expired lookalike sessions are ignored before claiming the webhook event', () => {
+  // The source marker is public metadata and the Stripe account may be shared.
+  // Require the server-issued HMAC before an expiry event can consume the
+  // durable event ledger, release inventory, or mutate a provisional order.
+  const expiryBranch = webhookRoute.slice(
+    webhookRoute.indexOf("if(event.type==='checkout.session.expired')"),
+    webhookRoute.indexOf('const validation=validateQyRoamSession(session)'),
+  );
+  const provenanceGuard = expiryBranch.indexOf('if(!validQyRoamProvenance(session.id,session.metadata))');
+  const eventClaim = expiryBranch.indexOf('await claimOnce(supabase,eventClaimId,event.type)');
+  assert.notEqual(provenanceGuard, -1);
+  assert.notEqual(eventClaim, -1);
+  assert.ok(provenanceGuard < eventClaim);
+  assert.match(expiryBranch, /stripe_webhook_expiry_integrity_error/);
+  assert.match(expiryBranch, /return NextResponse\.json\(\{received:true,ignored:true\}\)/);
+});
+
 test('expired checkout sessions close only their provisional pending orders', () => {
   // A delayed payment may have created an awaiting-payment order before its
   // Checkout Session reaches Stripe's terminal expiry state.
