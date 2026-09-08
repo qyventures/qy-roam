@@ -29,6 +29,10 @@ Optional until measurement launch:
 
 Never place live credentials in GitHub.
 
+The production Stripe endpoint must be created in **live mode**. The webhook
+rejects a signed event when its Stripe mode does not match `STRIPE_SECRET_KEY`,
+so a test-mode endpoint cannot create operational orders or fulfilment alerts.
+
 ### Checkout-integrity secret rotation
 
 Rotate this secret without invalidating a customer who has already reached

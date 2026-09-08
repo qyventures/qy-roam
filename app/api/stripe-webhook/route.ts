@@ -9,6 +9,7 @@ import { validateQyRoamSession } from '@/lib/qyRoamSession';
 import { validCheckoutRequestId } from '@/lib/checkoutValidation';
 import { validQyRoamProvenance } from '@/lib/orderProvenance';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
+import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { getEsimPlan } from '@/lib/esimPlans';
 
 export const runtime = 'nodejs';
@@ -386,6 +387,15 @@ export async function POST(req:Request){
     return NextResponse.json({error:'Invalid webhook payload'},{status:400});
   }
   try{event=stripe.webhooks.constructEvent(payload,req.headers.get('stripe-signature')||'',webhookSecret);}catch{return NextResponse.json({error:'Invalid signature'},{status:400});}
+  // A webhook secret is scoped to a Stripe endpoint but its value does not
+  // encode test versus live mode. Prevent an accidentally configured test
+  // endpoint from creating operational orders, sending fulfilment email, or
+  // reporting CAPI revenue while this service is using a live API key (and
+  // likewise prevent live events from entering a local/test installation).
+  if(!stripeEventMatchesConfiguredMode(key,event.livemode)){
+    console.error('stripe_webhook_mode_mismatch',{eventId:event.id,eventLivemode:event.livemode});
+    return NextResponse.json({error:'Stripe event mode mismatch'},{status:400});
+  }
   if(!['checkout.session.completed','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed','checkout.session.expired'].includes(event.type)) return NextResponse.json({received:true});
   const session=event.data.object as Stripe.Checkout.Session, supabase=getSupabaseAdmin(); if(!supabase) return NextResponse.json({error:'Persistence unavailable'},{status:503});
   // QY Roam can share a Stripe account with other products. A broad Checkout

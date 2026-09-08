@@ -9,3 +9,17 @@ export function hasRequiredStripeCheckoutConfig() {
   if (!key) return false;
   return process.env.NODE_ENV !== 'production' || key.startsWith('sk_live_') || key.startsWith('rk_live_');
 }
+
+/**
+ * Stripe webhook signing secrets do not identify test versus live mode. Bind
+ * every signed event to the configured API-key mode before it can reach order
+ * persistence or external side effects. Unknown key formats fail closed: an
+ * API credential that cannot establish the event mode is not a safe payment
+ * authority.
+ */
+export function stripeEventMatchesConfiguredMode(key: string, livemode: boolean) {
+  const configuredKey = key.trim();
+  if (configuredKey.startsWith('sk_live_') || configuredKey.startsWith('rk_live_')) return livemode;
+  if (configuredKey.startsWith('sk_test_') || configuredKey.startsWith('rk_test_')) return !livemode;
+  return false;
+}

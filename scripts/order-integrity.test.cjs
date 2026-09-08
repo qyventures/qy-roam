@@ -31,7 +31,7 @@ const { operationalConfig } = require('../lib/operationalConfig.ts');
 const { validStripeCheckoutSessionId } = require('../lib/stripeSessionId.ts');
 const { readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError } = require('../lib/requestBody.ts');
 const { createCheckoutAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
-const { hasRequiredStripeCheckoutConfig } = require('../lib/stripeCheckoutConfig.ts');
+const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = require('../lib/stripeCheckoutConfig.ts');
 const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
@@ -507,6 +507,20 @@ test('production checkout and recovery reject test-mode Stripe server credential
   assert.match(healthRoute, /stripe: hasRequiredStripeCheckoutConfig\(\)/);
   assert.match(productionReadiness, /export \{ hasRequiredStripeCheckoutConfig \} from '@\/lib\/stripeCheckoutConfig';/);
   assert.match(stripeCheckoutConfig, /key\.startsWith\('sk_live_'\).*key\.startsWith\('rk_live_'\)/);
+});
+
+test('signed Stripe webhooks cannot cross the configured test/live boundary', () => {
+  assert.equal(stripeEventMatchesConfiguredMode('sk_live_secret', true), true);
+  assert.equal(stripeEventMatchesConfiguredMode('rk_live_secret', true), true);
+  assert.equal(stripeEventMatchesConfiguredMode('sk_live_secret', false), false);
+  assert.equal(stripeEventMatchesConfiguredMode('rk_live_secret', false), false);
+  assert.equal(stripeEventMatchesConfiguredMode('sk_test_secret', false), true);
+  assert.equal(stripeEventMatchesConfiguredMode('rk_test_secret', false), true);
+  assert.equal(stripeEventMatchesConfiguredMode('sk_test_secret', true), false);
+  assert.equal(stripeEventMatchesConfiguredMode('unknown_secret', false), false);
+  assert.match(webhookRoute, /stripeEventMatchesConfiguredMode\(key,event\.livemode\)/);
+  assert.match(webhookRoute, /Stripe event mode mismatch/);
+  assert.match(webhookRoute, /return NextResponse\.json\(\{error:'Stripe event mode mismatch'\},\{status:400\}\)/);
 });
 
 test('fulfilment recipients are explicitly configured and never fall back to a historical mailbox', () => {
