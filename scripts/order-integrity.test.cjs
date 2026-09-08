@@ -609,6 +609,23 @@ test('idempotent checkout replays recover paid orders without a second payment a
   assert.match(esimPage, /data\.completed && typeof data\.sessionId === 'string'/);
 });
 
+test('Pocket WiFi open-session retries honor the freshly retrieved Stripe state', () => {
+  // Listing and retrieving are separate Stripe calls. A traveller can pay or
+  // the session can expire between them, so the stale listed URL must never be
+  // returned without checking the retrieved session status.
+  assert.match(wifiCheckoutRoute, /const existing=await stripe\.checkout\.sessions\.retrieve\(holdState\.existingSessionId\)/);
+  const replayBranch = wifiCheckoutRoute.slice(
+    wifiCheckoutRoute.indexOf('if(holdState.existingUrl&&holdState.existingSessionId)'),
+    wifiCheckoutRoute.indexOf('const expiresAt=', wifiCheckoutRoute.indexOf('if(holdState.existingUrl&&holdState.existingSessionId)')),
+  );
+  assert.match(replayBranch, /matchesRequestedPocketWifi\(existing,requestId,requested\)/);
+  assert.match(replayBranch, /existing\.status==='complete'&&existing\.payment_status==='paid'/);
+  assert.match(replayBranch, /existing\.status==='expired'/);
+  assert.match(replayBranch, /existing\.status!=='open'\|\|!existing\.url/);
+  assert.match(replayBranch, /\{url:existing\.url\}/);
+  assert.doesNotMatch(replayBranch, /\{url:holdState\.existingUrl\}/);
+});
+
 test('paid Pocket WiFi checkout replays release only their own linked hold', () => {
   // A response can be lost after the webhook persists payment but before it
   // removes the temporary reservation. The idempotent replay must clear that

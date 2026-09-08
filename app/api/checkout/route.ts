@@ -169,13 +169,43 @@ export async function POST(req: Request) {
   if(!supabase) return NextResponse.json({error:'Live reservation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
   if(holdState.existingUrl&&holdState.existingSessionId){
     // A retry can find a session created just before a process interruption.
-    // Repair its provenance before returning its URL, rather than allowing an
-    // unsigned session to reach payment.
+    // Retrieve it again because payment or expiry can race the preceding list
+    // call. The fresh state, not the URL snapshot from that list, determines
+    // whether the browser may return to Checkout.
     const existing=await stripe.checkout.sessions.retrieve(holdState.existingSessionId);
+    if(!matchesRequestedPocketWifi(existing,requestId,requested)){
+      return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.',checkoutRequestConflict:true},{status:409,headers:{'Cache-Control':'no-store'}});
+    }
     const metadata={...existing.metadata} as Record<string,string>;
     const provenance=signedQyRoamProvenance(existing.id,metadata);
     if(metadata[QY_ROAM_PROVENANCE_METADATA_KEY]!==provenance){
       await stripe.checkout.sessions.update(existing.id,{metadata:{[QY_ROAM_PROVENANCE_METADATA_KEY]:provenance}});
+    }
+    if(existing.status==='complete'&&existing.payment_status==='paid'){
+      // The signed terminal webhook normally removes this hold. Keep it linked
+      // if order persistence is still catching up, or remove only this exact
+      // session's hold once the paid order is durable.
+      const order=await supabase.from('orders').select('payment_status').eq('stripe_session_id',existing.id).maybeSingle();
+      if(order.error) throw order.error;
+      if(order.data?.payment_status==='paid'){
+        const released=await supabase.from('checkout_reservations').delete()
+          .eq('checkout_request_id',requestId)
+          .eq('stripe_session_id',existing.id);
+        if(released.error) throw released.error;
+      }else if(!await linkReservationToSession(supabase,requestId,existing.id)){
+        return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
+      }
+      return NextResponse.json({completed:true,sessionId:existing.id},{headers:{'Cache-Control':'no-store'}});
+    }
+    if(existing.status==='expired'){
+      // Expiry makes the payment URL unusable. Release only the reservation
+      // that is unlinked or belongs to this exact expired session; a newer
+      // recovery attempt must remain untouched.
+      const released=await supabase.from('checkout_reservations').delete()
+        .eq('checkout_request_id',requestId)
+        .or(`stripe_session_id.is.null,stripe_session_id.eq.${existing.id}`);
+      if(released.error) console.error('checkout_expired_reservation_release_error',released.error);
+      return NextResponse.json({error:'This secure checkout session has expired. Please try again to start a new one.',checkoutExpired:true},{status:409,headers:{'Cache-Control':'no-store'}});
     }
     if(!await linkReservationToSession(supabase,requestId,existing.id)){
       // Do not redirect a retry to payment when its durable reservation was
@@ -183,7 +213,10 @@ export async function POST(req: Request) {
       // Session unexposed preserves capacity until an operator can investigate.
       return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
     }
-    return NextResponse.json({url:holdState.existingUrl},{headers:{'Cache-Control':'no-store'}});
+    if(existing.status!=='open'||!existing.url){
+      return NextResponse.json({error:'Your payment is still being confirmed. Please wait for confirmation before trying again.',paymentPending:true},{status:409,headers:{'Cache-Control':'no-store'}});
+    }
+    return NextResponse.json({url:existing.url},{headers:{'Cache-Control':'no-store'}});
   }
   const expiresAt=new Date(Date.now()+HOLD_MINUTES*60_000).toISOString();
   const reservation=await supabase.rpc('qy_reserve_pocket_wifi',{
