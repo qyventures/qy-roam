@@ -1051,6 +1051,24 @@ test('failed Stripe webhook claims remain visible and immediately retryable', ()
   assert.match(adminPage, /failed events awaiting a signed retry/);
 });
 
+test('Stripe event idempotency records stay bound to one event type and Checkout Session', () => {
+  // A corrupt or imported row must never make a different signed event look
+  // processed, in-flight, or eligible for stale-lease takeover solely because
+  // its event_id collides with the ledger primary key.
+  assert.match(webhookRoute, /select\('event_type,stripe_session_id,processed_at,processing_started_at,last_error,attempts'\)/);
+  const duplicateClaim = webhookRoute.slice(
+    webhookRoute.indexOf("if(claimed.error?.code==='23505')"),
+    webhookRoute.indexOf('async function recordEventFailure'),
+  );
+  const identityGuard = duplicateClaim.indexOf("existing.data.event_type!==type||existing.data.stripe_session_id!==sessionId");
+  const processedAck = duplicateClaim.indexOf("if(existing.data?.processed_at) return {status:'processed'}");
+  const staleReclaim = duplicateClaim.indexOf("const reclaimed=await supabase.from('stripe_events')");
+  assert.notEqual(identityGuard, -1);
+  assert.ok(identityGuard < processedAck);
+  assert.ok(identityGuard < staleReclaim);
+  assert.match(duplicateClaim, /Stripe event idempotency identity mismatch/);
+});
+
 test('failed Stripe webhook records identify the affected Checkout Session for recovery', () => {
   assert.match(schema, /stripe_session_id text/);
   assert.match(productionReadiness, /event_id,event_type,stripe_session_id,processing_started_at/);

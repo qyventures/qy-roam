@@ -225,8 +225,17 @@ async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string
   const processingStartedAt=new Date().toISOString();
   const claimed=await supabase.from('stripe_events').insert({event_id:id,event_type:type,stripe_session_id:sessionId,processing_started_at:processingStartedAt});
   if(claimed.error?.code==='23505'){
-    const existing=await supabase.from('stripe_events').select('processed_at,processing_started_at,last_error,attempts').eq('event_id',id).maybeSingle();
+    const existing=await supabase.from('stripe_events').select('event_type,stripe_session_id,processed_at,processing_started_at,last_error,attempts').eq('event_id',id).maybeSingle();
     if(existing.error) throw existing.error;
+    // An event id is Stripe's idempotency identity, so every observation of
+    // that id must describe the same event and Checkout Session. Never let a
+    // corrupt/imported ledger row turn a different signed paid event into an
+    // acknowledged duplicate, and never rewrite that row while reclaiming a
+    // stale lease. Failing closed keeps Stripe retrying and makes the mismatch
+    // visible to operations for reconciliation.
+    if(!existing.data||existing.data.event_type!==type||existing.data.stripe_session_id!==sessionId){
+      throw new Error('Stripe event idempotency identity mismatch');
+    }
     if(existing.data?.processed_at) return {status:'processed'};
     const previousStartedAt=existing.data?.processing_started_at;
     const previousStartedMs=previousStartedAt ? new Date(previousStartedAt).getTime() : Number.NaN;
