@@ -135,12 +135,12 @@ async function sendMetaPurchase(session: Stripe.Checkout.Session, eventTime: num
   if (!token || !pixel) throw new Error('Meta CAPI is not configured');
   const email=normalizeEmail(session.customer_details?.email), phone=normalizePhone(session.customer_details?.phone);
   const userData:Record<string,string|string[]>={}; if(email) userData.em=[sha256(email)!]; if(phone) userData.ph=[sha256(phone)!];
-  const fbp=session.metadata?.meta_fbp, fbc=session.metadata?.meta_fbc, clientUserAgent=session.metadata?.meta_client_user_agent;
+  const fbp=session.metadata?.meta_fbp, fbc=session.metadata?.meta_fbc, clientUserAgent=session.metadata?.meta_client_user_agent, clientIp=session.metadata?.meta_client_ip;
   // fbp/fbc are Meta's opaque browser identifiers, not hashed PII arrays.
   if(fbp) userData.fbp=fbp; if(fbc) userData.fbc=fbc;
   const productType=session.metadata?.product_type||'pocket_wifi';
   const contentId=productType==='esim' ? `esim:${session.metadata?.plan_id||''}` : `pocket_wifi:${session.metadata?.country||''}`;
-  const payload={data:[{event_name:'Purchase',event_time:eventTime,action_source:'website',event_source_url:`${process.env.NEXT_PUBLIC_SITE_URL||'https://qyroam.com'}/success`,event_id:`stripe_${session.id}`,user_data:{...userData,...(clientUserAgent?{client_user_agent:clientUserAgent}:{})},custom_data:{currency:'SGD',value:(session.amount_total||0)/100,order_id:session.id,content_type:'product',content_ids:[contentId],contents:[{id:contentId,quantity:1}],content_category:productType==='esim'?'Travel eSIM':'Pocket WiFi'}}]};
+  const payload={data:[{event_name:'Purchase',event_time:eventTime,action_source:'website',event_source_url:`${process.env.NEXT_PUBLIC_SITE_URL||'https://qyroam.com'}/success`,event_id:`stripe_${session.id}`,user_data:{...userData,...(clientUserAgent?{client_user_agent:clientUserAgent}:{}),...(clientIp?{client_ip_address:clientIp}:{})},custom_data:{currency:'SGD',value:(session.amount_total||0)/100,order_id:session.id,content_type:'product',content_ids:[contentId],contents:[{id:contentId,quantity:1}],content_category:productType==='esim'?'Travel eSIM':'Pocket WiFi'}}]};
   const response=await postJsonWithTimeout(`https://graph.facebook.com/v21.0/${pixel}/events?access_token=${encodeURIComponent(token)}`,payload);
   if(!response.ok) throw new Error(`Meta CAPI failed (${response.status}): ${response.responseBody.slice(0,300)}`);
 }

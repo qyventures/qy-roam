@@ -147,7 +147,7 @@ export async function POST(req: Request) {
         checkout_request_id: requestId,
         source: 'qyroam.com',
         measurement_consent: body.measurementConsent === true ? 'accepted' : 'essential',
-        ...(body.measurementConsent === true ? metaAttributionFromRequest(body.attribution, req.headers.get('user-agent')) : {})
+        ...(body.measurementConsent === true ? metaAttributionFromRequest(body.attribution, req.headers.get('user-agent'), req.headers.get('x-real-ip')) : {})
       },
       consent_collection: { terms_of_service: 'required' }
     }, { idempotencyKey: `qyroam_esim_${requestId}` });

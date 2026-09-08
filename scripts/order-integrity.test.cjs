@@ -983,20 +983,22 @@ test('consented browser and CAPI Purchases share a stable deduplication identity
 test('consented CAPI Purchases retain only safe browser matching context', () => {
   const validFbp = 'fb.1.1725000000000.123456789012345';
   const validFbc = 'fb.1.1725000000000.AbCdEf_123-xyz';
-  assert.deepEqual(metaAttributionFromRequest({ fbp: validFbp, fbc: validFbc }, 'Mozilla/5.0\r\nInjected'), {
+  assert.deepEqual(metaAttributionFromRequest({ fbp: validFbp, fbc: validFbc }, 'Mozilla/5.0\r\nInjected', '203.0.113.42'), {
     meta_fbp: validFbp,
     meta_fbc: validFbc,
     meta_client_user_agent: 'Mozilla/5.0Injected',
+    meta_client_ip: '203.0.113.42',
   });
-  assert.deepEqual(metaAttributionFromRequest({ fbp: 'not-a-meta-id', fbc: '<script>' }, null), {});
+  assert.deepEqual(metaAttributionFromRequest({ fbp: 'not-a-meta-id', fbc: '<script>' }, null, 'not an ip'), {});
   assert.match(metaAttribution, /const META_BROWSER_ID =/);
   assert.match(metaClient, /export function metaAttribution\(\)/);
-  assert.match(esimCheckoutRoute, /metaAttributionFromRequest\(body\.attribution, req\.headers\.get\('user-agent'\)\)/);
-  assert.match(wifiCheckoutRoute, /metaAttributionFromRequest\(body\.attribution,req\.headers\.get\('user-agent'\)\)/);
+  assert.match(esimCheckoutRoute, /metaAttributionFromRequest\(body\.attribution, req\.headers\.get\('user-agent'\), req\.headers\.get\('x-real-ip'\)\)/);
+  assert.match(wifiCheckoutRoute, /metaAttributionFromRequest\(body\.attribution,req\.headers\.get\('user-agent'\),req\.headers\.get\('x-real-ip'\)\)/);
   assert.match(esimCheckoutRoute, /body\.measurementConsent === true \? metaAttributionFromRequest/);
   assert.match(wifiCheckoutRoute, /body\.measurementConsent===true\?metaAttributionFromRequest/);
   assert.match(webhookRoute, /session\.metadata\?\.meta_fbp/);
   assert.match(webhookRoute, /client_user_agent:clientUserAgent/);
+  assert.match(webhookRoute, /client_ip_address:clientIp/);
 });
 
 test('fulfilment email retries retain one safe per-order message identity', () => {
