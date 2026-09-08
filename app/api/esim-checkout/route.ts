@@ -8,6 +8,7 @@ import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig, hasRequir
 import { InvalidRequestBodyLengthError, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
 import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { metaAttributionFromRequest } from '@/lib/metaAttribution';
+import { checkoutExpiresAt } from '@/lib/checkoutExpiry';
 
 export const runtime = 'nodejs';
 
@@ -18,7 +19,6 @@ const CHECKOUT_BODY_TIMEOUT_MS = 15_000;
 // short-lived so a customer cannot complete a stale checkout many hours after
 // the selection, pricing and operational readiness checks ran. The client
 // already treats an expired idempotent session as a recoverable fresh attempt.
-const ESIM_CHECKOUT_HOLD_MINUTES = 30;
 const limited = createCheckoutAttemptLimiter();
 
 function siteOrigin(req: Request) {
@@ -111,7 +111,7 @@ export async function POST(req: Request) {
     const stripe = createStripeClient(key);
     const origin = siteOrigin(req);
     const amount = Math.max(50, Math.round(plan.qyPriceSgd * 100));
-    const expiresAt = Math.floor(Date.now() / 1000) + ESIM_CHECKOUT_HOLD_MINUTES * 60;
+    const expiresAt = checkoutExpiresAt();
 
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',

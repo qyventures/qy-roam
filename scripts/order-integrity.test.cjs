@@ -33,6 +33,7 @@ const { readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeErro
 const { checkoutClientKey, createCheckoutAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = require('../lib/stripeCheckoutConfig.ts');
 const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
+const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -448,10 +449,22 @@ test('eSIM Checkout Sessions use a bounded, recoverable payment window', () => {
   // A digital plan has no inventory hold, but it still carries a signed price
   // and fulfilment commitment. Do not leave its Checkout URL payable for the
   // much longer Stripe default window after the readiness checks ran.
-  assert.match(esimCheckoutRoute, /const ESIM_CHECKOUT_HOLD_MINUTES = 30/);
-  assert.match(esimCheckoutRoute, /const expiresAt = Math\.floor\(Date\.now\(\) \/ 1000\) \+ ESIM_CHECKOUT_HOLD_MINUTES \* 60/);
+  assert.equal(CHECKOUT_PAYMENT_WINDOW_MINUTES, 30);
+  assert.ok(STRIPE_EXPIRY_SAFETY_SECONDS > 0);
+  assert.equal(CHECKOUT_HOLD_WINDOW_SECONDS, CHECKOUT_PAYMENT_WINDOW_MINUTES * 60 + STRIPE_EXPIRY_SAFETY_SECONDS);
+  const nowMs = 1_700_000_000_999;
+  assert.equal(checkoutExpiresAt(nowMs), Math.floor(nowMs / 1000) + CHECKOUT_HOLD_WINDOW_SECONDS);
+  assert.ok(checkoutExpiresAt(nowMs) - Math.ceil(nowMs / 1000) >= 30 * 60);
+  assert.match(esimCheckoutRoute, /const expiresAt = checkoutExpiresAt\(\)/);
   assert.match(esimCheckoutRoute, /mode: 'payment',\s*expires_at: expiresAt,/);
   assert.match(esimPage, /data\.checkoutExpired \|\| data\.checkoutRequestConflict/);
+});
+
+test('Pocket WiFi expiry and inventory scans share the Stripe-safe hold window', () => {
+  assert.match(wifiCheckoutRoute, /const expiresAtSeconds=checkoutExpiresAt\(\)/);
+  assert.match(wifiCheckoutRoute, /expires_at:expiresAtSeconds/);
+  assert.match(wifiCheckoutRoute, /const cutoff=nowSeconds-CHECKOUT_HOLD_WINDOW_SECONDS/);
+  assert.match(availabilityRoute, /const cutoff = nowSeconds - CHECKOUT_HOLD_WINDOW_SECONDS/);
 });
 
 test('eSIM checkout fails closed when its durable post-payment order boundary is unavailable', () => {

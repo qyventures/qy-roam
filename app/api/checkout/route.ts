@@ -12,12 +12,12 @@ import { hasRequiredFulfilmentEmailConfig, hasRequiredPaymentSchema, hasRequired
 import { InvalidRequestBodyLengthError, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
 import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { metaAttributionFromRequest } from '@/lib/metaAttribution';
+import { CHECKOUT_HOLD_WINDOW_SECONDS, checkoutExpiresAt } from '@/lib/checkoutExpiry';
 
 export const runtime = 'nodejs';
 
 const MAX_BODY_BYTES=4096;
 const CHECKOUT_BODY_TIMEOUT_MS=15_000;
-const HOLD_MINUTES=30;
 const limited=createCheckoutAttemptLimiter();
 
 function siteOrigin(req: Request) {
@@ -56,14 +56,14 @@ function matchesRequestedPocketWifi(session:Stripe.Checkout.Session,requestId:st
 
 async function activeStripeHolds(stripe:Stripe,start:string,end:string,requestId:string|null,requested:RequestedPocketWifi) {
   const nowSeconds=Math.floor(Date.now()/1000);
-  const cutoff=nowSeconds-(HOLD_MINUTES*60);
+  const cutoff=nowSeconds-CHECKOUT_HOLD_WINDOW_SECONDS;
   let startingAfter:string|undefined;
   let holds=0;
   const requestIds:string[]=[];
   // Every still-valid QY Roam Checkout Session is an inventory hold. Keep
   // paginating through the complete hold window: stopping after an arbitrary
   // number of pages can undercount holds during a busy period and oversell the
-  // final routers. The server always gives these sessions a 30-minute expiry,
+  // final routers. The server gives these sessions a short bounded expiry,
   // so Stripe can filter out historical open sessions before pagination rather
   // than making a customer-facing checkout scan the whole account.
   for(;;){
@@ -218,7 +218,8 @@ export async function POST(req: Request) {
     }
     return NextResponse.json({url:existing.url},{headers:{'Cache-Control':'no-store'}});
   }
-  const expiresAt=new Date(Date.now()+HOLD_MINUTES*60_000).toISOString();
+  const expiresAtSeconds=checkoutExpiresAt();
+  const expiresAt=new Date(expiresAtSeconds*1000).toISOString();
   const reservation=await supabase.rpc('qy_reserve_pocket_wifi',{
     p_checkout_request_id:requestId,
     p_travel_start:start,
@@ -236,7 +237,7 @@ export async function POST(req: Request) {
   if(courierFee>0) lineItems.push({quantity:1,price_data:{currency:'sgd',unit_amount:courierFee,product_data:{name:'Singapore courier delivery & return handling'}}});
   let session:Stripe.Checkout.Session;
   try{
-    session=await stripe.checkout.sessions.create({mode:'payment',line_items:lineItems,expires_at:Math.floor(new Date(expiresAt).getTime()/1000),billing_address_collection:'required',shipping_address_collection:{allowed_countries:['SG']},phone_number_collection:{enabled:true},customer_creation:'always',success_url:`${origin}/success?session_id={CHECKOUT_SESSION_ID}`,cancel_url:`${origin}/?checkout=cancelled`,metadata:{product_type:'pocket_wifi',plan_name:`${country} Pocket WiFi`,country,start,end,days:String(days),daily_rate_sgd:daily.toFixed(2),benchmark_provider:WIFI_BENCHMARK.provider,benchmark_rate_sgd:wifiPlan.benchmarkRateSgd.toFixed(2),benchmark_verified_on:WIFI_BENCHMARK.verifiedOn,rental_before_promo_sgd:(rentalBeforePromo/100).toFixed(2),promo_code:promo.promoCode,promo_discount_sgd:(promo.discountCents/100).toFixed(2),courier_fee_sgd:(courierFee/100).toFixed(2),checkout_amount_cents:String(rentalAmount+courierFee),checkout_request_id:requestId,source:'qyroam.com',measurement_consent:body.measurementConsent===true?'accepted':'essential',...(body.measurementConsent===true?metaAttributionFromRequest(body.attribution,req.headers.get('user-agent'),req.headers.get('x-real-ip')):{})},consent_collection:{terms_of_service:'required'}},{idempotencyKey:`qyroam_wifi_${requestId}`});
+    session=await stripe.checkout.sessions.create({mode:'payment',line_items:lineItems,expires_at:expiresAtSeconds,billing_address_collection:'required',shipping_address_collection:{allowed_countries:['SG']},phone_number_collection:{enabled:true},customer_creation:'always',success_url:`${origin}/success?session_id={CHECKOUT_SESSION_ID}`,cancel_url:`${origin}/?checkout=cancelled`,metadata:{product_type:'pocket_wifi',plan_name:`${country} Pocket WiFi`,country,start,end,days:String(days),daily_rate_sgd:daily.toFixed(2),benchmark_provider:WIFI_BENCHMARK.provider,benchmark_rate_sgd:wifiPlan.benchmarkRateSgd.toFixed(2),benchmark_verified_on:WIFI_BENCHMARK.verifiedOn,rental_before_promo_sgd:(rentalBeforePromo/100).toFixed(2),promo_code:promo.promoCode,promo_discount_sgd:(promo.discountCents/100).toFixed(2),courier_fee_sgd:(courierFee/100).toFixed(2),checkout_amount_cents:String(rentalAmount+courierFee),checkout_request_id:requestId,source:'qyroam.com',measurement_consent:body.measurementConsent===true?'accepted':'essential',...(body.measurementConsent===true?metaAttributionFromRequest(body.attribution,req.headers.get('user-agent'),req.headers.get('x-real-ip')):{})},consent_collection:{terms_of_service:'required'}},{idempotencyKey:`qyroam_wifi_${requestId}`});
   }catch(error){
     // A network failure is ambiguous: Stripe may have created a payable
     // session before its response was lost. Releasing the reservation here

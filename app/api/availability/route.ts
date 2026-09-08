@@ -12,10 +12,9 @@ import {
   hasRequiredStripeCheckoutConfig,
   hasRequiredStripeWebhookConfig,
 } from '@/lib/productionReadiness';
+import { CHECKOUT_HOLD_WINDOW_SECONDS } from '@/lib/checkoutExpiry';
 
 export const dynamic = 'force-dynamic';
-
-const HOLD_MINUTES = 30;
 
 // Availability is a purchase promise, rather than a rough stock estimate.
 // Keep its unavailable response identical across prerequisite failures so the
@@ -30,14 +29,14 @@ function unavailableAvailability() {
 
 async function activeStripeHolds(stripe: Stripe, start: string, end: string) {
   const nowSeconds = Math.floor(Date.now() / 1000);
-  const cutoff = nowSeconds - HOLD_MINUTES * 60;
+  const cutoff = nowSeconds - CHECKOUT_HOLD_WINDOW_SECONDS;
   let startingAfter: string | undefined;
   let holds = 0;
   const requestIds = new Set<string>();
   // Every still-valid QY Roam Checkout Session is an inventory hold. Do not cap
   // pagination within the hold window: an arbitrary page limit would report
   // stock that is already held when checkout volume exceeds that limit. QY Roam
-  // creates 30-minute sessions, so ask Stripe to omit historical open sessions
+  // creates short-lived sessions, so ask Stripe to omit historical open sessions
   // instead of scanning an account's entire Checkout history on every search.
   for (;;) {
     const sessions = await stripe.checkout.sessions.list({ status: 'open', limit: 100, created: { gte: cutoff }, ...(startingAfter ? { starting_after: startingAfter } : {}) });
