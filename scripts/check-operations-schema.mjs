@@ -31,4 +31,15 @@ for (const contract of requiredContracts) {
   assert.ok(schema.includes(contract), `Missing operations schema contract: ${contract}`);
 }
 
-console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts.`);
+// This file is also the clean-install migration. Keep database objects ahead
+// of functions that resolve their tables/columns; testing only for presence
+// allowed a schema that upgraded successfully but failed on an empty project.
+const inventoryTable = schema.indexOf('create table if not exists public.inventory_items');
+const orderInventoryColumn = schema.indexOf('alter table public.orders add column if not exists inventory_item_id');
+const reservationFunction = schema.indexOf('create or replace function public.qy_reserve_pocket_wifi');
+const manualOrderFunction = schema.indexOf('create or replace function public.qy_create_manual_pocket_wifi_order');
+assert.ok(inventoryTable >= 0 && inventoryTable < reservationFunction, 'inventory_items must exist before the reservation function');
+assert.ok(orderInventoryColumn > inventoryTable && orderInventoryColumn < reservationFunction, 'orders.inventory_item_id must exist before the reservation function');
+assert.ok(inventoryTable < manualOrderFunction, 'inventory_items must exist before the manual-order function');
+
+console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts and clean-install dependency order.`);
