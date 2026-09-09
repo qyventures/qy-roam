@@ -26,7 +26,7 @@ const { validateQyRoamSession } = require('../lib/qyRoamSession.ts');
 const { parseExactIsoDate, validCheckoutRequestId } = require('../lib/checkoutValidation.ts');
 const { operationalIsoDate, operationalIsoDateAfter } = require('../lib/operationalDate.ts');
 const { WIFI_BENCHMARK, WIFI_PLANS } = require('../lib/wifiPlans.ts');
-const { allowedFulfilmentStatuses, validFulfilmentTransition, STRIPE_EVENT_CLAIM_STALE_MS } = require('../lib/orderLifecycle.ts');
+const { allowedFulfilmentStatuses, fulfilmentNotificationActionable, validFulfilmentTransition, STRIPE_EVENT_CLAIM_STALE_MS } = require('../lib/orderLifecycle.ts');
 const { operationalConfig } = require('../lib/operationalConfig.ts');
 const { validStripeCheckoutSessionId } = require('../lib/stripeSessionId.ts');
 const { readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError } = require('../lib/requestBody.ts');
@@ -824,6 +824,17 @@ test('Pocket WiFi fulfilment follows a dispatch and return lifecycle', () => {
   assert.equal(validFulfilmentTransition('pocket_wifi', 'closed', 'packing'), false);
 });
 
+test('fulfilment notification recovery cannot revive completed or cancelled orders', () => {
+  assert.equal(fulfilmentNotificationActionable('pocket_wifi', 'paid'), true);
+  assert.equal(fulfilmentNotificationActionable('pocket_wifi', 'packing'), true);
+  assert.equal(fulfilmentNotificationActionable('pocket_wifi', 'dispatched'), false);
+  assert.equal(fulfilmentNotificationActionable('pocket_wifi', 'returned'), false);
+  assert.equal(fulfilmentNotificationActionable('pocket_wifi', 'cancelled'), false);
+  assert.equal(fulfilmentNotificationActionable('esim', 'awaiting_fulfilment'), true);
+  assert.equal(fulfilmentNotificationActionable('esim', 'fulfilled'), false);
+  assert.equal(fulfilmentNotificationActionable('esim', 'cancelled'), false);
+});
+
 test('Pocket WiFi cannot leave the return workflow after physical dispatch', () => {
   assert.deepEqual(allowedFulfilmentStatuses('pocket_wifi', 'dispatched'), [
     'dispatched', 'with_customer', 'return_due', 'returned'
@@ -1073,6 +1084,7 @@ test('admin order visibility identifies the specific Meta CAPI delivery needing 
 test('admin email exceptions include paid Stripe orders missing their notification ledger', () => {
   assert.match(adminPage, /const notificationExceptions = orders\.filter/);
   assert.match(adminPage, /isStripeCheckoutOrder\(order\)/);
+  assert.match(adminPage, /fulfilmentNotificationActionable\(order\.product_type, order\.fulfilment_status\)/);
   assert.match(adminPage, /notificationBySession\.get\(order\.stripe_session_id\)\?\.status !== 'sent'/);
   assert.match(adminPage, /notificationExceptions\.length/);
   assert.match(adminPage, /canRetryNotifications/);
@@ -1085,14 +1097,17 @@ test('admin CAPI recovery is limited to consented purchases and remains availabl
   assert.match(productionReadiness, /measurement_consent/);
   assert.match(webhookRoute, /const measurementConsent=session\.metadata\?\.measurement_consent==='accepted'\?'accepted':'essential'/);
   assert.match(webhookRoute, /measurement_consent:measurementConsent/);
-  assert.match(adminPage, /notification\?\.status !== 'sent' \|\|[\s\S]{0,180}o\.measurement_consent === 'accepted' && metaDelivery\?\.status !== 'sent'/);
+  assert.match(adminPage, /fulfilmentNotificationActionable\(o\.product_type, o\.fulfilment_status\) && notification\?\.status !== 'sent'[\s\S]{0,180}o\.measurement_consent === 'accepted' && metaDelivery\?\.status !== 'sent'/);
   assert.match(adminOrderActions, /Retry order deliveries/);
 });
 
-test('admin can safely resume failed paid-order notifications', () => {
+test('admin recovery only resumes actionable fulfilment while preserving consented CAPI recovery', () => {
   assert.match(adminOrderRoute, /export async function POST/);
   assert.match(adminOrderRoute, /validateQyRoamSession\(session\)/);
-  assert.match(adminOrderRoute, /await deliverPaidOrderSideEffects\(supabase, session, metaEventTime\)/);
+  assert.match(adminOrderRoute, /fulfilmentNotificationActionable\(validation\.productType, order\.fulfilment_status\)/);
+  assert.match(adminOrderRoute, /const retryMeta = order\.measurement_consent === 'accepted'/);
+  assert.match(adminOrderRoute, /deliverFulfilmentNotification\(supabase, session\)/);
+  assert.match(adminOrderRoute, /deliverMetaPurchase\(supabase, session, metaEventTime\)/);
   assert.match(adminOrderActions, /Retry order deliveries/);
 });
 
@@ -1193,9 +1208,9 @@ test('Meta Purchase retries preserve one durable event timestamp for deduplicati
   assert.match(webhookRoute, /async function persistSession\(session:Stripe\.Checkout\.Session,eventType:Stripe\.Event\.Type,eventCreated:number\)/);
   assert.match(webhookRoute, /payment_confirmed_at:confirmedAt/);
   assert.match(webhookRoute, /await sendMetaPurchase\(session,Number\(attempt\.data\[0\]\.event_time\)\)/);
-  assert.match(adminOrderRoute, /select\('stripe_session_id,payment_status,payment_confirmed_at'\)/);
+  assert.match(adminOrderRoute, /select\('stripe_session_id,payment_status,payment_confirmed_at,product_type,fulfilment_status,measurement_consent'\)/);
   assert.match(adminOrderRoute, /const metaEventTime=Number\.isFinite\(confirmedAtMs\)/);
-  assert.match(adminOrderRoute, /await deliverPaidOrderSideEffects\(supabase, session, metaEventTime\)/);
+  assert.match(adminOrderRoute, /deliverMetaPurchase\(supabase, session, metaEventTime\)/);
   assert.doesNotMatch(adminOrderRoute, /Math\.floor\(Date\.now\(\) \/ 1000\)/);
 });
 
@@ -1206,8 +1221,9 @@ test('paid-order email and Meta deliveries are attempted independently', () => {
   assert.match(webhookRoute, /Promise\.allSettled\(\[\s*deliverFulfilmentNotification\(supabase,session\),\s*deliverMetaPurchase\(supabase,session,eventTime\),\s*\]\)/);
   assert.match(webhookRoute, /if\(failures\.length\) throw new AggregateError/);
   assert.match(webhookRoute, /await deliverPaidOrderSideEffects\(supabase,session,event\.created\)/);
-  assert.match(adminOrderRoute, /await deliverPaidOrderSideEffects\(supabase, session, metaEventTime\)/);
-  assert.doesNotMatch(adminOrderRoute, /await deliverFulfilmentNotification\(supabase, session\)[\s\S]{0,800}await deliverMetaPurchase\(supabase, session/);
+  assert.match(adminOrderRoute, /Promise\.allSettled\(\[/);
+  assert.match(adminOrderRoute, /retryFulfilment \? \[deliverFulfilmentNotification\(supabase, session\)\]/);
+  assert.match(adminOrderRoute, /retryMeta \? \[deliverMetaPurchase\(supabase, session, metaEventTime\)\]/);
 });
 
 test('consented browser and CAPI Purchases share a stable deduplication identity', () => {

@@ -83,3 +83,15 @@ export function initialFulfilmentStatus(productType: string | null | undefined, 
   if (paymentStatus !== 'paid') return paymentStatus === 'failed' ? 'payment_failed' : 'awaiting_payment';
   return isEsimProduct(productType) ? 'awaiting_fulfilment' : 'paid';
 }
+
+/**
+ * A fulfilment notification tells staff to take an outbound action. It is not
+ * a general order-history email, so recovery must never revive a cancelled,
+ * returned, or already-completed order just because its earlier SMTP attempt
+ * was interrupted. Keep this rule shared by the protected recovery endpoint
+ * and the admin exception view.
+ */
+export function fulfilmentNotificationActionable(productType: string | null | undefined, status: string | null | undefined) {
+  if (isEsimProduct(productType)) return status === 'awaiting_fulfilment';
+  return status === 'paid' || status === 'packing';
+}

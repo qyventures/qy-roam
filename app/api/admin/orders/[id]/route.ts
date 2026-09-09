@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 import { createStripeClient } from '@/lib/stripeClient';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
-import { validFulfilmentStatus, validFulfilmentTransition } from '@/lib/orderLifecycle';
+import { fulfilmentNotificationActionable, validFulfilmentStatus, validFulfilmentTransition } from '@/lib/orderLifecycle';
 import { validateQyRoamSession } from '@/lib/qyRoamSession';
-import { deliverPaidOrderSideEffects } from '@/app/api/stripe-webhook/route';
+import { deliverFulfilmentNotification, deliverMetaPurchase } from '@/app/api/stripe-webhook/route';
 import { InvalidRequestBodyLengthError, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '@/lib/requestBody';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
@@ -160,7 +160,7 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   try {
     const { data: order, error } = await supabase
       .from('orders')
-      .select('stripe_session_id,payment_status,payment_confirmed_at')
+      .select('stripe_session_id,payment_status,payment_confirmed_at,product_type,fulfilment_status,measurement_consent')
       .eq('id', id)
       .maybeSingle();
     if (error) throw error;
@@ -184,19 +184,32 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
       return NextResponse.json({ error: 'The linked Stripe session is not a valid paid QY Roam order' }, { status: 409 });
     }
 
+    // A fulfilment alert asks staff to send a device or digital entitlement.
+    // Retrying it after cancellation, physical return, or completion could
+    // create an accidental second fulfilment. CAPI is an independent record
+    // of the already-paid purchase, however, so it remains recoverable for a
+    // consented buyer even when the operational order is no longer actionable.
+    const retryFulfilment = fulfilmentNotificationActionable(validation.productType, order.fulfilment_status);
+    const retryMeta = order.measurement_consent === 'accepted' && session.metadata?.measurement_consent === 'accepted';
+    if (!retryFulfilment && !retryMeta) {
+      return NextResponse.json({ error: 'This order no longer needs a fulfilment or consented analytics delivery retry' }, { status: 409 });
+    }
+
     // The delivery ledgers preserve the original webhook event timestamp and
-    // make each side effect independently retry-safe. Attempt email and Meta
-    // together so an outage at either provider cannot starve recovery of the
-    // other after Stripe's automatic retry window has ended.
-    //
-    // If a previous attempt failed before it created the Meta row, use the
-    // first signed payment-confirmation time persisted by the webhook. Session
-    // creation remains a stable fallback only for legacy orders.
+    // make each selected side effect independently retry-safe. If a previous
+    // attempt failed before it created the Meta row, use the first signed
+    // payment-confirmation time persisted by the webhook. Session creation
+    // remains a stable fallback only for legacy orders.
     const confirmedAtMs=order.payment_confirmed_at ? new Date(order.payment_confirmed_at).getTime() : Number.NaN;
     const metaEventTime=Number.isFinite(confirmedAtMs) && confirmedAtMs>0
       ? Math.floor(confirmedAtMs/1000)
       : session.created;
-    await deliverPaidOrderSideEffects(supabase, session, metaEventTime);
+    const deliveries = await Promise.allSettled([
+      ...(retryFulfilment ? [deliverFulfilmentNotification(supabase, session)] : []),
+      ...(retryMeta ? [deliverMetaPurchase(supabase, session, metaEventTime)] : []),
+    ]);
+    const failures = deliveries.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (failures.length) throw new AggregateError(failures.map((failure) => failure.reason), 'One or more order deliveries failed');
     return NextResponse.json({ ok: true }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('admin_order_notification_retry_error', error);

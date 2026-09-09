@@ -1,6 +1,6 @@
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import AdminOrderActions from '@/components/AdminOrderActions';
-import { STRIPE_EVENT_CLAIM_STALE_MS } from '@/lib/orderLifecycle';
+import { fulfilmentNotificationActionable, STRIPE_EVENT_CLAIM_STALE_MS } from '@/lib/orderLifecycle';
 
 export const dynamic = 'force-dynamic';
 
@@ -106,6 +106,7 @@ export default async function AdminPage() {
   const notificationExceptions = orders.filter((order:any) =>
     order.payment_status === 'paid' &&
     isStripeCheckoutOrder(order) &&
+    fulfilmentNotificationActionable(order.product_type, order.fulfilment_status) &&
     notificationBySession.get(order.stripe_session_id)?.status !== 'sent',
   );
   const metaDeliveries: any[] = metaDeliveryResult.data ?? [];
@@ -239,7 +240,7 @@ export default async function AdminPage() {
           // Expose it for a missing/failed Meta event even after the ops email
           // was successfully sent, which is the common post-Stripe-retry case.
           const canRetryNotifications = o.payment_status === 'paid' && isStripeCheckoutOrder(o) && (
-            notification?.status !== 'sent' ||
+            (fulfilmentNotificationActionable(o.product_type, o.fulfilment_status) && notification?.status !== 'sent') ||
             (o.measurement_consent === 'accepted' && metaDelivery?.status !== 'sent')
           );
           return <tr key={o.id} style={{borderTop:'1px solid #e5e8ed',verticalAlign:'top'}}>
