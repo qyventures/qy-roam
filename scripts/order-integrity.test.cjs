@@ -942,6 +942,16 @@ test('manual orders cannot bypass paid-order lifecycle, pricing, or WiFi capacit
   assert.match(adminOpsRoute, /Pocket WiFi orders require a destination and valid travel start and end dates/);
 });
 
+test('opening Pocket WiFi stock is created through an audited database boundary', () => {
+  assert.match(adminOpsRoute, /qy_create_inventory_item/);
+  assert.doesNotMatch(adminOpsRoute, /from\('inventory_items'\)\.insert\(row\)/);
+  assert.match(schema, /create or replace function public\.qy_create_inventory_item/);
+  assert.match(schema, /'opening_stock'/);
+  assert.match(schema, /grant execute on function public\.qy_create_inventory_item\(text,text,text,text,text,integer,integer,numeric,text,text\) to service_role/);
+  assert.match(productionReadiness, /qy_create_inventory_item/);
+  assert.match(productionReadiness, /inventory SKU is required/);
+});
+
 test('manual paid Pocket WiFi orders use the same atomic capacity boundary as checkout', () => {
   const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
   assert.match(adminOpsRoute, /product === 'pocket_wifi' && paymentStatus === 'paid'/);

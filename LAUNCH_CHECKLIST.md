@@ -88,7 +88,7 @@ Subscribe to `checkout.session.completed`, `checkout.session.async_payment_succe
 
 ## 5. End-to-end payment smoke test
 
-Before deploying this application version, apply `supabase/schema.sql` to the production Supabase project. The checkout and webhook require the `orders`, `checkout_reservations`, `stripe_events`, `fulfilment_notifications`, and `meta_purchase_deliveries` tables plus the `qy_reserve_pocket_wifi` and `qy_create_manual_pocket_wifi_order` functions; deploy the schema before restarting the app so checkout and staff-created paid rentals use the same atomic inventory boundary and webhook processing cannot fail on missing database objects.
+Before deploying this application version, apply `supabase/schema.sql` to the production Supabase project. The checkout and webhook require the `orders`, `checkout_reservations`, `stripe_events`, `fulfilment_notifications`, and `meta_purchase_deliveries` tables plus the Pocket WiFi reservation, Stripe-persistence, manual-order, inventory-creation, inventory-adjustment, inventory-status, and dispatch/return RPCs defined there. Deploy the schema before restarting the app so checkout, staff-created paid rentals, and opening router stock all use their atomic inventory and audit boundaries.
 
 Before advertising, make one controlled real booking using the lowest practical charge and verify:
 

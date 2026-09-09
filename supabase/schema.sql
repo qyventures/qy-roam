@@ -479,6 +479,61 @@ alter table public.inventory_movements drop constraint if exists inventory_movem
 alter table public.inventory_movements add constraint inventory_movements_quantity_check check (quantity <> 0 or movement_type in ('return_quarantined', 'return_damaged', 'status_change'));
 alter table public.inventory_movements enable row level security;
 
+-- Opening inventory is an auditable stock receipt, not a special direct table
+-- write. Keeping creation and the first movement in one transaction prevents
+-- a router from becoming saleable without a ledger record of how it entered
+-- the fleet.
+create or replace function public.qy_create_inventory_item(
+  p_sku text,
+  p_name text,
+  p_product_type text,
+  p_serial_no text default null,
+  p_status text default 'available',
+  p_quantity_on_hand integer default 0,
+  p_reorder_level integer default 0,
+  p_unit_cost_sgd numeric default 0,
+  p_location text default null,
+  p_notes text default null
+)
+returns public.inventory_items
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_item public.inventory_items%rowtype;
+  v_product_type text := lower(trim(coalesce(p_product_type, '')));
+  v_status text := lower(trim(coalesce(p_status, '')));
+begin
+  if nullif(trim(coalesce(p_sku, '')), '') is null then raise exception 'inventory SKU is required'; end if;
+  if nullif(trim(coalesce(p_name, '')), '') is null then raise exception 'inventory name is required'; end if;
+  if v_product_type not in ('pocket_wifi', 'esim') then raise exception 'invalid inventory product type'; end if;
+  if v_status not in ('available', 'quarantined', 'damaged', 'maintenance') then raise exception 'invalid inventory status'; end if;
+  if p_quantity_on_hand is null or p_quantity_on_hand < 0 then raise exception 'inventory quantity cannot be negative'; end if;
+  if p_reorder_level is null or p_reorder_level < 0 then raise exception 'inventory reorder level cannot be negative'; end if;
+  if p_unit_cost_sgd is null or p_unit_cost_sgd < 0 then raise exception 'inventory unit cost cannot be negative'; end if;
+
+  insert into public.inventory_items (
+    sku, name, product_type, serial_no, status, quantity_on_hand, reorder_level,
+    unit_cost_sgd, location, notes, updated_at
+  ) values (
+    left(trim(p_sku), 80), left(trim(p_name), 120), v_product_type,
+    nullif(left(trim(coalesce(p_serial_no, '')), 120), ''), v_status,
+    p_quantity_on_hand, p_reorder_level, p_unit_cost_sgd,
+    nullif(left(trim(coalesce(p_location, '')), 120), ''),
+    nullif(left(trim(coalesce(p_notes, '')), 1000), ''), now()
+  ) returning * into v_item;
+
+  if p_quantity_on_hand > 0 then
+    insert into public.inventory_movements (inventory_item_id, movement_type, quantity, reference, notes)
+    values (v_item.id, 'opening_stock', p_quantity_on_hand, left(v_item.sku, 120), 'Initial inventory receipt');
+  end if;
+  return v_item;
+end;
+$$;
+revoke all on function public.qy_create_inventory_item(text,text,text,text,text,integer,integer,numeric,text,text) from public;
+grant execute on function public.qy_create_inventory_item(text,text,text,text,text,integer,integer,numeric,text,text) to service_role;
+
 -- Inventory quantity and its audit record must change atomically. The admin
 -- API uses only this function for adjustments, dispatches and returns.
 create or replace function public.qy_adjust_inventory(

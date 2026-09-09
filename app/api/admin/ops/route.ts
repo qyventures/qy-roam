@@ -125,7 +125,24 @@ export async function POST(req: NextRequest) {
         updated_at: new Date().toISOString()
       };
       if (!row.sku || !row.name) return NextResponse.json({ error: 'SKU and name are required' }, { status: 400 });
-      const { error } = await db.from('inventory_items').insert(row); if (error) throw error;
+      // Opening stock is a real physical-stock movement. Do not insert the
+      // item directly: a later audit would otherwise show its adjustments,
+      // dispatch and return records but not how its original saleable balance
+      // entered the fleet. The RPC creates the item and its opening movement
+      // in one transaction.
+      const { error } = await db.rpc('qy_create_inventory_item', {
+        p_sku: row.sku,
+        p_name: row.name,
+        p_product_type: row.product_type,
+        p_serial_no: row.serial_no,
+        p_status: row.status,
+        p_quantity_on_hand: row.quantity_on_hand,
+        p_reorder_level: row.reorder_level,
+        p_unit_cost_sgd: row.unit_cost_sgd,
+        p_location: row.location,
+        p_notes: row.notes,
+      });
+      if (error) throw error;
     } else if (action === 'inventory_adjust') {
       const { error } = await db.rpc('qy_adjust_inventory', { p_item_id: int(body.item_id), p_delta: int(body.delta), p_type: text(body.movement_type, 40) || 'adjustment', p_reference: text(body.reference, 120) || null, p_notes: text(body.notes, 1000) || null }); if (error) throw error;
     } else if (action === 'inventory_status') {

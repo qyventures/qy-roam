@@ -308,14 +308,15 @@ async function checkRequiredOperationsSchema() {
         return false;
       }
 
-      // Probe the three inventory RPCs without changing any state. A zero order
-      // id is impossible for the identity-backed orders table, and a zero item
-      // id is rejected before any inventory function writes. Their expected domain
-      // errors prove the functions, their current argument signatures, and the
-      // service-role grants are deployed. Missing-function or permission errors
-      // instead fail the launch gate before an operator needs to dispatch or
-      // receive a real device.
-      const [transitionProbe, adjustmentProbe, statusProbe] = await Promise.all([
+      // Probe the four inventory RPCs without changing any state. A zero order
+      // id is impossible for the identity-backed orders table, a zero item id
+      // is rejected before inventory functions write, and an empty SKU is
+      // rejected before an item can be created. Their expected domain errors
+      // prove the functions, current argument signatures and service-role
+      // grants are deployed. Missing-function or permission errors instead
+      // fail the launch gate before staff need to receive, dispatch or create
+      // a sellable router.
+      const [transitionProbe, adjustmentProbe, statusProbe, creationProbe] = await Promise.all([
         database.rpc('qy_transition_pocket_wifi_order', {
           p_order_id: 0,
           p_expected_status: 'paid',
@@ -339,6 +340,18 @@ async function checkRequiredOperationsSchema() {
           p_reference: null,
           p_notes: null,
         }).abortSignal(signal),
+        database.rpc('qy_create_inventory_item', {
+          p_sku: '',
+          p_name: 'readiness probe',
+          p_product_type: 'pocket_wifi',
+          p_serial_no: null,
+          p_status: 'available',
+          p_quantity_on_hand: 0,
+          p_reorder_level: 0,
+          p_unit_cost_sgd: 0,
+          p_location: null,
+          p_notes: null,
+        }).abortSignal(signal),
       ]);
       if (!transitionProbe.error || !/order not found/i.test(transitionProbe.error.message || '') ||
         !adjustmentProbe.error || !/invalid inventory item/i.test(adjustmentProbe.error.message || '')) {
@@ -347,6 +360,10 @@ async function checkRequiredOperationsSchema() {
       }
       if (!statusProbe.error || !/invalid inventory item/i.test(statusProbe.error.message || '')) {
         console.error('production_operations_inventory_status_rpc_check_failed');
+        return false;
+      }
+      if (!creationProbe.error || !/inventory SKU is required/i.test(creationProbe.error.message || '')) {
+        console.error('production_operations_inventory_creation_rpc_check_failed');
         return false;
       }
       return true;
