@@ -294,12 +294,15 @@ test('booking status uses full checkout-session integrity validation', () => {
   assert.doesNotMatch(bookingPage, /qyRoamProductType\(session\)/);
 });
 
-test('booking status distinguishes an unavailable order ledger from an unpersisted order', () => {
-  // A Stripe-confirmed payment remains trustworthy, but a database query error
-  // must not be rendered as the normal "queued for fulfilment" state.
+test('booking status requires a durable paid order before showing fulfilment progress', () => {
+  // A Stripe-confirmed payment remains trustworthy, but a missing, provisional,
+  // or unavailable order snapshot must not be rendered as the normal queued
+  // fulfilment state.
   assert.match(bookingPage, /const orderLookupFailed = Boolean\(orderResult\?\.error\)/);
-  assert.match(bookingPage, /paid && orderLookupFailed/);
-  assert.match(bookingPage, /temporarily finalising the order record/);
+  assert.match(bookingPage, /select\('payment_status,fulfilment_status,/);
+  assert.match(bookingPage, /const orderPersisted = order\?\.payment_status === 'paid'/);
+  assert.match(bookingPage, /paid && !orderPersisted/);
+  assert.match(bookingPage, /orderLookupFailed \? 'temporarily unable to verify' : 'still finalising'/);
   assert.match(bookingPage, /Please do not place a second order/);
 });
 

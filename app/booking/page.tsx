@@ -71,7 +71,7 @@ export default async function BookingPage({ searchParams }: Props) {
     const orderResult = supabase
       ? await supabase
           .from('orders')
-          .select('fulfilment_status,courier_tracking,return_tracking,dispatched_at,returned_at')
+          .select('payment_status,fulfilment_status,courier_tracking,return_tracking,dispatched_at,returned_at')
           .eq('stripe_session_id', sessionId)
           .maybeSingle()
       : null;
@@ -81,6 +81,11 @@ export default async function BookingPage({ searchParams }: Props) {
     // that their order is queued while the signed webhook is still retrying.
     const orderLookupFailed = Boolean(orderResult?.error);
     const order = orderResult?.data;
+    // A provisional row can be created for a delayed payment method before
+    // Stripe confirms it, and the paid webhook can still be retrying when the
+    // customer first opens this page. Only a paid order snapshot proves the
+    // fulfilment queue has durably received the purchase.
+    const orderPersisted = order?.payment_status === 'paid';
 
     const fulfilment = order?.fulfilment_status || initialFulfilmentStatus(productType, session.payment_status);
     const destination = session.metadata?.country || 'your destination';
@@ -97,9 +102,9 @@ export default async function BookingPage({ searchParams }: Props) {
         <h1>{paid ? statusLabels[fulfilment] || 'Order confirmed' : 'Payment not yet confirmed'}</h1>
         <p><strong>{planName}</strong>{start && end ? ` · ${start} to ${end}` : ''}{amount ? ` · ${amount}` : ''}</p>
 
-        {paid && orderLookupFailed ? (
+        {paid && !orderPersisted ? (
           <div role="alert">
-            <p><strong>Your payment is confirmed.</strong> We’re temporarily finalising the order record, so fulfilment details are not available just yet.</p>
+            <p><strong>Your payment is confirmed.</strong> We’re {orderLookupFailed ? 'temporarily unable to verify' : 'still finalising'} the order record, so fulfilment details are not available just yet.</p>
             <p>Please do not place a second order. Refresh this page shortly; if this message remains, contact us at <a href="tel:+6580327183"><strong>+65 8032 7183</strong></a> and quote your checkout confirmation.</p>
           </div>
         ) : paid ? (
