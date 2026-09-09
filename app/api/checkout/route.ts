@@ -13,6 +13,7 @@ import { InvalidRequestBodyLengthError, readLimitedRequestText, RequestBodyTimeo
 import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { metaAttributionFromRequest } from '@/lib/metaAttribution';
 import { CHECKOUT_HOLD_WINDOW_SECONDS, checkoutExpiresAt } from '@/lib/checkoutExpiry';
+import { checkoutSiteOrigin } from '@/lib/siteOrigin';
 
 export const runtime = 'nodejs';
 
@@ -20,12 +21,6 @@ const MAX_BODY_BYTES=4096;
 const CHECKOUT_BODY_TIMEOUT_MS=15_000;
 const limited=createCheckoutAttemptLimiter();
 
-function siteOrigin(req: Request) {
-  const configured = process.env.NEXT_PUBLIC_SITE_URL;
-  if (configured) { try { return new URL(configured).origin; } catch { throw new Error('Invalid NEXT_PUBLIC_SITE_URL'); } }
-  if (process.env.NODE_ENV === 'production') throw new Error('NEXT_PUBLIC_SITE_URL is required in production');
-  return new URL(req.url).origin;
-}
 type RequestedPocketWifi = {
   country:string; start:string; end:string; days:number; daily:number;
   rentalBeforePromo:number; promoCode:string; promoDiscount:number; courierFee:number;
@@ -232,7 +227,7 @@ export async function POST(req: Request) {
   if(reservation.error) throw reservation.error;
   const reserved=reservation.data?.[0]?.reserved===true;
   if(!reserved) return NextResponse.json({error:'Pocket WiFi is sold out or currently reserved for these dates. Please try different dates or contact +65 8032 7183.'},{status:409,headers:{'Cache-Control':'no-store'}});
-  const origin=siteOrigin(req);
+  const origin=checkoutSiteOrigin(req.url);
   const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[]=[{quantity:1,price_data:{currency:'sgd',unit_amount:rentalAmount,product_data:{name:`QY Roam Pocket WiFi — ${country}`,description:`${start} to ${end} · ${days} day${days===1?'':'s'}${promo.discountCents>0?` · ${normalisePromoCode(body.promoCode)} applied`:''}`}}}];
   if(courierFee>0) lineItems.push({quantity:1,price_data:{currency:'sgd',unit_amount:courierFee,product_data:{name:'Singapore courier delivery & return handling'}}});
   let session:Stripe.Checkout.Session;

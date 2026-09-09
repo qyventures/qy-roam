@@ -9,6 +9,7 @@ import { InvalidRequestBodyLengthError, readLimitedRequestText, RequestBodyTimeo
 import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { metaAttributionFromRequest } from '@/lib/metaAttribution';
 import { checkoutExpiresAt } from '@/lib/checkoutExpiry';
+import { checkoutSiteOrigin } from '@/lib/siteOrigin';
 
 export const runtime = 'nodejs';
 
@@ -20,16 +21,6 @@ const CHECKOUT_BODY_TIMEOUT_MS = 15_000;
 // the selection, pricing and operational readiness checks ran. The client
 // already treats an expired idempotent session as a recoverable fresh attempt.
 const limited = createCheckoutAttemptLimiter();
-
-function siteOrigin(req: Request) {
-  const configured = process.env.NEXT_PUBLIC_SITE_URL;
-  if (configured) {
-    try { return new URL(configured).origin; }
-    catch { throw new Error('Invalid NEXT_PUBLIC_SITE_URL'); }
-  }
-  if (process.env.NODE_ENV === 'production') throw new Error('NEXT_PUBLIC_SITE_URL is required in production');
-  return new URL(req.url).origin;
-}
 
 // Stripe idempotency keys are intentionally durable. If a caller reuses a
 // checkout request id for a different plan, Stripe returns the first session
@@ -109,7 +100,7 @@ export async function POST(req: Request) {
     }
 
     const stripe = createStripeClient(key);
-    const origin = siteOrigin(req);
+    const origin = checkoutSiteOrigin(req.url);
     const amount = Math.max(50, Math.round(plan.qyPriceSgd * 100));
     const expiresAt = checkoutExpiresAt();
 

@@ -34,6 +34,7 @@ const { checkoutClientKey, createCheckoutAttemptLimiter } = require('../lib/chec
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = require('../lib/stripeCheckoutConfig.ts');
 const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
 const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
+const { checkoutSiteOrigin, isProductionQyRoamOrigin } = require('../lib/siteOrigin.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -1293,4 +1294,32 @@ test('authenticated admin browser mutations reject cross-site request triggering
   assert.match(middleware, /if \(!isTrustedAdminMutation\(req\)\)/);
   assert.match(middleware, /status: 403/);
   assert.match(middleware, /'Cache-Control': 'no-store'/);
+});
+
+test('Stripe Checkout redirects fail closed unless production uses a canonical QY Roam origin', () => {
+  const priorEnvironment = process.env.NODE_ENV;
+  const priorSiteUrl = process.env.NEXT_PUBLIC_SITE_URL;
+  process.env.NODE_ENV = 'production';
+  try {
+    for (const value of ['https://qyroam.com', 'https://www.qyroam.com/store']) {
+      process.env.NEXT_PUBLIC_SITE_URL = value;
+      assert.equal(isProductionQyRoamOrigin(value), true);
+      assert.equal(checkoutSiteOrigin('http://localhost:3000/api/checkout'), new URL(value).origin);
+    }
+    for (const value of ['http://qyroam.com', 'https://qyroam.com:8443', 'https://staff@qyroam.com', 'https://not-qyroam.example']) {
+      process.env.NEXT_PUBLIC_SITE_URL = value;
+      assert.equal(isProductionQyRoamOrigin(value), false);
+      assert.throws(() => checkoutSiteOrigin('http://localhost:3000/api/checkout'), /canonical QY Roam HTTPS origin/);
+    }
+  } finally {
+    if (priorEnvironment === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = priorEnvironment;
+    if (priorSiteUrl === undefined) delete process.env.NEXT_PUBLIC_SITE_URL;
+    else process.env.NEXT_PUBLIC_SITE_URL = priorSiteUrl;
+  }
+  for (const route of [wifiCheckoutRoute, esimCheckoutRoute]) {
+    assert.match(route, /checkoutSiteOrigin\(req\.url\)/);
+    assert.doesNotMatch(route, /function siteOrigin\(/);
+  }
+  assert.match(healthRoute, /isProductionQyRoamOrigin\(process\.env\.NEXT_PUBLIC_SITE_URL\)/);
 });

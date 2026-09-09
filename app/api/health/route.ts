@@ -2,19 +2,10 @@ import { NextResponse } from 'next/server';
 import { getAdminCredentials, getMetaCapiToken } from '@/lib/runtimeConfig';
 import { hasRequiredFulfilmentEmailConfig, hasRequiredOperationsSchema, hasRequiredPaymentSchema, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '@/lib/productionReadiness';
 import { operationalConfig } from '@/lib/operationalConfig';
+import { isProductionQyRoamOrigin } from '@/lib/siteOrigin';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
-
-function isProductionSiteUrl(value?: string) {
-  if (!value) return false;
-  try {
-    const url = new URL(value);
-    return url.protocol === 'https:' && ['qyroam.com', 'www.qyroam.com'].includes(url.hostname);
-  } catch {
-    return false;
-  }
-}
 
 function hasPrefix(value: string | undefined, prefixes: string[]) {
   return Boolean(value && prefixes.some((prefix) => value.startsWith(prefix)));
@@ -77,7 +68,7 @@ export async function GET(req: Request) {
   const checks = {
     stripe: hasRequiredStripeCheckoutConfig(),
     publishableKey: hasPrefix(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY, ['pk_live_']),
-    siteUrl: isProductionSiteUrl(process.env.NEXT_PUBLIC_SITE_URL),
+    siteUrl: isProductionQyRoamOrigin(process.env.NEXT_PUBLIC_SITE_URL),
     webhook: hasRequiredStripeWebhookConfig(),
     orderIntegrity: isOrderIntegrityConfigured(),
     supabase: Boolean(process.env.SUPABASE_URL?.startsWith('https://') && process.env.SUPABASE_SERVICE_ROLE_KEY && process.env.SUPABASE_SERVICE_ROLE_KEY.length >= 32),
