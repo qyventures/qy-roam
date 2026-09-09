@@ -644,6 +644,15 @@ test('Pocket WiFi capacity cannot exceed physically saleable inventory', () => {
   assert.match(availabilityRoute, /const effectiveInventory = Math\.min\(inventory, inventoryState\.saleableInventory\)/);
 });
 
+test('Pocket WiFi reservation retries revalidate current physical capacity', () => {
+  // A worker may die after reserving but before creating its Stripe Session.
+  // Reusing that request id must not bypass a router that was subsequently
+  // quarantined, damaged, or otherwise removed from saleable stock.
+  assert.doesNotMatch(schema, /if found then[\s\S]{0,300}return query select true, greatest\(0, p_inventory - 1\)/);
+  assert.match(schema, /if v_existing\.checkout_request_id is not null then[\s\S]{0,300}v_effective_inventory >= 1 and v_committed <= v_effective_inventory/);
+  assert.match(schema, /greatest\(0, v_effective_inventory - v_committed\)/);
+});
+
 test('Pocket WiFi capacity does not double-count dispatched routers', () => {
   // Dispatch atomically decrements the available inventory ledger. Both the
   // checkout RPC and public availability exclude assigned dispatched orders,

@@ -204,8 +204,6 @@ begin
     if v_existing.travel_start <> p_travel_start or v_existing.travel_end <> p_travel_end then
       raise exception 'checkout request id was already used for different dates';
     end if;
-    return query select true, greatest(0, p_inventory - 1);
-    return;
   end if;
 
   select count(*)::integer into v_booked
@@ -235,6 +233,21 @@ begin
     and not (checkout_request_id = any(coalesce(p_stripe_hold_request_ids, array[]::text[])));
 
   v_committed := v_booked + v_reserved + greatest(0, coalesce(p_stripe_hold_count, 0));
+
+  -- A process can reserve capacity and then fail before it creates or links a
+  -- Stripe Session. On retry, the row above already exists, but the physical
+  -- fleet may have shrunk in the meantime (for example, an operator
+  -- quarantined a router). The existing hold is included in v_reserved unless
+  -- Stripe already represents it, so approve it only while all current
+  -- commitments still fit inside the current saleable/configured ceiling.
+  -- This prevents an old request id from bypassing the same stock boundary a
+  -- fresh checkout must pass before exposing a payment URL.
+  if v_existing.checkout_request_id is not null then
+    return query select v_effective_inventory >= 1 and v_committed <= v_effective_inventory,
+      greatest(0, v_effective_inventory - v_committed);
+    return;
+  end if;
+
   if v_effective_inventory < 1 or v_committed >= v_effective_inventory then
     return query select false, greatest(0, v_effective_inventory - v_committed);
     return;
