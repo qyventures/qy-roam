@@ -4,7 +4,7 @@ import { createStripeClient } from '../../../lib/stripeClient';
 import crypto from 'crypto';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { sendSmtpMail } from '@/lib/smtp';
-import { getMetaCapiToken } from '@/lib/runtimeConfig';
+import { getMetaCapiToken, hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
 import { validateQyRoamSession } from '@/lib/qyRoamSession';
 import { validCheckoutRequestId } from '@/lib/checkoutValidation';
 import { validQyRoamProvenance } from '@/lib/orderProvenance';
@@ -175,7 +175,7 @@ async function postJsonWithTimeout(url:string,body:unknown,timeoutMs=DELIVERY_TI
 function metaPurchaseConfigured(session: Stripe.Checkout.Session) {
   return session.payment_status === 'paid' &&
     session.metadata?.measurement_consent === 'accepted' &&
-    Boolean(getMetaCapiToken() && process.env.NEXT_PUBLIC_META_PIXEL_ID);
+    hasRequiredMetaCapiPurchaseConfig();
 }
 
 async function sendMetaPurchase(session: Stripe.Checkout.Session, eventTime: number) {

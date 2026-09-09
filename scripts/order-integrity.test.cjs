@@ -35,6 +35,7 @@ const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = re
 const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
 const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
 const { checkoutSiteOrigin, isProductionQyRoamOrigin } = require('../lib/siteOrigin.ts');
+const { hasRequiredMetaCapiPurchaseConfig } = require('../lib/runtimeConfig.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -1110,7 +1111,9 @@ test('admin recovery only resumes actionable fulfilment while preserving consent
   assert.match(adminOrderRoute, /export async function POST/);
   assert.match(adminOrderRoute, /validateQyRoamSession\(session\)/);
   assert.match(adminOrderRoute, /fulfilmentNotificationActionable\(validation\.productType, order\.fulfilment_status\)/);
-  assert.match(adminOrderRoute, /const retryMeta = order\.measurement_consent === 'accepted'/);
+  assert.match(adminOrderRoute, /const metaRequested = order\.measurement_consent === 'accepted'/);
+  assert.match(adminOrderRoute, /if \(metaRequested && !hasRequiredMetaCapiPurchaseConfig\(\)\)/);
+  assert.match(adminOrderRoute, /const retryMeta = metaRequested/);
   assert.match(adminOrderRoute, /deliverFulfilmentNotification\(supabase, session\)/);
   assert.match(adminOrderRoute, /deliverMetaPurchase\(supabase, session, metaEventTime\)/);
   assert.match(adminOrderActions, /Retry order deliveries/);
@@ -1229,6 +1232,32 @@ test('paid-order email and Meta deliveries are attempted independently', () => {
   assert.match(adminOrderRoute, /Promise\.allSettled\(\[/);
   assert.match(adminOrderRoute, /retryFulfilment \? \[deliverFulfilmentNotification\(supabase, session\)\]/);
   assert.match(adminOrderRoute, /retryMeta \? \[deliverMetaPurchase\(supabase, session, metaEventTime\)\]/);
+});
+
+test('Meta CAPI requires a complete destination and admin recovery never reports a no-op retry', () => {
+  const originalPixel = process.env.NEXT_PUBLIC_META_PIXEL_ID;
+  const originalToken = process.env.META_CAPI_ACCESS_TOKEN;
+  const originalLegacyToken = process.env.META_CAPI_TOKEN;
+  try {
+    process.env.NEXT_PUBLIC_META_PIXEL_ID = 'not-a-pixel';
+    process.env.META_CAPI_ACCESS_TOKEN = 'token-that-is-long-enough-to-look-configured';
+    delete process.env.META_CAPI_TOKEN;
+    assert.equal(hasRequiredMetaCapiPurchaseConfig(), false);
+    process.env.NEXT_PUBLIC_META_PIXEL_ID = '123456789';
+    process.env.META_CAPI_ACCESS_TOKEN = 'token-that-is-long-enough-to-look-configured';
+    assert.equal(hasRequiredMetaCapiPurchaseConfig(), true);
+    process.env.META_CAPI_ACCESS_TOKEN = 'token-with-a-newline\n';
+    assert.equal(hasRequiredMetaCapiPurchaseConfig(), false);
+  } finally {
+    if (originalPixel === undefined) delete process.env.NEXT_PUBLIC_META_PIXEL_ID; else process.env.NEXT_PUBLIC_META_PIXEL_ID = originalPixel;
+    if (originalToken === undefined) delete process.env.META_CAPI_ACCESS_TOKEN; else process.env.META_CAPI_ACCESS_TOKEN = originalToken;
+    if (originalLegacyToken === undefined) delete process.env.META_CAPI_TOKEN; else process.env.META_CAPI_TOKEN = originalLegacyToken;
+  }
+  assert.match(webhookRoute, /hasRequiredMetaCapiPurchaseConfig\(\)/);
+  assert.match(adminOrderRoute, /Meta CAPI is not configured, so this consented Purchase cannot be retried yet\./);
+  assert.match(adminPage, /Meta CAPI Purchase delivery is not configured\./);
+  assert.match(adminPage, /metaCapiConfigured && o\.measurement_consent === 'accepted'/);
+  assert.match(healthRoute, /metaCapi: hasRequiredMetaCapiPurchaseConfig\(\)/);
 });
 
 test('consented browser and CAPI Purchases share a stable deduplication identity', () => {

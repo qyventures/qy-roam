@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getAdminCredentials, getMetaCapiToken } from '@/lib/runtimeConfig';
+import { getAdminCredentials, hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
 import { hasRequiredFulfilmentEmailConfig, hasRequiredOperationsSchema, hasRequiredPaymentSchema, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '@/lib/productionReadiness';
 import { operationalConfig } from '@/lib/operationalConfig';
 import { isProductionQyRoamOrigin } from '@/lib/siteOrigin';
@@ -14,15 +14,6 @@ function hasPrefix(value: string | undefined, prefixes: string[]) {
 function isStrongAdminPassword(value?: string) {
   if (!value || value.length < 16) return false;
   return /[a-z]/.test(value) && /[A-Z]/.test(value) && /\d/.test(value) && /[^A-Za-z0-9]/.test(value);
-}
-
-function isMetaPixelConfigured() {
-  return /^\d{6,25}$/.test(process.env.NEXT_PUBLIC_META_PIXEL_ID || '');
-}
-
-function isMetaCapiConfigured() {
-  const token = getMetaCapiToken();
-  return Boolean(token && token.length >= 20);
 }
 
 function isOrderIntegrityConfigured() {
@@ -81,8 +72,7 @@ export async function GET(req: Request) {
     fulfilmentEmail: hasRequiredFulfilmentEmailConfig(),
   };
   const paidAcquisitionChecks = {
-    metaPixel: isMetaPixelConfigured(),
-    metaCapi: isMetaCapiConfigured(),
+    metaCapi: hasRequiredMetaCapiPurchaseConfig(),
   };
   const launchReady = Object.values(checks).every(Boolean);
   const paidAcquisitionReady = launchReady && Object.values(paidAcquisitionChecks).every(Boolean);

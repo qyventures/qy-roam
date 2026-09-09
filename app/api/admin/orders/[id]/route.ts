@@ -7,6 +7,7 @@ import { deliverFulfilmentNotification, deliverMetaPurchase } from '@/app/api/st
 import { InvalidRequestBodyLengthError, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '@/lib/requestBody';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
+import { hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
 
 export const runtime = 'nodejs';
 
@@ -190,7 +191,15 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     // of the already-paid purchase, however, so it remains recoverable for a
     // consented buyer even when the operational order is no longer actionable.
     const retryFulfilment = fulfilmentNotificationActionable(validation.productType, order.fulfilment_status);
-    const retryMeta = order.measurement_consent === 'accepted' && session.metadata?.measurement_consent === 'accepted';
+    const metaRequested = order.measurement_consent === 'accepted' && session.metadata?.measurement_consent === 'accepted';
+    // The webhook intentionally treats Meta as optional so a missing campaign
+    // integration cannot block customer fulfilment. An explicit admin retry,
+    // however, must never claim it recovered a Purchase event when no valid
+    // CAPI destination exists.
+    if (metaRequested && !hasRequiredMetaCapiPurchaseConfig()) {
+      return NextResponse.json({ error: 'Meta CAPI is not configured, so this consented Purchase cannot be retried yet.' }, { status: 503 });
+    }
+    const retryMeta = metaRequested;
     if (!retryFulfilment && !retryMeta) {
       return NextResponse.json({ error: 'This order no longer needs a fulfilment or consented analytics delivery retry' }, { status: 409 });
     }

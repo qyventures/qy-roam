@@ -1,6 +1,7 @@
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import AdminOrderActions from '@/components/AdminOrderActions';
 import { fulfilmentNotificationActionable, STRIPE_EVENT_CLAIM_STALE_MS } from '@/lib/orderLifecycle';
+import { hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
 
 export const dynamic = 'force-dynamic';
 
@@ -111,6 +112,7 @@ export default async function AdminPage() {
   );
   const metaDeliveries: any[] = metaDeliveryResult.data ?? [];
   const metaDeliveryBySession = new Map(metaDeliveries.map((delivery:any)=>[delivery.stripe_session_id,delivery]));
+  const metaCapiConfigured = hasRequiredMetaCapiPurchaseConfig();
   // A missing CAPI ledger is actionable only when the buyer gave measurement
   // consent. Without this persisted marker, an absent record is ambiguous:
   // it can mean either a deliberately untracked purchase or a failed webhook.
@@ -118,6 +120,7 @@ export default async function AdminPage() {
     order.payment_status === 'paid' &&
     isStripeCheckoutOrder(order) &&
     order.measurement_consent === 'accepted' &&
+    metaCapiConfigured &&
     metaDeliveryBySession.get(order.stripe_session_id)?.status !== 'sent',
   );
   const webhookFailures: any[] = (stripeEventResult.data ?? []).filter((event:any) => {
@@ -190,6 +193,10 @@ export default async function AdminPage() {
         <strong>Operational data needs archiving or a dedicated reporting view.</strong>
         <div style={{marginTop:6}}>This screen safely loaded its first {ADMIN_MAX_ROWS.toLocaleString()} rows but stopped before all {truncatedPanels.join(', ')} could be reviewed. Do not rely on these totals or exception counts until the backlog is reconciled.</div>
       </div>}
+      {!metaCapiConfigured && <div role="alert" style={{...cardStyle,borderColor:'#b45309',background:'#fffbeb',marginBottom:20}}>
+        <strong>Meta CAPI Purchase delivery is not configured.</strong>
+        <div style={{marginTop:6}}>Consented purchases remain safely recorded in the order ledger, but no server-side Purchase events can be sent or retried until a valid Pixel ID and CAPI access token are configured.</div>
+      </div>}
       <nav style={{display:'flex',gap:10,flexWrap:'wrap',margin:'22px 0'}}>
         <a className="secondary" href="#dashboard">Dashboard</a>
         <a className="secondary" href="#orders">Orders</a>
@@ -241,7 +248,7 @@ export default async function AdminPage() {
           // was successfully sent, which is the common post-Stripe-retry case.
           const canRetryNotifications = o.payment_status === 'paid' && isStripeCheckoutOrder(o) && (
             (fulfilmentNotificationActionable(o.product_type, o.fulfilment_status) && notification?.status !== 'sent') ||
-            (o.measurement_consent === 'accepted' && metaDelivery?.status !== 'sent')
+            (metaCapiConfigured && o.measurement_consent === 'accepted' && metaDelivery?.status !== 'sent')
           );
           return <tr key={o.id} style={{borderTop:'1px solid #e5e8ed',verticalAlign:'top'}}>
             <td style={{padding:'14px 10px'}}><strong>{String(o.stripe_session_id || o.id).slice(-10)}</strong><br/><small>{o.created_at ? new Date(o.created_at).toLocaleDateString('en-SG') : ''}</small></td>
@@ -250,7 +257,7 @@ export default async function AdminPage() {
             <td style={{padding:'14px 8px'}}>{o.payment_status || '-'}</td>
             <td style={{padding:'14px 8px'}}><strong>{money(o.amount_sgd)}</strong></td>
             <td style={{padding:'14px 8px'}}>{notification?.status === 'sent' ? '✓ Sent' : notification ? `⚠ ${notification.status}` : o.payment_status === 'paid' ? '⚠ Not recorded' : '-'}{notification?.last_error && <><br/><small>{String(notification.last_error).slice(0,120)}</small></>}</td>
-            <td style={{padding:'14px 8px'}}>{metaDelivery?.status === 'sent' ? '✓ Sent' : metaDelivery ? `⚠ ${metaDelivery.status}` : o.payment_status === 'paid' ? 'Not requested / not recorded' : '-'}{metaDelivery?.last_error && <><br/><small>{String(metaDelivery.last_error).slice(0,120)}</small></>}</td>
+            <td style={{padding:'14px 8px'}}>{metaDelivery?.status === 'sent' ? '✓ Sent' : !metaCapiConfigured && o.measurement_consent === 'accepted' ? 'CAPI unavailable' : metaDelivery ? `⚠ ${metaDelivery.status}` : o.payment_status === 'paid' ? 'Not requested / not recorded' : '-'}{metaDelivery?.last_error && <><br/><small>{String(metaDelivery.last_error).slice(0,120)}</small></>}</td>
             <td style={{padding:'14px 8px'}}>{o.return_disposition && <small>Return: {String(o.return_disposition).replaceAll('_',' ')}</small>}<AdminOrderActions id={o.id} initialStatus={o.fulfilment_status} productType={o.product_type} courierTracking={o.courier_tracking} returnTracking={o.return_tracking} inventoryItemId={o.inventory_item_id} inventoryItems={inventoryItems} canRetryNotifications={canRetryNotifications}/></td>
           </tr>;
         })}</tbody>
