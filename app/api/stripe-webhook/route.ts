@@ -98,6 +98,30 @@ function paidFulfilmentDetailsIssue(session:Stripe.Checkout.Session,productType:
   }
   return null;
 }
+
+// A valid Stripe signature authenticates the event payload, but order state
+// still has to agree with the event that carries it. In particular, never
+// acknowledge an asynchronous success with an unpaid snapshot: doing so would
+// mark that event processed without creating a paid fulfilment obligation.
+// Failing closed also keeps malformed or unexpectedly-versioned terminal
+// events in Stripe's retry/alert flow instead of silently weakening the order
+// ledger. `checkout.session.completed` may legitimately be unpaid while a
+// delayed payment method is still settling.
+function stripeCheckoutEventStateIssue(eventType:Stripe.Event.Type,session:Stripe.Checkout.Session) {
+  if(eventType==='checkout.session.expired') {
+    return session.status==='expired'&&session.payment_status!=='paid'
+      ? null
+      : 'Expired event does not contain an expired unpaid Checkout Session';
+  }
+  if(session.status!=='complete') return 'Terminal checkout event does not contain a complete Checkout Session';
+  if(eventType==='checkout.session.async_payment_succeeded'&&session.payment_status!=='paid') {
+    return 'Asynchronous payment success does not contain a paid Checkout Session';
+  }
+  if(eventType==='checkout.session.async_payment_failed'&&session.payment_status==='paid') {
+    return 'Asynchronous payment failure contains a paid Checkout Session';
+  }
+  return null;
+}
 const DELIVERY_TIMEOUT_MS=20_000;
 // Meta and an optional SMTP relay return tiny JSON responses. Bound their
 // bodies as well as the request deadline: a misbehaving upstream must not be
@@ -451,6 +475,11 @@ export async function POST(req:Request){
   // order, sending fulfilment email, or filling this app's idempotency ledger.
   // Both QY Roam checkout routes set this server-controlled marker.
   if(session.metadata?.source!=='qyroam.com') return NextResponse.json({received:true,ignored:true});
+  const eventStateIssue=stripeCheckoutEventStateIssue(event.type,session);
+  if(eventStateIssue){
+    console.error('stripe_webhook_event_state_error',{eventId:event.id,sessionId:session.id,reason:eventStateIssue});
+    return NextResponse.json({error:'Stripe event state validation failed'},{status:500});
+  }
   if(event.type==='checkout.session.expired'){
     // Expiry does not persist a paid order, but it still writes to the event
     // ledger and can release inventory or close a provisional order. The

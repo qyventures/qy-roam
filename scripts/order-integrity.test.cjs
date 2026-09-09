@@ -1135,6 +1135,21 @@ test('Stripe event idempotency records stay bound to one event type and Checkout
   assert.match(duplicateClaim, /Stripe event idempotency identity mismatch/);
 });
 
+test('Stripe terminal events must agree with their Checkout Session payment state before any mutation', () => {
+  const webhookRoute = fs.readFileSync(require.resolve('../app/api/stripe-webhook/route.ts'), 'utf8');
+  assert.match(webhookRoute, /function stripeCheckoutEventStateIssue\(eventType:Stripe\.Event\.Type,session:Stripe\.Checkout\.Session\)/);
+  assert.match(webhookRoute, /eventType==='checkout\.session\.expired'[\s\S]{0,220}session\.status==='expired'&&session\.payment_status!=='paid'/);
+  assert.match(webhookRoute, /session\.status!=='complete'/);
+  assert.match(webhookRoute, /eventType==='checkout\.session\.async_payment_succeeded'&&session\.payment_status!=='paid'/);
+  assert.match(webhookRoute, /eventType==='checkout\.session\.async_payment_failed'&&session\.payment_status==='paid'/);
+  const stateCheck = webhookRoute.indexOf('const eventStateIssue=stripeCheckoutEventStateIssue(event.type,session)');
+  const expiryMutation = webhookRoute.indexOf("if(event.type==='checkout.session.expired')");
+  const paidValidation = webhookRoute.indexOf('const validation=validateQyRoamSession(session)');
+  assert.ok(stateCheck > 0 && stateCheck < expiryMutation && stateCheck < paidValidation);
+  assert.match(webhookRoute, /stripe_webhook_event_state_error/);
+  assert.match(webhookRoute, /Stripe event state validation failed/);
+});
+
 test('failed Stripe webhook records identify the affected Checkout Session for recovery', () => {
   assert.match(schema, /stripe_session_id text/);
   assert.match(productionReadiness, /event_id,event_type,stripe_session_id,processing_started_at/);
