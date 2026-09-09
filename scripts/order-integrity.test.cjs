@@ -967,6 +967,20 @@ test('admin order visibility fails loudly instead of presenting a database failu
   assert.match(adminPage, /Do not treat empty panels as no orders/);
 });
 
+test('admin operational visibility pages beyond one Supabase response and warns before a bounded view can hide work', () => {
+  // Order, fulfilment-email, and CAPI exception counts must not silently stop
+  // at the first response once the business has more than a few hundred rows.
+  // The hard ceiling keeps server rendering bounded, while the alert prevents
+  // staff from treating a partial view as complete operations data.
+  assert.match(adminPage, /const ADMIN_PAGE_SIZE = 250/);
+  assert.match(adminPage, /const ADMIN_MAX_ROWS = 5_000/);
+  assert.match(adminPage, /async function loadPages/);
+  assert.match(adminPage, /\.range\(from, to\)/);
+  assert.match(adminPage, /const truncatedPanels = \[/);
+  assert.match(adminPage, /Operational data needs archiving or a dedicated reporting view/);
+  assert.doesNotMatch(adminPage, /from\('orders'\)\.select\('\*'\)\.order\('created_at', \{ ascending: false \}\)\.limit\(500\)/);
+});
+
 test('launch control reports the same checkout prerequisites that protect real orders', () => {
   // The launch dashboard is an operational decision surface. It must not show
   // a green storefront state based only on a Stripe key and partial schema

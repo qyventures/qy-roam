@@ -3,6 +3,28 @@ import AdminOrderActions from '@/components/AdminOrderActions';
 
 export const dynamic = 'force-dynamic';
 
+// Supabase caps a single select response. The operations dashboard must not
+// quietly become a view of only the newest orders once that cap is reached:
+// old unresolved returns and unsent fulfilment notices are still actionable.
+// Keep requests bounded for a server-rendered admin page, but make a growing
+// data set visible to staff before it can hide operational work.
+const ADMIN_PAGE_SIZE = 250;
+const ADMIN_MAX_ROWS = 5_000;
+
+type PagedResult = { data: any[]; error: any; truncated: boolean };
+
+async function loadPages(fetchPage: (from: number, to: number) => PromiseLike<{ data: any[] | null; error: any }>): Promise<PagedResult> {
+  const data: any[] = [];
+  for (let from = 0; from < ADMIN_MAX_ROWS; from += ADMIN_PAGE_SIZE) {
+    const result = await fetchPage(from, from + ADMIN_PAGE_SIZE - 1);
+    if (result.error) return { data: [], error: result.error, truncated: false };
+    const page = result.data || [];
+    data.push(...page);
+    if (page.length < ADMIN_PAGE_SIZE) return { data, error: null, truncated: false };
+  }
+  return { data, error: null, truncated: true };
+}
+
 function localDate(value: string | null | undefined) {
   if (!value) return null;
   const date = new Date(`${value}T00:00:00+08:00`);
@@ -57,13 +79,13 @@ export default async function AdminPage() {
   // is dangerous: staff can conclude there are no orders to fulfil. Fetch the
   // independent panels together, but preserve each failure so the UI fails
   // loudly while leaving any successfully loaded operational data visible.
-  const unavailable = { data: [] as any[], error: new Error('Order database is not configured') };
+  const unavailable: PagedResult = { data: [], error: new Error('Order database is not configured'), truncated: false };
   const [result, inventoryResult, notificationResult, metaDeliveryResult, stripeEventResult] = supabase
     ? await Promise.all([
-        supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(500),
+        loadPages((from, to) => supabase.from('orders').select('*').order('created_at', { ascending: false }).order('id', { ascending: false }).range(from, to)),
         supabase.from('inventory_items').select('id,sku,name,quantity_on_hand,status').eq('product_type', 'pocket_wifi').order('name'),
-        supabase.from('fulfilment_notifications').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('updated_at', { ascending: false }).limit(500),
-        supabase.from('meta_purchase_deliveries').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('updated_at', { ascending: false }).limit(500),
+        loadPages((from, to) => supabase.from('fulfilment_notifications').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('updated_at', { ascending: false }).order('stripe_session_id').range(from, to)),
+        loadPages((from, to) => supabase.from('meta_purchase_deliveries').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('updated_at', { ascending: false }).order('stripe_session_id').range(from, to)),
         supabase.from('stripe_events').select('event_id,event_type,stripe_session_id,attempts,last_failed_at,last_error').is('processed_at', null).not('last_error', 'is', null).order('last_failed_at', { ascending: false }).limit(50),
       ])
     : [unavailable, unavailable, unavailable, unavailable, unavailable];
@@ -98,6 +120,11 @@ export default async function AdminPage() {
     notificationResult.error && 'fulfilment notifications',
     metaDeliveryResult.error && 'Meta delivery status',
     stripeEventResult.error && 'Stripe webhook failures',
+  ].filter(Boolean) as string[];
+  const truncatedPanels = [
+    result.truncated && 'orders',
+    notificationResult.truncated && 'fulfilment notifications',
+    metaDeliveryResult.truncated && 'Meta delivery status',
   ].filter(Boolean) as string[];
 
   const paid = orders.filter((o:any)=>o.payment_status === 'paid');
@@ -147,6 +174,10 @@ export default async function AdminPage() {
       {failedPanels.length > 0 && <div role="alert" style={{...cardStyle,borderColor:'#dc2626',background:'#fef2f2',marginBottom:20}}>
         <strong>Operational data is currently unavailable: {failedPanels.join(', ')}.</strong>
         <div style={{marginTop:6}}>Do not treat empty panels as no orders. Restore the database/schema connection and refresh before taking fulfilment or inventory decisions.</div>
+      </div>}
+      {truncatedPanels.length > 0 && <div role="alert" style={{...cardStyle,borderColor:'#b45309',background:'#fffbeb',marginBottom:20}}>
+        <strong>Operational data needs archiving or a dedicated reporting view.</strong>
+        <div style={{marginTop:6}}>This screen safely loaded its first {ADMIN_MAX_ROWS.toLocaleString()} rows but stopped before all {truncatedPanels.join(', ')} could be reviewed. Do not rely on these totals or exception counts until the backlog is reconciled.</div>
       </div>}
       <nav style={{display:'flex',gap:10,flexWrap:'wrap',margin:'22px 0'}}>
         <a className="secondary" href="#dashboard">Dashboard</a>
