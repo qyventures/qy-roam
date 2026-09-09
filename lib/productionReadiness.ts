@@ -284,14 +284,14 @@ async function checkRequiredOperationsSchema() {
         return false;
       }
 
-      // Probe the two inventory RPCs without changing any state. A zero order
+      // Probe the three inventory RPCs without changing any state. A zero order
       // id is impossible for the identity-backed orders table, and a zero item
-      // id is rejected before either function writes. Their expected domain
+      // id is rejected before any inventory function writes. Their expected domain
       // errors prove the functions, their current argument signatures, and the
       // service-role grants are deployed. Missing-function or permission errors
       // instead fail the launch gate before an operator needs to dispatch or
       // receive a real device.
-      const [transitionProbe, adjustmentProbe] = await Promise.all([
+      const [transitionProbe, adjustmentProbe, statusProbe] = await Promise.all([
         database.rpc('qy_transition_pocket_wifi_order', {
           p_order_id: 0,
           p_expected_status: 'paid',
@@ -309,10 +309,20 @@ async function checkRequiredOperationsSchema() {
           p_reference: null,
           p_notes: null,
         }).abortSignal(signal),
+        database.rpc('qy_set_inventory_status', {
+          p_item_id: 0,
+          p_status: 'available',
+          p_reference: null,
+          p_notes: null,
+        }).abortSignal(signal),
       ]);
       if (!transitionProbe.error || !/order not found/i.test(transitionProbe.error.message || '') ||
         !adjustmentProbe.error || !/invalid inventory item/i.test(adjustmentProbe.error.message || '')) {
         console.error('production_operations_inventory_rpc_check_failed');
+        return false;
+      }
+      if (!statusProbe.error || !/invalid inventory item/i.test(statusProbe.error.message || '')) {
+        console.error('production_operations_inventory_status_rpc_check_failed');
         return false;
       }
       return true;

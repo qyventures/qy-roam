@@ -526,6 +526,7 @@ test('production readiness aborts stalled database probes instead of holding che
   assert.match(productionReadiness, /qy_reserve_pocket_wifi[\s\S]{0,500}\.abortSignal\(signal\)/);
   assert.match(productionReadiness, /qy_transition_pocket_wifi_order[\s\S]{0,500}\.abortSignal\(signal\)/);
   assert.match(productionReadiness, /qy_adjust_inventory[\s\S]{0,300}\.abortSignal\(signal\)/);
+  assert.match(productionReadiness, /qy_set_inventory_status[\s\S]{0,300}\.abortSignal\(signal\)/);
 });
 
 test('checkout never exposes payment when human fulfilment email is not configured', () => {
@@ -958,10 +959,22 @@ test('Pocket WiFi non-restock returns remove the exact device from dispatchable 
   assert.match(inventoryPage, /InventoryStatusForm items=\{items\}/);
 });
 
+test('Pocket WiFi inspection status changes are durably audited before a unit can return to service', () => {
+  assert.match(schema, /movement_type in \('return_quarantined', 'return_damaged', 'status_change'\)/);
+  assert.match(schema, /create or replace function public\.qy_set_inventory_status/);
+  assert.match(schema, /'status_change',\s*\n    0,/);
+  assert.match(schema, /grant execute on function public\.qy_set_inventory_status\(bigint,text,text,text\) to service_role/);
+  assert.match(adminOpsRoute, /rpc\('qy_set_inventory_status'/);
+  assert.doesNotMatch(adminOpsRoute, /from\('inventory_items'\)\s*\n\s*\.update\(\{ status/);
+  assert.match(adminOpsRoute, /p_reference: text\(body\.reference, 120\) \|\| null/);
+  assert.match(adminOpsRoute, /p_notes: text\(body\.notes, 1000\) \|\| null/);
+});
+
 test('production readiness verifies the deployed Pocket WiFi dispatch and return contract', () => {
   assert.match(productionReadiness, /inventory_item_id,courier_tracking,return_tracking,return_disposition,dispatched_at,returned_at/);
   assert.match(productionReadiness, /database\.rpc\('qy_transition_pocket_wifi_order'/);
   assert.match(productionReadiness, /database\.rpc\('qy_adjust_inventory'/);
+  assert.match(productionReadiness, /database\.rpc\('qy_set_inventory_status'/);
   assert.match(productionReadiness, /p_order_id: 0/);
   assert.match(productionReadiness, /p_item_id: 0/);
   assert.match(productionReadiness, /production_operations_inventory_rpc_check_failed/);

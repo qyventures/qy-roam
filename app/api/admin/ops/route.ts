@@ -138,13 +138,19 @@ export async function POST(req: NextRequest) {
       if (!['available', 'quarantined', 'damaged', 'maintenance'].includes(status)) {
         return NextResponse.json({ error: 'Choose a valid inventory status' }, { status: 400 });
       }
-      const { data, error } = await db.from('inventory_items')
-        .update({ status, updated_at: new Date().toISOString() })
-        .eq('id', itemId)
-        .select('id')
-        .maybeSingle();
-      if (error) throw error;
-      if (!data) return NextResponse.json({ error: 'Inventory item not found' }, { status: 404 });
+      // Status changes control whether a router can be dispatched. Keep them
+      // in the inventory movement ledger instead of making an unaudited table
+      // update that could silently restore a quarantined unit to saleable use.
+      const { error } = await db.rpc('qy_set_inventory_status', {
+        p_item_id: itemId,
+        p_status: status,
+        p_reference: text(body.reference, 120) || null,
+        p_notes: text(body.notes, 1000) || null,
+      });
+      if (error) {
+        if (/inventory item not found/i.test(error.message || '')) return NextResponse.json({ error: 'Inventory item not found' }, { status: 404 });
+        throw error;
+      }
     } else if (action === 'customer_create') {
       const row = { email: text(body.email, 200).toLowerCase() || null, phone: text(body.phone, 60) || null, name: text(body.name, 120) || null, status: text(body.status, 40) || 'lead', source: text(body.source, 80) || 'manual', notes: text(body.notes, 1500) || null, updated_at: new Date().toISOString() };
       if (!row.email && !row.phone) return NextResponse.json({ error: 'Email or phone is required' }, { status: 400 });

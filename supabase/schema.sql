@@ -382,7 +382,7 @@ create table if not exists public.inventory_movements (
 -- generated constraint explicitly so the additive migration is safe both for
 -- fresh installs and deployments that already have inventory movements.
 alter table public.inventory_movements drop constraint if exists inventory_movements_quantity_check;
-alter table public.inventory_movements add constraint inventory_movements_quantity_check check (quantity <> 0 or movement_type in ('return_quarantined', 'return_damaged'));
+alter table public.inventory_movements add constraint inventory_movements_quantity_check check (quantity <> 0 or movement_type in ('return_quarantined', 'return_damaged', 'status_change'));
 alter table public.inventory_movements enable row level security;
 
 -- Inventory quantity and its audit record must change atomically. The admin
@@ -426,6 +426,52 @@ end;
 $$;
 revoke all on function public.qy_adjust_inventory(bigint,integer,text,text,text) from public;
 grant execute on function public.qy_adjust_inventory(bigint,integer,text,text,text) to service_role;
+
+-- Inspection state is part of the physical-stock boundary too. A direct
+-- table update would let a quarantined or damaged router become dispatchable
+-- without leaving any evidence of the inspection decision. Keep this
+-- zero-quantity movement in the same transaction as the status change.
+create or replace function public.qy_set_inventory_status(
+  p_item_id bigint,
+  p_status text,
+  p_reference text default null,
+  p_notes text default null
+)
+returns public.inventory_items
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_item public.inventory_items%rowtype;
+  v_status text;
+begin
+  if p_item_id is null or p_item_id < 1 then raise exception 'invalid inventory item'; end if;
+  v_status := lower(trim(coalesce(p_status, '')));
+  if v_status not in ('available', 'quarantined', 'damaged', 'maintenance') then
+    raise exception 'invalid inventory status';
+  end if;
+
+  update public.inventory_items
+  set status = v_status,
+      updated_at = now()
+  where id = p_item_id
+  returning * into v_item;
+  if not found then raise exception 'inventory item not found'; end if;
+
+  insert into public.inventory_movements (inventory_item_id, movement_type, quantity, reference, notes)
+  values (
+    p_item_id,
+    'status_change',
+    0,
+    nullif(left(trim(coalesce(p_reference, '')), 120), ''),
+    nullif(left(trim(coalesce(p_notes, '')), 1000), '')
+  );
+  return v_item;
+end;
+$$;
+revoke all on function public.qy_set_inventory_status(bigint,text,text,text) from public;
+grant execute on function public.qy_set_inventory_status(bigint,text,text,text) to service_role;
 
 -- The physical hand-off and receipt boundaries must update an order and its
 -- stock ledger in one transaction. A browser-side sequence of "set status",
