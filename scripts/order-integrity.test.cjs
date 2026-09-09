@@ -253,6 +253,25 @@ test('eSIM fulfilment preserves the exact plan identity and data allowance', () 
   assert.match(adminPage, /Data: \{o\.data_allowance\}/);
 });
 
+test('paid orders fail into the durable webhook recovery ledger when fulfilment contact data is incomplete', () => {
+  assert.match(webhookRoute, /function paidFulfilmentDetailsIssue\(session:Stripe\.Checkout\.Session,productType:'esim'\|'pocket_wifi'\)/);
+  assert.match(webhookRoute, /Paid order is missing a valid customer email/);
+  assert.match(webhookRoute, /Paid Pocket WiFi order is missing a valid customer phone number/);
+  assert.match(webhookRoute, /shipping\?\.country!=='SG'/);
+  assert.match(webhookRoute, /Paid Pocket WiFi order is missing a complete Singapore delivery address/);
+
+  const processing = webhookRoute.slice(
+    webhookRoute.indexOf("const eventClaimId=`stripe:${event.id}`", webhookRoute.indexOf("const validation=validateQyRoamSession")),
+    webhookRoute.indexOf("return NextResponse.json({received:true});", webhookRoute.indexOf("const validation=validateQyRoamSession")),
+  );
+  const claim = processing.indexOf('claimStartedAt=claim.processingStartedAt');
+  const detailsGuard = processing.indexOf('paidFulfilmentDetailsIssue(session,validation.productType)');
+  const persistence = processing.indexOf('await persistSession(session,event.type,event.created)');
+  assert.ok(claim >= 0 && detailsGuard > claim, 'fulfilment validation must run after the durable event claim');
+  assert.ok(persistence > detailsGuard, 'an incomplete paid order must not enter the order ledger');
+  assert.match(processing, /if\(claimStartedAt\) await recordEventFailure\(supabase,eventClaimId,claimStartedAt,error\)/);
+});
+
 test('v2 provenance binds all checkout metadata, including same-priced travel dates', () => {
   const session = wifiSession();
   // Moving a four-day rental to another four-day period leaves the catalogue

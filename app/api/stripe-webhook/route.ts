@@ -75,6 +75,28 @@ function sha256(value?: string | null) { return value ? crypto.createHash('sha25
 function normalizeEmail(value?: string | null) { return value?.trim().toLowerCase(); }
 function normalizePhone(value?: string | null) { if (!value) return undefined; const digits=value.replace(/\D/g,''); return digits||undefined; }
 function fulfilmentMessageId(sessionId:string) { return `<qyroam-${crypto.createHash('sha256').update(sessionId).digest('hex').slice(0,32)}@qyroam.com>`; }
+
+// Stripe Checkout normally guarantees the fields requested when the Session
+// was created, but the signed completion event is the final hand-off into
+// operations. Do not create an apparently fulfilable paid order if that
+// hand-off is incomplete. In particular, an eSIM without an email address has
+// no digital delivery destination, while a Pocket WiFi order needs both a
+// Singapore delivery address and a phone number for courier coordination.
+// This runs after the event claim so any anomaly is retained in stripe_events
+// with the affected Checkout Session id for operator recovery.
+function paidFulfilmentDetailsIssue(session:Stripe.Checkout.Session,productType:'esim'|'pocket_wifi') {
+  if(session.payment_status!=='paid') return null;
+  const email=session.customer_details?.email?.trim();
+  if(!email||email.length>320||/[\r\n]/.test(email)||!email.includes('@')) return 'Paid order is missing a valid customer email';
+  if(productType==='esim') return null;
+  const phone=normalizePhone(session.customer_details?.phone);
+  if(!phone||phone.length<7||phone.length>15) return 'Paid Pocket WiFi order is missing a valid customer phone number';
+  const shipping=session.shipping_details?.address;
+  if(shipping?.country!=='SG'||!shipping.line1?.trim()||!shipping.postal_code?.trim()) {
+    return 'Paid Pocket WiFi order is missing a complete Singapore delivery address';
+  }
+  return null;
+}
 const DELIVERY_TIMEOUT_MS=20_000;
 // Meta and an optional SMTP relay return tiny JSON responses. Bound their
 // bodies as well as the request deadline: a misbehaving upstream must not be
@@ -475,6 +497,8 @@ export async function POST(req:Request){
     if(claim.status==='processed') return NextResponse.json({received:true,duplicate:true});
     if(claim.status==='in_progress') return NextResponse.json({error:'Event is still processing'},{status:500});
     claimStartedAt=claim.processingStartedAt;
+    const fulfilmentDetailsIssue=paidFulfilmentDetailsIssue(session,validation.productType);
+    if(fulfilmentDetailsIssue) throw new Error(fulfilmentDetailsIssue);
     await persistSession(session,event.type,event.created);
     // A paid or failed terminal event supersedes the temporary checkout hold.
     // Keeping pending async-payment reservations until expiry prevents the same
