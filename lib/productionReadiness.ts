@@ -181,6 +181,30 @@ async function checkRequiredPaymentSchema() {
         console.error('production_payment_reservation_rpc_check_failed');
         return false;
       }
+      // Probe the Stripe-to-inventory hand-off RPC inside a transaction that
+      // is guaranteed to fail validation. PostgREST still resolves its exact
+      // deployed signature, without creating an operational order.
+      const persistenceProbe = await supabase.rpc('qy_persist_stripe_pocket_wifi_order', {
+        p_stripe_session_id: '',
+        p_payment_status: 'unpaid',
+        p_customer_name: null,
+        p_email: null,
+        p_phone: null,
+        p_amount_sgd: 0,
+        p_plan_name: null,
+        p_country: null,
+        p_travel_start: today,
+        p_travel_end: today,
+        p_measurement_consent: 'essential',
+        p_shipping_address: null,
+        p_payment_confirmed_at: null,
+        p_payment_failed: false,
+        p_checkout_request_id: null,
+      }).abortSignal(signal);
+      if (!persistenceProbe.error || !/Stripe session id is required/i.test(persistenceProbe.error.message || '')) {
+        console.error('production_payment_persistence_rpc_check_failed');
+        return false;
+      }
       return true;
     });
   } catch {

@@ -685,6 +685,18 @@ test('Pocket WiFi capacity cannot exceed physically saleable inventory', () => {
   assert.match(availabilityRoute, /const effectiveInventory = Math\.min\(inventory, inventoryState\.saleableInventory\)/);
 });
 
+test('Pocket WiFi payment persistence atomically replaces its checkout hold with a durable capacity commitment', () => {
+  assert.match(webhookRoute, /qy_persist_stripe_pocket_wifi_order/);
+  assert.match(schema, /create or replace function public\.qy_persist_stripe_pocket_wifi_order/);
+  assert.match(schema, /pg_advisory_xact_lock\(hashtext\('qy_roam_pocket_wifi_checkout'\)\)/);
+  assert.match(schema, /payment_status = 'paid' or fulfilment_status = 'awaiting_payment'/);
+  assert.match(schema, /expires_at > now\(\) - interval '4 days'/);
+  assert.match(availabilityRoute, /fulfilment_status\.eq\.awaiting_payment/);
+  assert.match(availabilityRoute, /CHECKOUT_WEBHOOK_HANDOFF_GRACE_MS/);
+  assert.match(schema, /delete from public\.checkout_reservations[\s\S]*checkout_request_id = p_checkout_request_id and stripe_session_id = p_stripe_session_id/);
+  assert.match(productionReadiness, /production_payment_persistence_rpc_check_failed/);
+});
+
 test('Pocket WiFi reservation retries revalidate current physical capacity', () => {
   // A worker may die after reserving but before creating its Stripe Session.
   // Reusing that request id must not bypass a router that was subsequently
@@ -1399,12 +1411,12 @@ test('expired checkout sessions close only their provisional pending orders', ()
 });
 
 test('only the matching Pocket WiFi terminal event can release a checkout reservation', () => {
-  const webhookRoute = fs.readFileSync(require.resolve('../app/api/stripe-webhook/route.ts'), 'utf8');
   // eSIM and Pocket WiFi have separate Stripe idempotency namespaces, so the
   // shared request-id syntax alone must never make an eSIM payment release a
-  // router held by another checkout.
-  assert.match(webhookRoute, /validation\.productType==='pocket_wifi'/);
-  assert.match(webhookRoute, /\.eq\('checkout_request_id',checkoutRequestId\)\s*\.eq\('stripe_session_id',session\.id\)/);
+  // router held by another checkout. The Pocket WiFi-only persistence RPC
+  // matches both identities while it holds the inventory lock.
+  assert.match(webhookRoute, /if\(productType==='pocket_wifi'\)/);
+  assert.match(schema, /where checkout_request_id = p_checkout_request_id and stripe_session_id = p_stripe_session_id/);
 });
 
 test('authenticated admin browser mutations reject cross-site request triggering', () => {

@@ -12,7 +12,7 @@ import {
   hasRequiredStripeCheckoutConfig,
   hasRequiredStripeWebhookConfig,
 } from '@/lib/productionReadiness';
-import { CHECKOUT_HOLD_WINDOW_SECONDS } from '@/lib/checkoutExpiry';
+import { CHECKOUT_HOLD_WINDOW_SECONDS, CHECKOUT_WEBHOOK_HANDOFF_GRACE_MS } from '@/lib/checkoutExpiry';
 import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
 
 export const dynamic = 'force-dynamic';
@@ -78,11 +78,11 @@ async function committedInventory(start: string, end: string, stripeHoldRequestI
   const supabase = getSupabaseAdmin();
   if (!supabase) throw new Error('Supabase is not configured');
 
-  const now = new Date().toISOString();
+  const reservationCutoff = new Date(Date.now() - CHECKOUT_WEBHOOK_HANDOFF_GRACE_MS).toISOString();
   const [orders, reservations, saleableItems] = await Promise.all([
     supabase.from('orders').select('id', { count: 'exact', head: true })
       .eq('product_type', 'pocket_wifi')
-      .eq('payment_status', 'paid')
+      .or('payment_status.eq.paid,fulfilment_status.eq.awaiting_payment')
       .lte('travel_start', end)
       .gte('travel_end', start)
       // Dispatch atomically removes an assigned router from quantity_on_hand.
@@ -93,7 +93,7 @@ async function committedInventory(start: string, end: string, stripeHoldRequestI
       .or('dispatched_at.is.null,inventory_item_id.is.null')
       .or('fulfilment_status.not.in.(cancelled,payment_failed,returned,closed),and(fulfilment_status.eq.cancelled,dispatched_at.not.is.null,returned_at.is.null,inventory_item_id.is.null)'),
     supabase.from('checkout_reservations').select('checkout_request_id')
-      .gt('expires_at', now)
+      .gt('expires_at', reservationCutoff)
       .lte('travel_start', end)
       .gte('travel_end', start),
     // The configured fleet size is a safety cap, not evidence that a router

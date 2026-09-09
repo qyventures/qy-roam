@@ -220,6 +220,38 @@ async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.E
   const defaultPaidStatus=productType==='esim'?'awaiting_fulfilment':'paid';
   const paymentConfirmedAt=new Date(eventCreated*1000).toISOString();
   const measurementConsent=session.metadata?.measurement_consent==='accepted'?'accepted':'essential';
+  const esimPlan=productType==='esim'?getEsimPlan(session.metadata?.plan_id):undefined;
+  const orderSnapshot={stripe_session_id:session.id,payment_status:session.payment_status,customer_name:session.customer_details?.name,email:session.customer_details?.email,phone:session.customer_details?.phone,amount_sgd:(session.amount_total||0)/100,product_type:productType,plan_id:session.metadata?.plan_id||null,plan_name:session.metadata?.plan_name||null,data_allowance:session.metadata?.data_allowance||esimPlan?.data||null,country:session.metadata?.country,travel_start:session.metadata?.start||null,travel_end:session.metadata?.end||null,measurement_consent:measurementConsent,shipping_address:session.shipping_details?.address||null};
+
+  if(productType==='pocket_wifi'){
+    // Persist the durable inventory commitment and retire its temporary hold
+    // under the same database advisory lock used by checkout reservations.
+    // Without this boundary, an expired hold could be deleted by a new
+    // checkout in the instant before this paid order became visible, selling
+    // the same physical router twice. Awaiting asynchronous payments are also
+    // durable commitments until Stripe reports failure.
+    const persisted=await supabase.rpc('qy_persist_stripe_pocket_wifi_order',{
+      p_stripe_session_id:session.id,
+      p_payment_status:session.payment_status,
+      p_customer_name:orderSnapshot.customer_name,
+      p_email:orderSnapshot.email,
+      p_phone:orderSnapshot.phone,
+      p_amount_sgd:orderSnapshot.amount_sgd,
+      p_plan_name:orderSnapshot.plan_name,
+      p_country:orderSnapshot.country,
+      p_travel_start:orderSnapshot.travel_start,
+      p_travel_end:orderSnapshot.travel_end,
+      p_measurement_consent:measurementConsent,
+      p_shipping_address:orderSnapshot.shipping_address,
+      p_payment_confirmed_at:paid?paymentConfirmedAt:null,
+      p_payment_failed:failed,
+      p_checkout_request_id:session.metadata?.checkout_request_id||null,
+    });
+    if(persisted.error) throw persisted.error;
+    const persistedOrder=Array.isArray(persisted.data)?persisted.data[0]:persisted.data;
+    if(!persistedOrder?.stripe_session_id) throw new Error('Pocket WiFi order persistence returned no order');
+    return;
+  }
 
   // Stripe can deliver distinct events for one Checkout Session concurrently,
   // while an operator may advance fulfilment at the same time. Use the current
@@ -235,8 +267,7 @@ async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.E
     // Retain the first signed payment time so CAPI recovery uses one stable
     // event timestamp even when a later paid event refreshes customer details.
     const confirmedAt=paid?(existing.data?.payment_confirmed_at||paymentConfirmedAt):(existing.data?.payment_confirmed_at||null);
-    const esimPlan=productType==='esim'?getEsimPlan(session.metadata?.plan_id):undefined;
-    const order={stripe_session_id:session.id,payment_status:session.payment_status,customer_name:session.customer_details?.name,email:session.customer_details?.email,phone:session.customer_details?.phone,amount_sgd:(session.amount_total||0)/100,product_type:productType,plan_id:session.metadata?.plan_id||null,plan_name:session.metadata?.plan_name||null,data_allowance:session.metadata?.data_allowance||esimPlan?.data||null,country:session.metadata?.country,travel_start:session.metadata?.start||null,travel_end:session.metadata?.end||null,fulfilment_status:fulfilment,payment_confirmed_at:confirmedAt,measurement_consent:measurementConsent,shipping_address:session.shipping_details?.address||null,updated_at:new Date().toISOString()};
+    const order={...orderSnapshot,fulfilment_status:fulfilment,payment_confirmed_at:confirmedAt,updated_at:new Date().toISOString()};
 
     if(!existing.data){
       const inserted=await supabase.from('orders').insert(order);
@@ -528,22 +559,8 @@ export async function POST(req:Request){
     const fulfilmentDetailsIssue=paidFulfilmentDetailsIssue(session,validation.productType);
     if(fulfilmentDetailsIssue) throw new Error(fulfilmentDetailsIssue);
     await persistSession(session,event.type,event.created);
-    // A paid or failed terminal event supersedes the temporary checkout hold.
-    // Keeping pending async-payment reservations until expiry prevents the same
-    // router being sold while Stripe is still confirming payment.
-    if(validation.productType==='pocket_wifi'&&(session.payment_status==='paid'||event.type==='checkout.session.async_payment_failed')){
-      const checkoutRequestId=session.metadata?.checkout_request_id;
-      if(checkoutRequestId){
-        // eSIM and Pocket WiFi Checkout Sessions deliberately use different
-        // Stripe idempotency namespaces, but a caller can still reuse the
-        // same client request id across them. Only a terminal event for this
-        // exact router session may release its durable inventory hold.
-        const released=await supabase.from('checkout_reservations').delete()
-          .eq('checkout_request_id',checkoutRequestId)
-          .eq('stripe_session_id',session.id);
-        if(released.error) throw released.error;
-      }
-    }
+    // Pocket WiFi persistence atomically replaces the temporary reservation
+    // with the durable order commitment inside qy_persist_stripe_pocket_wifi_order.
     if(event.type!=='checkout.session.async_payment_failed'&&session.payment_status==='paid'){
       // Use the signed Stripe event timestamp: the Checkout Session may have
       // been created well before an asynchronous payment actually succeeded.

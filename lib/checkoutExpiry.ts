@@ -9,6 +9,10 @@ export const CHECKOUT_PAYMENT_WINDOW_MINUTES = 30;
 // checkout far below Stripe's 24-hour maximum/default.
 export const STRIPE_EXPIRY_SAFETY_SECONDS = 5 * 60;
 export const CHECKOUT_HOLD_WINDOW_SECONDS = CHECKOUT_PAYMENT_WINDOW_MINUTES * 60 + STRIPE_EXPIRY_SAFETY_SECONDS;
+// Expiry webhooks release abandoned holds promptly in healthy operation. Keep
+// a database-only grace through Stripe's retry window so delayed completion
+// delivery cannot create a paid commitment after the router was resold.
+export const CHECKOUT_WEBHOOK_HANDOFF_GRACE_MS = 4 * 24 * 60 * 60 * 1000;
 
 export function checkoutExpiresAt(nowMs = Date.now()) {
   return Math.floor(nowMs / 1000) + CHECKOUT_HOLD_WINDOW_SECONDS;

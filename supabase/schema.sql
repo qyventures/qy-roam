@@ -185,7 +185,10 @@ begin
   -- A single transaction-level lock makes capacity calculation plus insertion
   -- atomic across every application instance.
   perform pg_advisory_xact_lock(hashtext('qy_roam_pocket_wifi_checkout'));
-  delete from public.checkout_reservations where expires_at <= now();
+  -- Expiry events normally release holds immediately. Retain an unconfirmed
+  -- hold through Stripe's webhook retry window so a delayed paid event cannot
+  -- appear after the router was sold to another customer.
+  delete from public.checkout_reservations where expires_at <= now() - interval '4 days';
 
   -- The configured fleet limit protects against an accidental over-count in
   -- the stock register, but physical saleable stock is the hard ceiling. A
@@ -209,7 +212,7 @@ begin
   select count(*)::integer into v_booked
   from public.orders
   where product_type = 'pocket_wifi'
-    and payment_status = 'paid'
+    and (payment_status = 'paid' or fulfilment_status = 'awaiting_payment')
     and travel_start <= p_travel_end
     and travel_end >= p_travel_start
     -- A recorded dispatch with an assigned stock item already decrements
@@ -227,7 +230,7 @@ begin
   -- represented by those sessions are excluded from the database count.
   select count(*)::integer into v_reserved
   from public.checkout_reservations
-  where expires_at > now()
+  where expires_at > now() - interval '4 days'
     and travel_start <= p_travel_end
     and travel_end >= p_travel_start
     and not (checkout_request_id = any(coalesce(p_stripe_hold_request_ids, array[]::text[])));
@@ -301,7 +304,7 @@ begin
   if p_travel_start is null or p_travel_end is null or p_travel_end < p_travel_start then raise exception 'invalid Pocket WiFi travel dates'; end if;
 
   perform pg_advisory_xact_lock(hashtext('qy_roam_pocket_wifi_checkout'));
-  delete from public.checkout_reservations where expires_at <= now();
+  delete from public.checkout_reservations where expires_at <= now() - interval '4 days';
 
   -- Apply the same physical-stock ceiling used by public checkout. Manual
   -- paid orders are genuine rental commitments and cannot bypass a
@@ -315,7 +318,7 @@ begin
   select count(*)::integer into v_booked
   from public.orders
   where product_type = 'pocket_wifi'
-    and payment_status = 'paid'
+    and (payment_status = 'paid' or fulfilment_status = 'awaiting_payment')
     and travel_start <= p_travel_end
     and travel_end >= p_travel_start
     -- Match public checkout: an assigned dispatched device is already removed
@@ -329,7 +332,7 @@ begin
 
   select count(*)::integer into v_reserved
   from public.checkout_reservations
-  where expires_at > now()
+  where expires_at > now() - interval '4 days'
     and travel_start <= p_travel_end
     and travel_end >= p_travel_start;
 
@@ -362,6 +365,97 @@ create index if not exists stripe_events_failed_at_idx on public.stripe_events(l
 create index if not exists fulfilment_notifications_status_idx on public.fulfilment_notifications(status, updated_at);
 create index if not exists meta_purchase_deliveries_status_idx on public.meta_purchase_deliveries(status, updated_at);
 create index if not exists checkout_reservations_dates_idx on public.checkout_reservations(travel_start, travel_end, expires_at);
+
+-- Stripe completion must cross from a temporary checkout hold to a durable
+-- router commitment under the reservation lock. This also records completed
+-- checkouts that are awaiting an asynchronous payment: after their short
+-- Checkout reservation expires they must still consume capacity until Stripe
+-- reports failure, otherwise the eventual success can oversell the fleet.
+create or replace function public.qy_persist_stripe_pocket_wifi_order(
+  p_stripe_session_id text,
+  p_payment_status text,
+  p_customer_name text,
+  p_email text,
+  p_phone text,
+  p_amount_sgd numeric,
+  p_plan_name text,
+  p_country text,
+  p_travel_start date,
+  p_travel_end date,
+  p_measurement_consent text,
+  p_shipping_address jsonb,
+  p_payment_confirmed_at timestamptz,
+  p_payment_failed boolean,
+  p_checkout_request_id text
+)
+returns public.orders
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_order public.orders%rowtype;
+  v_paid boolean := p_payment_status = 'paid';
+  v_fulfilment text;
+begin
+  if coalesce(length(trim(p_stripe_session_id)), 0) = 0 then raise exception 'Stripe session id is required'; end if;
+  if p_travel_start is null or p_travel_end is null or p_travel_end < p_travel_start then raise exception 'invalid Pocket WiFi travel dates'; end if;
+  if p_amount_sgd is null or p_amount_sgd <= 0 then raise exception 'invalid Pocket WiFi payment amount'; end if;
+
+  perform pg_advisory_xact_lock(hashtext('qy_roam_pocket_wifi_checkout'));
+  select * into v_order from public.orders where stripe_session_id = p_stripe_session_id for update;
+
+  -- An out-of-order failed event must never downgrade an already-paid order.
+  if found and v_order.payment_status = 'paid' and not v_paid then
+    delete from public.checkout_reservations
+    where checkout_request_id = p_checkout_request_id and stripe_session_id = p_stripe_session_id;
+    return v_order;
+  end if;
+
+  v_fulfilment := case
+    when v_paid and found and v_order.fulfilment_status not in ('awaiting_payment','payment_failed') then v_order.fulfilment_status
+    when v_paid then 'paid'
+    when p_payment_failed and found and v_order.fulfilment_status not in ('awaiting_payment','payment_failed') then v_order.fulfilment_status
+    when p_payment_failed then 'payment_failed'
+    when found then v_order.fulfilment_status
+    else 'awaiting_payment'
+  end;
+
+  insert into public.orders (
+    stripe_session_id,payment_status,customer_name,email,phone,amount_sgd,
+    product_type,plan_name,country,travel_start,travel_end,fulfilment_status,
+    payment_confirmed_at,measurement_consent,shipping_address,updated_at
+  ) values (
+    p_stripe_session_id,p_payment_status,p_customer_name,p_email,p_phone,p_amount_sgd,
+    'pocket_wifi',p_plan_name,p_country,p_travel_start,p_travel_end,v_fulfilment,
+    case when v_paid then p_payment_confirmed_at else null end,p_measurement_consent,p_shipping_address,now()
+  )
+  on conflict (stripe_session_id) do update set
+    payment_status = excluded.payment_status,
+    customer_name = excluded.customer_name,
+    email = excluded.email,
+    phone = excluded.phone,
+    amount_sgd = excluded.amount_sgd,
+    plan_name = excluded.plan_name,
+    country = excluded.country,
+    travel_start = excluded.travel_start,
+    travel_end = excluded.travel_end,
+    fulfilment_status = v_fulfilment,
+    payment_confirmed_at = case when v_paid then coalesce(orders.payment_confirmed_at, p_payment_confirmed_at) else orders.payment_confirmed_at end,
+    measurement_consent = excluded.measurement_consent,
+    shipping_address = excluded.shipping_address,
+    updated_at = now()
+  returning * into v_order;
+
+  -- The durable order now represents the commitment, including while an
+  -- asynchronous payment is pending, so retaining the hold would double-count.
+  delete from public.checkout_reservations
+  where checkout_request_id = p_checkout_request_id and stripe_session_id = p_stripe_session_id;
+  return v_order;
+end;
+$$;
+revoke all on function public.qy_persist_stripe_pocket_wifi_order(text,text,text,text,text,numeric,text,text,date,date,text,jsonb,timestamptz,boolean,text) from public;
+grant execute on function public.qy_persist_stripe_pocket_wifi_order(text,text,text,text,text,numeric,text,text,date,date,text,jsonb,timestamptz,boolean,text) to service_role;
 
 -- Operations tables backing the protected admin area. Keep these in the same
 -- deployable schema as checkout: an otherwise healthy order database must not
