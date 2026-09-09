@@ -13,8 +13,16 @@ import {
   hasRequiredStripeWebhookConfig,
 } from '@/lib/productionReadiness';
 import { CHECKOUT_HOLD_WINDOW_SECONDS } from '@/lib/checkoutExpiry';
+import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
 
 export const dynamic = 'force-dynamic';
+
+// A live availability lookup performs a Stripe hold scan and several database
+// reads. Keep ordinary date-picker retries responsive while preventing the
+// public endpoint from becoming an unbounded provider-work amplifier. This is
+// deliberately separate from the stricter checkout limiter because checking
+// a date range is safe to repeat a little more often than opening payment.
+const limited = createCheckoutAttemptLimiter(60_000, 30);
 
 // Availability is a purchase promise, rather than a rough stock estimate.
 // Keep its unavailable response identical across prerequisite failures so the
@@ -115,6 +123,12 @@ export async function GET(req: NextRequest) {
   const start = parseExactIsoDate(req.nextUrl.searchParams.get('start'));
   const end = parseExactIsoDate(req.nextUrl.searchParams.get('end'));
   if (!start || !end || end < start) return NextResponse.json({ available: false, error: 'Valid start and end dates are required.' }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
+  if (limited(req)) {
+    return NextResponse.json({ available: false, error: 'Too many availability checks. Please try again shortly.' }, {
+      status: 429,
+      headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' },
+    });
+  }
 
   const config = operationalConfig();
   if (!config) return NextResponse.json({ available: false, remaining: 0, inventoryMode: 'unavailable', error: 'Live availability is temporarily unavailable. Please try again shortly or contact +65 8032 7183.' }, { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '30' } });

@@ -716,6 +716,15 @@ test('Pocket WiFi availability does not promise stock when checkout cannot safel
   assert.match(availabilityRoute, /'Retry-After': '30'/);
 });
 
+test('Pocket WiFi availability bounds public Stripe and database capacity scans', () => {
+  assert.match(availabilityRoute, /import \{ createCheckoutAttemptLimiter \} from '@\/lib\/checkoutRateLimit';/);
+  assert.match(availabilityRoute, /const limited = createCheckoutAttemptLimiter\(60_000, 30\)/);
+  assert.match(availabilityRoute, /if \(limited\(req\)\)/);
+  assert.match(availabilityRoute, /Too many availability checks/);
+  assert.match(availabilityRoute, /status: 429/);
+  assert.match(availabilityRoute, /'Retry-After': '60'/);
+});
+
 test('Pocket WiFi checkout retries bind the complete server-priced booking', () => {
   assert.match(wifiCheckoutRoute, /function matchesRequestedPocketWifi/);
   assert.match(wifiCheckoutRoute, /session\.metadata\?\.promo_code===requested\.promoCode/);
