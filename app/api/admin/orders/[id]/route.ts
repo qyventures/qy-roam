@@ -6,6 +6,7 @@ import { validateQyRoamSession } from '@/lib/qyRoamSession';
 import { deliverPaidOrderSideEffects } from '@/app/api/stripe-webhook/route';
 import { InvalidRequestBodyLengthError, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '@/lib/requestBody';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
+import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 
 export const runtime = 'nodejs';
 
@@ -171,6 +172,13 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
 
     const stripe = createStripeClient(stripeKey);
     const session = await stripe.checkout.sessions.retrieve(order.stripe_session_id);
+    // Recovery is an operational mutation with external side effects. Keep it
+    // on the same Stripe credential-mode boundary as checkout, webhook, and
+    // the customer confirmation pages: a misrouted or unexpected test-mode
+    // session must never trigger a real fulfilment email or CAPI Purchase.
+    if (!stripeEventMatchesConfiguredMode(stripeKey, session.livemode)) {
+      throw new Error('Stripe Checkout Session mode does not match configured credential');
+    }
     const validation = validateQyRoamSession(session);
     if (!validation.valid || session.payment_status !== 'paid') {
       return NextResponse.json({ error: 'The linked Stripe session is not a valid paid QY Roam order' }, { status: 409 });
