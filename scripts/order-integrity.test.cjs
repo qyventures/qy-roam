@@ -223,6 +223,18 @@ test('accepts an authenticated historical price snapshot after a catalogue updat
   assert.deepEqual(validateQyRoamSession(session), { valid: true, productType: 'esim' });
 });
 
+test('rejects even signed checkout amount snapshots that disagree with Stripe', () => {
+  for (const createSession of [esimSession, wifiSession]) {
+    const session = createSession();
+    // This models a server-side session construction defect rather than a
+    // third-party tamper attempt, so recompute the provenance after changing
+    // the metadata. The payment amount remains Stripe's source of truth.
+    session.metadata.checkout_amount_cents = String(session.amount_total + 1);
+    session.metadata.qyroam_provenance = signedQyRoamProvenance(session.id, session.metadata);
+    assert.equal(validateQyRoamSession(session).valid, false);
+  }
+});
+
 test('accepts an authenticated historical eSIM plan after it is retired', () => {
   const plan = ESIM_PLANS[0];
   const session = esimSession(plan);

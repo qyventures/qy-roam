@@ -24,6 +24,17 @@ function moneyMetadataCents(value?: string) {
   return Number.isSafeInteger(cents) ? cents : null;
 }
 
+function checkoutAmountSnapshotIsConsistent(session: Stripe.Checkout.Session) {
+  const amount = session.amount_total;
+  // Keep the amount snapshot canonical as well as signed. A valid HMAC proves
+  // that metadata came from this application, but it does not make a
+  // server-side creation defect (or a future consumer of this field) safe.
+  // The Stripe amount is the payment authority and must exactly match the
+  // server-authored integer-cent snapshot used throughout the order record.
+  if (typeof amount !== 'number' || !Number.isSafeInteger(amount) || amount <= 0) return false;
+  return session.metadata?.checkout_amount_cents === String(amount);
+}
+
 function historicalPocketWifiSnapshotIsConsistent(session: Stripe.Checkout.Session, days: number) {
   const metadata = session.metadata;
   const country = metadata?.country || '';
@@ -34,7 +45,7 @@ function historicalPocketWifiSnapshotIsConsistent(session: Stripe.Checkout.Sessi
   const checkoutAmount = Number(metadata?.checkout_amount_cents);
   if (!country || country.length > 100 || metadata?.plan_name !== `${country} Pocket WiFi` ||
     daily === null || daily < 1 || rental === null || discount === null || courierFee === null ||
-    !Number.isSafeInteger(checkoutAmount) || checkoutAmount < 1 ||
+    !checkoutAmountSnapshotIsConsistent(session) || !Number.isSafeInteger(checkoutAmount) || checkoutAmount < 1 ||
     !metadata?.benchmark_provider || metadata.benchmark_provider.length > 100 ||
     moneyMetadataCents(metadata?.benchmark_rate_sgd) === null || !/^\d{4}-\d{2}-\d{2}$/.test(metadata?.benchmark_verified_on || '')) {
     return false;
@@ -44,7 +55,7 @@ function historicalPocketWifiSnapshotIsConsistent(session: Stripe.Checkout.Sessi
     ? Math.floor((expectedRental * LAUNCH_PROMO.percent) / 100)
     : metadata?.promo_code === '' ? 0 : null;
   return rental === expectedRental && discount === expectedDiscount &&
-    session.currency?.toLowerCase() === 'sgd' && session.amount_total === checkoutAmount && checkoutAmount === rental - discount + courierFee;
+    session.currency?.toLowerCase() === 'sgd' && checkoutAmount === rental - discount + courierFee;
 }
 
 function historicalEsimSnapshotIsConsistent(session: Stripe.Checkout.Session) {
@@ -62,8 +73,8 @@ function historicalEsimSnapshotIsConsistent(session: Stripe.Checkout.Session) {
     (dataAllowance === undefined || (dataAllowance.length > 0 && dataAllowance.length <= 200)) &&
     metadata?.promo_code === ESIM_PROMO.code && metadata?.promo_discount_percent === String(ESIM_PROMO.percent) &&
     moneyMetadataCents(metadata?.benchmark_price_sgd) !== null &&
-    Number.isSafeInteger(checkoutAmount) && checkoutAmount >= 50 &&
-    session.currency?.toLowerCase() === 'sgd' && session.amount_total === checkoutAmount;
+    checkoutAmountSnapshotIsConsistent(session) && Number.isSafeInteger(checkoutAmount) && checkoutAmount >= 50 &&
+    session.currency?.toLowerCase() === 'sgd';
 }
 
 /**
@@ -80,6 +91,9 @@ export function validateQyRoamSession(session: Stripe.Checkout.Session): QyRoamS
   }
   if (!validQyRoamProvenance(session.id, session.metadata)) {
     return { valid: false, reason: 'missing or invalid QY Roam checkout provenance' };
+  }
+  if (!checkoutAmountSnapshotIsConsistent(session)) {
+    return { valid: false, reason: 'checkout amount snapshot does not match the Stripe payment amount' };
   }
 
   if (productType === 'pocket_wifi') {
