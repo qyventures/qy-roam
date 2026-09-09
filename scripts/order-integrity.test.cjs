@@ -627,6 +627,11 @@ test('SMTP transport independently validates the envelope and message header bou
   assert.match(webhookRoute, /to=\(process\.env\.ORDER_FULFILMENT_EMAIL\|\|process\.env\.FULFILMENT_TO\|\|''\)\.trim\(\)/);
 });
 
+test('SMTP fulfilment delivery upgrades every non-implicit-TLS transport before authentication', () => {
+  assert.match(smtpClient, /if \(!options\.secure\) \{\s*await command\(activeSocket, 'STARTTLS', \[220\]\);/);
+  assert.doesNotMatch(smtpClient, /!options\.secure\s*&&\s*options\.port\s*===\s*587/);
+});
+
 test('payment-readiness checks coalesce healthy checkout probes without caching failures', () => {
   assert.match(productionReadiness, /const READINESS_CACHE_MS = 15_000/);
   assert.match(productionReadiness, /let paymentSchemaCheckInFlight: Promise<boolean> \| null = null/);

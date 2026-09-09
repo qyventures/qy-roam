@@ -113,7 +113,14 @@ export async function sendSmtpMail(options: SmtpOptions) {
     await waitForResponse(activeSocket, [220]);
     await command(activeSocket, `EHLO qyroam.com`, [250]);
 
-    if (!options.secure && options.port === 587) {
+    // A paid-order message contains customer contact and fulfilment details.
+    // Never authenticate or send it over a cleartext SMTP connection merely
+    // because an operator uses a submission port other than the conventional
+    // 587 (many relays use 25 or 2525). Implicit-TLS transports are already
+    // protected by tls.connect above; every other transport must upgrade with
+    // STARTTLS before AUTH or DATA. A relay without STARTTLS fails closed and
+    // leaves the durable delivery record retryable rather than leaking PII.
+    if (!options.secure) {
       await command(activeSocket, 'STARTTLS', [220]);
       activeSocket = tls.connect({ socket: activeSocket, servername: host });
       activeSocket.setTimeout(timeoutMs);
