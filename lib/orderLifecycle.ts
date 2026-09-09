@@ -20,6 +20,11 @@ export const ESIM_FULFILMENT_STATUSES = [
   'cancelled',
 ] as const;
 
+// Stripe webhook workers use a durable processing lease. Keep the duration in
+// one dependency-free module so recovery and the operations dashboard agree
+// about when an unfinished claim is abandoned rather than still in flight.
+export const STRIPE_EVENT_CLAIM_STALE_MS = 30 * 60_000;
+
 export function isEsimProduct(productType?: string | null) {
   return productType === 'esim';
 }

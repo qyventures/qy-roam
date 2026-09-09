@@ -11,6 +11,7 @@ import { validQyRoamProvenance } from '@/lib/orderProvenance';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { getEsimPlan } from '@/lib/esimPlans';
+import { STRIPE_EVENT_CLAIM_STALE_MS } from '@/lib/orderLifecycle';
 
 export const runtime = 'nodejs';
 
@@ -240,8 +241,6 @@ type EventClaim =
   | { status: 'processed' }
   | { status: 'in_progress' };
 
-const EVENT_CLAIM_STALE_MS = 30 * 60_000;
-
 async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string, type:string, sessionId:string):Promise<EventClaim> {
   if(!supabase) throw new Error('Persistence unavailable');
   const processingStartedAt=new Date().toISOString();
@@ -263,7 +262,7 @@ async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string
     const previousStartedMs=previousStartedAt ? new Date(previousStartedAt).getTime() : Number.NaN;
     // A settled failure is no longer in flight and can be retried immediately.
     // Otherwise retain the stale lease for a worker that may still complete.
-    if(!existing.data?.last_error&&(!previousStartedAt||!Number.isFinite(previousStartedMs)||Date.now()-previousStartedMs<=EVENT_CLAIM_STALE_MS)) return {status:'in_progress'};
+    if(!existing.data?.last_error&&(!previousStartedAt||!Number.isFinite(previousStartedMs)||Date.now()-previousStartedMs<=STRIPE_EVENT_CLAIM_STALE_MS)) return {status:'in_progress'};
 
     // A process can die after inserting the event but before completing it. Reclaim
     // only the exact stale version so concurrent Stripe retries cannot both proceed.

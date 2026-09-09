@@ -26,7 +26,7 @@ const { validateQyRoamSession } = require('../lib/qyRoamSession.ts');
 const { parseExactIsoDate, validCheckoutRequestId } = require('../lib/checkoutValidation.ts');
 const { operationalIsoDate, operationalIsoDateAfter } = require('../lib/operationalDate.ts');
 const { WIFI_BENCHMARK, WIFI_PLANS } = require('../lib/wifiPlans.ts');
-const { allowedFulfilmentStatuses, validFulfilmentTransition } = require('../lib/orderLifecycle.ts');
+const { allowedFulfilmentStatuses, validFulfilmentTransition, STRIPE_EVENT_CLAIM_STALE_MS } = require('../lib/orderLifecycle.ts');
 const { operationalConfig } = require('../lib/operationalConfig.ts');
 const { validStripeCheckoutSessionId } = require('../lib/stripeSessionId.ts');
 const { readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError } = require('../lib/requestBody.ts');
@@ -1101,7 +1101,20 @@ test('failed Stripe webhook claims remain visible and immediately retryable', ()
   assert.match(webhookRoute, /!existing\.data\?\.last_error/);
   assert.doesNotMatch(webhookRoute, /from\('stripe_events'\)\.delete\(\)/);
   assert.match(adminPage, /Stripe webhook failures/);
-  assert.match(adminPage, /failed events awaiting a signed retry/);
+  assert.match(adminPage, /failed or abandoned events awaiting a signed retry/);
+});
+
+test('admin visibility detects abandoned Stripe claims using the webhook recovery lease', () => {
+  // A process can terminate before recordEventFailure runs. Such a claim has
+  // no last_error, but it is just as actionable once the webhook lease expires.
+  assert.equal(STRIPE_EVENT_CLAIM_STALE_MS, 30 * 60_000);
+  assert.match(webhookRoute, /Date\.now\(\)-previousStartedMs<=STRIPE_EVENT_CLAIM_STALE_MS/);
+  assert.match(adminPage, /select\('event_id,event_type,stripe_session_id,attempts,processing_started_at,last_failed_at,last_error'\)/);
+  assert.match(adminPage, /last_error\.not\.is\.null,processing_started_at\.lt\.\$\{webhookExceptionCutoff\}/);
+  assert.match(adminPage, /if \(event\.last_error\) return true/);
+  assert.match(adminPage, /Date\.now\(\) - processingStartedMs > STRIPE_EVENT_CLAIM_STALE_MS/);
+  assert.match(adminPage, /failed or abandoned events awaiting a signed retry/);
+  assert.match(adminPage, /Processing worker stopped before completion/);
 });
 
 test('Stripe event idempotency records stay bound to one event type and Checkout Session', () => {

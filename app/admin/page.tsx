@@ -1,5 +1,6 @@
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import AdminOrderActions from '@/components/AdminOrderActions';
+import { STRIPE_EVENT_CLAIM_STALE_MS } from '@/lib/orderLifecycle';
 
 export const dynamic = 'force-dynamic';
 
@@ -75,6 +76,7 @@ const metricStyle = {fontSize:30,fontWeight:800,lineHeight:1.1,marginTop:6} as c
 
 export default async function AdminPage() {
   const supabase = getSupabaseAdmin();
+  const webhookExceptionCutoff = new Date(Date.now() - STRIPE_EVENT_CLAIM_STALE_MS).toISOString();
   // An admin dashboard that quietly turns a failed query into an empty table
   // is dangerous: staff can conclude there are no orders to fulfil. Fetch the
   // independent panels together, but preserve each failure so the UI fails
@@ -86,7 +88,11 @@ export default async function AdminPage() {
         supabase.from('inventory_items').select('id,sku,name,quantity_on_hand,status').eq('product_type', 'pocket_wifi').order('name'),
         loadPages((from, to) => supabase.from('fulfilment_notifications').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('updated_at', { ascending: false }).order('stripe_session_id').range(from, to)),
         loadPages((from, to) => supabase.from('meta_purchase_deliveries').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('updated_at', { ascending: false }).order('stripe_session_id').range(from, to)),
-        supabase.from('stripe_events').select('event_id,event_type,stripe_session_id,attempts,last_failed_at,last_error').is('processed_at', null).not('last_error', 'is', null).order('last_failed_at', { ascending: false }).limit(50),
+        // Include claims with no recorded error: a worker can exit after the
+        // durable claim is inserted and before its catch handler runs. Recent
+        // claims are filtered below, while abandoned leases must be visible to
+        // operations even before Stripe's next scheduled retry arrives.
+        supabase.from('stripe_events').select('event_id,event_type,stripe_session_id,attempts,processing_started_at,last_failed_at,last_error').is('processed_at', null).or(`last_error.not.is.null,processing_started_at.lt.${webhookExceptionCutoff}`).order('processing_started_at', { ascending: false }).limit(100),
       ])
     : [unavailable, unavailable, unavailable, unavailable, unavailable];
   const orders: any[] = result.data ?? [];
@@ -113,7 +119,11 @@ export default async function AdminPage() {
     order.measurement_consent === 'accepted' &&
     metaDeliveryBySession.get(order.stripe_session_id)?.status !== 'sent',
   );
-  const webhookFailures: any[] = stripeEventResult.data ?? [];
+  const webhookFailures: any[] = (stripeEventResult.data ?? []).filter((event:any) => {
+    if (event.last_error) return true;
+    const processingStartedMs = new Date(event.processing_started_at).getTime();
+    return Number.isFinite(processingStartedMs) && Date.now() - processingStartedMs > STRIPE_EVENT_CLAIM_STALE_MS;
+  });
   const failedPanels = [
     result.error && 'orders',
     inventoryResult.error && 'inventory',
@@ -205,12 +215,12 @@ export default async function AdminPage() {
           <div style={cardStyle}><small>Overdue WiFi returns</small><div style={metricStyle}>{returnExceptions.length}</div><small>more than 5 days past trip end</small></div>
           <div style={cardStyle}><small>Ops email exceptions</small><div style={metricStyle}>{notificationExceptions.length}</div><small>paid Stripe-order notifications not confirmed sent</small></div>
           <div style={cardStyle}><small>Meta CAPI exceptions</small><div style={metricStyle}>{metaDeliveryExceptions.length}</div><small>consented purchases not confirmed delivered</small></div>
-          <div style={cardStyle}><small>Stripe webhook failures</small><div style={metricStyle}>{webhookFailures.length}</div><small>failed events awaiting a signed retry</small></div>
+          <div style={cardStyle}><small>Stripe webhook exceptions</small><div style={metricStyle}>{webhookFailures.length}</div><small>failed or abandoned events awaiting a signed retry</small></div>
         </div>
         {webhookFailures.length > 0 && <div role="alert" style={{...cardStyle,borderColor:'#dc2626',background:'#fef2f2',marginTop:14}}>
           <strong>Payment processing needs attention.</strong>
           <div style={{marginTop:6}}>Stripe will retry these events automatically. Check the order and delivery ledgers before asking a customer to pay again.</div>
-          <ul>{webhookFailures.slice(0,10).map((failure:any)=><li key={failure.event_id}><code>{failure.event_type}</code>{failure.stripe_session_id && <> · session <code>{failure.stripe_session_id}</code></>} · attempt {failure.attempts} · {String(failure.last_error||'Processing failed').slice(0,180)}</li>)}</ul>
+          <ul>{webhookFailures.slice(0,10).map((failure:any)=><li key={failure.event_id}><code>{failure.event_type}</code>{failure.stripe_session_id && <> · session <code>{failure.stripe_session_id}</code></>} · attempt {failure.attempts} · {String(failure.last_error||'Processing worker stopped before completion').slice(0,180)}</li>)}</ul>
         </div>}
       </section>
     </>}
