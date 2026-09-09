@@ -171,28 +171,41 @@ export async function POST(req: Request) {
       await stripe.checkout.sessions.update(session.id, { metadata: { [QY_ROAM_PROVENANCE_METADATA_KEY]: provenance } });
     }
 
+    // Stripe caches the response for an idempotency key. A browser retry can
+    // therefore receive the original `open` Session snapshot after the buyer
+    // has completed payment in another tab. Retrieve the Session again before
+    // choosing a recovery response: a completed payment must lead to its
+    // confirmation page, never back to an unusable Checkout URL.
+    const currentSession = await stripe.checkout.sessions.retrieve(session.id);
+    if (!matchesRequestedEsim(currentSession, requestId, plan)) {
+      return NextResponse.json({ error: 'This checkout attempt belongs to a different eSIM plan. Please try again.', checkoutRequestConflict: true }, {
+        status: 409,
+        headers: { 'Cache-Control': 'no-store' }
+      });
+    }
+
     // A browser can retry after Stripe accepted payment but before it received
     // the original response. The durable idempotency key must lead to the
     // existing order confirmation, never a second attempted purchase.
-    if (session.status === 'complete' && session.payment_status === 'paid') {
-      return NextResponse.json({ completed: true, sessionId: session.id }, { headers: { 'Cache-Control': 'no-store' } });
+    if (currentSession.status === 'complete' && currentSession.payment_status === 'paid') {
+      return NextResponse.json({ completed: true, sessionId: currentSession.id }, { headers: { 'Cache-Control': 'no-store' } });
     }
     // Stripe can return the prior response for this idempotency key after its
     // Checkout Session has expired. That response has no usable URL, so make
     // the recovery path explicit instead of returning a misleading success.
-    if (session.status === 'expired') {
+    if (currentSession.status === 'expired') {
       return NextResponse.json({ error: 'This secure checkout session has expired. Please try again to start a new one.', checkoutExpired: true }, {
         status: 409,
         headers: { 'Cache-Control': 'no-store' }
       });
     }
-    if (session.status !== 'open' || !session.url) {
+    if (currentSession.status !== 'open' || !currentSession.url) {
       return NextResponse.json({ error: 'Your payment is still being confirmed. Please wait for confirmation before trying again.', paymentPending: true }, {
         status: 409,
         headers: { 'Cache-Control': 'no-store' }
       });
     }
-    return NextResponse.json({ url: session.url }, { headers: { 'Cache-Control': 'no-store' } });
+    return NextResponse.json({ url: currentSession.url }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('esim_checkout_error', error);
     return NextResponse.json({ error: 'Unable to start eSIM checkout.' }, { status: 500 });

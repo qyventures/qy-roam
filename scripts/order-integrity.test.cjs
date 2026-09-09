@@ -479,6 +479,15 @@ test('eSIM Checkout Sessions use a bounded, recoverable payment window', () => {
   assert.match(esimPage, /data\.checkoutExpired \|\| data\.checkoutRequestConflict/);
 });
 
+test('eSIM idempotent recovery uses a fresh Stripe session state before returning a payment URL', () => {
+  // Stripe caches idempotent POST responses. The route must not make a
+  // recovery decision from a stale original `open` snapshot after payment.
+  assert.match(esimCheckoutRoute, /const currentSession = await stripe\.checkout\.sessions\.retrieve\(session\.id\)/);
+  assert.match(esimCheckoutRoute, /currentSession\.status === 'complete' && currentSession\.payment_status === 'paid'/);
+  assert.match(esimCheckoutRoute, /url: currentSession\.url/);
+  assert.doesNotMatch(esimCheckoutRoute, /if \(session\.status === 'complete' && session\.payment_status === 'paid'\)/);
+});
+
 test('Pocket WiFi expiry and inventory scans share the Stripe-safe hold window', () => {
   assert.match(wifiCheckoutRoute, /const expiresAtSeconds=checkoutExpiresAt\(\)/);
   assert.match(wifiCheckoutRoute, /expires_at:expiresAtSeconds/);
@@ -691,8 +700,9 @@ test('idempotent checkout replays recover paid orders without a second payment a
   assert.match(wifiCheckoutRoute, /\{completed:true,sessionId:session\.id\}/);
   assert.match(wifiCheckoutRoute, /\.eq\('stripe_session_id',session\.id\)\.maybeSingle\(\)/);
   assert.match(wifiCheckoutRoute, /paymentPending:true/);
-  assert.match(esimCheckoutRoute, /session\.status === 'complete' && session\.payment_status === 'paid'/);
-  assert.match(esimCheckoutRoute, /\{ completed: true, sessionId: session\.id \}/);
+  assert.match(esimCheckoutRoute, /const currentSession = await stripe\.checkout\.sessions\.retrieve\(session\.id\)/);
+  assert.match(esimCheckoutRoute, /currentSession\.status === 'complete' && currentSession\.payment_status === 'paid'/);
+  assert.match(esimCheckoutRoute, /\{ completed: true, sessionId: currentSession\.id \}/);
   assert.match(esimCheckoutRoute, /paymentPending: true/);
   assert.match(homePage, /data\.completed && typeof data\.sessionId === 'string'/);
   assert.match(esimPage, /data\.completed && typeof data\.sessionId === 'string'/);
