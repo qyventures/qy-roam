@@ -5,6 +5,7 @@ import { initialFulfilmentStatus } from '@/lib/orderLifecycle';
 import { validateQyRoamSession } from '@/lib/qyRoamSession';
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
+import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 
 export const dynamic = 'force-dynamic';
 
@@ -54,6 +55,12 @@ export default async function BookingPage({ searchParams }: Props) {
   try {
     const stripe = createStripeClient(key);
     const session = await stripe.checkout.sessions.retrieve(sessionId);
+    // Keep the status page on the identical credential-mode boundary as
+    // checkout, success and webhook processing. Do not disclose status for a
+    // session if Stripe ever returns one from the other account mode.
+    if (!stripeEventMatchesConfiguredMode(key, session.livemode)) {
+      throw new Error('Stripe Checkout Session mode does not match configured credential');
+    }
     // Treat the customer-facing status page as the same trust boundary as the
     // success page and webhook. A source marker alone is not enough because a
     // manually created session in a shared Stripe account can carry metadata.

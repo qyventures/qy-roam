@@ -4,6 +4,7 @@ import { validateQyRoamSession, type QyRoamProductType } from '@/lib/qyRoamSessi
 import MetaPurchase from '@/components/MetaPurchase';
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
+import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 
 export const dynamic = 'force-dynamic';
 
@@ -35,6 +36,13 @@ export default async function SuccessPage({ searchParams }: Props) {
     try {
       const stripe = createStripeClient(key);
       const session = await stripe.checkout.sessions.retrieve(sessionId);
+      // Stripe credentials normally scope reads to one mode, but make the
+      // trust boundary explicit here as it is in the webhook. A misrouted
+      // client or an unexpected Stripe response must never turn a session
+      // from the other mode into a customer payment confirmation.
+      if (!stripeEventMatchesConfiguredMode(key, session.livemode)) {
+        throw new Error('Stripe Checkout Session mode does not match configured credential');
+      }
       const validation = validateQyRoamSession(session);
       if (!validation.valid) throw new Error(`Invalid QY Roam Checkout Session: ${validation.reason}`);
       productType = validation.productType;

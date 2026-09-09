@@ -591,6 +591,13 @@ test('signed Stripe webhooks cannot cross the configured test/live boundary', ()
   assert.match(webhookRoute, /return NextResponse\.json\(\{error:'Stripe event mode mismatch'\},\{status:400\}\)/);
 });
 
+test('customer payment confirmation and status views enforce the Stripe credential mode boundary', () => {
+  assert.match(successPage, /stripeEventMatchesConfiguredMode\(key, session\.livemode\)/);
+  assert.match(bookingPage, /stripeEventMatchesConfiguredMode\(key, session\.livemode\)/);
+  assert.match(successPage, /Stripe Checkout Session mode does not match configured credential/);
+  assert.match(bookingPage, /Stripe Checkout Session mode does not match configured credential/);
+});
+
 test('fulfilment recipients are explicitly configured and never fall back to a historical mailbox', () => {
   assert.match(productionReadiness, /ORDER_FULFILMENT_EMAIL \|\| process\.env\.FULFILMENT_TO \|\| ''/);
   assert.match(webhookRoute, /to=\(process\.env\.ORDER_FULFILMENT_EMAIL\|\|process\.env\.FULFILMENT_TO\|\|''\)\.trim\(\)/);
