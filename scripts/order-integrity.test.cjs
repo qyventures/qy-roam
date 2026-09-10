@@ -451,6 +451,16 @@ test('admin operational mutations bound and validate their JSON request bodies',
   assert.doesNotMatch(adminOpsRoute, /await req\.json\(\)/);
 });
 
+test('admin sales-period close totals every Supabase page instead of silently using its row cap', () => {
+  assert.match(adminOpsRoute, /async function paidOrderGrossForPeriod/);
+  assert.match(adminOpsRoute, /CLOSING_ORDER_PAGE_SIZE = 1_000/);
+  assert.match(adminOpsRoute, /\.range\(offset, offset \+ CLOSING_ORDER_PAGE_SIZE - 1\)/);
+  assert.match(adminOpsRoute, /if \(page\.length < CLOSING_ORDER_PAGE_SIZE\) return gross/);
+  assert.match(adminOpsRoute, /if \(offset >= MAX_CLOSING_ORDERS\)/);
+  assert.match(adminOpsRoute, /await paidOrderGrossForPeriod\(db, dates\.start!, dates\.end!\)/);
+  assert.match(adminOpsRoute, /Period dates must be valid ISO dates with the end date on or after the start date/);
+});
+
 test('admin order transitions bound and validate their JSON request bodies', () => {
   assert.match(adminOrderRoute, /readLimitedRequestText\(req,\s*MAX_ADMIN_ORDER_BODY_BYTES,\s*ADMIN_ORDER_BODY_TIMEOUT_MS\)/);
   assert.match(adminOrderRoute, /RequestBodyTimeoutError/);

@@ -13,6 +13,13 @@ export const dynamic = 'force-dynamic';
 // indefinitely while awaiting req.json().
 const MAX_ADMIN_OPS_BODY_BYTES = 16 * 1024;
 const ADMIN_OPS_BODY_TIMEOUT_MS = 15_000;
+// PostgREST/Supabase commonly caps a single response at 1,000 rows. Closing
+// a sales period is an accounting operation, so it must never treat that
+// transport page as the complete ledger. Keep the operational request
+// bounded, but fail loudly once it exceeds the amount this request can read
+// safely instead of recording an understated close.
+const CLOSING_ORDER_PAGE_SIZE = 1_000;
+const MAX_CLOSING_ORDERS = 50_000;
 
 function text(v: unknown, max = 500) { return String(v ?? '').trim().slice(0, max); }
 function num(v: unknown, fallback = 0) { const n = Number(v); return Number.isFinite(n) ? n : fallback; }
@@ -32,6 +39,29 @@ function optionalTravelDates(body: Record<string, unknown>) {
   const start = parseExactIsoDate(startRaw), end = parseExactIsoDate(endRaw);
   if (!start || !end || end < start) return null;
   return { start: startRaw, end: endRaw };
+}
+
+async function paidOrderGrossForPeriod(db: ReturnType<typeof getSupabaseAdmin>, start: string, end: string) {
+  if (!db) throw new Error('Database unavailable');
+  let gross = 0;
+  let offset = 0;
+  for (;;) {
+    const { data: orders, error } = await db
+      .from('orders')
+      .select('amount_sgd')
+      .eq('payment_status', 'paid')
+      .gte('created_at', `${start}T00:00:00+08:00`)
+      .lte('created_at', `${end}T23:59:59+08:00`)
+      .range(offset, offset + CLOSING_ORDER_PAGE_SIZE - 1);
+    if (error) throw error;
+    const page = orders || [];
+    gross += page.reduce((total: number, order: { amount_sgd: unknown }) => total + Number(order.amount_sgd || 0), 0);
+    if (page.length < CLOSING_ORDER_PAGE_SIZE) return gross;
+    offset += page.length;
+    if (offset >= MAX_CLOSING_ORDERS) {
+      throw new Error(`Sales period has ${MAX_CLOSING_ORDERS.toLocaleString()} or more paid orders. Close it from the audited reporting workflow before recording this period.`);
+    }
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -190,8 +220,9 @@ export async function POST(req: NextRequest) {
       const { error } = await db.from('forecasts').insert({ forecast_month: month, product_type: product, forecast_orders: Math.max(0, int(body.forecast_orders)), forecast_revenue_sgd: Math.max(0, num(body.forecast_revenue_sgd)), forecast_units: Math.max(0, int(body.forecast_units)), method: text(body.method, 80) || 'management', notes: text(body.notes, 1200) || null, updated_at: new Date().toISOString() }); if (error) throw error;
     } else if (action === 'close_period') {
       const start = text(body.period_start, 10), end = text(body.period_end, 10); if (!start || !end) return NextResponse.json({ error: 'Period dates are required' }, { status: 400 });
-      const { data: orders, error: orderError } = await db.from('orders').select('amount_sgd').eq('payment_status', 'paid').gte('created_at', `${start}T00:00:00+08:00`).lte('created_at', `${end}T23:59:59+08:00`); if (orderError) throw orderError;
-      const gross = (orders ?? []).reduce((s: number, x: any) => s + Number(x.amount_sgd || 0), 0); const refunds = Math.max(0, num(body.refunds_sgd)); const fees = Math.max(0, num(body.fees_sgd)); const cogs = Math.max(0, num(body.cogs_sgd)); const net = gross - refunds; const gp = net - fees - cogs;
+      const dates = optionalTravelDates({ travel_start: start, travel_end: end });
+      if (!dates) return NextResponse.json({ error: 'Period dates must be valid ISO dates with the end date on or after the start date' }, { status: 400 });
+      const gross = await paidOrderGrossForPeriod(db, dates.start!, dates.end!); const refunds = Math.max(0, num(body.refunds_sgd)); const fees = Math.max(0, num(body.fees_sgd)); const cogs = Math.max(0, num(body.cogs_sgd)); const net = gross - refunds; const gp = net - fees - cogs;
       const { error } = await db.from('closing_periods').insert({ period_start: start, period_end: end, status: body.lock ? 'closed' : 'open', gross_sales_sgd: gross, refunds_sgd: refunds, net_sales_sgd: net, fees_sgd: fees, cogs_sgd: cogs, gross_profit_sgd: gp, closed_by: body.lock ? (text(body.closed_by, 100) || 'qyadmin') : null, closed_at: body.lock ? new Date().toISOString() : null, notes: text(body.notes, 1500) || null, updated_at: new Date().toISOString() }); if (error) throw error;
     } else return NextResponse.json({ error: 'Unsupported action' }, { status: 400 });
 
