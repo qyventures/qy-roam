@@ -79,7 +79,11 @@ export default async function BookingPage({ searchParams }: Props) {
     // the same as an order that has not yet been persisted. Do not present the
     // normal fulfilment message in that state: it could tell a paid traveller
     // that their order is queued while the signed webhook is still retrying.
-    const orderLookupFailed = Boolean(orderResult?.error);
+    // Match the confirmation page's fail-loud behaviour: an unavailable
+    // order ledger is materially different from a webhook that is still
+    // finalising a paid order. Do not present the latter as a reassuring
+    // normal state when this server could not query the ledger at all.
+    const orderLookupFailed = !supabase || Boolean(orderResult?.error);
     const order = orderResult?.data;
     // A provisional row can be created for a delayed payment method before
     // Stripe confirms it, and the paid webhook can still be retrying when the

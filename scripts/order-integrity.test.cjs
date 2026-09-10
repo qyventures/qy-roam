@@ -346,7 +346,7 @@ test('booking status requires a durable paid order before showing fulfilment pro
   // A Stripe-confirmed payment remains trustworthy, but a missing, provisional,
   // or unavailable order snapshot must not be rendered as the normal queued
   // fulfilment state.
-  assert.match(bookingPage, /const orderLookupFailed = Boolean\(orderResult\?\.error\)/);
+  assert.match(bookingPage, /const orderLookupFailed = !supabase \|\| Boolean\(orderResult\?\.error\)/);
   assert.match(bookingPage, /select\('payment_status,fulfilment_status,/);
   assert.match(bookingPage, /const orderPersisted = order\?\.payment_status === 'paid'/);
   assert.match(bookingPage, /paid && !orderPersisted/);
