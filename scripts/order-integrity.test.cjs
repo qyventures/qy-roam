@@ -1150,7 +1150,7 @@ test('launch control reports the same checkout prerequisites that protect real o
   assert.match(launchPage, /const esimReady=commonCheckoutReady&&esimOrderDbOk/);
   assert.match(launchPage, /const wifiReady=commonCheckoutReady&&paymentDbOk&&wifiInventory/);
   assert.doesNotMatch(launchPage, /const esimReady=.*paymentDbOk/);
-  assert.match(launchPage, /const paidReady=esimReady&&wifiReady&&pixel&&capi/);
+  assert.match(launchPage, /const paidReady=esimReady&&wifiReady&&metaCapi/);
   assert.match(launchPage, /eSIM checkout blockers/);
   assert.match(launchPage, /Pocket WiFi checkout blockers/);
   assert.match(launchPage, /eSIM checkout/);
@@ -1385,6 +1385,9 @@ test('Meta CAPI requires a complete destination and admin recovery never reports
   assert.match(adminPage, /Meta CAPI Purchase delivery is not configured\./);
   assert.match(adminPage, /metaCapiConfigured && o\.measurement_consent === 'accepted'/);
   assert.match(healthRoute, /metaCapi: hasRequiredMetaCapiPurchaseConfig\(\)/);
+  assert.match(launchPage, /hasRequiredMetaCapiPurchaseConfig/);
+  assert.match(launchPage, /const metaCapi=hasRequiredMetaCapiPurchaseConfig\(\)/);
+  assert.doesNotMatch(launchPage, /Boolean\(process\.env\.NEXT_PUBLIC_META_PIXEL_ID\)/);
 });
 
 test('consented browser and CAPI Purchases share a stable deduplication identity', () => {
