@@ -539,6 +539,16 @@ test('eSIM idempotent recovery uses a fresh Stripe session state before returnin
   assert.doesNotMatch(esimCheckoutRoute, /if \(session\.status === 'complete' && session\.payment_status === 'paid'\)/);
 });
 
+test('browser InitiateCheckout events share the durable Stripe attempt identity on retries', () => {
+  // Pixel events are client-side, but checkout retries are an important
+  // measurement boundary: one Stripe idempotency key must not inflate the
+  // checkout-start funnel merely because a response was lost in transit.
+  assert.match(homePage, /trackMeta\('InitiateCheckout',[\s\S]*?\{ eventID: `checkout_\$\{checkoutAttempt\.current\.requestId\}` \}\);/);
+  assert.match(esimPage, /trackMeta\('InitiateCheckout',[\s\S]*?\{ eventID: `checkout_\$\{checkoutAttempt\.current\.requestId\}` \}\);/);
+  assert.match(homePage, /const fingerprint = JSON\.stringify[\s\S]*?trackMeta\('InitiateCheckout'/);
+  assert.match(esimPage, /checkoutAttempt\.current\?\.planId !== planId[\s\S]*?trackMeta\('InitiateCheckout'/);
+});
+
 test('Pocket WiFi expiry and inventory scans share the Stripe-safe hold window', () => {
   assert.match(wifiCheckoutRoute, /const expiresAtSeconds=checkoutExpiresAt\(\)/);
   assert.match(wifiCheckoutRoute, /expires_at:expiresAtSeconds/);

@@ -78,6 +78,15 @@ export default function Home() {
     let currentAvailability = availability;
     if (!currentAvailability?.available) { currentAvailability = await checkAvailability(); if (!currentAvailability.available) { checkoutInFlight.current = false; return; } }
     const measurementConsent = localStorage.getItem('qyroam_consent') === 'accepted';
+    const fingerprint = JSON.stringify({ country, start, end, promoCode, measurementConsent });
+    if (checkoutAttempt.current?.fingerprint !== fingerprint) {
+      checkoutAttempt.current = { fingerprint, requestId: crypto.randomUUID() };
+    }
+    // A transient browser/network failure can retry this exact Stripe
+    // idempotency key. Give Pixel the same stable attempt identity so it does
+    // not turn one customer's recovery attempt into multiple checkout starts.
+    // A deliberately changed booking gets a new request id and remains a new
+    // funnel event.
     if (measurementConsent) trackMeta('InitiateCheckout', {
       content_name: `${country} Pocket WiFi`,
       content_category: 'Pocket WiFi',
@@ -86,11 +95,7 @@ export default function Home() {
       value: Number(subtotal.toFixed(2)),
       currency: 'SGD',
       num_items: 1
-    });
-    const fingerprint = JSON.stringify({ country, start, end, promoCode, measurementConsent });
-    if (checkoutAttempt.current?.fingerprint !== fingerprint) {
-      checkoutAttempt.current = { fingerprint, requestId: crypto.randomUUID() };
-    }
+    }, { eventID: `checkout_${checkoutAttempt.current.requestId}` });
     setCheckingOut(true);
     try {
       const res = await fetch('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ country, start, end, promoCode, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: checkoutAttempt.current.requestId }) });

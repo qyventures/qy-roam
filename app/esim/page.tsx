@@ -23,6 +23,9 @@ export default function EsimPage() {
       if (checkoutAttempt.current?.planId !== planId) {
         checkoutAttempt.current = { planId, requestId: crypto.randomUUID() };
       }
+      // Keep repeated attempts for the same Stripe idempotency key as one
+      // browser checkout-start event. A different plan intentionally creates
+      // a new request id and therefore a new funnel event.
       if (measurementConsent) trackMeta('InitiateCheckout', {
         content_name: `${plan.destination} Travel eSIM`,
         content_category: 'Travel eSIM',
@@ -31,7 +34,7 @@ export default function EsimPage() {
         value: Number(plan.qyPriceSgd.toFixed(2)),
         currency: 'SGD',
         num_items: 1
-      });
+      }, { eventID: `checkout_${checkoutAttempt.current.requestId}` });
       const res = await fetch('/api/esim-checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
