@@ -1133,6 +1133,16 @@ test('inventory visibility distinguishes unavailable data from zero stock and ex
   assert.match(inventoryPage, /Quarantined Pocket WiFi units/);
 });
 
+test('inventory movement audit visibility pages beyond one Supabase response and warns before a bounded view can hide history', () => {
+  assert.match(inventoryPage, /const INVENTORY_MOVEMENT_PAGE_SIZE=250/);
+  assert.match(inventoryPage, /const INVENTORY_MOVEMENT_MAX_ROWS=5_000/);
+  assert.match(inventoryPage, /async function loadMovementPages/);
+  assert.match(inventoryPage, /\.range\(from,from\+INVENTORY_MOVEMENT_PAGE_SIZE-1\)/);
+  assert.match(inventoryPage, /\.range\(INVENTORY_MOVEMENT_MAX_ROWS,INVENTORY_MOVEMENT_MAX_ROWS\)/);
+  assert.match(inventoryPage, /movesResult\.truncated&&/);
+  assert.match(inventoryPage, /Inventory movement history needs archiving or a dedicated audit view/);
+});
+
 test('admin order visibility identifies the specific Meta CAPI delivery needing recovery', () => {
   assert.match(adminPage, /const metaDeliveryBySession = new Map/);
   assert.match(adminPage, /const metaDeliveryExceptions = orders\.filter/);
