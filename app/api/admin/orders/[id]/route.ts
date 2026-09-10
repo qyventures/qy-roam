@@ -82,7 +82,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const courierTracking = trackingValue(body.courier_tracking, existing.data.courier_tracking);
   const returnTracking = trackingValue(body.return_tracking, existing.data.return_tracking);
   const deliveryReference = digitalDeliveryReference(body.digital_delivery_reference, existing.data.digital_delivery_reference);
-  const returnDisposition = typeof body.return_disposition === 'string' ? body.return_disposition.trim().toLowerCase() : 'restock';
+  const returnDisposition = typeof body.return_disposition === 'string' ? body.return_disposition.trim().toLowerCase() : '';
   if (existing.data.product_type === 'esim' && status === 'fulfilled' && !deliveryReference) {
     return NextResponse.json({ error: 'A delivery reference is required before marking an eSIM order fulfilled. Record a provider order ID or secure delivery/email log reference, not the eSIM QR code.' }, { status: 400 });
   }

@@ -11,7 +11,10 @@ export default function AdminOrderActions({ id, initialStatus, productType = 'po
   const [courier, setCourier] = useState(courierTracking || '');
   const [returned, setReturned] = useState(returnTracking || '');
   const [deliveryReference, setDeliveryReference] = useState(digitalDeliveryReference || '');
-  const [returnDisposition, setReturnDisposition] = useState('restock');
+  // Returning a unit is the point at which capacity can be restored. Leave
+  // this unset until staff consciously decide what inspection found instead
+  // of silently treating an omitted field as a restock instruction.
+  const [returnDisposition, setReturnDisposition] = useState('');
   const [inventoryItem, setInventoryItem] = useState(inventoryItemId ? String(inventoryItemId) : '');
   const [saving, setSaving] = useState(false);
   const [retrying, setRetrying] = useState(false);
@@ -28,6 +31,9 @@ export default function AdminOrderActions({ id, initialStatus, productType = 'po
       }
       if (!isEsim && status === 'returned' && !returned.trim()) {
         throw new Error('Enter a return tracking or receipt reference before marking this order returned.');
+      }
+      if (!isEsim && status === 'returned' && !returnDisposition) {
+        throw new Error('Choose whether the returned Pocket WiFi unit is restocked, quarantined, or damaged.');
       }
       if (isEsim && status === 'fulfilled' && !deliveryReference.trim()) {
         throw new Error('Enter a provider order ID or secure delivery/email log reference before marking this eSIM order fulfilled. Do not enter the QR code.');
@@ -72,6 +78,7 @@ export default function AdminOrderActions({ id, initialStatus, productType = 'po
       <input aria-label="Courier tracking" placeholder="Courier tracking / delivery reference" value={courier} onChange={e=>setCourier(e.target.value)} />
       <input aria-label="Return tracking" placeholder="Return tracking / receipt reference" value={returned} onChange={e=>setReturned(e.target.value)} />
       {status === 'returned' && <select aria-label="Return disposition" value={returnDisposition} onChange={e=>setReturnDisposition(e.target.value)}>
+        <option value="" disabled>Choose inspection disposition</option>
         <option value="restock">Restock after receipt</option>
         <option value="quarantine">Quarantine for inspection</option>
         <option value="damaged">Damaged — do not restock</option>

@@ -1095,13 +1095,17 @@ test('Pocket WiFi dispatch and return atomically reconcile the assigned stock it
 
 test('Pocket WiFi returns explicitly quarantine damaged or inspection-required units instead of silently restocking them', () => {
   assert.match(schema, /return_disposition text/);
-  assert.match(schema, /p_return_disposition text default 'restock'/);
+  assert.match(schema, /p_return_disposition text/);
+  assert.doesNotMatch(schema, /p_return_disposition text default/);
+  assert.match(schema, /Require an explicit[\s\S]*rather than defaulting an omitted[\s\S]*restock/);
   assert.match(schema, /v_return_disposition not in \('restock', 'quarantine', 'damaged'\)/);
   assert.match(schema, /case when v_return_disposition = 'restock' then 1 else 0 end/);
   assert.match(schema, /return_quarantined/);
   assert.match(adminOrderRoute, /\['restock', 'quarantine', 'damaged'\]/);
   assert.match(adminOrderActions, /Quarantine for inspection/);
   assert.match(adminOrderActions, /Damaged — do not restock/);
+  assert.match(adminOrderActions, /status === 'returned' && !returnDisposition/);
+  assert.match(adminOrderActions, /Choose inspection disposition/);
   assert.match(productionReadiness, /return_disposition/);
 });
 

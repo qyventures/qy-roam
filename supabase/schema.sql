@@ -673,11 +673,14 @@ create or replace function public.qy_transition_pocket_wifi_order(
   p_order_id bigint,
   p_expected_status text,
   p_next_status text,
-  p_courier_tracking text default null,
-  p_return_tracking text default null,
-  p_notes text default null,
-  p_inventory_item_id bigint default null,
-  p_return_disposition text default 'restock'
+  p_courier_tracking text,
+  p_return_tracking text,
+  p_notes text,
+  p_inventory_item_id bigint,
+  -- Returning a device can restore public capacity. Require an explicit
+  -- inspection decision from every caller rather than defaulting an omitted
+  -- field to restock.
+  p_return_disposition text
 )
 returns public.orders
 language plpgsql
@@ -739,7 +742,7 @@ begin
     values (v_item_id, 'dispatch', -1, left(v_order.stripe_session_id, 120), nullif(left(trim(coalesce(p_courier_tracking, '')), 1000), ''));
   elsif p_next_status = 'returned' and v_order.returned_at is null then
     if nullif(trim(coalesce(p_return_tracking, '')), '') is null then raise exception 'return tracking is required before receipt'; end if;
-    v_return_disposition := lower(trim(coalesce(p_return_disposition, 'restock')));
+    v_return_disposition := lower(trim(coalesce(p_return_disposition, '')));
     if v_return_disposition not in ('restock', 'quarantine', 'damaged') then raise exception 'invalid Pocket WiFi return disposition'; end if;
     -- Receiving a device increases saleable stock. Never infer that the
     -- corresponding dispatch happened merely from an editable status label:
