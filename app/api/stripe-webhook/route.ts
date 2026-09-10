@@ -128,6 +128,18 @@ function stripeCheckoutEventStateIssue(eventType:Stripe.Event.Type,session:Strip
   return null;
 }
 const DELIVERY_TIMEOUT_MS=20_000;
+// Delivery ledgers are normally protected by a non-null database timestamp,
+// but a partially migrated or manually repaired record can still contain an
+// invalid value. Treat that lease as abandoned instead of leaving a paid
+// order permanently unrecoverable: ownership is still acquired with the
+// status-and-timestamp compare-and-swap below, so this does not permit two
+// healthy workers to send the same delivery concurrently.
+const DELIVERY_LEASE_STALE_MS=15*60_000;
+
+function deliveryLeaseIsStale(updatedAt: string | null | undefined) {
+  const updatedAtMs=updatedAt ? new Date(updatedAt).getTime() : Number.NaN;
+  return !Number.isFinite(updatedAtMs)||Date.now()-updatedAtMs>DELIVERY_LEASE_STALE_MS;
+}
 // Meta and an optional SMTP relay return tiny JSON responses. Bound their
 // bodies as well as the request deadline: a misbehaving upstream must not be
 // able to consume an unbounded amount of webhook-worker memory while we only
@@ -410,7 +422,7 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
     if(existing.data?.status==='sent') return;
   }
   const notification=existing.data!;
-  const staleSending=notification.status==='sending'&&Date.now()-new Date(notification.updated_at).getTime()>15*60_000;
+  const staleSending=notification.status==='sending'&&deliveryLeaseIsStale(notification.updated_at);
   if(notification.status==='sending'&&!staleSending) throw new Error('Fulfilment notification is already being sent');
   const now=new Date().toISOString();
   const attempt=await supabase.from('fulfilment_notifications').update({status:'sending',attempts:Number(notification.attempts||0)+1,last_attempt_at:now,last_error:null,updated_at:now}).eq('stripe_session_id',session.id).eq('status',notification.status).eq('updated_at',notification.updated_at).select('stripe_session_id');
@@ -455,7 +467,7 @@ export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof
   const delivery=existing.data!;
   const persistedEventTime=Number(delivery.event_time);
   const metaEventTime=Number.isSafeInteger(persistedEventTime)&&persistedEventTime>0 ? persistedEventTime : requestedEventTime;
-  const staleSending=delivery.status==='sending'&&Date.now()-new Date(delivery.updated_at).getTime()>15*60_000;
+  const staleSending=delivery.status==='sending'&&deliveryLeaseIsStale(delivery.updated_at);
   if(delivery.status==='sending'&&!staleSending) throw new Error('Meta purchase delivery is already being sent');
   const now=new Date().toISOString();
   // `event_time` also backfills records made before this column existed.
