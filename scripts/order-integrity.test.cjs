@@ -986,6 +986,19 @@ test('eSIM lifecycle cannot use router statuses or reopen closed orders', () => 
   assert.equal(validFulfilmentTransition('esim', 'closed', 'awaiting_fulfilment'), false);
 });
 
+test('database enforces product-specific fulfilment status domains on new order writes', () => {
+  // API validation is useful feedback for staff, but this constraint is the
+  // final persistence boundary for webhook recovery and service-role work.
+  // NOT VALID preserves visibility of any historic imports while PostgreSQL
+  // still enforces the rule for all subsequent inserts and updates.
+  assert.match(schema, /orders_product_fulfilment_status_check/);
+  assert.match(schema, /product_type = 'pocket_wifi' and fulfilment_status in \(/);
+  assert.match(schema, /'with_customer', 'return_due', 'returned', 'closed', 'cancelled'/);
+  assert.match(schema, /product_type = 'esim' and fulfilment_status in \(/);
+  assert.match(schema, /'awaiting_fulfilment', 'fulfilled',\s*'closed', 'cancelled'/);
+  assert.match(schema, /\) not valid;/);
+});
+
 test('fulfilled eSIM orders cannot be reopened or cancelled after digital delivery', () => {
   assert.equal(validFulfilmentTransition('esim', 'awaiting_fulfilment', 'fulfilled'), true);
   assert.equal(validFulfilmentTransition('esim', 'awaiting_fulfilment', 'cancelled'), true);

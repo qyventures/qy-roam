@@ -53,6 +53,26 @@ alter table public.orders add column if not exists return_disposition text;
 alter table public.orders add column if not exists dispatched_at timestamptz;
 alter table public.orders add column if not exists returned_at timestamptz;
 alter table public.orders add column if not exists notes text;
+
+-- The admin API and webhook each validate the lifecycle they write, but the
+-- service role is also used for migrations and operational recovery. Keep the
+-- product/status boundary in the database so a direct write cannot turn an
+-- eSIM into a router return (or make a Pocket WiFi order appear digitally
+-- fulfilled). NOT VALID makes this safe to roll out on an existing project:
+-- old imported rows remain reviewable, while every new or changed row is
+-- protected immediately. Once any historical exceptions are reconciled, this
+-- constraint can be validated without changing its meaning.
+alter table public.orders drop constraint if exists orders_product_fulfilment_status_check;
+alter table public.orders add constraint orders_product_fulfilment_status_check check (
+  (product_type = 'pocket_wifi' and fulfilment_status in (
+    'awaiting_payment', 'payment_failed', 'paid', 'packing', 'dispatched',
+    'with_customer', 'return_due', 'returned', 'closed', 'cancelled'
+  )) or
+  (product_type = 'esim' and fulfilment_status in (
+    'awaiting_payment', 'payment_failed', 'awaiting_fulfilment', 'fulfilled',
+    'closed', 'cancelled'
+  ))
+) not valid;
 alter table public.orders enable row level security;
 
 -- Create the physical stock register before any reservation/manual-order
