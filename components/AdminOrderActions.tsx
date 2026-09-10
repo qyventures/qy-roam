@@ -39,7 +39,10 @@ export default function AdminOrderActions({ id, initialStatus, productType = 'po
         body.return_disposition = returnDisposition;
         if (inventoryItem) body.inventory_item_id = inventoryItem;
       } else {
-        body.digital_delivery_reference = deliveryReference;
+        // Do not submit a hidden legacy value back to the server. In
+        // particular, an unsafe old value must not block the only permitted
+        // terminal action (closing an already fulfilled order).
+        if (deliveryReference.trim()) body.digital_delivery_reference = deliveryReference;
       }
       const res = await fetch(`/api/admin/orders/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const result = await res.json().catch(() => null) as { fulfilment_status?: string; error?: string } | null;
@@ -81,7 +84,7 @@ export default function AdminOrderActions({ id, initialStatus, productType = 'po
         })}
       </select>
     </>}
-    {isEsim && <><input aria-label="eSIM delivery reference" placeholder="Provider order ID or secure delivery/email log reference" value={deliveryReference} onChange={e=>setDeliveryReference(e.target.value)} /><small>Mark fulfilled only after the QR code / activation instructions have been sent. Record a delivery reference, never the QR code.</small></>}
+    {isEsim && <><input aria-label="eSIM delivery reference" placeholder="Provider order ID or secure delivery/email log reference" value={deliveryReference} onChange={e=>setDeliveryReference(e.target.value)} readOnly={currentStatus === 'fulfilled'} /><small>{currentStatus === 'fulfilled' ? 'Delivery audit references are immutable after fulfilment.' : 'Mark fulfilled only after the QR code / activation instructions have been sent. Record a delivery reference, never the QR code.'}</small></>}
     <button type="button" onClick={save} disabled={saving || statuses.length < 2}>{saving ? 'Saving…' : 'Save'}</button>
     {canRetryNotifications && <button type="button" onClick={retryNotifications} disabled={retrying}>{retrying ? 'Retrying deliveries…' : 'Retry order deliveries'}</button>}
     {message && <small aria-live="polite">{message}</small>}

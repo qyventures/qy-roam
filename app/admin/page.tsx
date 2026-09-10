@@ -2,6 +2,7 @@ import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import AdminOrderActions from '@/components/AdminOrderActions';
 import { fulfilmentNotificationActionable, STRIPE_EVENT_CLAIM_STALE_MS } from '@/lib/orderLifecycle';
 import { hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
+import { isSafeDigitalDeliveryReference } from '@/lib/digitalDeliveryReference';
 
 export const dynamic = 'force-dynamic';
 
@@ -258,7 +259,7 @@ export default async function AdminPage() {
             <td style={{padding:'14px 8px'}}><strong>{money(o.amount_sgd)}</strong></td>
             <td style={{padding:'14px 8px'}}>{notification?.status === 'sent' ? '✓ Sent' : notification ? `⚠ ${notification.status}` : o.payment_status === 'paid' ? '⚠ Not recorded' : '-'}{notification?.last_error && <><br/><small>{String(notification.last_error).slice(0,120)}</small></>}</td>
             <td style={{padding:'14px 8px'}}>{metaDelivery?.status === 'sent' ? '✓ Sent' : !metaCapiConfigured && o.measurement_consent === 'accepted' ? 'CAPI unavailable' : metaDelivery ? `⚠ ${metaDelivery.status}` : o.payment_status === 'paid' ? 'Not requested / not recorded' : '-'}{metaDelivery?.last_error && <><br/><small>{String(metaDelivery.last_error).slice(0,120)}</small></>}</td>
-            <td style={{padding:'14px 8px'}}>{o.return_disposition && <small>Return: {String(o.return_disposition).replaceAll('_',' ')}</small>}{isEsim(o) && o.digital_delivery_reference && <small>Delivery ref: {o.digital_delivery_reference}</small>}<AdminOrderActions id={o.id} initialStatus={o.fulfilment_status} productType={o.product_type} courierTracking={o.courier_tracking} returnTracking={o.return_tracking} digitalDeliveryReference={o.digital_delivery_reference} inventoryItemId={o.inventory_item_id} inventoryItems={inventoryItems} canRetryNotifications={canRetryNotifications}/></td>
+            <td style={{padding:'14px 8px'}}>{o.return_disposition && <small>Return: {String(o.return_disposition).replaceAll('_',' ')}</small>}{isEsim(o) && o.digital_delivery_reference && <small>{isSafeDigitalDeliveryReference(o.digital_delivery_reference) ? 'Delivery audit reference recorded' : '⚠ Unsafe legacy delivery value hidden — review support record'}</small>}<AdminOrderActions id={o.id} initialStatus={o.fulfilment_status} productType={o.product_type} courierTracking={o.courier_tracking} returnTracking={o.return_tracking} digitalDeliveryReference={isSafeDigitalDeliveryReference(o.digital_delivery_reference) ? o.digital_delivery_reference : ''} inventoryItemId={o.inventory_item_id} inventoryItems={inventoryItems} canRetryNotifications={canRetryNotifications}/></td>
           </tr>;
         })}</tbody>
       </table></div>}

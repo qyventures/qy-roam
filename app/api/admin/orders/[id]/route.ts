@@ -8,6 +8,7 @@ import { InvalidRequestBodyLengthError, readLimitedRequestText, RequestBodyTimeo
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
+import { digitalDeliveryReferenceIssue, normalizeDigitalDeliveryReference } from '@/lib/digitalDeliveryReference';
 
 export const runtime = 'nodejs';
 
@@ -32,8 +33,8 @@ function digitalDeliveryReference(value: unknown, existing: string | null) {
   // string, or other customer credential. Keeping it short also makes it safe
   // to show to authorised operations staff without turning the order table
   // into a secrets store.
-  if (typeof value !== 'string') return (existing || '').trim();
-  return value.trim().slice(0, 200);
+  if (typeof value !== 'string') return normalizeDigitalDeliveryReference(existing);
+  return normalizeDigitalDeliveryReference(value);
 }
 
 function transitionErrorStatus(message: string) {
@@ -84,6 +85,21 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const returnDisposition = typeof body.return_disposition === 'string' ? body.return_disposition.trim().toLowerCase() : 'restock';
   if (existing.data.product_type === 'esim' && status === 'fulfilled' && !deliveryReference) {
     return NextResponse.json({ error: 'A delivery reference is required before marking an eSIM order fulfilled. Record a provider order ID or secure delivery/email log reference, not the eSIM QR code.' }, { status: 400 });
+  }
+  if (existing.data.product_type === 'esim' && typeof body.digital_delivery_reference === 'string') {
+    const referenceIssue = digitalDeliveryReferenceIssue(deliveryReference);
+    if (referenceIssue) return NextResponse.json({ error: referenceIssue }, { status: 400 });
+    // A fulfilled eSIM is an irreversible hand-off. Its audit pointer must
+    // remain stable so later edits cannot hide the actual delivery record or
+    // replace it with a credential. Corrections belong in the support/refund
+    // record, not in this fulfilment ledger.
+    if (existing.data.fulfilment_status === 'fulfilled' && deliveryReference !== normalizeDigitalDeliveryReference(existing.data.digital_delivery_reference)) {
+      return NextResponse.json({ error: 'The delivery reference is immutable after an eSIM order is fulfilled. Record any correction in the support/refund log.' }, { status: 409 });
+    }
+  }
+  if (existing.data.product_type === 'esim' && status === 'fulfilled') {
+    const referenceIssue = digitalDeliveryReferenceIssue(deliveryReference);
+    if (referenceIssue) return NextResponse.json({ error: `${referenceIssue} Record a provider order ID or secure delivery/email log reference, not the eSIM QR code.` }, { status: 400 });
   }
   if (existing.data.product_type === 'pocket_wifi' && status === 'dispatched' && !courierTracking) {
     return NextResponse.json({ error: 'Courier tracking or delivery reference is required before dispatching a Pocket WiFi order' }, { status: 400 });

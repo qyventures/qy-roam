@@ -36,6 +36,7 @@ const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
 const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
 const { checkoutSiteOrigin, isProductionQyRoamOrigin } = require('../lib/siteOrigin.ts');
 const { hasRequiredMetaCapiPurchaseConfig } = require('../lib/runtimeConfig.ts');
+const { digitalDeliveryReferenceIssue, isSafeDigitalDeliveryReference } = require('../lib/digitalDeliveryReference.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -1047,7 +1048,23 @@ test('eSIM fulfilment requires a non-secret delivery audit reference', () => {
   assert.match(adminOrderActions, /Do not enter the QR code/);
   assert.match(schema, /digital_delivery_reference text/);
   assert.match(productionReadiness, /digital_delivery_reference/);
-  assert.match(adminPage, /digitalDeliveryReference=\{o\.digital_delivery_reference\}/);
+  assert.match(adminPage, /digitalDeliveryReference=\{isSafeDigitalDeliveryReference\(o\.digital_delivery_reference\) \? o\.digital_delivery_reference : ''\}/);
+});
+
+test('eSIM delivery references are safe audit pointers and cannot be changed after fulfilment', () => {
+  assert.equal(digitalDeliveryReferenceIssue('Provider order #QYR-1024'), null);
+  for (const unsafe of ['LPA:1$consumer.smdp.example$activation-token', 'QR code: ABC123', 'https://provider.example/delivery/secret', 'mail log\nsecret']) {
+    assert.notEqual(digitalDeliveryReferenceIssue(unsafe), null);
+    assert.equal(isSafeDigitalDeliveryReference(unsafe), false);
+  }
+  assert.match(adminOrderRoute, /The delivery reference is immutable after an eSIM order is fulfilled/);
+  assert.match(adminOrderRoute, /digitalDeliveryReferenceIssue\(deliveryReference\)/);
+  assert.match(adminPage, /Unsafe legacy delivery value hidden/);
+  assert.match(adminPage, /isSafeDigitalDeliveryReference\(o\.digital_delivery_reference\) \? o\.digital_delivery_reference : ''/);
+  assert.match(adminOrderActions, /if \(deliveryReference\.trim\(\)\) body\.digital_delivery_reference = deliveryReference/);
+  assert.match(adminOrderActions, /readOnly=\{currentStatus === 'fulfilled'\}/);
+  assert.match(schema, /orders_digital_delivery_reference_safe_check/);
+  assert.match(schema, /digital_delivery_reference !~\* '\(lpa:/);
 });
 
 test('admin fulfilment writes reject stale concurrent order state', () => {

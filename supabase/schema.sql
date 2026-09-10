@@ -54,6 +54,20 @@ alter table public.orders add column if not exists dispatched_at timestamptz;
 alter table public.orders add column if not exists returned_at timestamptz;
 alter table public.orders add column if not exists notes text;
 
+-- eSIM credentials must never be stored as a delivery "reference". Keep a
+-- database backstop for direct operational writes as well as the stricter
+-- application validation; NOT VALID preserves review access to any legacy
+-- rows while enforcing the boundary for all new and changed records.
+alter table public.orders drop constraint if exists orders_digital_delivery_reference_safe_check;
+alter table public.orders add constraint orders_digital_delivery_reference_safe_check check (
+  digital_delivery_reference is null or (
+    length(digital_delivery_reference) between 1 and 200 and
+    btrim(digital_delivery_reference) <> '' and
+    digital_delivery_reference !~ '[[:cntrl:]]' and
+    digital_delivery_reference !~* '(lpa:|smdp\\+?|activation[[:space:]]*(code|token)|qr[[:space:]]*code|iccid|imsi|eid|confirmation[[:space:]]*code|https?://|www\\.)'
+  )
+) not valid;
+
 -- The admin API and webhook each validate the lifecycle they write, but the
 -- service role is also used for migrations and operational recovery. Keep the
 -- product/status boundary in the database so a direct write cannot turn an
