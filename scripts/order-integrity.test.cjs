@@ -1415,6 +1415,19 @@ test('Stripe webhook bounds third-party delivery responses as well as request ti
   assert.doesNotMatch(webhookRoute, /const responseBody=await response\.text\(\)/);
 });
 
+test('paid-order delivery endpoints are fail-closed and never follow credential-bearing redirects', () => {
+  // A relay typo must stop checkout before a customer pays, rather than
+  // failing only when the webhook tries to send fulfilment data. Redirects
+  // are unsafe here because the relay body has SMTP credentials and the Meta
+  // request URL carries its access token.
+  assert.match(productionReadiness, /const relayUrl = process\.env\.SMTP_RELAY_URL\?\.trim\(\)/);
+  assert.match(productionReadiness, /const relaySecret = process\.env\.SMTP_RELAY_SECRET\?\.trim\(\)/);
+  assert.match(productionReadiness, /relayConfigured = url\.protocol === 'https:'/);
+  assert.match(productionReadiness, /relaySecret\.length >= 24/);
+  assert.match(productionReadiness, /isSafeSmtpMailbox\(from\) && isSafeSmtpMailbox\(recipient\) && relayConfigured/);
+  assert.match(webhookRoute, /redirect:'error'/);
+});
+
 test('Stripe network calls use a bounded shared production client', () => {
   assert.match(stripeClient, /STRIPE_REQUEST_TIMEOUT_MS = 15_000/);
   assert.match(stripeClient, /STRIPE_MAX_NETWORK_RETRIES = 1/);

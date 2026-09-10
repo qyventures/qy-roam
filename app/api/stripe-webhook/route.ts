@@ -167,7 +167,11 @@ async function postJsonWithTimeout(url:string,body:unknown,timeoutMs=DELIVERY_TI
   const controller=new AbortController();
   const deadline=setTimeout(()=>controller.abort(),timeoutMs);
   try{
-    const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:controller.signal});
+    // Both the optional SMTP relay payload and Meta URL contain credentials.
+    // Following a redirect would resend those values to a different endpoint,
+    // and can turn a harmless relay typo into a paid-order data leak. Treat a
+    // redirect as a failed retryable delivery instead.
+    const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:controller.signal,redirect:'error'});
     // Consume the response while the deadline is still active. A provider that
     // sends headers and then stalls its body must not hold the webhook open.
     const responseBody=await readDeliveryResponseBody(response);

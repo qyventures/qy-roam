@@ -122,11 +122,26 @@ export function hasRequiredFulfilmentEmailConfig() {
   // configured destination. A historical fallback mailbox can silently route
   // customer details to the wrong operations team on a fresh deployment.
   const recipient = (process.env.ORDER_FULFILMENT_EMAIL || process.env.FULFILMENT_TO || '').trim();
+  const relayUrl = process.env.SMTP_RELAY_URL?.trim();
+  const relaySecret = process.env.SMTP_RELAY_SECRET?.trim();
+  // The relay is optional, but a partial or malformed relay configuration
+  // must not be silently ignored after checkout has accepted payment. The
+  // request carries SMTP credentials and paid-order PII, so require a direct
+  // HTTPS endpoint without embedded credentials whenever the relay is used.
+  let relayConfigured = !relayUrl && !relaySecret;
+  if (relayUrl && relaySecret && relaySecret.length >= 24 && !/[\r\n]/.test(relaySecret)) {
+    try {
+      const url = new URL(relayUrl);
+      relayConfigured = url.protocol === 'https:' && Boolean(url.hostname) && !url.username && !url.password;
+    } catch {
+      relayConfigured = false;
+    }
+  }
   return Boolean(
     host && !/[\r\n]/.test(host) &&
     Number.isInteger(port) && port > 0 && port <= 65535 &&
     user && !/[\r\n]/.test(user) && pass &&
-    isSafeSmtpMailbox(from) && isSafeSmtpMailbox(recipient),
+    isSafeSmtpMailbox(from) && isSafeSmtpMailbox(recipient) && relayConfigured,
   );
 }
 
