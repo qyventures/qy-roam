@@ -1426,6 +1426,12 @@ test('Meta CAPI requires a complete destination and admin recovery never reports
   assert.doesNotMatch(launchPage, /Boolean\(process\.env\.NEXT_PUBLIC_META_PIXEL_ID\)/);
 });
 
+test('admin delivery recovery requires a completed Stripe session and matching persisted product identity', () => {
+  assert.match(adminOrderRoute, /!validation\.valid \|\| session\.status !== 'complete' \|\| session\.payment_status !== 'paid'/);
+  assert.match(adminOrderRoute, /if \(order\.product_type !== validation\.productType\)/);
+  assert.match(adminOrderRoute, /stored order product does not match its signed Stripe session/);
+});
+
 test('consented browser and CAPI Purchases share a stable deduplication identity', () => {
   assert.match(successPage, /<MetaPurchase sessionId=\{sessionId\}/);
   assert.match(successPage, /measurementConsent=\{measurementConsent\}/);

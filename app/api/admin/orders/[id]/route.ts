@@ -211,8 +211,19 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
       throw new Error('Stripe Checkout Session mode does not match configured credential');
     }
     const validation = validateQyRoamSession(session);
-    if (!validation.valid || session.payment_status !== 'paid') {
+    if (!validation.valid || session.status !== 'complete' || session.payment_status !== 'paid') {
       return NextResponse.json({ error: 'The linked Stripe session is not a valid paid QY Roam order' }, { status: 409 });
+    }
+
+    // The Stripe Session is the authority for payment and the signed product
+    // snapshot, while the database row is the authority for its operational
+    // lifecycle. Recovery must only join those two records when their product
+    // identity agrees. Otherwise a manually repaired/corrupt row could make a
+    // valid eSIM session send a Pocket WiFi fulfilment alert (or vice versa).
+    // Do not "repair" this implicitly: it needs an operator to reconcile the
+    // affected paid order before any external side effect is retried.
+    if (order.product_type !== validation.productType) {
+      return NextResponse.json({ error: 'The stored order product does not match its signed Stripe session. Reconcile the order before retrying deliveries.' }, { status: 409 });
     }
 
     // A fulfilment alert asks staff to send a device or digital entitlement.
