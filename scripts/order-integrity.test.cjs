@@ -67,6 +67,7 @@ const inventoryPage = fs.readFileSync(require.resolve('../app/admin/inventory/pa
 const launchPage = fs.readFileSync(require.resolve('../app/admin/launch/page.tsx'), 'utf8');
 const middleware = fs.readFileSync(require.resolve('../middleware.ts'), 'utf8');
 const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
+const nextConfig = fs.readFileSync(require.resolve('../next.config.mjs'), 'utf8');
 
 const requestId = 'checkout_request_123456';
 
@@ -1481,4 +1482,12 @@ test('Stripe Checkout redirects fail closed unless production uses a canonical Q
     assert.doesNotMatch(route, /function siteOrigin\(/);
   }
   assert.match(healthRoute, /isProductionQyRoamOrigin\(process\.env\.NEXT_PUBLIC_SITE_URL\)/);
+});
+
+test('customer confirmation and booking URLs are never cacheable or indexable', () => {
+  assert.match(successPage, /robots:\s*\{\s*index:\s*false,\s*follow:\s*false\s*\}/);
+  for (const path of ['/success', '/booking']) {
+    const source = new RegExp(`source: '${path}',[\\s\\S]{0,260}Cache-Control', value: 'no-store, max-age=0, private'[\\s\\S]{0,260}X-Robots-Tag', value: 'noindex, nofollow, nosnippet'`);
+    assert.match(nextConfig, source);
+  }
 });

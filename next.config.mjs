@@ -42,6 +42,24 @@ const nextConfig = {
           { key: 'X-Robots-Tag', value: 'noindex, nofollow, nosnippet' },
         ],
       },
+      // Checkout redirects carry an unguessable Stripe session reference in
+      // the URL. These pages retrieve current payment and fulfilment state,
+      // so a browser, proxy, or search crawler must not retain a prior
+      // traveller's confirmation or status response.
+      {
+        source: '/success',
+        headers: [
+          { key: 'Cache-Control', value: 'no-store, max-age=0, private' },
+          { key: 'X-Robots-Tag', value: 'noindex, nofollow, nosnippet' },
+        ],
+      },
+      {
+        source: '/booking',
+        headers: [
+          { key: 'Cache-Control', value: 'no-store, max-age=0, private' },
+          { key: 'X-Robots-Tag', value: 'noindex, nofollow, nosnippet' },
+        ],
+      },
       {
         source: '/admin/:path*',
         headers: [

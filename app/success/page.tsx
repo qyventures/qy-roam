@@ -7,6 +7,9 @@ import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 
 export const dynamic = 'force-dynamic';
+export const metadata = {
+  robots: { index: false, follow: false },
+};
 
 type Props = {
   searchParams?: { session_id?: string | string[] };
