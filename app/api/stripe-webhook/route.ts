@@ -199,6 +199,13 @@ async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
   if(!host||!user||!pass||!from||!to) throw new Error('SMTP fulfilment email is not configured');
   const productType=session.metadata?.product_type;
   if(productType!=='esim'&&productType!=='pocket_wifi') throw new Error('Unknown or missing product_type on paid order');
+  // Webhook processing applies this guard before it creates the order, but
+  // fulfilment retries can be initiated later from the protected admin route.
+  // Keep the same boundary next to the actual outbound hand-off so a legacy
+  // or manually repaired order cannot turn incomplete customer/delivery data
+  // into an apparently actionable fulfilment alert.
+  const fulfilmentDetailsIssue=paidFulfilmentDetailsIssue(session,productType);
+  if(fulfilmentDetailsIssue) throw new Error(fulfilmentDetailsIssue);
   const isEsim=productType==='esim', destination=session.metadata?.country||'', planName=session.metadata?.plan_name||'', planId=session.metadata?.plan_id||'', esimPlan=isEsim?getEsimPlan(planId):undefined, dataAllowance=session.metadata?.data_allowance||esimPlan?.data||'', start=session.metadata?.start||'', end=session.metadata?.end||'', customer=session.customer_details, amount=((session.amount_total||0)/100).toFixed(2), shipping=session.shipping_details?.address, messageId=fulfilmentMessageId(session.id);
   const shippingText=shipping?[shipping.line1,shipping.line2,shipping.city,shipping.state,shipping.postal_code,shipping.country].filter(Boolean).join(', '):'Not applicable / not supplied';
   const subject=`[QY Roam] Paid ${isEsim?'eSIM':'Pocket WiFi'} order — ${destination||planName||session.id}`;

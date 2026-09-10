@@ -286,6 +286,19 @@ test('paid orders fail into the durable webhook recovery ledger when fulfilment 
   assert.match(processing, /if\(claimStartedAt\) await recordEventFailure\(supabase,eventClaimId,claimStartedAt,error\)/);
 });
 
+test('admin fulfilment recovery cannot bypass paid-order delivery-detail validation', () => {
+  // A protected retry is a second entry point to the same outbound alert. The
+  // shared mailer must retain the webhook's customer and courier-data gate so
+  // legacy or manually repaired order rows cannot create a false fulfilment
+  // task with missing contact or delivery details.
+  const mailer = webhookRoute.slice(
+    webhookRoute.indexOf('async function sendHumanFulfilmentEmail'),
+    webhookRoute.indexOf('async function persistSession'),
+  );
+  assert.match(mailer, /const fulfilmentDetailsIssue=paidFulfilmentDetailsIssue\(session,productType\)/);
+  assert.match(mailer, /if\(fulfilmentDetailsIssue\) throw new Error\(fulfilmentDetailsIssue\)/);
+});
+
 test('v2 provenance binds all checkout metadata, including same-priced travel dates', () => {
   const session = wifiSession();
   // Moving a four-day rental to another four-day period leaves the catalogue
