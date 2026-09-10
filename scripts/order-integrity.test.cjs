@@ -1133,7 +1133,13 @@ test('inventory visibility distinguishes unavailable data from zero stock and ex
   assert.match(inventoryPage, /Quarantined Pocket WiFi units/);
 });
 
-test('inventory movement audit visibility pages beyond one Supabase response and warns before a bounded view can hide history', () => {
+test('inventory register and movement audit visibility page beyond one Supabase response and warn before a bounded view can hide operations data', () => {
+  assert.match(inventoryPage, /const INVENTORY_ITEM_PAGE_SIZE=250/);
+  assert.match(inventoryPage, /const INVENTORY_ITEM_MAX_ROWS=5_000/);
+  assert.match(inventoryPage, /async function loadInventoryItemPages/);
+  assert.match(inventoryPage, /from\('inventory_items'\)\.select\('\*'\)\.order\('name'\)\.order\('id'\)\.range\(from,from\+INVENTORY_ITEM_PAGE_SIZE-1\)/);
+  assert.match(inventoryPage, /itemsResult\.truncated/);
+  assert.match(inventoryPage, /Do not treat the stock totals, asset count, or device selector as complete/);
   assert.match(inventoryPage, /const INVENTORY_MOVEMENT_PAGE_SIZE=250/);
   assert.match(inventoryPage, /const INVENTORY_MOVEMENT_MAX_ROWS=5_000/);
   assert.match(inventoryPage, /async function loadMovementPages/);
