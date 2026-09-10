@@ -1578,6 +1578,27 @@ test('authenticated admin browser mutations reject cross-site request triggering
   assert.match(middleware, /'Cache-Control': 'no-store'/);
 });
 
+test('paid orders reconcile into CRM records idempotently without overwriting operator workflow fields', () => {
+  // The CRM must follow the authoritative paid-orders ledger, including a
+  // delayed payment that changes an existing order from awaiting payment to
+  // paid. Totals are recalculated from orders, so duplicate Stripe terminal
+  // events cannot inflate a customer's purchase count or lifetime value.
+  assert.match(schema, /create or replace function public\.qy_reconcile_customer_from_paid_order/);
+  assert.match(schema, /after insert or update of payment_status, customer_name, email, phone, amount_sgd on public\.orders/);
+  assert.match(schema, /if new\.payment_status <> 'paid' or \(v_email is null and v_phone is null\) then/);
+  assert.match(schema, /pg_advisory_xact_lock\(hashtext\('qy_roam_customer:' \|\| v_identity\)\)/);
+  assert.match(schema, /from public\.orders\s+where payment_status = 'paid'/);
+  assert.match(schema, /total_orders = v_orders/);
+  assert.match(schema, /lifetime_value_sgd = v_lifetime_value/);
+  assert.match(schema, /last_order_at = v_last_order_at/);
+  const customerUpdate = schema.slice(
+    schema.indexOf('update public.customers set', schema.indexOf('create or replace function public.qy_reconcile_customer_from_paid_order')),
+    schema.indexOf('where id = v_customer_id;', schema.indexOf('create or replace function public.qy_reconcile_customer_from_paid_order')),
+  );
+  assert.doesNotMatch(customerUpdate, /status\s*=/);
+  assert.doesNotMatch(customerUpdate, /source\s*=/);
+});
+
 test('Stripe Checkout redirects fail closed unless production uses a canonical QY Roam origin', () => {
   const priorEnvironment = process.env.NODE_ENV;
   const priorSiteUrl = process.env.NEXT_PUBLIC_SITE_URL;
