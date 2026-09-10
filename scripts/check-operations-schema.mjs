@@ -22,6 +22,7 @@ const requiredContracts = [
   'alter table public.customers enable row level security',
   'grant execute on function public.qy_adjust_inventory(bigint,integer,text,text,text) to service_role',
   'return_disposition text',
+  'digital_delivery_reference text',
   "return_quarantined', 'return_damaged",
   "p_return_disposition text default 'restock'",
   'grant execute on function public.qy_transition_pocket_wifi_order(bigint,text,text,text,text,text,bigint,text) to service_role',

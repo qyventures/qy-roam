@@ -3,13 +3,14 @@
 import { useState } from 'react';
 import { allowedFulfilmentStatuses } from '@/lib/orderLifecycle';
 
-export default function AdminOrderActions({ id, initialStatus, productType = 'pocket_wifi', courierTracking = '', returnTracking = '', inventoryItemId = null, inventoryItems = [], canRetryNotifications = false }: { id: number; initialStatus: string; productType?: string | null; courierTracking?: string | null; returnTracking?: string | null; inventoryItemId?: number | null; inventoryItems?: { id: number; name: string; sku: string; quantity_on_hand: number; status: string }[]; canRetryNotifications?: boolean }) {
+export default function AdminOrderActions({ id, initialStatus, productType = 'pocket_wifi', courierTracking = '', returnTracking = '', digitalDeliveryReference = '', inventoryItemId = null, inventoryItems = [], canRetryNotifications = false }: { id: number; initialStatus: string; productType?: string | null; courierTracking?: string | null; returnTracking?: string | null; digitalDeliveryReference?: string | null; inventoryItemId?: number | null; inventoryItems?: { id: number; name: string; sku: string; quantity_on_hand: number; status: string }[]; canRetryNotifications?: boolean }) {
   const isEsim = productType === 'esim';
   const [currentStatus, setCurrentStatus] = useState(initialStatus);
   const [status, setStatus] = useState(initialStatus);
   const statuses = allowedFulfilmentStatuses(productType, currentStatus);
   const [courier, setCourier] = useState(courierTracking || '');
   const [returned, setReturned] = useState(returnTracking || '');
+  const [deliveryReference, setDeliveryReference] = useState(digitalDeliveryReference || '');
   const [returnDisposition, setReturnDisposition] = useState('restock');
   const [inventoryItem, setInventoryItem] = useState(inventoryItemId ? String(inventoryItemId) : '');
   const [saving, setSaving] = useState(false);
@@ -28,12 +29,17 @@ export default function AdminOrderActions({ id, initialStatus, productType = 'po
       if (!isEsim && status === 'returned' && !returned.trim()) {
         throw new Error('Enter a return tracking or receipt reference before marking this order returned.');
       }
+      if (isEsim && status === 'fulfilled' && !deliveryReference.trim()) {
+        throw new Error('Enter a provider order ID or secure delivery/email log reference before marking this eSIM order fulfilled. Do not enter the QR code.');
+      }
       const body: Record<string, string> = { status };
       if (!isEsim) {
         body.courier_tracking = courier;
         body.return_tracking = returned;
         body.return_disposition = returnDisposition;
         if (inventoryItem) body.inventory_item_id = inventoryItem;
+      } else {
+        body.digital_delivery_reference = deliveryReference;
       }
       const res = await fetch(`/api/admin/orders/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const result = await res.json().catch(() => null) as { fulfilment_status?: string; error?: string } | null;
@@ -75,7 +81,7 @@ export default function AdminOrderActions({ id, initialStatus, productType = 'po
         })}
       </select>
     </>}
-    {isEsim && <small>Mark fulfilled after the QR code / activation instructions have been sent to the customer.</small>}
+    {isEsim && <><input aria-label="eSIM delivery reference" placeholder="Provider order ID or secure delivery/email log reference" value={deliveryReference} onChange={e=>setDeliveryReference(e.target.value)} /><small>Mark fulfilled only after the QR code / activation instructions have been sent. Record a delivery reference, never the QR code.</small></>}
     <button type="button" onClick={save} disabled={saving || statuses.length < 2}>{saving ? 'Saving…' : 'Save'}</button>
     {canRetryNotifications && <button type="button" onClick={retryNotifications} disabled={retrying}>{retrying ? 'Retrying deliveries…' : 'Retry order deliveries'}</button>}
     {message && <small aria-live="polite">{message}</small>}

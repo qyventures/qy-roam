@@ -95,7 +95,7 @@ const REQUIRED_OPERATIONS_SCHEMA = [
   // The order fields below are the durable evidence used by the guarded
   // dispatch/return RPC.  A table-only probe can otherwise pass against an
   // older deployment and leave staff unable to receive a router safely.
-  { table: 'orders', columns: 'id,product_type,payment_status,fulfilment_status,inventory_item_id,courier_tracking,return_tracking,return_disposition,dispatched_at,returned_at' },
+  { table: 'orders', columns: 'id,product_type,payment_status,fulfilment_status,inventory_item_id,courier_tracking,return_tracking,digital_delivery_reference,return_disposition,dispatched_at,returned_at' },
   { table: 'inventory_items', columns: 'id,sku,product_type,status,quantity_on_hand,reorder_level' },
   { table: 'inventory_movements', columns: 'id,inventory_item_id,movement_type,quantity' },
   { table: 'customers', columns: 'id,email,phone,total_orders,lifetime_value_sgd' },

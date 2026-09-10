@@ -25,6 +25,10 @@ create table if not exists public.orders (
   measurement_consent text,
   courier_tracking text,
   return_tracking text,
+  -- eSIM fulfilment is an irreversible digital hand-off. Store a concise
+  -- operator reference (for example a provider order id or secure email log
+  -- reference), never the QR code or activation credentials themselves.
+  digital_delivery_reference text,
   -- A received router is not necessarily ready for its next rental. Preserve
   -- the operator's receipt decision so a damaged or inspection-required unit
   -- cannot be silently restored to saleable quantity.
@@ -44,6 +48,7 @@ alter table public.orders add column if not exists payment_confirmed_at timestam
 alter table public.orders add column if not exists measurement_consent text;
 alter table public.orders add column if not exists courier_tracking text;
 alter table public.orders add column if not exists return_tracking text;
+alter table public.orders add column if not exists digital_delivery_reference text;
 alter table public.orders add column if not exists return_disposition text;
 alter table public.orders add column if not exists dispatched_at timestamptz;
 alter table public.orders add column if not exists returned_at timestamptz;

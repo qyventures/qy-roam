@@ -992,6 +992,19 @@ test('fulfilled eSIM orders cannot be reopened or cancelled after digital delive
   assert.equal(validFulfilmentTransition('esim', 'fulfilled', 'cancelled'), false);
 });
 
+test('eSIM fulfilment requires a non-secret delivery audit reference', () => {
+  assert.match(adminOrderRoute, /function digitalDeliveryReference\(value: unknown, existing: string \| null\)/);
+  assert.match(adminOrderRoute, /status === 'fulfilled' && !deliveryReference/);
+  assert.match(adminOrderRoute, /A delivery reference is required before marking an eSIM order fulfilled/);
+  assert.match(adminOrderRoute, /patch\.digital_delivery_reference = deliveryReference \|\| null/);
+  assert.match(adminOrderActions, /status === 'fulfilled' && !deliveryReference\.trim\(\)/);
+  assert.match(adminOrderActions, /aria-label="eSIM delivery reference"/);
+  assert.match(adminOrderActions, /Do not enter the QR code/);
+  assert.match(schema, /digital_delivery_reference text/);
+  assert.match(productionReadiness, /digital_delivery_reference/);
+  assert.match(adminPage, /digitalDeliveryReference=\{o\.digital_delivery_reference\}/);
+});
+
 test('admin fulfilment writes reject stale concurrent order state', () => {
   assert.match(adminOrderRoute, /\.eq\('fulfilment_status', existing\.data\.fulfilment_status\)/);
   assert.match(adminOrderRoute, /\.eq\('payment_status', 'paid'\)/);
@@ -1050,7 +1063,7 @@ test('Pocket WiFi inspection status changes are durably audited before a unit ca
 });
 
 test('production readiness verifies the deployed Pocket WiFi dispatch and return contract', () => {
-  assert.match(productionReadiness, /inventory_item_id,courier_tracking,return_tracking,return_disposition,dispatched_at,returned_at/);
+  assert.match(productionReadiness, /inventory_item_id,courier_tracking,return_tracking,digital_delivery_reference,return_disposition,dispatched_at,returned_at/);
   assert.match(productionReadiness, /database\.rpc\('qy_transition_pocket_wifi_order'/);
   assert.match(productionReadiness, /database\.rpc\('qy_adjust_inventory'/);
   assert.match(productionReadiness, /database\.rpc\('qy_set_inventory_status'/);

@@ -27,6 +27,15 @@ function trackingValue(value: unknown, existing: string | null) {
   return value.trim().slice(0, 200);
 }
 
+function digitalDeliveryReference(value: unknown, existing: string | null) {
+  // This is deliberately an audit pointer, not the eSIM QR code, activation
+  // string, or other customer credential. Keeping it short also makes it safe
+  // to show to authorised operations staff without turning the order table
+  // into a secrets store.
+  if (typeof value !== 'string') return (existing || '').trim();
+  return value.trim().slice(0, 200);
+}
+
 function transitionErrorStatus(message: string) {
   // Expected operational conflicts are actionable by staff and should not be
   // reported as a server failure. The database remains the authority because
@@ -58,7 +67,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const id = Number(params.id);
   if (!Number.isSafeInteger(id) || id < 1) return NextResponse.json({ error: 'Invalid order id' }, { status: 400 });
 
-  const existing = await supabase.from('orders').select('product_type,payment_status,fulfilment_status,dispatched_at,returned_at,courier_tracking,return_tracking').eq('id', id).maybeSingle();
+  const existing = await supabase.from('orders').select('product_type,payment_status,fulfilment_status,dispatched_at,returned_at,courier_tracking,return_tracking,digital_delivery_reference').eq('id', id).maybeSingle();
   if (existing.error) return NextResponse.json({ error: 'Unable to load order' }, { status: 500 });
   if (!existing.data) return NextResponse.json({ error: 'Order not found' }, { status: 404 });
   if (!validFulfilmentStatus(existing.data.product_type, status)) return NextResponse.json({ error: 'Invalid fulfilment status for this order' }, { status: 400 });
@@ -71,7 +80,11 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
   const courierTracking = trackingValue(body.courier_tracking, existing.data.courier_tracking);
   const returnTracking = trackingValue(body.return_tracking, existing.data.return_tracking);
+  const deliveryReference = digitalDeliveryReference(body.digital_delivery_reference, existing.data.digital_delivery_reference);
   const returnDisposition = typeof body.return_disposition === 'string' ? body.return_disposition.trim().toLowerCase() : 'restock';
+  if (existing.data.product_type === 'esim' && status === 'fulfilled' && !deliveryReference) {
+    return NextResponse.json({ error: 'A delivery reference is required before marking an eSIM order fulfilled. Record a provider order ID or secure delivery/email log reference, not the eSIM QR code.' }, { status: 400 });
+  }
   if (existing.data.product_type === 'pocket_wifi' && status === 'dispatched' && !courierTracking) {
     return NextResponse.json({ error: 'Courier tracking or delivery reference is required before dispatching a Pocket WiFi order' }, { status: 400 });
   }
@@ -119,6 +132,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     fulfilment_status: status,
     updated_at: new Date().toISOString(),
   };
+  if (typeof body.digital_delivery_reference === 'string') patch.digital_delivery_reference = deliveryReference || null;
   if (typeof body.courier_tracking === 'string') patch.courier_tracking = courierTracking || null;
   if (typeof body.return_tracking === 'string') patch.return_tracking = returnTracking || null;
   if (typeof body.notes === 'string') patch.notes = body.notes.slice(0, 1000);
