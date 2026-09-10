@@ -271,6 +271,8 @@ test('eSIM fulfilment preserves the exact plan identity and data allowance', () 
 test('paid orders fail into the durable webhook recovery ledger when fulfilment contact data is incomplete', () => {
   assert.match(webhookRoute, /function paidFulfilmentDetailsIssue\(session:Stripe\.Checkout\.Session,productType:'esim'\|'pocket_wifi'\)/);
   assert.match(webhookRoute, /Paid order is missing a valid customer email/);
+  assert.match(webhookRoute, /if\(!isSafeSmtpMailbox\(email\)\)/);
+  assert.match(webhookRoute, /import \{ isSafeSmtpMailbox, sendSmtpMail \} from '@\/lib\/smtp';/);
   assert.match(webhookRoute, /Paid Pocket WiFi order is missing a valid customer phone number/);
   assert.match(webhookRoute, /shipping\?\.country!=='SG'/);
   assert.match(webhookRoute, /Paid Pocket WiFi order is missing a complete Singapore delivery address/);

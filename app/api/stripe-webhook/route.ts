@@ -3,7 +3,7 @@ import Stripe from 'stripe';
 import { createStripeClient } from '../../../lib/stripeClient';
 import crypto from 'crypto';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
-import { sendSmtpMail } from '@/lib/smtp';
+import { isSafeSmtpMailbox, sendSmtpMail } from '@/lib/smtp';
 import { getMetaCapiToken, hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
 import { validateQyRoamSession } from '@/lib/qyRoamSession';
 import { validCheckoutRequestId } from '@/lib/checkoutValidation';
@@ -88,7 +88,12 @@ function fulfilmentMessageId(sessionId:string) { return `<qyroam-${crypto.create
 function paidFulfilmentDetailsIssue(session:Stripe.Checkout.Session,productType:'esim'|'pocket_wifi') {
   if(session.payment_status!=='paid') return null;
   const email=session.customer_details?.email?.trim();
-  if(!email||email.length>320||/[\r\n]/.test(email)||!email.includes('@')) return 'Paid order is missing a valid customer email';
+  // Stripe Checkout validates its email field, but this is the final
+  // fulfilment boundary and can also process historical or manually repaired
+  // Checkout Sessions. Require the same safe mailbox shape used by the SMTP
+  // transport so an eSIM order is never presented to staff as deliverable
+  // when its only customer contact cannot receive a fulfilment email.
+  if(!isSafeSmtpMailbox(email)) return 'Paid order is missing a valid customer email';
   if(productType==='esim') return null;
   const phone=normalizePhone(session.customer_details?.phone);
   if(!phone||phone.length<7||phone.length>15) return 'Paid Pocket WiFi order is missing a valid customer phone number';
