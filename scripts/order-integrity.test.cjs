@@ -543,6 +543,8 @@ test('browser InitiateCheckout events share the durable Stripe attempt identity 
   // Pixel events are client-side, but checkout retries are an important
   // measurement boundary: one Stripe idempotency key must not inflate the
   // checkout-start funnel merely because a response was lost in transit.
+  assert.match(metaClient, /export function trackMeta\(event: string, params: Record<string, unknown> = \{\}, options: Record<string, unknown> = \{\}\)/);
+  assert.match(metaClient, /fbq\('track', event, params, options\)/);
   assert.match(homePage, /trackMeta\('InitiateCheckout',[\s\S]*?\{ eventID: `checkout_\$\{checkoutAttempt\.current\.requestId\}` \}\);/);
   assert.match(esimPage, /trackMeta\('InitiateCheckout',[\s\S]*?\{ eventID: `checkout_\$\{checkoutAttempt\.current\.requestId\}` \}\);/);
   assert.match(homePage, /const fingerprint = JSON\.stringify[\s\S]*?trackMeta\('InitiateCheckout'/);

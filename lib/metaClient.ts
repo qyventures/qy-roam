@@ -19,10 +19,13 @@ export function metaAttribution() {
   return { fbp: cookieValue('_fbp'), fbc: cookieValue('_fbc') };
 }
 
-export function trackMeta(event: string, params: Record<string, unknown> = {}) {
+// Meta Pixel accepts an optional event-options argument, including `eventID`.
+// Keep it available to immediate browser events too: checkout retries reuse
+// their Stripe idempotency identity and must not become separate Pixel events.
+export function trackMeta(event: string, params: Record<string, unknown> = {}, options: Record<string, unknown> = {}) {
   if (!metaMeasurementAllowed() || typeof window === 'undefined') return;
   const fbq = (window as Window & { fbq?: (...args: any[]) => void }).fbq;
-  if (typeof fbq === 'function') fbq('track', event, params);
+  if (typeof fbq === 'function') fbq('track', event, params, options);
 }
 
 // The consent banner loads the Pixel asynchronously. A conversion can be
