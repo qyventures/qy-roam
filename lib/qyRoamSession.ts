@@ -86,6 +86,14 @@ function historicalEsimSnapshotIsConsistent(session: Stripe.Checkout.Session) {
 export function validateQyRoamSession(session: Stripe.Checkout.Session): QyRoamSessionValidation {
   const productType = qyRoamProductType(session);
   if (!productType) return { valid: false, reason: 'unknown QY Roam product identity' };
+  // QY Roam sells one-time travel products. The metadata HMAC authenticates
+  // the server-authored order snapshot, but it does not itself bind Stripe's
+  // Checkout mode. Keep this payment boundary explicit so a future checkout
+  // configuration regression (for example, a subscription session carrying
+  // otherwise valid metadata) cannot enter fulfilment as a one-time order.
+  if (session.mode !== 'payment') {
+    return { valid: false, reason: 'QY Roam orders must use one-time payment Checkout mode' };
+  }
   if (!validCheckoutRequestId(session.metadata?.checkout_request_id)) {
     return { valid: false, reason: 'missing or invalid checkout request id' };
   }

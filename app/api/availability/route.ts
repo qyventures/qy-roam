@@ -54,7 +54,7 @@ async function activeStripeHolds(stripe: Stripe, start: string, end: string) {
       // Inventory holds must be as trustworthy as fulfilment. A source marker
       // alone is writable on manually-created Checkout Sessions in a shared
       // Stripe account and must not be able to make routers appear sold out.
-      if (session.created < cutoff || !session.expires_at || session.expires_at <= nowSeconds || session.metadata?.source !== 'qyroam.com' || !validQyRoamProvenance(session.id, session.metadata)) continue;
+      if (session.mode !== 'payment' || session.created < cutoff || !session.expires_at || session.expires_at <= nowSeconds || session.metadata?.source !== 'qyroam.com' || !validQyRoamProvenance(session.id, session.metadata)) continue;
       // Only explicitly identified router sessions can consume router stock.
       // Never infer Pocket WiFi from the absence of a product marker: a valid
       // signed session for another QY Roam flow must not make availability

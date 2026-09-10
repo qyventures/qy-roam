@@ -30,7 +30,8 @@ type RequestedPocketWifi = {
 // must identify the full server-priced booking, not merely its travel dates.
 function matchesRequestedPocketWifi(session:Stripe.Checkout.Session,requestId:string,requested:RequestedPocketWifi) {
   const expectedAmount=requested.rentalBeforePromo-requested.promoDiscount+requested.courierFee;
-  return session.metadata?.source==='qyroam.com' &&
+  return session.mode==='payment' &&
+    session.metadata?.source==='qyroam.com' &&
     session.metadata?.product_type==='pocket_wifi' &&
     session.metadata?.checkout_request_id===requestId &&
     session.metadata?.country===requested.country &&
@@ -70,7 +71,7 @@ async function activeStripeHolds(stripe:Stripe,start:string,end:string,requestId
       // Do not let a manually-created lookalike session in a shared Stripe
       // account consume scarce router capacity. Holds use the same
       // server-authored provenance boundary as paid-order fulfilment.
-      if(session.created<cutoff||!session.expires_at||session.expires_at<=nowSeconds||session.metadata?.source!=='qyroam.com'||!validQyRoamProvenance(session.id,session.metadata)) continue;
+      if(session.mode!=='payment'||session.created<cutoff||!session.expires_at||session.expires_at<=nowSeconds||session.metadata?.source!=='qyroam.com'||!validQyRoamProvenance(session.id,session.metadata)) continue;
       // A signed QY Roam session is not necessarily a router reservation.
       // Require the explicit server-authored product identity; treating an
       // absent type as Pocket WiFi could reserve stock for another product

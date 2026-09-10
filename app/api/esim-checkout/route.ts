@@ -27,7 +27,8 @@ const limited = createCheckoutAttemptLimiter();
 // instead of creating a new one. Never redirect a customer to that earlier
 // (but otherwise valid) purchase.
 function matchesRequestedEsim(session: Stripe.Checkout.Session, requestId: string, plan: NonNullable<ReturnType<typeof getEsimPlan>>) {
-  return session.metadata?.source === 'qyroam.com' &&
+  return session.mode === 'payment' &&
+    session.metadata?.source === 'qyroam.com' &&
     session.metadata?.product_type === 'esim' &&
     session.metadata?.checkout_request_id === requestId &&
     session.metadata?.plan_id === plan.id &&

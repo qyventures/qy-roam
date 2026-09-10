@@ -74,6 +74,7 @@ const requestId = 'checkout_request_123456';
 function esimSession(plan = ESIM_PLANS[0]) {
   const session = {
     id: 'cs_test_esim',
+    mode: 'payment',
     currency: 'sgd',
     amount_total: Math.max(50, Math.round(plan.qyPriceSgd * 100)),
     metadata: {
@@ -100,6 +101,7 @@ function wifiSession(plan = WIFI_PLANS[0]) {
   const discount = Math.floor((rental * LAUNCH_PROMO.percent) / 100);
   const session = {
     id: 'cs_test_wifi',
+    mode: 'payment',
     currency: 'sgd',
     amount_total: rental - discount,
     metadata: {
@@ -168,6 +170,22 @@ test('ignores sessions outside the QY Roam checkout boundary', () => {
   const session = esimSession();
   session.metadata.source = 'another-store';
   assert.equal(validateQyRoamSession(session).valid, false);
+});
+
+test('rejects non-payment Checkout modes even with valid signed order metadata', () => {
+  for (const createSession of [esimSession, wifiSession]) {
+    const session = createSession();
+    session.mode = 'subscription';
+    // The mode is a Stripe-owned field and intentionally not part of the
+    // metadata HMAC. Validation must still protect the fulfilment boundary.
+    assert.equal(validateQyRoamSession(session).valid, false);
+  }
+  // The same boundary applies before returning an idempotent Checkout URL and
+  // while counting short-lived router reservations for availability.
+  assert.match(esimCheckoutRoute, /return session\.mode === 'payment' &&/);
+  assert.match(wifiCheckoutRoute, /return session\.mode==='payment' &&/);
+  assert.match(wifiCheckoutRoute, /if\(session\.mode!=='payment'\|\|session\.created<cutoff/);
+  assert.match(availabilityRoute, /if \(session\.mode !== 'payment' \|\| session\.created < cutoff/);
 });
 
 test('rejects unsigned, copied, and session-id-replayed checkout provenance', () => {
