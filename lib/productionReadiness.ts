@@ -323,15 +323,15 @@ async function checkRequiredOperationsSchema() {
         return false;
       }
 
-      // Probe the four inventory RPCs without changing any state. A zero order
-      // id is impossible for the identity-backed orders table, a zero item id
-      // is rejected before inventory functions write, and an empty SKU is
-      // rejected before an item can be created. Their expected domain errors
-      // prove the functions, current argument signatures and service-role
-      // grants are deployed. Missing-function or permission errors instead
-      // fail the launch gate before staff need to receive, dispatch or create
-      // a sellable router.
-      const [transitionProbe, adjustmentProbe, statusProbe, creationProbe] = await Promise.all([
+      // Probe the five inventory/order RPCs without changing any state. A zero
+      // order or item id is rejected before inventory functions write, while
+      // empty manual-order and SKU values are rejected before either creation
+      // routine can insert rows. Their expected domain errors prove the
+      // functions, current argument signatures and service-role grants are
+      // deployed. Missing-function or permission errors instead fail the
+      // launch gate before staff need to receive, dispatch, create stock, or
+      // record a capacity-consuming manual rental.
+      const [transitionProbe, adjustmentProbe, statusProbe, creationProbe, manualOrderProbe] = await Promise.all([
         database.rpc('qy_transition_pocket_wifi_order', {
           p_order_id: 0,
           p_expected_status: 'paid',
@@ -367,6 +367,19 @@ async function checkRequiredOperationsSchema() {
           p_location: null,
           p_notes: null,
         }).abortSignal(signal),
+        database.rpc('qy_create_manual_pocket_wifi_order', {
+          p_stripe_session_id: '',
+          p_customer_name: null,
+          p_email: null,
+          p_phone: null,
+          p_amount_sgd: 0,
+          p_plan_name: null,
+          p_country: null,
+          p_travel_start: null,
+          p_travel_end: null,
+          p_notes: null,
+          p_inventory: 0,
+        }).abortSignal(signal),
       ]);
       if (!transitionProbe.error || !/order not found/i.test(transitionProbe.error.message || '') ||
         !adjustmentProbe.error || !/invalid inventory item/i.test(adjustmentProbe.error.message || '')) {
@@ -381,6 +394,10 @@ async function checkRequiredOperationsSchema() {
         console.error('production_operations_inventory_creation_rpc_check_failed');
         return false;
       }
+      if (!manualOrderProbe.error || !/manual order reference is required/i.test(manualOrderProbe.error.message || '')) {
+        console.error('production_operations_manual_order_rpc_check_failed');
+        return false;
+      }
       return true;
     });
   } catch {
@@ -390,7 +407,7 @@ async function checkRequiredOperationsSchema() {
 }
 
 // Health checks commonly run on a short interval and this operations probe is
-// intentionally comprehensive (nine relations plus two RPC contracts). Keep
+// intentionally comprehensive (nine relations plus five RPC contracts). Keep
 // it responsive under multiple health-check workers without hiding a failed
 // migration or outage: only a successful result is cached, and only briefly.
 export async function hasRequiredOperationsSchema() {

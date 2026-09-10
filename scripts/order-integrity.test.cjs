@@ -1100,9 +1100,12 @@ test('production readiness verifies the deployed Pocket WiFi dispatch and return
   assert.match(productionReadiness, /database\.rpc\('qy_transition_pocket_wifi_order'/);
   assert.match(productionReadiness, /database\.rpc\('qy_adjust_inventory'/);
   assert.match(productionReadiness, /database\.rpc\('qy_set_inventory_status'/);
+  assert.match(productionReadiness, /database\.rpc\('qy_create_manual_pocket_wifi_order'/);
   assert.match(productionReadiness, /p_order_id: 0/);
   assert.match(productionReadiness, /p_item_id: 0/);
   assert.match(productionReadiness, /production_operations_inventory_rpc_check_failed/);
+  assert.match(productionReadiness, /manual order reference is required/);
+  assert.match(productionReadiness, /production_operations_manual_order_rpc_check_failed/);
 });
 
 test('Pocket WiFi receipt cannot create stock unless the outbound hand-off was recorded', () => {
