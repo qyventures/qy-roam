@@ -51,6 +51,7 @@ const wifiCheckoutRoute = fs.readFileSync(require.resolve('../app/api/checkout/r
 const availabilityRoute = fs.readFileSync(require.resolve('../app/api/availability/route.ts'), 'utf8');
 const esimPage = fs.readFileSync(require.resolve('../app/esim/page.tsx'), 'utf8');
 const homePage = fs.readFileSync(require.resolve('../app/page.tsx'), 'utf8');
+const manualOrderForm = fs.readFileSync(require.resolve('../components/ManualOrderForm.tsx'), 'utf8');
 const adminOpsRoute = fs.readFileSync(require.resolve('../app/api/admin/ops/route.ts'), 'utf8');
 const productionReadiness = fs.readFileSync(require.resolve('../lib/productionReadiness.ts'), 'utf8');
 const stripeCheckoutConfig = fs.readFileSync(require.resolve('../lib/stripeCheckoutConfig.ts'), 'utf8');
@@ -1005,6 +1006,13 @@ test('manual orders cannot bypass paid-order lifecycle, pricing, or WiFi capacit
   assert.match(adminOpsRoute, /parseExactIsoDate\(startRaw\)/);
   assert.match(adminOpsRoute, /New orders must start in their initial fulfilment status/);
   assert.match(adminOpsRoute, /Pocket WiFi orders require a destination and valid travel start and end dates/);
+});
+
+test('manual eSIM orders retain the same safe email delivery boundary as Checkout', () => {
+  assert.match(adminOpsRoute, /import \{ isSafeSmtpMailbox \} from '@\/lib\/smtp';/);
+  assert.match(adminOpsRoute, /product === 'esim' && !isSafeSmtpMailbox\(row\.email \|\| undefined\)/);
+  assert.match(adminOpsRoute, /eSIM orders require a valid customer email for digital delivery/);
+  assert.match(manualOrderForm, /eSIM orders require a valid customer email for digital delivery/);
 });
 
 test('opening Pocket WiFi stock is created through an audited database boundary', () => {

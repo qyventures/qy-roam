@@ -4,6 +4,7 @@ import { initialFulfilmentStatus, validFulfilmentStatus } from '@/lib/orderLifec
 import { parseExactIsoDate } from '@/lib/checkoutValidation';
 import { operationalConfig } from '@/lib/operationalConfig';
 import { InvalidRequestBodyLengthError, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '@/lib/requestBody';
+import { isSafeSmtpMailbox } from '@/lib/smtp';
 
 export const dynamic = 'force-dynamic';
 
@@ -122,6 +123,16 @@ export async function POST(req: NextRequest) {
         updated_at: new Date().toISOString()
       };
       if (!row.email && !row.phone) return NextResponse.json({ error: 'Customer email or phone is required' }, { status: 400 });
+      // A manual eSIM sale joins the same fulfilment lifecycle as a Stripe
+      // sale, but it does not receive Stripe Checkout's required-email field.
+      // Do not let an offline entry create an apparently paid digital order
+      // with no safe delivery destination: a phone number alone cannot carry
+      // the QR code / activation instructions or provide a durable delivery
+      // trail. Pocket WiFi remains permitted to use a phone-only offline
+      // record because its physical dispatch is coordinated separately.
+      if (product === 'esim' && !isSafeSmtpMailbox(row.email || undefined)) {
+        return NextResponse.json({ error: 'eSIM orders require a valid customer email for digital delivery' }, { status: 400 });
+      }
       if (product === 'pocket_wifi' && paymentStatus === 'paid') {
         // A manual paid rental is a real inventory commitment, not merely an
         // admin record. Let the database create it under the same advisory
