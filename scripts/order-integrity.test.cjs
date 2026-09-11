@@ -1699,3 +1699,13 @@ test('customer confirmation and booking URLs are never cacheable or indexable', 
     assert.match(nextConfig, source);
   }
 });
+
+test('production CSP does not permit JavaScript eval', () => {
+  // `unsafe-eval` is needed by Next's development source-map runtime only.
+  // It must not ship as a production browser capability alongside checkout
+  // and authenticated operations pages.
+  assert.match(nextConfig, /const scriptSources = \[/);
+  assert.match(nextConfig, /process\.env\.NODE_ENV === 'development' \? \["'unsafe-eval'"\] : \[\]/);
+  assert.match(nextConfig, /`script-src \$\{scriptSources\}`/);
+  assert.doesNotMatch(nextConfig, /"script-src 'self' 'unsafe-inline' 'unsafe-eval'/);
+});

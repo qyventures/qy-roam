@@ -1,4 +1,15 @@
 /** @type {import('next').NextConfig} */
+// Next's development runtime uses eval-backed source maps, but the optimized
+// standalone server does not. Keep that development-only exception out of the
+// customer-facing CSP: an XSS defect should not also gain an eval primitive in
+// production.
+const scriptSources = [
+  "'self'",
+  "'unsafe-inline'",
+  ...(process.env.NODE_ENV === 'development' ? ["'unsafe-eval'"] : []),
+  'https://connect.facebook.net',
+].join(' ');
+
 const nextConfig = {
   output: 'standalone',
   poweredByHeader: false,
@@ -22,7 +33,7 @@ const nextConfig = {
           "img-src 'self' data: https://www.facebook.com https://*.fbcdn.net",
           "font-src 'self' data:",
           "style-src 'self' 'unsafe-inline'",
-          "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://connect.facebook.net",
+          `script-src ${scriptSources}`,
           "connect-src 'self' https://api.stripe.com https://*.supabase.co https://www.facebook.com https://connect.facebook.net",
           "frame-src https://checkout.stripe.com",
           'upgrade-insecure-requests',
