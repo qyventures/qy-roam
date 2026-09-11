@@ -528,12 +528,29 @@ export async function POST(req:Request){
     return NextResponse.json({error:'Stripe event mode mismatch'},{status:400});
   }
   if(!['checkout.session.completed','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed','checkout.session.expired'].includes(event.type)) return NextResponse.json({received:true});
-  const session=event.data.object as Stripe.Checkout.Session, supabase=getSupabaseAdmin(); if(!supabase) return NextResponse.json({error:'Persistence unavailable'},{status:503});
+  const eventSession=event.data.object as Stripe.Checkout.Session, supabase=getSupabaseAdmin(); if(!supabase) return NextResponse.json({error:'Persistence unavailable'},{status:503});
   // QY Roam can share a Stripe account with other products. A broad Checkout
   // webhook subscription must acknowledge their sessions without creating an
   // order, sending fulfilment email, or filling this app's idempotency ledger.
   // Both QY Roam checkout routes set this server-controlled marker.
-  if(session.metadata?.source!=='qyroam.com') return NextResponse.json({received:true,ignored:true});
+  if(eventSession.metadata?.source!=='qyroam.com') return NextResponse.json({received:true,ignored:true});
+  // Stripe signs the event snapshot, but fetch the Checkout Session again
+  // before using it as an order or delivery record. This keeps a delayed
+  // terminal event from persisting incomplete customer/shipping fields that
+  // can occur in an event payload across API-version changes, and gives every
+  // fulfilment/CAPI retry one current Stripe-owned snapshot. The signed event
+  // type and its created time remain the authority for the transition and the
+  // original Purchase timestamp respectively.
+  let session: Stripe.Checkout.Session;
+  try {
+    session=await stripe.checkout.sessions.retrieve(eventSession.id);
+  } catch (error) {
+    // A temporary Stripe read failure must remain retryable rather than
+    // acknowledging a paid order whose durable fulfilment record we cannot
+    // safely reconstruct from a complete Checkout Session.
+    console.error('stripe_webhook_session_retrieve_error',{eventId:event.id,sessionId:eventSession.id});
+    return NextResponse.json({error:'Unable to retrieve Checkout Session'},{status:500});
+  }
   const eventStateIssue=stripeCheckoutEventStateIssue(event.type,session);
   if(eventStateIssue){
     console.error('stripe_webhook_event_state_error',{eventId:event.id,sessionId:session.id,reason:eventStateIssue});

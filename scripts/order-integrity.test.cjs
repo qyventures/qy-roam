@@ -1371,6 +1371,19 @@ test('Stripe terminal events must agree with their Checkout Session payment stat
   assert.match(webhookRoute, /Stripe event state validation failed/);
 });
 
+test('Stripe terminal events refresh the Checkout Session before persisting or delivering an order', () => {
+  const processing = webhookRoute.slice(
+    webhookRoute.indexOf("if(!['checkout.session.completed'"),
+    webhookRoute.indexOf("if(event.type==='checkout.session.expired')"),
+  );
+  const sourceBoundary = processing.indexOf("if(eventSession.metadata?.source!=='qyroam.com')");
+  const refresh = processing.indexOf('session=await stripe.checkout.sessions.retrieve(eventSession.id)');
+  const eventState = processing.indexOf('const eventStateIssue=stripeCheckoutEventStateIssue(event.type,session)');
+  assert.ok(sourceBoundary >= 0 && refresh > sourceBoundary, 'only QY Roam events should cause a Stripe Session refresh');
+  assert.ok(eventState > refresh, 'terminal-state validation must use the refreshed Stripe Session');
+  assert.match(processing, /stripe_webhook_session_retrieve_error/);
+});
+
 test('failed Stripe webhook records identify the affected Checkout Session for recovery', () => {
   assert.match(schema, /stripe_session_id text/);
   assert.match(productionReadiness, /event_id,event_type,stripe_session_id,processing_started_at/);
