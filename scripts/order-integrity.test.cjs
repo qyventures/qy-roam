@@ -462,6 +462,17 @@ test('admin sales-period close totals every Supabase page instead of silently us
   assert.match(adminOpsRoute, /Period dates must be valid ISO dates with the end date on or after the start date/);
 });
 
+test('admin forecast replacement and financial inputs preserve approved operations data', () => {
+  assert.match(adminOpsRoute, /function nonNegativeMoney\(value: unknown\)/);
+  assert.match(adminOpsRoute, /function nonNegativeInteger\(value: unknown\)/);
+  assert.match(adminOpsRoute, /parseExactIsoDate\(month\)/);
+  assert.match(adminOpsRoute, /\['pocket_wifi', 'esim'\]\.includes\(product\)/);
+  assert.match(adminOpsRoute, /\.upsert\(/);
+  assert.match(adminOpsRoute, /onConflict: 'forecast_month,product_type'/);
+  assert.doesNotMatch(adminOpsRoute, /from\('forecasts'\)\.delete\(\)/);
+  assert.match(adminOpsRoute, /Refunds, fees and COGS must be non-negative amounts/);
+});
+
 test('admin order transitions bound and validate their JSON request bodies', () => {
   assert.match(adminOrderRoute, /readLimitedRequestText\(req,\s*MAX_ADMIN_ORDER_BODY_BYTES,\s*ADMIN_ORDER_BODY_TIMEOUT_MS\)/);
   assert.match(adminOrderRoute, /RequestBodyTimeoutError/);

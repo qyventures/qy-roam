@@ -33,6 +33,24 @@ function money(value: unknown) {
   return Number.isSafeInteger(cents) && cents > 0 && cents <= 10_000_000 ? cents : null;
 }
 
+// Operational reports are business records, not display-only estimates. Keep
+// their numeric boundary explicit: `Number('invalid') || 0` would silently
+// turn a malformed refund, fee, COGS, or forecast into a plausible zero.
+function nonNegativeMoney(value: unknown) {
+  const raw = typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
+  if (!/^\d+(?:\.\d{1,2})?$/.test(raw)) return null;
+  const [dollars, fraction = ''] = raw.split('.');
+  const cents = Number(dollars) * 100 + Number(fraction.padEnd(2, '0'));
+  return Number.isSafeInteger(cents) && cents >= 0 && cents <= 10_000_000 ? cents : null;
+}
+
+function nonNegativeInteger(value: unknown) {
+  const raw = typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
+  if (!/^\d+$/.test(raw)) return null;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) && parsed <= 1_000_000 ? parsed : null;
+}
+
 function optionalTravelDates(body: Record<string, unknown>) {
   const startRaw = text(body.travel_start, 10);
   const endRaw = text(body.travel_end, 10);
@@ -226,14 +244,22 @@ export async function POST(req: NextRequest) {
       const { error } = await db.from('sales_opportunities').update({ stage, probability, updated_at: new Date().toISOString() }).eq('id', int(body.id)); if (error) throw error;
     } else if (action === 'forecast_upsert') {
       const month = text(body.forecast_month, 10); const product = text(body.product_type, 40);
-      if (!month || !product) return NextResponse.json({ error: 'Month and product are required' }, { status: 400 });
-      await db.from('forecasts').delete().eq('forecast_month', month).eq('product_type', product);
-      const { error } = await db.from('forecasts').insert({ forecast_month: month, product_type: product, forecast_orders: Math.max(0, int(body.forecast_orders)), forecast_revenue_sgd: Math.max(0, num(body.forecast_revenue_sgd)), forecast_units: Math.max(0, int(body.forecast_units)), method: text(body.method, 80) || 'management', notes: text(body.notes, 1200) || null, updated_at: new Date().toISOString() }); if (error) throw error;
+      const forecastOrders = nonNegativeInteger(body.forecast_orders);
+      const forecastRevenueCents = nonNegativeMoney(body.forecast_revenue_sgd);
+      const forecastUnits = nonNegativeInteger(body.forecast_units);
+      if (!parseExactIsoDate(month) || !['pocket_wifi', 'esim'].includes(product)) return NextResponse.json({ error: 'Choose a valid forecast date and product type' }, { status: 400 });
+      if (forecastOrders === null || forecastRevenueCents === null || forecastUnits === null) return NextResponse.json({ error: 'Forecast orders and units must be whole non-negative numbers; revenue must be a non-negative amount with at most two decimal places' }, { status: 400 });
+      // The schema owns this natural key. Use its atomic conflict boundary
+      // rather than deleting the previous forecast before inserting a new
+      // one: an interrupted request must retain the last approved forecast.
+      const { error } = await db.from('forecasts').upsert({ forecast_month: month, product_type: product, forecast_orders: forecastOrders, forecast_revenue_sgd: forecastRevenueCents / 100, forecast_units: forecastUnits, method: text(body.method, 80) || 'management', notes: text(body.notes, 1200) || null, updated_at: new Date().toISOString() }, { onConflict: 'forecast_month,product_type' }); if (error) throw error;
     } else if (action === 'close_period') {
       const start = text(body.period_start, 10), end = text(body.period_end, 10); if (!start || !end) return NextResponse.json({ error: 'Period dates are required' }, { status: 400 });
       const dates = optionalTravelDates({ travel_start: start, travel_end: end });
       if (!dates) return NextResponse.json({ error: 'Period dates must be valid ISO dates with the end date on or after the start date' }, { status: 400 });
-      const gross = await paidOrderGrossForPeriod(db, dates.start!, dates.end!); const refunds = Math.max(0, num(body.refunds_sgd)); const fees = Math.max(0, num(body.fees_sgd)); const cogs = Math.max(0, num(body.cogs_sgd)); const net = gross - refunds; const gp = net - fees - cogs;
+      const refundsCents = nonNegativeMoney(body.refunds_sgd), feesCents = nonNegativeMoney(body.fees_sgd), cogsCents = nonNegativeMoney(body.cogs_sgd);
+      if (refundsCents === null || feesCents === null || cogsCents === null) return NextResponse.json({ error: 'Refunds, fees and COGS must be non-negative amounts with at most two decimal places' }, { status: 400 });
+      const gross = await paidOrderGrossForPeriod(db, dates.start!, dates.end!); const refunds = refundsCents / 100, fees = feesCents / 100, cogs = cogsCents / 100, net = gross - refunds, gp = net - fees - cogs;
       const { error } = await db.from('closing_periods').insert({ period_start: start, period_end: end, status: body.lock ? 'closed' : 'open', gross_sales_sgd: gross, refunds_sgd: refunds, net_sales_sgd: net, fees_sgd: fees, cogs_sgd: cogs, gross_profit_sgd: gp, closed_by: body.lock ? (text(body.closed_by, 100) || 'qyadmin') : null, closed_at: body.lock ? new Date().toISOString() : null, notes: text(body.notes, 1500) || null, updated_at: new Date().toISOString() }); if (error) throw error;
     } else return NextResponse.json({ error: 'Unsupported action' }, { status: 400 });
 
