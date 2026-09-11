@@ -21,6 +21,12 @@ assert.doesNotMatch(deploy, /npm install --no-audit --no-fund/);
 assert.match(service, /^Environment=HOSTNAME=127\.0\.0\.1$/m, 'standalone Next.js must bind only to loopback behind Nginx');
 assert.match(nginx, /proxy_pass http:\/\/127\.0\.0\.1:3100;/);
 assert.match(nginx, /proxy_set_header X-Real-IP \$remote_addr;/);
+// The public proxy must enforce the same coarse body boundary as the signed
+// Stripe webhook reader. This stops oversized or stalled uploads before they
+// consume an application worker; checkout/admin routes apply narrower limits
+// again at their own request boundaries.
+assert.match(nginx, /client_max_body_size 1m;/);
+assert.match(nginx, /client_body_timeout 15s;/);
 
 // npm v9 lockfiles record only the optional SWC binaries resolved for the
 // install platform. Next 14 nevertheless tries to patch in every foreign
