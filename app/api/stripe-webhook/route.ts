@@ -211,7 +211,12 @@ async function sendMetaPurchase(session: Stripe.Checkout.Session, eventTime: num
   const contentId=productType==='esim' ? `esim:${session.metadata?.plan_id||''}` : `pocket_wifi:${session.metadata?.country||''}`;
   const payload={data:[{event_name:'Purchase',event_time:eventTime,action_source:'website',event_source_url:`${process.env.NEXT_PUBLIC_SITE_URL||'https://qyroam.com'}/success`,event_id:`stripe_${session.id}`,user_data:{...userData,...(clientUserAgent?{client_user_agent:clientUserAgent}:{}),...(clientIp?{client_ip_address:clientIp}:{})},custom_data:{currency:'SGD',value:(session.amount_total||0)/100,order_id:session.id,content_type:'product',content_ids:[contentId],contents:[{id:contentId,quantity:1}],content_category:productType==='esim'?'Travel eSIM':'Pocket WiFi'}}]};
   const response=await postJsonWithTimeout(`https://graph.facebook.com/v21.0/${pixel}/events?access_token=${encodeURIComponent(token)}`,payload);
-  if(!response.ok) throw new Error(`Meta CAPI failed (${response.status}): ${response.responseBody.slice(0,300)}`);
+  // Provider responses are not a safe diagnostic channel: an intermediary
+  // can echo request data or credentials. The error is persisted in the
+  // operator-visible retry ledger and logged by the webhook, so retain only
+  // the actionable HTTP status rather than copying an untrusted body into
+  // either durable operations data or application logs.
+  if(!response.ok) throw new Error(`Meta CAPI failed (${response.status})`);
 }
 
 async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
@@ -234,7 +239,10 @@ async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
   const relayUrl=process.env.SMTP_RELAY_URL, relaySecret=process.env.SMTP_RELAY_SECRET;
   if(relayUrl&&relaySecret){
     const response=await postJsonWithTimeout(relayUrl,{relay_secret:relaySecret,smtp_host:host,smtp_port:port,smtp_user:user,smtp_pass:pass,from,to,subject,text,message_id:messageId});
-    if(!response.ok) throw new Error(`SMTP relay failed (${response.status}): ${response.responseBody.slice(0,300)}`);
+    // Do not persist or log a relay response body. A relay failure may echo
+    // this credential-bearing request, while the status code is sufficient
+    // for a retrying webhook and for staff to identify the failing transport.
+    if(!response.ok) throw new Error(`SMTP relay failed (${response.status})`);
     return;
   }
   await sendSmtpMail({host,port,secure,user,pass,from,to,subject,text,messageId,timeoutMs:DELIVERY_TIMEOUT_MS});

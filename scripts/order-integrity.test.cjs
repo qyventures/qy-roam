@@ -1555,6 +1555,17 @@ test('paid-order delivery endpoints are fail-closed and never follow credential-
   assert.match(webhookRoute, /redirect:'error'/);
 });
 
+test('third-party delivery failures never copy response bodies into logs or recovery records', () => {
+  // Both provider calls carry sensitive data: the SMTP relay receives its
+  // transport credentials and paid-order details, while Meta uses an access
+  // token in its request URL. Their response bodies are untrusted and can be
+  // surfaced by webhook error logging or the durable retry ledger.
+  assert.match(webhookRoute, /Meta CAPI failed \(\$\{response\.status\}\)/);
+  assert.match(webhookRoute, /SMTP relay failed \(\$\{response\.status\}\)/);
+  assert.doesNotMatch(webhookRoute, /Meta CAPI failed \(\$\{response\.status\}\): \$\{response\.responseBody/);
+  assert.doesNotMatch(webhookRoute, /SMTP relay failed \(\$\{response\.status\}\): \$\{response\.responseBody/);
+});
+
 test('Stripe network calls use a bounded shared production client', () => {
   assert.match(stripeClient, /STRIPE_REQUEST_TIMEOUT_MS = 15_000/);
   assert.match(stripeClient, /STRIPE_MAX_NETWORK_RETRIES = 1/);
