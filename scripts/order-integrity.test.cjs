@@ -473,6 +473,17 @@ test('admin forecast replacement and financial inputs preserve approved operatio
   assert.match(adminOpsRoute, /Refunds, fees and COGS must be non-negative amounts/);
 });
 
+test('accounting period saves are idempotent while open and immutable once closed', () => {
+  assert.match(adminOpsRoute, /Accounting period lock must be a boolean choice/);
+  assert.match(adminOpsRoute, /Closed accounting periods require an accountable operator name/);
+  assert.match(adminOpsRoute, /rpc\('qy_record_closing_period'/);
+  assert.doesNotMatch(adminOpsRoute, /from\('closing_periods'\)\.insert\(/);
+  assert.match(schema, /create or replace function public\.qy_record_closing_period/);
+  assert.match(schema, /qy_roam_closing_period:/);
+  assert.match(schema, /closed accounting period cannot be replaced/);
+  assert.match(productionReadiness, /qy_record_closing_period/);
+});
+
 test('admin order transitions bound and validate their JSON request bodies', () => {
   assert.match(adminOrderRoute, /readLimitedRequestText\(req,\s*MAX_ADMIN_ORDER_BODY_BYTES,\s*ADMIN_ORDER_BODY_TIMEOUT_MS\)/);
   assert.match(adminOrderRoute, /RequestBodyTimeoutError/);

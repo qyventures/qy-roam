@@ -348,7 +348,7 @@ async function checkRequiredOperationsSchema() {
       // deployed. Missing-function or permission errors instead fail the
       // launch gate before staff need to receive, dispatch, create stock, or
       // record a capacity-consuming manual rental.
-      const [transitionProbe, adjustmentProbe, statusProbe, creationProbe, manualOrderProbe] = await Promise.all([
+      const [transitionProbe, adjustmentProbe, statusProbe, creationProbe, manualOrderProbe, closingProbe] = await Promise.all([
         database.rpc('qy_transition_pocket_wifi_order', {
           p_order_id: 0,
           p_expected_status: 'paid',
@@ -397,6 +397,21 @@ async function checkRequiredOperationsSchema() {
           p_notes: null,
           p_inventory: 0,
         }).abortSignal(signal),
+        // A null period is rejected before the accounting routine can write,
+        // while still verifying its deployed signature and service-role grant.
+        database.rpc('qy_record_closing_period', {
+          p_period_start: null,
+          p_period_end: null,
+          p_lock: false,
+          p_gross_sales_sgd: 0,
+          p_refunds_sgd: 0,
+          p_net_sales_sgd: 0,
+          p_fees_sgd: 0,
+          p_cogs_sgd: 0,
+          p_gross_profit_sgd: 0,
+          p_closed_by: null,
+          p_notes: null,
+        }).abortSignal(signal),
       ]);
       if (!transitionProbe.error || !/order not found/i.test(transitionProbe.error.message || '') ||
         !adjustmentProbe.error || !/invalid inventory item/i.test(adjustmentProbe.error.message || '')) {
@@ -413,6 +428,10 @@ async function checkRequiredOperationsSchema() {
       }
       if (!manualOrderProbe.error || !/manual order reference is required/i.test(manualOrderProbe.error.message || '')) {
         console.error('production_operations_manual_order_rpc_check_failed');
+        return false;
+      }
+      if (!closingProbe.error || !/accounting period dates are invalid/i.test(closingProbe.error.message || '')) {
+        console.error('production_operations_closing_rpc_check_failed');
         return false;
       }
       return true;

@@ -1020,6 +1020,99 @@ create table if not exists public.closing_periods (
 );
 alter table public.closing_periods enable row level security;
 
+-- Accounting periods are revised while they are open, then become an
+-- immutable operational record when closed.  Do not rely on the admin UI to
+-- provide that boundary: a retry after a dropped response used to insert a
+-- second record for the same dates, while concurrent staff could overwrite a
+-- close without seeing one another's work.  The scoped advisory lock makes a
+-- period's read/replace/close decision atomic without imposing a broad lock
+-- on unrelated reporting periods.
+create or replace function public.qy_record_closing_period(
+  p_period_start date,
+  p_period_end date,
+  p_lock boolean,
+  p_gross_sales_sgd numeric,
+  p_refunds_sgd numeric,
+  p_net_sales_sgd numeric,
+  p_fees_sgd numeric,
+  p_cogs_sgd numeric,
+  p_gross_profit_sgd numeric,
+  p_closed_by text,
+  p_notes text
+)
+returns public.closing_periods
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_existing public.closing_periods%rowtype;
+  v_matches integer;
+  v_now timestamptz := now();
+begin
+  if p_period_start is null or p_period_end is null or p_period_end < p_period_start then
+    raise exception 'accounting period dates are invalid';
+  end if;
+  if p_lock is null then raise exception 'accounting period lock choice is required'; end if;
+  if p_gross_sales_sgd is null or p_gross_sales_sgd < 0 or
+    p_refunds_sgd is null or p_refunds_sgd < 0 or
+    p_fees_sgd is null or p_fees_sgd < 0 or
+    p_cogs_sgd is null or p_cogs_sgd < 0 or
+    p_net_sales_sgd is null or p_gross_profit_sgd is null then
+    raise exception 'accounting period amounts are invalid';
+  end if;
+  if p_lock and nullif(trim(coalesce(p_closed_by, '')), '') is null then
+    raise exception 'closed accounting period requires an accountable operator';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtext('qy_roam_closing_period:' || p_period_start::text || ':' || p_period_end::text));
+  select count(*) into v_matches from public.closing_periods
+  where period_start = p_period_start and period_end = p_period_end;
+  if v_matches > 1 then
+    raise exception 'multiple accounting records already exist for this period; reconcile them before saving';
+  end if;
+  if v_matches = 1 then
+    select * into v_existing from public.closing_periods
+    where period_start = p_period_start and period_end = p_period_end
+    for update;
+    if v_existing.status = 'closed' then
+      raise exception 'closed accounting period cannot be replaced';
+    end if;
+    update public.closing_periods set
+      status = case when p_lock then 'closed' else 'open' end,
+      gross_sales_sgd = p_gross_sales_sgd,
+      refunds_sgd = p_refunds_sgd,
+      net_sales_sgd = p_net_sales_sgd,
+      fees_sgd = p_fees_sgd,
+      cogs_sgd = p_cogs_sgd,
+      gross_profit_sgd = p_gross_profit_sgd,
+      closed_by = case when p_lock then left(trim(p_closed_by), 100) else null end,
+      closed_at = case when p_lock then v_now else null end,
+      notes = nullif(left(trim(coalesce(p_notes, '')), 1500), ''),
+      updated_at = v_now
+    where id = v_existing.id
+    returning * into v_existing;
+    return v_existing;
+  end if;
+
+  insert into public.closing_periods (
+    period_start, period_end, status, gross_sales_sgd, refunds_sgd,
+    net_sales_sgd, fees_sgd, cogs_sgd, gross_profit_sgd, closed_by,
+    closed_at, notes, updated_at
+  ) values (
+    p_period_start, p_period_end, case when p_lock then 'closed' else 'open' end,
+    p_gross_sales_sgd, p_refunds_sgd, p_net_sales_sgd, p_fees_sgd,
+    p_cogs_sgd, p_gross_profit_sgd,
+    case when p_lock then left(trim(p_closed_by), 100) else null end,
+    case when p_lock then v_now else null end,
+    nullif(left(trim(coalesce(p_notes, '')), 1500), ''), v_now
+  ) returning * into v_existing;
+  return v_existing;
+end;
+$$;
+revoke all on function public.qy_record_closing_period(date,date,boolean,numeric,numeric,numeric,numeric,numeric,numeric,text,text) from public;
+grant execute on function public.qy_record_closing_period(date,date,boolean,numeric,numeric,numeric,numeric,numeric,numeric,text,text) to service_role;
+
 -- Reporting is derived directly from the authoritative orders ledger, so it
 -- cannot drift from webhook-persisted paid revenue.
 create or replace view public.sales_daily_summary with (security_invoker = true) as

@@ -259,8 +259,24 @@ export async function POST(req: NextRequest) {
       if (!dates) return NextResponse.json({ error: 'Period dates must be valid ISO dates with the end date on or after the start date' }, { status: 400 });
       const refundsCents = nonNegativeMoney(body.refunds_sgd), feesCents = nonNegativeMoney(body.fees_sgd), cogsCents = nonNegativeMoney(body.cogs_sgd);
       if (refundsCents === null || feesCents === null || cogsCents === null) return NextResponse.json({ error: 'Refunds, fees and COGS must be non-negative amounts with at most two decimal places' }, { status: 400 });
+      // A truthy string such as "false" must never close an accounting
+      // period. The browser sends a boolean, and non-browser callers get the
+      // same explicit contract rather than an accidental irreversible close.
+      if (body.lock !== undefined && typeof body.lock !== 'boolean') return NextResponse.json({ error: 'Accounting period lock must be a boolean choice' }, { status: 400 });
+      const lock = body.lock === true;
+      const closedBy = text(body.closed_by, 100);
+      if (lock && !closedBy) return NextResponse.json({ error: 'Closed accounting periods require an accountable operator name' }, { status: 400 });
       const gross = await paidOrderGrossForPeriod(db, dates.start!, dates.end!); const refunds = refundsCents / 100, fees = feesCents / 100, cogs = cogsCents / 100, net = gross - refunds, gp = net - fees - cogs;
-      const { error } = await db.from('closing_periods').insert({ period_start: start, period_end: end, status: body.lock ? 'closed' : 'open', gross_sales_sgd: gross, refunds_sgd: refunds, net_sales_sgd: net, fees_sgd: fees, cogs_sgd: cogs, gross_profit_sgd: gp, closed_by: body.lock ? (text(body.closed_by, 100) || 'qyadmin') : null, closed_at: body.lock ? new Date().toISOString() : null, notes: text(body.notes, 1500) || null, updated_at: new Date().toISOString() }); if (error) throw error;
+      const { error } = await db.rpc('qy_record_closing_period', {
+        p_period_start: start, p_period_end: end, p_lock: lock,
+        p_gross_sales_sgd: gross, p_refunds_sgd: refunds, p_net_sales_sgd: net,
+        p_fees_sgd: fees, p_cogs_sgd: cogs, p_gross_profit_sgd: gp,
+        p_closed_by: closedBy || null, p_notes: text(body.notes, 1500) || null,
+      });
+      if (error) {
+        if (/closed accounting period|multiple accounting records/i.test(error.message || '')) return NextResponse.json({ error: error.message }, { status: 409 });
+        throw error;
+      }
     } else return NextResponse.json({ error: 'Unsupported action' }, { status: 400 });
 
     return NextResponse.json({ ok: true });
