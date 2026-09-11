@@ -68,6 +68,16 @@ const REQUIRED_PAYMENT_SCHEMA = [
     columns: 'stripe_session_id,status,event_time,attempts,last_attempt_at,sent_at,last_error,updated_at',
   },
   {
+    // Every paid order invokes qy_reconcile_customer_from_paid_order. That
+    // trigger writes this CRM record in the same transaction as the order,
+    // so it is part of the payment-persistence contract rather than an
+    // optional admin-only table. Without this probe, a partially deployed
+    // CRM schema could let Checkout accept payment and then make the webhook
+    // fail while inserting the paid order.
+    table: 'customers',
+    columns: 'id,email,phone,name,status,source,total_orders,lifetime_value_sgd,last_order_at,updated_at',
+  },
+  {
     // Pocket WiFi checkout relies on this durable hold ledger to make the
     // availability check and the subsequent Stripe session creation safe under
     // concurrent requests. Treat its absence as launch-blocking rather than
@@ -89,7 +99,7 @@ const REQUIRED_PAYMENT_SCHEMA = [
 // customer pays. Keep this smaller contract separately so digital checkout
 // can fail closed before creating a payable Stripe Session without coupling it
 // to router-inventory configuration.
-const REQUIRED_ESIM_ORDER_SCHEMA = REQUIRED_PAYMENT_SCHEMA.slice(0, 4);
+const REQUIRED_ESIM_ORDER_SCHEMA = REQUIRED_PAYMENT_SCHEMA.slice(0, 5);
 
 const REQUIRED_OPERATIONS_SCHEMA = [
   // The order fields below are the durable evidence used by the guarded
@@ -162,12 +172,16 @@ export function hasRequiredStripeWebhookConfig() {
 async function checkRequiredPaymentSchema() {
   const supabase = getSupabaseAdmin();
   if (!supabase) return false;
+  // These are runtime probes across unrelated relations. Keeping this query
+  // surface untyped avoids expanding Supabase's generated table union as the
+  // paid-order transaction gains durable trigger dependencies.
+  const database: any = supabase;
 
   try {
     return await runReadinessProbe(async (signal) => {
       const results = await Promise.all(
         REQUIRED_PAYMENT_SCHEMA.map(({ table, columns }) =>
-          supabase.from(table).select(columns).limit(1).abortSignal(signal),
+          database.from(table).select(columns).limit(1).abortSignal(signal),
         ),
       );
       const failures = results
@@ -254,12 +268,15 @@ export async function hasRequiredPaymentSchema() {
 async function checkRequiredEsimOrderSchema() {
   const supabase = getSupabaseAdmin();
   if (!supabase) return false;
+  // See the matching Pocket WiFi probe above: this is an intentionally
+  // dynamic schema contract, not an application data query.
+  const database: any = supabase;
 
   try {
     return await runReadinessProbe(async (signal) => {
       const results = await Promise.all(
         REQUIRED_ESIM_ORDER_SCHEMA.map(({ table, columns }) =>
-          supabase.from(table).select(columns).limit(1).abortSignal(signal),
+          database.from(table).select(columns).limit(1).abortSignal(signal),
         ),
       );
       const failures = results

@@ -574,17 +574,18 @@ test('eSIM checkout fails closed when its durable post-payment order boundary is
   assert.match(esimCheckoutRoute, /hasRequiredEsimOrderSchema/);
   assert.match(esimCheckoutRoute, /if \(!await hasRequiredEsimOrderSchema\(\)\)/);
   assert.match(esimCheckoutRoute, /status: 503/);
-  assert.match(productionReadiness, /const REQUIRED_ESIM_ORDER_SCHEMA = REQUIRED_PAYMENT_SCHEMA\.slice\(0, 4\)/);
+  assert.match(productionReadiness, /const REQUIRED_ESIM_ORDER_SCHEMA = REQUIRED_PAYMENT_SCHEMA\.slice\(0, 5\)/);
   assert.match(productionReadiness, /export async function hasRequiredEsimOrderSchema\(\)/);
 });
 
-test('post-payment readiness checks every webhook-persisted delivery field', () => {
+test('post-payment readiness checks every webhook-persisted delivery field and paid-order trigger dependency', () => {
   // A table-only (or partial-column) probe can pass before an additive schema
   // migration is deployed. Checkout must fail closed rather than accepting a
   // payment whose webhook cannot persist its retry and deduplication state.
   assert.match(productionReadiness, /customer_name,email,phone,amount_sgd,product_type,plan_id,plan_name,data_allowance,country/);
   assert.match(productionReadiness, /last_attempt_at,sent_at,last_error/);
   assert.match(productionReadiness, /status,event_time,attempts,last_attempt_at,sent_at,last_error,updated_at/);
+  assert.match(productionReadiness, /id,email,phone,name,status,source,total_orders,lifetime_value_sgd,last_order_at,updated_at/);
 });
 
 test('production readiness aborts stalled database probes instead of holding checkout workers', () => {
