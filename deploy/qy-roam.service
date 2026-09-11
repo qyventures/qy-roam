@@ -9,6 +9,11 @@ WorkingDirectory=/root/qy-roam
 EnvironmentFile=/root/.config/qyroam/.env
 Environment=NODE_ENV=production
 Environment=PORT=3100
+# The application trusts X-Real-IP only after Nginx replaces it with the
+# socket peer. Keep the Next.js standalone server private to that proxy: its
+# generated server otherwise defaults to 0.0.0.0, which would let callers
+# bypass the TLS/security-header ingress and supply spoofed forwarding headers.
+Environment=HOSTNAME=127.0.0.1
 ExecStart=/usr/bin/npm run start
 Restart=always
 RestartSec=5

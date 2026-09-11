@@ -39,7 +39,7 @@ The script requires an already-clean `main` checkout, fast-forwards it, installs
 
 ## Nginx and TLS
 
-`deploy/nginx-qyroam.conf` is the production reverse-proxy template and proxies QY Roam to `127.0.0.1:3100`. Provision the certificate only after `qyroam.com` and `www.qyroam.com` point to the VPS. Then enable the site and test Nginx before reload.
+`deploy/qy-roam.service` binds the standalone Next.js app to `127.0.0.1:3100` only. `deploy/nginx-qyroam.conf` is the required production ingress: it terminates TLS, sets the trusted client IP header, and proxies to that loopback listener. Provision the certificate only after `qyroam.com` and `www.qyroam.com` point to the VPS. Then enable the site and test Nginx before reload.
 
 ## Required production configuration
 
