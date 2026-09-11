@@ -692,9 +692,17 @@ test('SMTP transport independently validates the envelope and message header bou
   assert.match(smtpClient, /normalizedMailbox\(options\.to, 'to'\)/);
   assert.match(smtpClient, /Invalid SMTP subject/);
   assert.match(smtpClient, /const safeOptions = \{ \.\.\.options, host, from, to, subject \}/);
-  assert.match(productionReadiness, /import \{ isSafeSmtpMailbox \} from '@\/lib\/smtp'/);
+  assert.match(productionReadiness, /isSafeSmtpMailbox/);
   assert.match(webhookRoute, /from=\(process\.env\.SMTP_FROM\|\|user\|\|''\)\.trim\(\)/);
   assert.match(webhookRoute, /to=\(process\.env\.ORDER_FULFILMENT_EMAIL\|\|process\.env\.FULFILMENT_TO\|\|''\)\.trim\(\)/);
+});
+
+test('checkout readiness rejects an SMTP host the fulfilment transport would reject', () => {
+  assert.match(smtpClient, /export function isSafeSmtpHost\(value: string \| undefined\)/);
+  assert.match(smtpClient, /host\.length <= 253/);
+  assert.match(smtpClient, /!\/\[\\s\\r\\n\]\//);
+  assert.match(productionReadiness, /import \{ isSafeSmtpHost, isSafeSmtpMailbox \} from '@\/lib\/smtp';/);
+  assert.match(productionReadiness, /isSafeSmtpHost\(host\)/);
 });
 
 test('SMTP fulfilment delivery upgrades every non-implicit-TLS transport before authentication', () => {

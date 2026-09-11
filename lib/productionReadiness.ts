@@ -1,6 +1,6 @@
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import crypto from 'crypto';
-import { isSafeSmtpMailbox } from '@/lib/smtp';
+import { isSafeSmtpHost, isSafeSmtpMailbox } from '@/lib/smtp';
 export { hasRequiredStripeCheckoutConfig } from '@/lib/stripeCheckoutConfig';
 
 // Checkout invokes these guards immediately before creating a payable Stripe
@@ -138,7 +138,7 @@ export function hasRequiredFulfilmentEmailConfig() {
     }
   }
   return Boolean(
-    host && !/[\r\n]/.test(host) &&
+    isSafeSmtpHost(host) &&
     Number.isInteger(port) && port > 0 && port <= 65535 &&
     user && !/[\r\n]/.test(user) && pass &&
     isSafeSmtpMailbox(from) && isSafeSmtpMailbox(recipient) && relayConfigured,

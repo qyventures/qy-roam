@@ -33,9 +33,19 @@ function normalizedMailbox(value: string, field: 'from' | 'to') {
   return mailbox;
 }
 
-function safeSmtpHost(value: string) {
+// Keep this export available to the pre-payment readiness gate. A host that
+// the transport would reject must make checkout unavailable before Stripe can
+// accept a paid order, rather than first failing when its fulfilment alert is
+// sent after payment.
+export function isSafeSmtpHost(value: string | undefined) {
+  if (!value) return false;
   const host = value.trim();
-  if (!host || host.length > 253 || /[\s\r\n]/.test(host)) throw new Error('Invalid SMTP host');
+  return Boolean(host && host.length <= 253 && !/[\s\r\n]/.test(host));
+}
+
+function safeSmtpHost(value: string) {
+  if (!isSafeSmtpHost(value)) throw new Error('Invalid SMTP host');
+  const host = value.trim();
   return host;
 }
 
