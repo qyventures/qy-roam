@@ -559,6 +559,22 @@ export async function POST(req:Request){
     console.error('stripe_webhook_session_retrieve_error',{eventId:event.id,sessionId:eventSession.id});
     return NextResponse.json({error:'Unable to retrieve Checkout Session'},{status:500});
   }
+  // The signed event selects the Checkout Session to process; the refreshed
+  // object only supplies its current customer and payment fields. Keep those
+  // roles separate. A malformed SDK response, a test double, or an
+  // integration defect must never let a different Session (or a different
+  // Stripe mode) inherit this event's authority and reach persistence or
+  // fulfilment side effects.
+  if(session.id!==eventSession.id||session.livemode!==event.livemode){
+    console.error('stripe_webhook_session_identity_mismatch',{
+      eventId:event.id,
+      eventSessionId:eventSession.id,
+      retrievedSessionId:session.id,
+      eventLivemode:event.livemode,
+      retrievedLivemode:session.livemode,
+    });
+    return NextResponse.json({error:'Retrieved Checkout Session does not match webhook event'},{status:500});
+  }
   const eventStateIssue=stripeCheckoutEventStateIssue(event.type,session);
   if(eventStateIssue){
     console.error('stripe_webhook_event_state_error',{eventId:event.id,sessionId:session.id,reason:eventStateIssue});
