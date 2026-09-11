@@ -68,6 +68,46 @@ alter table public.orders add constraint orders_digital_delivery_reference_safe_
   )
 ) not valid;
 
+-- Application validation requires a safe audit pointer before an eSIM can be
+-- marked fulfilled. Preserve that boundary for direct service-role writes as
+-- well: otherwise a manual SQL repair could make a digital order look handed
+-- off with no evidence of where the QR code or activation instructions were
+-- delivered. The safety constraint above remains responsible for excluding
+-- credentials and URLs; this constraint makes the reference mandatory at the
+-- irreversible fulfilment state. NOT VALID leaves historical imports
+-- reviewable while enforcing the rule for all new and changed rows.
+alter table public.orders drop constraint if exists orders_esim_fulfilled_delivery_reference_required_check;
+alter table public.orders add constraint orders_esim_fulfilled_delivery_reference_required_check check (
+  product_type <> 'esim' or fulfilment_status <> 'fulfilled' or (
+    digital_delivery_reference is not null and btrim(digital_delivery_reference) <> ''
+  )
+) not valid;
+
+-- Once an eSIM has been handed off, its audit pointer must not be silently
+-- replaced or erased through a direct database update. Corrections belong in
+-- the support/refund record, while this ledger remains an accurate record of
+-- the original digital-delivery hand-off. The application has the same rule;
+-- this trigger protects operational scripts and future service-role clients.
+create or replace function public.qy_enforce_esim_delivery_reference_immutability()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public
+as $$
+begin
+  if old.product_type = 'esim' and old.fulfilment_status = 'fulfilled'
+    and new.digital_delivery_reference is distinct from old.digital_delivery_reference then
+    raise exception 'eSIM delivery reference is immutable after fulfilment';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists qy_enforce_esim_delivery_reference_immutability on public.orders;
+create trigger qy_enforce_esim_delivery_reference_immutability
+before update of digital_delivery_reference on public.orders
+for each row execute function public.qy_enforce_esim_delivery_reference_immutability();
+
 -- The admin API and webhook each validate the lifecycle they write, but the
 -- service role is also used for migrations and operational recovery. Keep the
 -- product/status boundary in the database so a direct write cannot turn an

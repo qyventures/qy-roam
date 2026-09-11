@@ -1091,6 +1091,10 @@ test('eSIM delivery references are safe audit pointers and cannot be changed aft
   assert.match(adminOrderActions, /readOnly=\{currentStatus === 'fulfilled'\}/);
   assert.match(schema, /orders_digital_delivery_reference_safe_check/);
   assert.match(schema, /digital_delivery_reference !~\* '\(lpa:/);
+  assert.match(schema, /orders_esim_fulfilled_delivery_reference_required_check/);
+  assert.match(schema, /digital_delivery_reference is not null and btrim\(digital_delivery_reference\) <> ''/);
+  assert.match(schema, /qy_enforce_esim_delivery_reference_immutability/);
+  assert.match(schema, /old\.fulfilment_status = 'fulfilled'/);
 });
 
 test('admin fulfilment writes reject stale concurrent order state', () => {
