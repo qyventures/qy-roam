@@ -576,10 +576,6 @@ export async function POST(req:Request){
     return NextResponse.json({error:'Retrieved Checkout Session does not match webhook event'},{status:500});
   }
   const eventStateIssue=stripeCheckoutEventStateIssue(event.type,session);
-  if(eventStateIssue){
-    console.error('stripe_webhook_event_state_error',{eventId:event.id,sessionId:session.id,reason:eventStateIssue});
-    return NextResponse.json({error:'Stripe event state validation failed'},{status:500});
-  }
   if(event.type==='checkout.session.expired'){
     // Expiry does not persist a paid order, but it still writes to the event
     // ledger and can release inventory or close a provisional order. The
@@ -598,6 +594,7 @@ export async function POST(req:Request){
       if(claim.status==='processed') return NextResponse.json({received:true,duplicate:true});
       if(claim.status==='in_progress') return NextResponse.json({error:'Event is still processing'},{status:500});
       claimStartedAt=claim.processingStartedAt;
+      if(eventStateIssue) throw new Error(`Stripe event state validation failed: ${eventStateIssue}`);
       await releaseExpiredPocketWifiReservation(supabase,session);
       await closeExpiredAwaitingPaymentOrder(supabase,session);
       const completed=await supabase.from('stripe_events').update({processed_at:new Date().toISOString()}).eq('event_id',eventClaimId).eq('processing_started_at',claimStartedAt).is('processed_at',null).select('event_id');
@@ -610,14 +607,6 @@ export async function POST(req:Request){
     }
     return NextResponse.json({received:true});
   }
-  const validation=validateQyRoamSession(session);
-  if(!validation.valid){
-    // Never persist or fulfil a malformed digital order. Returning a failure is
-    // intentional: Stripe will retry and surface the delivery failure instead
-    // of silently losing a legitimate order that needs operator attention.
-    console.error('stripe_webhook_order_integrity_error',{sessionId:session.id,reason:validation.reason});
-    return NextResponse.json({error:'Order integrity validation failed'},{status:500});
-  }
   const eventClaimId=`stripe:${event.id}`;
   let claimStartedAt:string|undefined;
   try{
@@ -625,6 +614,22 @@ export async function POST(req:Request){
     if(claim.status==='processed') return NextResponse.json({received:true,duplicate:true});
     if(claim.status==='in_progress') return NextResponse.json({error:'Event is still processing'},{status:500});
     claimStartedAt=claim.processingStartedAt;
+    // Claim before the validation boundary. A signed QY Roam event that has
+    // become malformed due to configuration drift or an unexpected Stripe
+    // snapshot must remain visible in the durable recovery ledger; otherwise
+    // it only exists in Stripe's finite retry history and staff cannot
+    // reconcile the affected paid order after those retries stop.
+    if(eventStateIssue) {
+      console.error('stripe_webhook_event_state_error',{eventId:event.id,sessionId:session.id,reason:eventStateIssue});
+      throw new Error(`Stripe event state validation failed: ${eventStateIssue}`);
+    }
+    const validation=validateQyRoamSession(session);
+    if(!validation.valid){
+      // Never persist or fulfil a malformed order. The claimed event is
+      // marked failed below so it is visible and safely retryable.
+      console.error('stripe_webhook_order_integrity_error',{sessionId:session.id,reason:validation.reason});
+      throw new Error(`Order integrity validation failed: ${validation.reason}`);
+    }
     const fulfilmentDetailsIssue=paidFulfilmentDetailsIssue(session,validation.productType);
     if(fulfilmentDetailsIssue) throw new Error(fulfilmentDetailsIssue);
     await persistSession(session,event.type,event.created);

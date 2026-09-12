@@ -299,9 +299,11 @@ test('paid orders fail into the durable webhook recovery ledger when fulfilment 
   assert.match(webhookRoute, /shipping\?\.country!=='SG'/);
   assert.match(webhookRoute, /Paid Pocket WiFi order is missing a complete Singapore delivery address/);
 
+  const paidValidationAt = webhookRoute.indexOf('const validation=validateQyRoamSession(session)');
+  const paidClaimAt = webhookRoute.lastIndexOf("const eventClaimId=`stripe:${event.id}`", paidValidationAt);
   const processing = webhookRoute.slice(
-    webhookRoute.indexOf("const eventClaimId=`stripe:${event.id}`", webhookRoute.indexOf("const validation=validateQyRoamSession")),
-    webhookRoute.indexOf("return NextResponse.json({received:true});", webhookRoute.indexOf("const validation=validateQyRoamSession")),
+    paidClaimAt,
+    webhookRoute.indexOf("return NextResponse.json({received:true});", paidValidationAt),
   );
   const claim = processing.indexOf('claimStartedAt=claim.processingStartedAt');
   const detailsGuard = processing.indexOf('paidFulfilmentDetailsIssue(session,validation.productType)');
@@ -1420,9 +1422,20 @@ test('Stripe terminal events must agree with their Checkout Session payment stat
   const stateCheck = webhookRoute.indexOf('const eventStateIssue=stripeCheckoutEventStateIssue(event.type,session)');
   const expiryMutation = webhookRoute.indexOf("if(event.type==='checkout.session.expired')");
   const paidValidation = webhookRoute.indexOf('const validation=validateQyRoamSession(session)');
-  assert.ok(stateCheck > 0 && stateCheck < expiryMutation && stateCheck < paidValidation);
+  const paidClaim = webhookRoute.lastIndexOf("const eventClaimId=`stripe:${event.id}`", paidValidation);
+  assert.ok(stateCheck > 0 && stateCheck < expiryMutation && paidClaim < paidValidation);
   assert.match(webhookRoute, /stripe_webhook_event_state_error/);
   assert.match(webhookRoute, /Stripe event state validation failed/);
+  assert.ok(paidClaim < webhookRoute.indexOf('if(eventStateIssue) {', paidClaim), 'invalid paid-event state must be retained in the durable event ledger');
+});
+
+test('signed QY Roam integrity failures remain visible in the webhook recovery ledger', () => {
+  const validation = webhookRoute.indexOf('const validation=validateQyRoamSession(session)');
+  const paidClaim = webhookRoute.lastIndexOf("const eventClaimId=`stripe:${event.id}`", validation);
+  const failureRecord = webhookRoute.indexOf('if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error)', paidClaim);
+  assert.ok(paidClaim >= 0 && validation > paidClaim, 'claim before validating the persisted order boundary');
+  assert.ok(failureRecord > validation, 'malformed signed events must be recorded for operator recovery');
+  assert.match(webhookRoute, /Order integrity validation failed: \$\{validation\.reason\}/);
 });
 
 test('Stripe terminal events refresh the Checkout Session before persisting or delivering an order', () => {
