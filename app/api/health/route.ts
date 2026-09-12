@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getAdminCredentials, hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
-import { hasRequiredFulfilmentEmailConfig, hasRequiredOperationsSchema, hasRequiredPaymentSchema, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '@/lib/productionReadiness';
+import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig, hasRequiredOperationsSchema, hasRequiredPaymentSchema, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '@/lib/productionReadiness';
 import { operationalConfig } from '@/lib/operationalConfig';
 import { isProductionQyRoamOrigin } from '@/lib/siteOrigin';
 
@@ -52,7 +52,13 @@ export async function GET(req: Request) {
 
   const { user: adminUser, password: adminPassword } = getAdminCredentials();
   const config = operationalConfig();
-  const [paymentSchema, operationsSchema] = await Promise.all([
+  // Checkout has product-specific post-payment contracts. In particular, an
+  // eSIM requires its non-secret digital-delivery audit field, which is not a
+  // Pocket WiFi requirement. Keep the authenticated release signal aligned
+  // with both routes so it cannot declare the store ready while eSIM checkout
+  // correctly fails closed against a partial migration.
+  const [esimOrderSchema, paymentSchema, operationsSchema] = await Promise.all([
+    hasRequiredEsimOrderSchema(),
     hasRequiredPaymentSchema(),
     hasRequiredOperationsSchema(),
   ]);
@@ -63,6 +69,7 @@ export async function GET(req: Request) {
     webhook: hasRequiredStripeWebhookConfig(),
     orderIntegrity: isOrderIntegrityConfigured(),
     supabase: Boolean(process.env.SUPABASE_URL?.startsWith('https://') && process.env.SUPABASE_SERVICE_ROLE_KEY && process.env.SUPABASE_SERVICE_ROLE_KEY.length >= 32),
+    esimOrderSchema,
     paymentSchema,
     operationsSchema,
     admin: Boolean(adminUser && isStrongAdminPassword(adminPassword)),

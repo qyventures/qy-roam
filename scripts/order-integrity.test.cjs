@@ -1357,6 +1357,9 @@ test('authenticated health readiness fails when any order-critical dependency is
   // Public unauthenticated probes intentionally report process liveness, but
   // the token-authenticated response is used as the production readiness
   // boundary and must not return 200 for a service unable to take orders.
+  assert.match(healthRoute, /hasRequiredEsimOrderSchema/);
+  assert.match(healthRoute, /const \[esimOrderSchema, paymentSchema, operationsSchema\] = await Promise\.all\(\[/);
+  assert.match(healthRoute, /esimOrderSchema,/);
   assert.match(healthRoute, /const launchReady = Object\.values\(checks\)\.every\(Boolean\)/);
   assert.match(healthRoute, /ok: launchReady/);
   assert.match(healthRoute, /status: launchReady \? 200 : 503/);
