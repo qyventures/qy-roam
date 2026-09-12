@@ -80,7 +80,12 @@ function waitForResponse(socket: net.Socket | tls.TLSSocket, expected: number[])
       if (!last || !/^\d{3} /.test(last)) return;
       cleanup();
       const code = Number(last.slice(0, 3));
-      if (!expected.includes(code)) reject(new Error(`SMTP error ${code}: ${buffer.trim()}`));
+      // SMTP responses come from an external service and flow into the
+      // durable fulfilment retry ledger when delivery fails. Keep the
+      // actionable status code, but never retain or log the response text:
+      // a misconfigured or hostile relay can echo envelope details or other
+      // sensitive request context in an error banner.
+      if (!expected.includes(code)) reject(new Error(`SMTP error ${code}`));
       else resolve(buffer);
     };
     const onError = (error: Error) => { cleanup(); reject(error); };

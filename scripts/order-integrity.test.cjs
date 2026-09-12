@@ -1643,6 +1643,15 @@ test('third-party delivery failures never copy response bodies into logs or reco
   assert.doesNotMatch(webhookRoute, /SMTP relay failed \(\$\{response\.status\}\): \$\{response\.responseBody/);
 });
 
+test('SMTP delivery failures retain only a safe status code in fulfilment recovery records', () => {
+  // SMTP error text is supplied by an external relay and is persisted by the
+  // webhook on a failed fulfilment attempt. Do not let it become a durable
+  // source of echoed PII, credentials, or arbitrary operator-visible text.
+  assert.match(smtpClient, /if \(!expected\.includes\(code\)\) reject\(new Error\(`SMTP error \$\{code\}`\)\);/);
+  assert.doesNotMatch(smtpClient, /SMTP error \$\{code\}: \$\{buffer\.trim\(\)\}/);
+  assert.match(webhookRoute, /last_error:message\.slice\(0,500\)/);
+});
+
 test('Stripe network calls use a bounded shared production client', () => {
   assert.match(stripeClient, /STRIPE_REQUEST_TIMEOUT_MS = 15_000/);
   assert.match(stripeClient, /STRIPE_MAX_NETWORK_RETRIES = 1/);
