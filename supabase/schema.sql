@@ -228,6 +228,19 @@ create table if not exists public.fulfilment_notifications (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+-- These ledgers began as small one-row-per-session tables and gained retry
+-- ownership fields over time. `create table if not exists` does not upgrade a
+-- production table created by an earlier release, which would otherwise make
+-- the pre-payment readiness probe fail forever after this deploy. Keep every
+-- field used by the webhook's claim/retry/send contract additive so applying
+-- this single schema file repairs both fresh and existing projects.
+alter table public.fulfilment_notifications add column if not exists status text not null default 'pending';
+alter table public.fulfilment_notifications add column if not exists attempts integer not null default 0;
+alter table public.fulfilment_notifications add column if not exists last_attempt_at timestamptz;
+alter table public.fulfilment_notifications add column if not exists sent_at timestamptz;
+alter table public.fulfilment_notifications add column if not exists last_error text;
+alter table public.fulfilment_notifications add column if not exists created_at timestamptz not null default now();
+alter table public.fulfilment_notifications add column if not exists updated_at timestamptz not null default now();
 alter table public.fulfilment_notifications enable row level security;
 
 -- Durable Meta CAPI delivery ledger. Stripe retries remain safe when Meta is
@@ -246,6 +259,16 @@ create table if not exists public.meta_purchase_deliveries (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+-- As above, preserve the retry/deduplication write contract when upgrading a
+-- project whose Meta ledger predates one or more of these fields. In
+-- particular, `event_time` keeps a retry's Purchase identity stable.
+alter table public.meta_purchase_deliveries add column if not exists status text not null default 'pending';
+alter table public.meta_purchase_deliveries add column if not exists attempts integer not null default 0;
+alter table public.meta_purchase_deliveries add column if not exists last_attempt_at timestamptz;
+alter table public.meta_purchase_deliveries add column if not exists sent_at timestamptz;
+alter table public.meta_purchase_deliveries add column if not exists last_error text;
+alter table public.meta_purchase_deliveries add column if not exists created_at timestamptz not null default now();
+alter table public.meta_purchase_deliveries add column if not exists updated_at timestamptz not null default now();
 alter table public.meta_purchase_deliveries add column if not exists event_time bigint check (event_time is null or event_time > 0);
 alter table public.meta_purchase_deliveries enable row level security;
 

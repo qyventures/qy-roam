@@ -1476,6 +1476,20 @@ test('failed Stripe webhook claims remain visible and immediately retryable', ()
   assert.match(adminPage, /failed or abandoned events awaiting a signed retry/);
 });
 
+test('durable Stripe delivery ledgers upgrade every retry and ownership field additively', () => {
+  // A live project can have one of these tables from an earlier release.
+  // `create table if not exists` alone does not add later columns, so ensure
+  // the clean-install schema remains a safe upgrade migration as well.
+  for (const [table, fields] of [
+    ['fulfilment_notifications', ['status text not null default \'pending\'', 'attempts integer not null default 0', 'last_attempt_at timestamptz', 'sent_at timestamptz', 'last_error text', 'created_at timestamptz not null default now()', 'updated_at timestamptz not null default now()']],
+    ['meta_purchase_deliveries', ['status text not null default \'pending\'', 'attempts integer not null default 0', 'last_attempt_at timestamptz', 'sent_at timestamptz', 'last_error text', 'created_at timestamptz not null default now()', 'updated_at timestamptz not null default now()', 'event_time bigint']],
+  ]) {
+    for (const field of fields) {
+      assert.match(schema, new RegExp(`alter table public\\.${table} add column if not exists ${field.replace(/[()]/g, '\\$&')}`));
+    }
+  }
+});
+
 test('admin visibility detects abandoned Stripe claims using the webhook recovery lease', () => {
   // A process can terminate before recordEventFailure runs. Such a claim has
   // no last_error, but it is just as actionable once the webhook lease expires.
