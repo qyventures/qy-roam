@@ -157,6 +157,37 @@ alter table public.inventory_items enable row level security;
 alter table public.orders add column if not exists inventory_item_id bigint references public.inventory_items(id) on delete restrict;
 create index if not exists orders_inventory_item_idx on public.orders(inventory_item_id);
 
+-- Dispatch and receipt are the physical inventory boundaries. The protected
+-- admin RPC records these fields atomically with each stock movement, but the
+-- service role is also used by operational recovery and imports. Keep a
+-- database backstop so a direct write cannot make a router appear to have
+-- left the warehouse (or returned to stock) without reconcilable evidence.
+-- NOT VALID keeps historical rows available for review while enforcing this
+-- contract for all new and changed orders.
+alter table public.orders drop constraint if exists orders_pocket_wifi_dispatch_evidence_check;
+alter table public.orders add constraint orders_pocket_wifi_dispatch_evidence_check check (
+  product_type <> 'pocket_wifi' or fulfilment_status not in (
+    'dispatched', 'with_customer', 'return_due', 'returned', 'closed'
+  ) or (
+    inventory_item_id is not null and
+    dispatched_at is not null and
+    courier_tracking is not null and btrim(courier_tracking) <> ''
+  )
+) not valid;
+
+-- A return releases (or explicitly quarantines) the exact dispatched router.
+-- Require the receipt reference and inspection disposition to survive through
+-- closing the order; otherwise a direct status update could hide a missing
+-- device or silently imply it was restocked.
+alter table public.orders drop constraint if exists orders_pocket_wifi_return_evidence_check;
+alter table public.orders add constraint orders_pocket_wifi_return_evidence_check check (
+  product_type <> 'pocket_wifi' or fulfilment_status not in ('returned', 'closed') or (
+    returned_at is not null and
+    return_tracking is not null and btrim(return_tracking) <> '' and
+    return_disposition in ('restock', 'quarantine', 'damaged')
+  )
+) not valid;
+
 -- Stripe event idempotency ledger: Stripe may retry the same event multiple times.
 -- processed_at stays null while side effects are in flight so an interrupted
 -- delivery is retried instead of being mistaken for a completed event.

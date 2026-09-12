@@ -1226,6 +1226,20 @@ test('Pocket WiFi dispatch and return require a recorded operational reference',
   assert.match(adminOrderActions, /status === 'returned' && !returned\.trim\(\)/);
 });
 
+test('database preserves dispatch and return evidence throughout the Pocket WiFi lifecycle', () => {
+  // The RPC is the atomic stock-movement authority, but this protects service
+  // role recovery/import writes from making a device look dispatched or
+  // returned without the durable evidence needed to reconcile that movement.
+  assert.match(schema, /orders_pocket_wifi_dispatch_evidence_check/);
+  assert.match(schema, /inventory_item_id is not null/);
+  assert.match(schema, /dispatched_at is not null/);
+  assert.match(schema, /courier_tracking is not null and btrim\(courier_tracking\) <> ''/);
+  assert.match(schema, /orders_pocket_wifi_return_evidence_check/);
+  assert.match(schema, /returned_at is not null/);
+  assert.match(schema, /return_tracking is not null and btrim\(return_tracking\) <> ''/);
+  assert.match(schema, /return_disposition in \('restock', 'quarantine', 'damaged'\)/);
+});
+
 test('Pocket WiFi dispatch and return atomically reconcile the assigned stock item', () => {
   const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
   assert.match(schema, /add column if not exists inventory_item_id bigint references public\.inventory_items/);
