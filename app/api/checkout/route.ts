@@ -267,13 +267,32 @@ export async function POST(req: Request) {
       throw error;
     }
   }
+  // Stripe can replay the original response to the idempotent create call
+  // even when that Checkout Session was paid or expired in another tab. Read
+  // the current object after signing it, and make every redirect/reservation
+  // decision from that fresh state. This also proves the id-bound provenance
+  // update is visible before exposing a URL that can create a paid inventory
+  // obligation.
+  const currentSession=await stripe.checkout.sessions.retrieve(session.id);
+  if(!matchesRequestedPocketWifi(currentSession,requestId,requested)){
+    // The reservation has not been linked yet, so only this unlinked attempt
+    // is safe to release. A mismatched Stripe response must never inherit the
+    // requested booking's stock hold.
+    const released=await supabase.from('checkout_reservations').delete().eq('checkout_request_id',requestId).is('stripe_session_id',null);
+    if(released.error) throw released.error;
+    return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.',checkoutRequestConflict:true},{status:409,headers:{'Cache-Control':'no-store'}});
+  }
+  if(!validQyRoamProvenance(currentSession.id,currentSession.metadata)){
+    console.error('checkout_provenance_confirmation_error',{sessionId:currentSession.id});
+    return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
+  }
   // A completed paid Session may be returned when a browser retries after its
   // original response was lost. Do not send the customer back to Stripe or
   // hold capacity unnecessarily after the webhook has already persisted the
   // order. If persistence is still catching up, link the reservation first so
   // the terminal webhook can release it once it records the paid booking.
-  if(session.status==='complete'&&session.payment_status==='paid'){
-    const order=await supabase.from('orders').select('payment_status').eq('stripe_session_id',session.id).maybeSingle();
+  if(currentSession.status==='complete'&&currentSession.payment_status==='paid'){
+    const order=await supabase.from('orders').select('payment_status').eq('stripe_session_id',currentSession.id).maybeSingle();
     if(order.error) throw order.error;
     if(order.data?.payment_status==='paid'){
       // The normal terminal webhook releases this hold. A lost response can
@@ -283,19 +302,19 @@ export async function POST(req: Request) {
       // otherwise free a later recovery attempt that reused the request id.
       const released=await supabase.from('checkout_reservations').delete()
         .eq('checkout_request_id',requestId)
-        .eq('stripe_session_id',session.id);
+        .eq('stripe_session_id',currentSession.id);
       if(released.error) throw released.error;
-    }else if(!await linkReservationToSession(supabase,requestId,session.id)){
+    }else if(!await linkReservationToSession(supabase,requestId,currentSession.id)){
       return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
     }
-    return NextResponse.json({completed:true,sessionId:session.id},{headers:{'Cache-Control':'no-store'}});
+    return NextResponse.json({completed:true,sessionId:currentSession.id},{headers:{'Cache-Control':'no-store'}});
   }
   // Stripe retains idempotency keys after a Checkout Session expires. A client
   // retry using that key can therefore receive the old session, whose URL is
   // null. Do not link its new inventory reservation or report a false success.
   // The browser receives an explicit recoverable signal and creates a fresh
   // checkout request id for the next attempt.
-  if(session.status==='expired'){
+  if(currentSession.status==='expired'){
     const released=await supabase.from('checkout_reservations').delete().eq('checkout_request_id',requestId).is('stripe_session_id',null);
     if(released.error) console.error('checkout_expired_reservation_release_error',released.error);
     return NextResponse.json({error:'This secure checkout session has expired. Please try again to start a new one.',checkoutExpired:true},{status:409,headers:{'Cache-Control':'no-store'}});
@@ -304,15 +323,15 @@ export async function POST(req: Request) {
   // reservation and let the signed terminal webhook decide when stock can be
   // released, rather than turning a payment-in-progress retry into an
   // uncounted router booking.
-  if(session.status!=='open'||!session.url){
-    if(!await linkReservationToSession(supabase,requestId,session.id)) return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
+  if(currentSession.status!=='open'||!currentSession.url){
+    if(!await linkReservationToSession(supabase,requestId,currentSession.id)) return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
     return NextResponse.json({error:'Your payment is still being confirmed. Please wait for confirmation before trying again.',paymentPending:true},{status:409,headers:{'Cache-Control':'no-store'}});
   }
-  if(!await linkReservationToSession(supabase,requestId,session.id)){
+  if(!await linkReservationToSession(supabase,requestId,currentSession.id)){
     // Fail closed: a payment URL without a durable session-to-reservation
     // relationship cannot safely be reconciled by fulfilment or inventory.
     return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
   }
-  return NextResponse.json({url:session.url},{headers:{'Cache-Control':'no-store'}});
+  return NextResponse.json({url:currentSession.url},{headers:{'Cache-Control':'no-store'}});
  } catch(error){ console.error('checkout_error',error); return NextResponse.json({error:'Unable to start checkout.'},{status:500}); }
 }

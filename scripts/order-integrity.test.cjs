@@ -878,9 +878,9 @@ test('Pocket WiFi checkout retries bind the complete server-priced booking', () 
 
 test('idempotent checkout replays recover paid orders without a second payment attempt', () => {
   assert.match(wifiCheckoutRoute, /if\(!matchesRequestedPocketWifi\(session,requestId,requested\)\)/);
-  assert.match(wifiCheckoutRoute, /session\.status==='complete'&&session\.payment_status==='paid'/);
-  assert.match(wifiCheckoutRoute, /\{completed:true,sessionId:session\.id\}/);
-  assert.match(wifiCheckoutRoute, /\.eq\('stripe_session_id',session\.id\)\.maybeSingle\(\)/);
+  assert.match(wifiCheckoutRoute, /currentSession\.status==='complete'&&currentSession\.payment_status==='paid'/);
+  assert.match(wifiCheckoutRoute, /\{completed:true,sessionId:currentSession\.id\}/);
+  assert.match(wifiCheckoutRoute, /\.eq\('stripe_session_id',currentSession\.id\)\.maybeSingle\(\)/);
   assert.match(wifiCheckoutRoute, /paymentPending:true/);
   assert.match(esimCheckoutRoute, /const currentSession = await stripe\.checkout\.sessions\.retrieve\(session\.id\)/);
   assert.match(esimCheckoutRoute, /currentSession\.status === 'complete' && currentSession\.payment_status === 'paid'/);
@@ -888,6 +888,18 @@ test('idempotent checkout replays recover paid orders without a second payment a
   assert.match(esimCheckoutRoute, /paymentPending: true/);
   assert.match(homePage, /data\.completed && typeof data\.sessionId === 'string'/);
   assert.match(esimPage, /data\.completed && typeof data\.sessionId === 'string'/);
+});
+
+test('Pocket WiFi create recovery uses fresh Stripe state and confirms provenance before exposing checkout', () => {
+  const createCall = wifiCheckoutRoute.indexOf("session=await stripe.checkout.sessions.create");
+  const currentRead = wifiCheckoutRoute.indexOf("const currentSession=await stripe.checkout.sessions.retrieve(session.id)", createCall);
+  const paidBranch = wifiCheckoutRoute.indexOf("if(currentSession.status==='complete'&&currentSession.payment_status==='paid')", currentRead);
+  const expiredBranch = wifiCheckoutRoute.indexOf("if(currentSession.status==='expired')", currentRead);
+  const urlResponse = wifiCheckoutRoute.indexOf("{url:currentSession.url}", currentRead);
+  assert.ok(createCall > -1 && currentRead > createCall, 'the idempotent create response must be refreshed');
+  assert.ok(paidBranch > currentRead && expiredBranch > paidBranch && urlResponse > expiredBranch, 'fresh state must control paid, expired, and redirect outcomes');
+  assert.match(wifiCheckoutRoute.slice(currentRead, paidBranch), /validQyRoamProvenance\(currentSession\.id,currentSession\.metadata\)/);
+  assert.doesNotMatch(wifiCheckoutRoute.slice(currentRead), /\{url:session\.url\}/);
 });
 
 test('Pocket WiFi open-session retries honor the freshly retrieved Stripe state', () => {
@@ -911,14 +923,14 @@ test('paid Pocket WiFi checkout replays release only their own linked hold', () 
   // A response can be lost after the webhook persists payment but before it
   // removes the temporary reservation. The idempotent replay must clear that
   // stale hold promptly, without releasing another session's reservation.
-  assert.match(wifiCheckoutRoute, /if\(order\.data\?\.payment_status==='paid'\)\{[\s\S]*?\.eq\('checkout_request_id',requestId\)\s*\.eq\('stripe_session_id',session\.id\)/);
+  assert.match(wifiCheckoutRoute, /if\(order\.data\?\.payment_status==='paid'\)\{[\s\S]*?\.eq\('checkout_request_id',requestId\)\s*\.eq\('stripe_session_id',currentSession\.id\)/);
 });
 
 test('Pocket WiFi payment URLs require a durable matching reservation link', () => {
   assert.match(wifiCheckoutRoute, /async function linkReservationToSession/);
   assert.match(wifiCheckoutRoute, /stripe_session_id\.is\.null,stripe_session_id\.eq\.\$\{sessionId\}/);
   assert.match(wifiCheckoutRoute, /if\(!await linkReservationToSession\(supabase,requestId,existing\.id\)\)/);
-  assert.match(wifiCheckoutRoute, /if\(!await linkReservationToSession\(supabase,requestId,session\.id\)\)/);
+  assert.match(wifiCheckoutRoute, /if\(!await linkReservationToSession\(supabase,requestId,currentSession\.id\)\)/);
   assert.match(wifiCheckoutRoute, /Live reservation confirmation is temporarily unavailable/);
 });
 
