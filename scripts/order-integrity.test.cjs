@@ -37,6 +37,7 @@ const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_
 const { checkoutSiteOrigin, isProductionQyRoamOrigin } = require('../lib/siteOrigin.ts');
 const { hasRequiredMetaCapiPurchaseConfig } = require('../lib/runtimeConfig.ts');
 const { digitalDeliveryReferenceIssue, isSafeDigitalDeliveryReference } = require('../lib/digitalDeliveryReference.ts');
+const { SUPABASE_REQUEST_TIMEOUT_MS, fetchSupabaseWithTimeout } = require('../lib/supabaseAdmin.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -70,6 +71,7 @@ const launchPage = fs.readFileSync(require.resolve('../app/admin/launch/page.tsx
 const middleware = fs.readFileSync(require.resolve('../middleware.ts'), 'utf8');
 const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
 const nextConfig = fs.readFileSync(require.resolve('../next.config.mjs'), 'utf8');
+const supabaseAdmin = fs.readFileSync(require.resolve('../lib/supabaseAdmin.ts'), 'utf8');
 
 const requestId = 'checkout_request_123456';
 
@@ -1601,6 +1603,29 @@ test('Stripe network calls use a bounded shared production client', () => {
   for (const route of [wifiCheckoutRoute, esimCheckoutRoute, availabilityRoute, webhookRoute, adminOrderRoute, successPage, bookingPage]) {
     assert.match(route, /createStripeClient\(/);
     assert.doesNotMatch(route, /new Stripe\(/);
+  }
+});
+
+test('Supabase order-critical requests use a bounded shared transport', async () => {
+  assert.equal(SUPABASE_REQUEST_TIMEOUT_MS, 15_000);
+  assert.match(supabaseAdmin, /global: \{ fetch: fetchSupabaseWithTimeout \}/);
+  assert.match(supabaseAdmin, /const timeout = setTimeout\(\(\) => controller\.abort\(timeoutError\), timeoutMs\)/);
+  assert.match(supabaseAdmin, /requestSignal\?\.addEventListener\('abort', abortFromRequest, \{ once: true \}\)/);
+
+  const originalFetch = global.fetch;
+  let receivedSignal;
+  global.fetch = async (_input, init) => new Promise((_resolve, reject) => {
+    receivedSignal = init.signal;
+    init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
+  });
+  try {
+    await assert.rejects(
+      () => fetchSupabaseWithTimeout('https://supabase.example/rest/v1/orders', undefined, 1),
+      /Supabase request timed out/,
+    );
+    assert.equal(receivedSignal.aborted, true);
+  } finally {
+    global.fetch = originalFetch;
   }
 });
 
