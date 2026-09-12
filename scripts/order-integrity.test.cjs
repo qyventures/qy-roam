@@ -48,6 +48,7 @@ const { signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
 // same validator rather than trusting the QY Roam source marker by itself.
 const bookingPage = fs.readFileSync(require.resolve('../app/booking/page.tsx'), 'utf8');
 const adminOrderRoute = fs.readFileSync(require.resolve('../app/api/admin/orders/[id]/route.ts'), 'utf8');
+const stripeEventId = fs.readFileSync(require.resolve('../lib/stripeEventId.ts'), 'utf8');
 const adminOrderActions = fs.readFileSync(require.resolve('../components/AdminOrderActions.tsx'), 'utf8');
 const esimCheckoutRoute = fs.readFileSync(require.resolve('../app/api/esim-checkout/route.ts'), 'utf8');
 const wifiCheckoutRoute = fs.readFileSync(require.resolve('../app/api/checkout/route.ts'), 'utf8');
@@ -322,7 +323,7 @@ test('paid orders fail into the durable webhook recovery ledger when fulfilment 
   assert.match(webhookRoute, /Paid Pocket WiFi order is missing a complete Singapore delivery address/);
 
   const paidValidationAt = webhookRoute.indexOf('const validation=validateQyRoamSession(session)');
-  const paidClaimAt = webhookRoute.lastIndexOf("const eventClaimId=`stripe:${event.id}`", paidValidationAt);
+  const paidClaimAt = webhookRoute.lastIndexOf("const eventClaimId=`stripe:${stripeEventId}`", paidValidationAt);
   const processing = webhookRoute.slice(
     paidClaimAt,
     webhookRoute.indexOf("return NextResponse.json({received:true});", paidValidationAt),
@@ -1480,7 +1481,7 @@ test('Stripe terminal events must agree with their Checkout Session payment stat
   const stateCheck = webhookRoute.indexOf('const eventStateIssue=stripeCheckoutEventStateIssue(event.type,session)');
   const expiryMutation = webhookRoute.indexOf("if(event.type==='checkout.session.expired')");
   const paidValidation = webhookRoute.indexOf('const validation=validateQyRoamSession(session)');
-  const paidClaim = webhookRoute.lastIndexOf("const eventClaimId=`stripe:${event.id}`", paidValidation);
+  const paidClaim = webhookRoute.lastIndexOf("const eventClaimId=`stripe:${stripeEventId}`", paidValidation);
   assert.ok(stateCheck > 0 && stateCheck < expiryMutation && paidClaim < paidValidation);
   assert.match(webhookRoute, /stripe_webhook_event_state_error/);
   assert.match(webhookRoute, /Stripe event state validation failed/);
@@ -1489,7 +1490,7 @@ test('Stripe terminal events must agree with their Checkout Session payment stat
 
 test('signed QY Roam integrity failures remain visible in the webhook recovery ledger', () => {
   const validation = webhookRoute.indexOf('const validation=validateQyRoamSession(session)');
-  const paidClaim = webhookRoute.lastIndexOf("const eventClaimId=`stripe:${event.id}`", validation);
+  const paidClaim = webhookRoute.lastIndexOf("const eventClaimId=`stripe:${stripeEventId}`", validation);
   const failureRecord = webhookRoute.indexOf('if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error)', paidClaim);
   assert.ok(paidClaim >= 0 && validation > paidClaim, 'claim before validating the persisted order boundary');
   assert.ok(failureRecord > validation, 'malformed signed events must be recorded for operator recovery');
@@ -1846,4 +1847,19 @@ test('production CSP does not permit JavaScript eval', () => {
   assert.match(nextConfig, /process\.env\.NODE_ENV === 'development' \? \["'unsafe-eval'"\] : \[\]/);
   assert.match(nextConfig, /`script-src \$\{scriptSources\}`/);
   assert.doesNotMatch(nextConfig, /"script-src 'self' 'unsafe-inline' 'unsafe-eval'/);
+});
+
+test('Stripe webhook bounds event identities before logs or durable idempotency writes', () => {
+  assert.match(stripeEventId, /typeof value !== 'string'/);
+  assert.match(stripeEventId, /\^evt_\[A-Za-z0-9\]\{8,96\}\$/);
+  const signatureCheck = webhookRoute.indexOf('stripe.webhooks.constructEvent');
+  const eventValidation = webhookRoute.indexOf('const stripeEventId=validStripeEventId(event.id)', signatureCheck);
+  const firstEventLog = webhookRoute.indexOf('eventId:stripeEventId', eventValidation);
+  const firstClaim = webhookRoute.indexOf('const eventClaimId=`stripe:${stripeEventId}`', eventValidation);
+  assert.ok(signatureCheck >= 0 && eventValidation > signatureCheck, 'event id validation must follow signature verification');
+  assert.ok(firstEventLog > eventValidation, 'validated event id must be used by webhook logs');
+  assert.ok(firstClaim > eventValidation, 'validated event id must be used by the durable claim');
+  assert.match(webhookRoute, /if\(!stripeEventId\)[\s\S]{0,180}Invalid Stripe event identifier/);
+  assert.doesNotMatch(webhookRoute, /eventId:event\.id/);
+  assert.doesNotMatch(webhookRoute, /`stripe:\$\{event\.id\}`/);
 });

@@ -13,6 +13,7 @@ import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { getEsimPlan } from '@/lib/esimPlans';
 import { STRIPE_EVENT_CLAIM_STALE_MS } from '@/lib/orderLifecycle';
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
+import { validStripeEventId } from '@/lib/stripeEventId';
 
 export const runtime = 'nodejs';
 
@@ -527,13 +528,23 @@ export async function POST(req:Request){
     return NextResponse.json({error:'Invalid webhook payload'},{status:400});
   }
   try{event=stripe.webhooks.constructEvent(payload,req.headers.get('stripe-signature')||'',webhookSecret);}catch{return NextResponse.json({error:'Invalid signature'},{status:400});}
+  // A valid signature authenticates bytes, not the runtime shape supplied by
+  // an SDK/API-version edge case. Validate the event identity before using it
+  // in logs or as the primary key of the durable retry ledger. This mirrors
+  // the Checkout Session id boundary below and prevents an unbounded or
+  // control-character-bearing identifier from polluting operations data.
+  const stripeEventId=validStripeEventId(event.id);
+  if(!stripeEventId) {
+    console.error('stripe_webhook_invalid_event_id');
+    return NextResponse.json({error:'Invalid Stripe event identifier'},{status:400});
+  }
   // A webhook secret is scoped to a Stripe endpoint but its value does not
   // encode test versus live mode. Prevent an accidentally configured test
   // endpoint from creating operational orders, sending fulfilment email, or
   // reporting CAPI revenue while this service is using a live API key (and
   // likewise prevent live events from entering a local/test installation).
   if(!stripeEventMatchesConfiguredMode(key,event.livemode)){
-    console.error('stripe_webhook_mode_mismatch',{eventId:event.id,eventLivemode:event.livemode});
+    console.error('stripe_webhook_mode_mismatch',{eventId:stripeEventId,eventLivemode:event.livemode});
     return NextResponse.json({error:'Stripe event mode mismatch'},{status:400});
   }
   if(!['checkout.session.completed','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed','checkout.session.expired'].includes(event.type)) return NextResponse.json({received:true});
@@ -550,7 +561,7 @@ export async function POST(req:Request){
   // retrying operational record with an unbounded identifier.
   const eventSessionId=validStripeCheckoutSessionId(eventSession.id);
   if(!eventSessionId){
-    console.error('stripe_webhook_invalid_session_id',{eventId:event.id});
+    console.error('stripe_webhook_invalid_session_id',{eventId:stripeEventId});
     return NextResponse.json({error:'Invalid Checkout Session identifier'},{status:400});
   }
   // Stripe signs the event snapshot, but fetch the Checkout Session again
@@ -567,7 +578,7 @@ export async function POST(req:Request){
     // A temporary Stripe read failure must remain retryable rather than
     // acknowledging a paid order whose durable fulfilment record we cannot
     // safely reconstruct from a complete Checkout Session.
-    console.error('stripe_webhook_session_retrieve_error',{eventId:event.id,sessionId:eventSessionId});
+    console.error('stripe_webhook_session_retrieve_error',{eventId:stripeEventId,sessionId:eventSessionId});
     return NextResponse.json({error:'Unable to retrieve Checkout Session'},{status:500});
   }
   // The signed event selects the Checkout Session to process; the refreshed
@@ -578,7 +589,7 @@ export async function POST(req:Request){
   // fulfilment side effects.
   if(session.id!==eventSessionId||session.livemode!==event.livemode){
     console.error('stripe_webhook_session_identity_mismatch',{
-      eventId:event.id,
+      eventId:stripeEventId,
       eventSessionId,
       retrievedSessionId:session.id,
       eventLivemode:event.livemode,
@@ -598,7 +609,7 @@ export async function POST(req:Request){
       console.error('stripe_webhook_expiry_integrity_error',{sessionId:session.id});
       return NextResponse.json({received:true,ignored:true});
     }
-    const eventClaimId=`stripe:${event.id}`;
+    const eventClaimId=`stripe:${stripeEventId}`;
     let claimStartedAt:string|undefined;
     try{
       const claim=await claimOnce(supabase,eventClaimId,event.type,session.id);
@@ -618,7 +629,7 @@ export async function POST(req:Request){
     }
     return NextResponse.json({received:true});
   }
-  const eventClaimId=`stripe:${event.id}`;
+  const eventClaimId=`stripe:${stripeEventId}`;
   let claimStartedAt:string|undefined;
   try{
     const claim=await claimOnce(supabase,eventClaimId,event.type,session.id);
@@ -631,7 +642,7 @@ export async function POST(req:Request){
     // it only exists in Stripe's finite retry history and staff cannot
     // reconcile the affected paid order after those retries stop.
     if(eventStateIssue) {
-      console.error('stripe_webhook_event_state_error',{eventId:event.id,sessionId:session.id,reason:eventStateIssue});
+      console.error('stripe_webhook_event_state_error',{eventId:stripeEventId,sessionId:session.id,reason:eventStateIssue});
       throw new Error(`Stripe event state validation failed: ${eventStateIssue}`);
     }
     const validation=validateQyRoamSession(session);
