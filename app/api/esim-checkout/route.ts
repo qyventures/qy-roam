@@ -3,7 +3,7 @@ import type Stripe from 'stripe';
 import { createStripeClient } from '../../../lib/stripeClient';
 import { ESIM_PROMO, getEsimPlan } from '../../../lib/esimPlans';
 import { validCheckoutRequestId } from '../../../lib/checkoutValidation';
-import { QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance } from '../../../lib/orderProvenance';
+import { QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance, validQyRoamProvenance } from '../../../lib/orderProvenance';
 import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '../../../lib/productionReadiness';
 import { InvalidRequestBodyLengthError, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
 import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
@@ -173,6 +173,19 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'This checkout attempt belongs to a different eSIM plan. Please try again.', checkoutRequestConflict: true }, {
         status: 409,
         headers: { 'Cache-Control': 'no-store' }
+      });
+    }
+    // The URL is the point at which a shopper can create a paid fulfilment
+    // obligation. Confirm the id-bound provenance write is visible on the
+    // freshly retrieved Stripe Session before exposing it. This makes a
+    // delayed or otherwise incomplete metadata update recover through the
+    // same idempotent request instead of accepting a payment the webhook
+    // must reject as unauthenticated.
+    if (!validQyRoamProvenance(currentSession.id, currentSession.metadata)) {
+      console.error('esim_checkout_provenance_confirmation_error', { sessionId: currentSession.id });
+      return NextResponse.json({ error: 'Secure checkout confirmation is temporarily unavailable. Please try again shortly.' }, {
+        status: 503,
+        headers: { 'Cache-Control': 'no-store', 'Retry-After': '10' }
       });
     }
 

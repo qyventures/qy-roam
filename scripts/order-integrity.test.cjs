@@ -602,6 +602,7 @@ test('eSIM idempotent recovery uses a fresh Stripe session state before returnin
   // Stripe caches idempotent POST responses. The route must not make a
   // recovery decision from a stale original `open` snapshot after payment.
   assert.match(esimCheckoutRoute, /const currentSession = await stripe\.checkout\.sessions\.retrieve\(session\.id\)/);
+  assert.match(esimCheckoutRoute, /if \(!validQyRoamProvenance\(currentSession\.id, currentSession\.metadata\)\)/);
   assert.match(esimCheckoutRoute, /currentSession\.status === 'complete' && currentSession\.payment_status === 'paid'/);
   assert.match(esimCheckoutRoute, /url: currentSession\.url/);
   assert.doesNotMatch(esimCheckoutRoute, /if \(session\.status === 'complete' && session\.payment_status === 'paid'\)/);
