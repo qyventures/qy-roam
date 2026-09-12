@@ -349,6 +349,25 @@ test('admin fulfilment recovery cannot bypass paid-order delivery-detail validat
   assert.match(mailer, /if\(fulfilmentDetailsIssue\) throw new Error\(fulfilmentDetailsIssue\)/);
 });
 
+test('Stripe retries cannot revive fulfilment work after the order lifecycle has completed', () => {
+  // Webhook and admin retries share this function. The durable order is the
+  // authority for whether a human hand-off is still actionable; a historical
+  // paid event must not ask staff to resend a fulfilled eSIM or returned,
+  // closed, or cancelled router order.
+  const delivery = webhookRoute.slice(
+    webhookRoute.indexOf('export async function deliverFulfilmentNotification'),
+    webhookRoute.indexOf('export async function deliverMetaPurchase'),
+  );
+  const lifecycleRead = delivery.indexOf(".select('payment_status,product_type,fulfilment_status')");
+  const actionableGuard = delivery.indexOf('fulfilmentNotificationActionable(order.data.product_type,order.data.fulfilment_status)');
+  const notificationClaim = delivery.indexOf(".from('fulfilment_notifications')");
+  assert.ok(lifecycleRead >= 0, 'delivery must read the current durable order lifecycle');
+  assert.ok(actionableGuard > lifecycleRead, 'delivery must validate the current lifecycle after reading it');
+  assert.ok(notificationClaim > actionableGuard, 'a non-actionable order must be rejected before notification state is claimed');
+  assert.match(delivery, /if\(!order\.data\) throw new Error\('Paid order is missing before fulfilment notification delivery'\)/);
+  assert.match(delivery, /if\(order\.data\.product_type!==session\.metadata\?\.product_type\) throw new Error\('Stored order product does not match its Stripe session'\)/);
+});
+
 test('v2 provenance binds all checkout metadata, including same-priced travel dates', () => {
   const session = wifiSession();
   // Moving a four-day rental to another four-day period leaves the catalogue

@@ -11,7 +11,7 @@ import { validQyRoamProvenance } from '@/lib/orderProvenance';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { getEsimPlan } from '@/lib/esimPlans';
-import { STRIPE_EVENT_CLAIM_STALE_MS } from '@/lib/orderLifecycle';
+import { fulfilmentNotificationActionable, STRIPE_EVENT_CLAIM_STALE_MS } from '@/lib/orderLifecycle';
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
 import { validStripeEventId } from '@/lib/stripeEventId';
 
@@ -421,6 +421,23 @@ async function closeExpiredAwaitingPaymentOrder(supabase:NonNullable<ReturnType<
 }
 
 export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session){
+  // Stripe may retry a paid event after its original email attempt failed.
+  // Operations can legitimately cancel, return, close, or digitally fulfil
+  // the order before that retry arrives. Re-read the durable lifecycle at the
+  // shared delivery boundary (used by both webhook and admin recovery) so an
+  // old event cannot create a stale instruction to send a router or eSIM.
+  // This check intentionally precedes creation/claiming of the notification
+  // row: skipped deliveries are not failures and must not remain as a false
+  // pending exception on the operations dashboard.
+  const order=await supabase.from('orders')
+    .select('payment_status,product_type,fulfilment_status')
+    .eq('stripe_session_id',session.id)
+    .maybeSingle();
+  if(order.error) throw order.error;
+  if(!order.data) throw new Error('Paid order is missing before fulfilment notification delivery');
+  if(order.data.payment_status!=='paid'||!fulfilmentNotificationActionable(order.data.product_type,order.data.fulfilment_status)) return;
+  if(order.data.product_type!==session.metadata?.product_type) throw new Error('Stored order product does not match its Stripe session');
+
   let existing=await supabase.from('fulfilment_notifications').select('status,updated_at,attempts').eq('stripe_session_id',session.id).maybeSingle();
   if(existing.error) throw existing.error;
   if(existing.data?.status==='sent') return;
