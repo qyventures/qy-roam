@@ -641,6 +641,12 @@ test('customer-facing Stripe session lookups accept only one bounded Checkout Se
   assert.match(successPage, /validStripeCheckoutSessionId\(searchParams\?\.session_id\)/);
 });
 
+test('admin delivery recovery validates its stored Stripe Checkout Session id before retrieval', () => {
+  assert.match(adminOrderRoute, /const sessionId = validStripeCheckoutSessionId\(order\.stripe_session_id\)/);
+  assert.match(adminOrderRoute, /stripe\.checkout\.sessions\.retrieve\(sessionId\)/);
+  assert.doesNotMatch(adminOrderRoute, /stripe\.checkout\.sessions\.retrieve\(order\.stripe_session_id\)/);
+});
+
 test('eSIM checkout never redirects a reused idempotency key to another plan', () => {
   assert.match(esimCheckoutRoute, /function matchesRequestedEsim/);
   assert.match(esimCheckoutRoute, /session\.metadata\?\.plan_id === plan\.id/);

@@ -9,6 +9,7 @@ import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
 import { digitalDeliveryReferenceIssue, normalizeDigitalDeliveryReference } from '@/lib/digitalDeliveryReference';
+import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
 
 export const runtime = 'nodejs';
 
@@ -197,12 +198,18 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     if (error) throw error;
     if (!order) return NextResponse.json({ error: 'Order not found' }, { status: 404 });
     if (order.payment_status !== 'paid') return NextResponse.json({ error: 'Only paid orders can retry fulfilment notifications' }, { status: 409 });
-    if (!String(order.stripe_session_id).startsWith('cs_')) {
+    // This value is durable operational data, but it can still be from a
+    // manual import or a damaged row. Do not use a prefix check here: a
+    // malformed or unbounded value must not become an outbound Stripe request
+    // when an operator tries to recover a delivery. Manual orders intentionally
+    // use a non-Stripe reference and remain outside this recovery workflow.
+    const sessionId = validStripeCheckoutSessionId(order.stripe_session_id);
+    if (!sessionId) {
       return NextResponse.json({ error: 'Manual orders do not have a Stripe fulfilment notification to retry' }, { status: 409 });
     }
 
     const stripe = createStripeClient(stripeKey);
-    const session = await stripe.checkout.sessions.retrieve(order.stripe_session_id);
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
     // Recovery is an operational mutation with external side effects. Keep it
     // on the same Stripe credential-mode boundary as checkout, webhook, and
     // the customer confirmation pages: a misrouted or unexpected test-mode
