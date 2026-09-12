@@ -390,8 +390,17 @@ test('Pocket WiFi booking dates follow the Singapore operational calendar', () =
   assert.match(wifiCheckoutRoute, /const today=operationalIsoDate\(\)/);
   assert.match(wifiCheckoutRoute, /const minLeadDays=config\.minDeliveryLeadDays, earliest=operationalIsoDateAfter\(minLeadDays\)/);
   assert.match(availabilityRoute, /const earliest = operationalIsoDateAfter\(minLeadDays\)/);
-  assert.match(homePage, /const earliestStart = operationalIsoDateAfter\(DELIVERY_LEAD_DAYS\)/);
+  assert.match(homePage, /const earliestStart = operationalIsoDateAfter\(deliveryLeadDays\)/);
   assert.match(operationalDate, /OPERATIONAL_TIME_ZONE = 'Asia\/Singapore'/);
+});
+
+test('Pocket WiFi availability publishes only validated public booking terms for checkout UX', () => {
+  assert.match(availabilityRoute, /const bookingTerms = \{\s*minDeliveryLeadDays: minLeadDays,\s*courierFeeSgd: config\.courierFeeCents \/ 100,/s);
+  assert.match(availabilityRoute, /available: remaining > 0, remaining, inventoryMode: 'live', temporaryHolds: stripeHolds\.holds, \.\.\.bookingTerms/);
+  assert.match(homePage, /function validLeadDays\(value: unknown\)/);
+  assert.match(homePage, /function validCourierFee\(value: unknown\)/);
+  assert.match(homePage, /const payableTotal = subtotal \+ courierFeeSgd;/);
+  assert.match(homePage, /Total due today: S\$\{payableTotal\.toFixed\(2\)\}/);
 });
 
 test('checkout request ids use the same production boundary everywhere', () => {

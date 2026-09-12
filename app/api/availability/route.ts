@@ -135,8 +135,17 @@ export async function GET(req: NextRequest) {
   const minLeadDays = config.minDeliveryLeadDays;
   const earliest = operationalIsoDateAfter(minLeadDays);
   const rentalDays = Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
-  if (start.toISOString().slice(0, 10) < earliest) return NextResponse.json({ available: false, error: `Please book at least ${minLeadDays} day${minLeadDays === 1 ? '' : 's'} before departure.` }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
-  if (rentalDays < 1 || rentalDays > 90) return NextResponse.json({ available: false, error: 'Bookings must be between 1 and 90 days.' }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
+  // These two values are public booking terms rather than secrets. Return
+  // them even for an invalid date request so a browser built with an older
+  // default can immediately correct its picker after operations changes a
+  // delivery lead time. The amount itself is still calculated exclusively by
+  // the checkout route.
+  const bookingTerms = {
+    minDeliveryLeadDays: minLeadDays,
+    courierFeeSgd: config.courierFeeCents / 100,
+  };
+  if (start.toISOString().slice(0, 10) < earliest) return NextResponse.json({ available: false, ...bookingTerms, error: `Please book at least ${minLeadDays} day${minLeadDays === 1 ? '' : 's'} before departure.` }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
+  if (rentalDays < 1 || rentalDays > 90) return NextResponse.json({ available: false, ...bookingTerms, error: 'Bookings must be between 1 and 90 days.' }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
 
   // Availability is a promise that a customer can proceed to payment. Match
   // every non-request-specific checkout prerequisite before calculating stock:
@@ -169,7 +178,7 @@ export async function GET(req: NextRequest) {
     // truthfully show to a customer.
     const effectiveInventory = Math.min(inventory, inventoryState.saleableInventory);
     const remaining = Math.max(0, effectiveInventory - committed);
-    return NextResponse.json({ available: remaining > 0, remaining, inventoryMode: 'live', temporaryHolds: stripeHolds.holds }, { headers: { 'Cache-Control': 'no-store' } });
+    return NextResponse.json({ available: remaining > 0, remaining, inventoryMode: 'live', temporaryHolds: stripeHolds.holds, ...bookingTerms }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('availability check failed', error);
     return NextResponse.json({ available: false, remaining: 0, inventoryMode: 'unavailable', error: 'Live availability is temporarily unavailable. Please try again shortly or contact +65 8032 7183.' }, { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '30' } });
