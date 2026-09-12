@@ -1726,6 +1726,7 @@ test('fulfilment email retries retain one safe per-order message identity', () =
 
 test('Stripe webhook bounds raw payload memory before signature verification', () => {
   assert.match(webhookRoute, /const MAX_STRIPE_WEBHOOK_BODY_BYTES = 1_000_000/);
+  assert.match(webhookRoute, /const MAX_STRIPE_SIGNATURE_HEADER_BYTES = 8_192/);
   assert.match(webhookRoute, /const STRIPE_WEBHOOK_BODY_TIMEOUT_MS = 15_000/);
   assert.match(webhookRoute, /class StripeWebhookBodyTimeoutError extends Error/);
   assert.match(webhookRoute, /async function readStripeWebhookBody\(req: Request\): Promise<Buffer>/);
@@ -1736,7 +1737,12 @@ test('Stripe webhook bounds raw payload memory before signature verification', (
   assert.match(webhookRoute, /void reader\.cancel\(\)\.catch\(\(\) => undefined\)/);
   assert.match(webhookRoute, /Webhook payload timed out/);
   assert.match(webhookRoute, /Webhook payload too large/);
-  assert.match(webhookRoute, /stripe\.webhooks\.constructEvent\(payload,req\.headers\.get\('stripe-signature'\)/);
+  assert.match(webhookRoute, /function validStripeSignatureHeader\(value: string \| null\)/);
+  assert.match(webhookRoute, /value\.length <= MAX_STRIPE_SIGNATURE_HEADER_BYTES/);
+  assert.match(webhookRoute, /\^\[\\x20-\\x7e\]\+\$/);
+  const signatureValidation = webhookRoute.indexOf("const stripeSignature=validStripeSignatureHeader(req.headers.get('stripe-signature'))");
+  const signatureCheck = webhookRoute.indexOf('stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret)');
+  assert.ok(signatureValidation >= 0 && signatureCheck > signatureValidation, 'Stripe signature header must be bounded before verification');
 });
 
 test('Stripe webhook bounds third-party delivery responses as well as request time', () => {

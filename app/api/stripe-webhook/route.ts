@@ -22,12 +22,24 @@ export const runtime = 'nodejs';
 // the memory used by an invalid request bounded rather than relying on a proxy
 // body-size setting that may differ between production environments.
 const MAX_STRIPE_WEBHOOK_BODY_BYTES = 1_000_000;
+// Headers are ordinarily capped by the reverse proxy, but this public route
+// must remain safe when it is reached through a different proxy or directly
+// in an application runtime. Stripe's signed header is compact ASCII; reject
+// an oversized or control-character-bearing value before handing it to the
+// SDK's signature parser.
+const MAX_STRIPE_SIGNATURE_HEADER_BYTES = 8_192;
 // Do not let a peer that sends headers and then stalls its upload pin a
 // webhook worker indefinitely. Stripe will retry a timed-out delivery, while
 // the bounded body size below continues to protect memory for completed reads.
 const STRIPE_WEBHOOK_BODY_TIMEOUT_MS = 15_000;
 
 class StripeWebhookBodyTimeoutError extends Error {}
+
+function validStripeSignatureHeader(value: string | null) {
+  return value && value.length <= MAX_STRIPE_SIGNATURE_HEADER_BYTES && /^[\x20-\x7e]+$/.test(value)
+    ? value
+    : null;
+}
 
 async function readStripeWebhookBody(req: Request): Promise<Buffer> {
   const contentLength = req.headers.get('content-length');
@@ -544,7 +556,9 @@ export async function POST(req:Request){
     if (error instanceof StripeWebhookBodyTimeoutError) return NextResponse.json({error:'Webhook payload timed out'},{status:408});
     return NextResponse.json({error:'Invalid webhook payload'},{status:400});
   }
-  try{event=stripe.webhooks.constructEvent(payload,req.headers.get('stripe-signature')||'',webhookSecret);}catch{return NextResponse.json({error:'Invalid signature'},{status:400});}
+  const stripeSignature=validStripeSignatureHeader(req.headers.get('stripe-signature'));
+  if(!stripeSignature) return NextResponse.json({error:'Invalid signature'},{status:400});
+  try{event=stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret);}catch{return NextResponse.json({error:'Invalid signature'},{status:400});}
   // A valid signature authenticates bytes, not the runtime shape supplied by
   // an SDK/API-version edge case. Validate the event identity before using it
   // in logs or as the primary key of the durable retry ledger. This mirrors
