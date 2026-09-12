@@ -27,6 +27,11 @@ assert.match(nginx, /proxy_set_header X-Real-IP \$remote_addr;/);
 // again at their own request boundaries.
 assert.match(nginx, /client_max_body_size 1m;/);
 assert.match(nginx, /client_body_timeout 15s;/);
+// A successful webhook can include bounded Stripe retrieval, persistence,
+// and independent paid-order delivery work. Do not let the proxy abandon a
+// healthy worker before it can settle the idempotency lease and acknowledge
+// Stripe; retries remain a recovery path, not the normal slow-path.
+assert.match(nginx, /proxy_read_timeout 120s;/);
 
 // npm v9 lockfiles record only the optional SWC binaries resolved for the
 // install platform. Next 14 nevertheless tries to patch in every foreign
