@@ -12,6 +12,7 @@ import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { getEsimPlan } from '@/lib/esimPlans';
 import { STRIPE_EVENT_CLAIM_STALE_MS } from '@/lib/orderLifecycle';
+import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
 
 export const runtime = 'nodejs';
 
@@ -542,6 +543,16 @@ export async function POST(req:Request){
   // order, sending fulfilment email, or filling this app's idempotency ledger.
   // Both QY Roam checkout routes set this server-controlled marker.
   if(eventSession.metadata?.source!=='qyroam.com') return NextResponse.json({received:true,ignored:true});
+  // The event is Stripe-signed, but retain the same bounded identifier
+  // boundary used by customer-facing recovery pages before an SDK call or a
+  // durable ledger write. This protects the worker from an unexpected API
+  // version/object shape and prevents an invalid event object from becoming a
+  // retrying operational record with an unbounded identifier.
+  const eventSessionId=validStripeCheckoutSessionId(eventSession.id);
+  if(!eventSessionId){
+    console.error('stripe_webhook_invalid_session_id',{eventId:event.id});
+    return NextResponse.json({error:'Invalid Checkout Session identifier'},{status:400});
+  }
   // Stripe signs the event snapshot, but fetch the Checkout Session again
   // before using it as an order or delivery record. This keeps a delayed
   // terminal event from persisting incomplete customer/shipping fields that
@@ -551,12 +562,12 @@ export async function POST(req:Request){
   // original Purchase timestamp respectively.
   let session: Stripe.Checkout.Session;
   try {
-    session=await stripe.checkout.sessions.retrieve(eventSession.id);
+    session=await stripe.checkout.sessions.retrieve(eventSessionId);
   } catch (error) {
     // A temporary Stripe read failure must remain retryable rather than
     // acknowledging a paid order whose durable fulfilment record we cannot
     // safely reconstruct from a complete Checkout Session.
-    console.error('stripe_webhook_session_retrieve_error',{eventId:event.id,sessionId:eventSession.id});
+    console.error('stripe_webhook_session_retrieve_error',{eventId:event.id,sessionId:eventSessionId});
     return NextResponse.json({error:'Unable to retrieve Checkout Session'},{status:500});
   }
   // The signed event selects the Checkout Session to process; the refreshed
@@ -565,10 +576,10 @@ export async function POST(req:Request){
   // integration defect must never let a different Session (or a different
   // Stripe mode) inherit this event's authority and reach persistence or
   // fulfilment side effects.
-  if(session.id!==eventSession.id||session.livemode!==event.livemode){
+  if(session.id!==eventSessionId||session.livemode!==event.livemode){
     console.error('stripe_webhook_session_identity_mismatch',{
       eventId:event.id,
-      eventSessionId:eventSession.id,
+      eventSessionId,
       retrievedSessionId:session.id,
       eventLivemode:event.livemode,
       retrievedLivemode:session.livemode,

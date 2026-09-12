@@ -1483,12 +1483,14 @@ test('Stripe terminal events refresh the Checkout Session before persisting or d
     webhookRoute.indexOf("if(event.type==='checkout.session.expired')"),
   );
   const sourceBoundary = processing.indexOf("if(eventSession.metadata?.source!=='qyroam.com')");
-  const refresh = processing.indexOf('session=await stripe.checkout.sessions.retrieve(eventSession.id)');
-  const identityBoundary = processing.indexOf('if(session.id!==eventSession.id||session.livemode!==event.livemode)');
+  const sessionIdBoundary = processing.indexOf('const eventSessionId=validStripeCheckoutSessionId(eventSession.id)');
+  const refresh = processing.indexOf('session=await stripe.checkout.sessions.retrieve(eventSessionId)');
+  const identityBoundary = processing.indexOf('if(session.id!==eventSessionId||session.livemode!==event.livemode)');
   const eventState = processing.indexOf('const eventStateIssue=stripeCheckoutEventStateIssue(event.type,session)');
-  assert.ok(sourceBoundary >= 0 && refresh > sourceBoundary, 'only QY Roam events should cause a Stripe Session refresh');
+  assert.ok(sourceBoundary >= 0 && sessionIdBoundary > sourceBoundary && refresh > sessionIdBoundary, 'only QY Roam events with a valid bounded Session id should cause a Stripe Session refresh');
   assert.ok(identityBoundary > refresh, 'the refreshed Session must match the signed event identity and mode');
   assert.ok(eventState > identityBoundary, 'terminal-state validation must use the refreshed, event-bound Stripe Session');
+  assert.match(processing, /stripe_webhook_invalid_session_id/);
   assert.match(processing, /stripe_webhook_session_retrieve_error/);
   assert.match(processing, /stripe_webhook_session_identity_mismatch/);
   assert.match(processing, /Retrieved Checkout Session does not match webhook event/);
