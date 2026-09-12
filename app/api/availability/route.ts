@@ -12,7 +12,7 @@ import {
   hasRequiredStripeCheckoutConfig,
   hasRequiredStripeWebhookConfig,
 } from '@/lib/productionReadiness';
-import { CHECKOUT_HOLD_WINDOW_SECONDS, CHECKOUT_WEBHOOK_HANDOFF_GRACE_MS } from '@/lib/checkoutExpiry';
+import { CHECKOUT_HOLD_WINDOW_SECONDS, CHECKOUT_WEBHOOK_HANDOFF_GRACE_MS, MAX_STRIPE_HOLD_SCAN_PAGES } from '@/lib/checkoutExpiry';
 import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
 
 export const dynamic = 'force-dynamic';
@@ -39,15 +39,23 @@ async function activeStripeHolds(stripe: Stripe, start: string, end: string) {
   const nowSeconds = Math.floor(Date.now() / 1000);
   const cutoff = nowSeconds - CHECKOUT_HOLD_WINDOW_SECONDS;
   let startingAfter: string | undefined;
+  let pagesScanned = 0;
   let holds = 0;
   const requestIds = new Set<string>();
-  // Every still-valid QY Roam Checkout Session is an inventory hold. Do not cap
-  // pagination within the hold window: an arbitrary page limit would report
-  // stock that is already held when checkout volume exceeds that limit. QY Roam
-  // creates short-lived sessions, so ask Stripe to omit historical open sessions
-  // instead of scanning an account's entire Checkout history on every search.
+  // Every still-valid QY Roam Checkout Session is an inventory hold. Scan the
+  // short hold window within the shared, fail-closed page ceiling below: an
+  // incomplete scan must report unavailable rather than overstate stock. QY
+  // Roam creates short-lived sessions, so Stripe omits historical sessions
+  // before this bounded account-level scan begins.
   for (;;) {
+    if (pagesScanned >= MAX_STRIPE_HOLD_SCAN_PAGES) {
+      // A partial result would overstate availability. Fail closed so a noisy
+      // shared Stripe account cannot turn this public endpoint into unbounded
+      // provider work or cause the last router to be oversold.
+      throw new Error('Stripe Pocket WiFi hold scan exceeded its safe page limit');
+    }
     const sessions = await stripe.checkout.sessions.list({ status: 'open', limit: 100, created: { gte: cutoff }, ...(startingAfter ? { starting_after: startingAfter } : {}) });
+    pagesScanned += 1;
     for (const session of sessions.data) {
       // Session status is eventually consistent around expiry. Capacity must
       // follow the Checkout Session's actual expiry, not only its age.

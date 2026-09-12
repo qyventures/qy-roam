@@ -12,7 +12,7 @@ import { hasRequiredFulfilmentEmailConfig, hasRequiredPaymentSchema, hasRequired
 import { InvalidRequestBodyLengthError, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
 import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { metaAttributionFromRequest } from '@/lib/metaAttribution';
-import { CHECKOUT_HOLD_WINDOW_SECONDS, checkoutExpiresAt } from '@/lib/checkoutExpiry';
+import { CHECKOUT_HOLD_WINDOW_SECONDS, checkoutExpiresAt, MAX_STRIPE_HOLD_SCAN_PAGES } from '@/lib/checkoutExpiry';
 import { checkoutSiteOrigin } from '@/lib/siteOrigin';
 
 export const runtime = 'nodejs';
@@ -54,16 +54,23 @@ async function activeStripeHolds(stripe:Stripe,start:string,end:string,requestId
   const nowSeconds=Math.floor(Date.now()/1000);
   const cutoff=nowSeconds-CHECKOUT_HOLD_WINDOW_SECONDS;
   let startingAfter:string|undefined;
+  let pagesScanned=0;
   let holds=0;
   const requestIds:string[]=[];
-  // Every still-valid QY Roam Checkout Session is an inventory hold. Keep
-  // paginating through the complete hold window: stopping after an arbitrary
-  // number of pages can undercount holds during a busy period and oversell the
-  // final routers. The server gives these sessions a short bounded expiry,
-  // so Stripe can filter out historical open sessions before pagination rather
-  // than making a customer-facing checkout scan the whole account.
+  // Every still-valid QY Roam Checkout Session is an inventory hold. Scan the
+  // complete hold window within the shared, fail-closed page ceiling below:
+  // stopping with a partial count could oversell the final routers. The server
+  // gives these sessions a short bounded expiry, so Stripe can filter out
+  // historical open sessions before this bounded account-level scan.
   for(;;){
+    if(pagesScanned>=MAX_STRIPE_HOLD_SCAN_PAGES) {
+      // Do not return a partial count: it could free a router that is held on
+      // a later page. The route's existing error boundary fails this checkout
+      // attempt closed, preserving inventory integrity during account noise.
+      throw new Error('Stripe Pocket WiFi hold scan exceeded its safe page limit');
+    }
     const sessions=await stripe.checkout.sessions.list({status:'open',limit:100,created:{gte:cutoff},...(startingAfter?{starting_after:startingAfter}:{})});
+    pagesScanned+=1;
     for(const session of sessions.data){
       // Stripe normally removes expired sessions from the "open" list, but
       // expiry is the inventory boundary. Check it explicitly so a session

@@ -9,6 +9,16 @@ export const CHECKOUT_PAYMENT_WINDOW_MINUTES = 30;
 // checkout far below Stripe's 24-hour maximum/default.
 export const STRIPE_EXPIRY_SAFETY_SECONDS = 5 * 60;
 export const CHECKOUT_HOLD_WINDOW_SECONDS = CHECKOUT_PAYMENT_WINDOW_MINUTES * 60 + STRIPE_EXPIRY_SAFETY_SECONDS;
+// Stripe's list endpoint is scoped to the account rather than QY Roam's
+// metadata. A shared account can therefore contain unrelated open Checkout
+// Sessions inside this short window. Capacity checks must inspect every page
+// they choose to rely on, but must also have a finite upstream-work budget.
+// If this ceiling is reached callers fail closed instead of silently
+// undercounting holds (and selling an unavailable router) or keeping a public
+// checkout worker busy without bound. Five pages cover 500 recent open
+// Sessions, far beyond the physical fleet, while leaving an explicit signal
+// for operations to separate or clear noisy shared-account traffic.
+export const MAX_STRIPE_HOLD_SCAN_PAGES = 5;
 // Expiry webhooks release abandoned holds promptly in healthy operation. Keep
 // a database-only grace through Stripe's retry window so delayed completion
 // delivery cannot create a paid commitment after the router was resold.

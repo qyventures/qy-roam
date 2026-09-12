@@ -1052,12 +1052,16 @@ test('Pocket WiFi availability only counts Checkout Sessions that are still unex
   }
 });
 
-test('Pocket WiFi Stripe-hold scans paginate every recent session without reading historical account data', () => {
+test('Pocket WiFi Stripe-hold scans paginate recent sessions with a fail-closed work ceiling', () => {
   for (const source of [wifiCheckoutRoute, availabilityRoute]) {
     assert.match(source, /created:\s*\{\s*gte:\s*cutoff\s*\}/);
     assert.match(source, /starting_after/);
     assert.doesNotMatch(source, /limit:\s*(?:[1-9]|[1-9]\d)(?!\d)/);
+    assert.match(source, /pagesScanned\s*>=\s*MAX_STRIPE_HOLD_SCAN_PAGES/);
+    assert.match(source, /Stripe Pocket WiFi hold scan exceeded its safe page limit/);
   }
+  const checkoutExpiry = fs.readFileSync(require.resolve('../lib/checkoutExpiry.ts'), 'utf8');
+  assert.match(checkoutExpiry, /export const MAX_STRIPE_HOLD_SCAN_PAGES\s*=\s*5/);
 });
 
 test('Pocket WiFi holds require server-issued checkout provenance', () => {
