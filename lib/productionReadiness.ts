@@ -99,7 +99,17 @@ const REQUIRED_PAYMENT_SCHEMA = [
 // customer pays. Keep this smaller contract separately so digital checkout
 // can fail closed before creating a payable Stripe Session without coupling it
 // to router-inventory configuration.
-const REQUIRED_ESIM_ORDER_SCHEMA = REQUIRED_PAYMENT_SCHEMA.slice(0, 5);
+// Digital fulfilment has one additional durable boundary beyond the generic
+// paid-order ledger: staff must record a non-secret delivery audit pointer
+// before an eSIM can be marked fulfilled. Do not accept an eSIM payment
+// against a partial migration that omits that column; the order could be
+// charged and queued but could not be safely completed through the supported
+// operations workflow.
+const REQUIRED_ESIM_ORDER_SCHEMA = REQUIRED_PAYMENT_SCHEMA.slice(0, 5).map((requirement) =>
+  requirement.table === 'orders'
+    ? { ...requirement, columns: `${requirement.columns},digital_delivery_reference` }
+    : requirement,
+);
 
 const REQUIRED_OPERATIONS_SCHEMA = [
   // The order fields below are the durable evidence used by the guarded

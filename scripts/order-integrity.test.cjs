@@ -609,7 +609,12 @@ test('eSIM checkout fails closed when its durable post-payment order boundary is
   assert.match(esimCheckoutRoute, /hasRequiredEsimOrderSchema/);
   assert.match(esimCheckoutRoute, /if \(!await hasRequiredEsimOrderSchema\(\)\)/);
   assert.match(esimCheckoutRoute, /status: 503/);
-  assert.match(productionReadiness, /const REQUIRED_ESIM_ORDER_SCHEMA = REQUIRED_PAYMENT_SCHEMA\.slice\(0, 5\)/);
+  // A paid eSIM must retain a non-secret provider/email-log audit reference
+  // when it is fulfilled. That field is part of its pre-payment schema gate,
+  // even though Pocket WiFi-only inventory fields remain out of this smaller
+  // digital-order contract.
+  assert.match(productionReadiness, /const REQUIRED_ESIM_ORDER_SCHEMA = REQUIRED_PAYMENT_SCHEMA\.slice\(0, 5\)\.map/);
+  assert.match(productionReadiness, /columns: `\$\{requirement\.columns\},digital_delivery_reference`/);
   assert.match(productionReadiness, /export async function hasRequiredEsimOrderSchema\(\)/);
 });
 
