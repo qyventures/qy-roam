@@ -614,7 +614,17 @@ export async function POST(req:Request){
     });
     return NextResponse.json({error:'Retrieved Checkout Session does not match webhook event'},{status:500});
   }
-  const eventStateIssue=stripeCheckoutEventStateIssue(event.type,session);
+  // The retrieved Session is the freshest source for customer, shipping,
+  // metadata, and amount fields, but it must not change what this particular
+  // signed event says happened. A delayed retry of an initially-unpaid
+  // `checkout.session.completed` can arrive after a later asynchronous
+  // payment has succeeded; using the refreshed `paid` state would backdate
+  // payment_confirmed_at and the Meta Purchase to the older completion event.
+  // Keep the signed snapshot authoritative for transition state. Expiry is
+  // deliberately checked against the refreshed Session as well, because an
+  // out-of-order expiry must never release a reservation that is now paid.
+  const eventStateSession=event.type==='checkout.session.expired'?session:eventSession;
+  const eventStateIssue=stripeCheckoutEventStateIssue(event.type,eventStateSession);
   if(event.type==='checkout.session.expired'){
     // Expiry does not persist a paid order, but it still writes to the event
     // ledger and can release inventory or close a provisional order. The
@@ -662,22 +672,32 @@ export async function POST(req:Request){
       console.error('stripe_webhook_event_state_error',{eventId:stripeEventId,sessionId:session.id,reason:eventStateIssue});
       throw new Error(`Stripe event state validation failed: ${eventStateIssue}`);
     }
-    const validation=validateQyRoamSession(session);
+    // Combine current fulfilment details with the signed event's payment and
+    // Checkout state. In particular, an unpaid completion remains an
+    // awaiting-payment order even if the Session became paid before this
+    // retry; the distinct signed async-success event owns that later payment
+    // timestamp and its downstream Purchase attribution.
+    const sessionForEvent={
+      ...session,
+      status:eventSession.status,
+      payment_status:eventSession.payment_status,
+    } as Stripe.Checkout.Session;
+    const validation=validateQyRoamSession(sessionForEvent);
     if(!validation.valid){
       // Never persist or fulfil a malformed order. The claimed event is
       // marked failed below so it is visible and safely retryable.
       console.error('stripe_webhook_order_integrity_error',{sessionId:session.id,reason:validation.reason});
       throw new Error(`Order integrity validation failed: ${validation.reason}`);
     }
-    const fulfilmentDetailsIssue=paidFulfilmentDetailsIssue(session,validation.productType);
+    const fulfilmentDetailsIssue=paidFulfilmentDetailsIssue(sessionForEvent,validation.productType);
     if(fulfilmentDetailsIssue) throw new Error(fulfilmentDetailsIssue);
-    await persistSession(session,event.type,event.created);
+    await persistSession(sessionForEvent,event.type,event.created);
     // Pocket WiFi persistence atomically replaces the temporary reservation
     // with the durable order commitment inside qy_persist_stripe_pocket_wifi_order.
-    if(event.type!=='checkout.session.async_payment_failed'&&session.payment_status==='paid'){
+    if(event.type!=='checkout.session.async_payment_failed'&&sessionForEvent.payment_status==='paid'){
       // Use the signed Stripe event timestamp: the Checkout Session may have
       // been created well before an asynchronous payment actually succeeded.
-      await deliverPaidOrderSideEffects(supabase,session,event.created);
+      await deliverPaidOrderSideEffects(supabase,sessionForEvent,event.created);
     }
     const completed=await supabase.from('stripe_events').update({processed_at:new Date().toISOString()}).eq('event_id',eventClaimId).eq('processing_started_at',claimStartedAt).is('processed_at',null).select('event_id');
     if(completed.error)throw completed.error;
