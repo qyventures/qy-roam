@@ -3,6 +3,8 @@ import AdminOrderActions from '@/components/AdminOrderActions';
 import { fulfilmentNotificationActionable, STRIPE_EVENT_CLAIM_STALE_MS } from '@/lib/orderLifecycle';
 import { hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
 import { isSafeDigitalDeliveryReference } from '@/lib/digitalDeliveryReference';
+import { operationalDaysFromToday } from '@/lib/operationalDate';
+import { POCKET_WIFI_RETURN_GRACE_DAYS } from '@/lib/pocketWifiReturns';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,19 +30,8 @@ async function loadPages(fetchPage: (from: number, to: number) => PromiseLike<{ 
   return { data, error: null, truncated: true };
 }
 
-function localDate(value: string | null | undefined) {
-  if (!value) return null;
-  const date = new Date(`${value}T00:00:00+08:00`);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
 function daysFromToday(value: string | null | undefined) {
-  const target = localDate(value);
-  if (!target) return null;
-  const now = new Date();
-  const todaySg = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Singapore' }));
-  todaySg.setHours(0, 0, 0, 0);
-  return Math.round((target.getTime() - todaySg.getTime()) / 86400000);
+  return operationalDaysFromToday(value);
 }
 
 function isEsim(order: any) { return order.product_type === 'esim'; }
@@ -68,7 +59,7 @@ function tripFlag(order: any) {
     return untilDeparture < 0 ? '⚠ Departure passed — dispatch unresolved' : `⚠ Departure in ${untilDeparture} day${untilDeparture === 1 ? '' : 's'} — dispatch check`;
   }
   const afterTrip = daysFromToday(order.travel_end);
-  if (typeof afterTrip === 'number' && afterTrip < -5 && !['returned', 'closed'].includes(order.fulfilment_status)) return '⚠ Return overdue';
+  if (typeof afterTrip === 'number' && afterTrip < -POCKET_WIFI_RETURN_GRACE_DAYS && !['returned', 'closed'].includes(order.fulfilment_status)) return '⚠ Return overdue';
   if (typeof afterTrip === 'number' && afterTrip < 0 && !['returned', 'closed'].includes(order.fulfilment_status)) return 'Return due';
   return '';
 }
@@ -176,7 +167,7 @@ export default async function AdminPage() {
   const returnExceptions = active.filter((o:any) => {
     if (isEsim(o)) return false;
     const days = daysFromToday(o.travel_end);
-    return typeof days === 'number' && days < -5 && !['returned','closed'].includes(o.fulfilment_status);
+    return typeof days === 'number' && days < -POCKET_WIFI_RETURN_GRACE_DAYS && !['returned','closed'].includes(o.fulfilment_status);
   });
 
   return <main className="wrap section legal" style={{maxWidth:1280}}>
@@ -221,7 +212,7 @@ export default async function AdminPage() {
         <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:14}}>
           <div style={cardStyle}><small>WiFi dispatch exceptions</small><div style={metricStyle}>{wifiDispatchExceptions.length}</div><small>departing within 2 days / unresolved</small></div>
           <div style={cardStyle}><small>eSIM fulfilment exceptions</small><div style={metricStyle}>{esimExceptions.length}</div><small>departing within 2 days / unresolved</small></div>
-          <div style={cardStyle}><small>Overdue WiFi returns</small><div style={metricStyle}>{returnExceptions.length}</div><small>more than 5 days past trip end</small></div>
+          <div style={cardStyle}><small>Overdue WiFi returns</small><div style={metricStyle}>{returnExceptions.length}</div><small>more than {POCKET_WIFI_RETURN_GRACE_DAYS} days past trip end</small></div>
           <div style={cardStyle}><small>Ops email exceptions</small><div style={metricStyle}>{notificationExceptions.length}</div><small>paid Stripe-order notifications not confirmed sent</small></div>
           <div style={cardStyle}><small>Meta CAPI exceptions</small><div style={metricStyle}>{metaDeliveryExceptions.length}</div><small>consented purchases not confirmed delivered</small></div>
           <div style={cardStyle}><small>Stripe webhook exceptions</small><div style={metricStyle}>{webhookFailures.length}</div><small>failed or abandoned events awaiting a signed retry</small></div>

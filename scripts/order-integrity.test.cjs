@@ -24,7 +24,8 @@ const { ESIM_PLANS, ESIM_PROMO } = require('../lib/esimPlans.ts');
 const { LAUNCH_PROMO } = require('../lib/promotions.ts');
 const { validateQyRoamSession } = require('../lib/qyRoamSession.ts');
 const { parseExactIsoDate, validCheckoutRequestId } = require('../lib/checkoutValidation.ts');
-const { operationalIsoDate, operationalIsoDateAfter } = require('../lib/operationalDate.ts');
+const { operationalIsoDate, operationalIsoDateAfter, operationalDaysFromToday } = require('../lib/operationalDate.ts');
+const { POCKET_WIFI_RETURN_GRACE_DAYS } = require('../lib/pocketWifiReturns.ts');
 const { WIFI_BENCHMARK, WIFI_PLANS } = require('../lib/wifiPlans.ts');
 const { allowedFulfilmentStatuses, fulfilmentNotificationActionable, validFulfilmentTransition, STRIPE_EVENT_CLAIM_STALE_MS } = require('../lib/orderLifecycle.ts');
 const { operationalConfig } = require('../lib/operationalConfig.ts');
@@ -415,6 +416,20 @@ test('Pocket WiFi booking dates follow the Singapore operational calendar', () =
   assert.match(availabilityRoute, /const earliest = operationalIsoDateAfter\(minLeadDays\)/);
   assert.match(homePage, /const earliestStart = operationalIsoDateAfter\(deliveryLeadDays\)/);
   assert.match(operationalDate, /OPERATIONAL_TIME_ZONE = 'Asia\/Singapore'/);
+});
+
+test('operations departure and return exceptions use Singapore date boundaries', () => {
+  // This clock is still 11 September in UTC, but already 12 September in SG.
+  // The result must not depend on the timezone configured on the app server.
+  const singaporeMorning = new Date('2026-09-11T16:30:00.000Z');
+  assert.equal(operationalDaysFromToday('2026-09-12', singaporeMorning), 0);
+  assert.equal(operationalDaysFromToday('2026-09-13', singaporeMorning), 1);
+  assert.equal(operationalDaysFromToday('2026-09-07', singaporeMorning), -POCKET_WIFI_RETURN_GRACE_DAYS);
+  assert.equal(operationalDaysFromToday('2026-09-06', singaporeMorning), -(POCKET_WIFI_RETURN_GRACE_DAYS + 1));
+  assert.equal(operationalDaysFromToday('2026-02-30', singaporeMorning), null);
+  assert.match(adminPage, /operationalDaysFromToday/);
+  assert.match(adminPage, /POCKET_WIFI_RETURN_GRACE_DAYS/);
+  assert.match(bookingPage, /POCKET_WIFI_RETURN_GRACE_DAYS/);
 });
 
 test('Pocket WiFi availability publishes only validated public booking terms for checkout UX', () => {

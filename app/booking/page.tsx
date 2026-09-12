@@ -4,6 +4,7 @@ import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { initialFulfilmentStatus } from '@/lib/orderLifecycle';
 import { validateQyRoamSession } from '@/lib/qyRoamSession';
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
+import { POCKET_WIFI_RETURN_GRACE_DAYS } from '@/lib/pocketWifiReturns';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 
@@ -122,7 +123,7 @@ export default async function BookingPage({ searchParams }: Props) {
               <p>Your payment is confirmed. We’ll use the Singapore delivery details from checkout to fulfil your order.</p>
               {order?.courier_tracking && <p><strong>Delivery tracking:</strong> {order.courier_tracking}</p>}
               {order?.return_tracking && <p><strong>Return tracking:</strong> {order.return_tracking}</p>}
-              {fulfilment === 'return_due' && <p>Please hand the complete device kit to the return courier within 5 calendar days after your rental ends and keep the tracking receipt until QY Roam confirms receipt.</p>}
+              {fulfilment === 'return_due' && <p>Please hand the complete device kit to the return courier within {POCKET_WIFI_RETURN_GRACE_DAYS} calendar days after your rental ends and keep the tracking receipt until QY Roam confirms receipt.</p>}
             </>
           )
         ) : (

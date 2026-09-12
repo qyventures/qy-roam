@@ -27,3 +27,20 @@ export function operationalIsoDateAfter(days: number, now = new Date()) {
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
 }
+
+/**
+ * Return the number of Singapore calendar days from today to a canonical
+ * YYYY-MM-DD operational date. This deliberately compares date-only values
+ * as UTC midnights after deriving "today" in Singapore; parsing a formatted
+ * Singapore clock time in the host timezone can otherwise move an operations
+ * exception by a day on a non-Singapore server.
+ */
+export function operationalDaysFromToday(value: string | null | undefined, now = new Date()) {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const target = new Date(`${value}T00:00:00Z`);
+  // Date normalisation (for example, 2026-02-30) must not quietly turn into
+  // a different trip day in a fulfilment exception view.
+  if (Number.isNaN(target.getTime()) || target.toISOString().slice(0, 10) !== value) return null;
+  const today = new Date(`${operationalIsoDate(now)}T00:00:00Z`);
+  return Math.round((target.getTime() - today.getTime()) / 86_400_000);
+}
