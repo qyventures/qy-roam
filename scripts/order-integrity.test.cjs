@@ -36,6 +36,7 @@ const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
 const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
 const { checkoutSiteOrigin, isProductionQyRoamOrigin } = require('../lib/siteOrigin.ts');
 const { hasRequiredMetaCapiPurchaseConfig } = require('../lib/runtimeConfig.ts');
+const { metaMeasurementAllowed, setMetaMeasurementConsent } = require('../lib/metaClient.ts');
 const { digitalDeliveryReferenceIssue, isSafeDigitalDeliveryReference } = require('../lib/digitalDeliveryReference.ts');
 const { SUPABASE_REQUEST_TIMEOUT_MS, fetchSupabaseWithTimeout } = require('../lib/supabaseAdmin.ts');
 
@@ -74,6 +75,26 @@ const nextConfig = fs.readFileSync(require.resolve('../next.config.mjs'), 'utf8'
 const supabaseAdmin = fs.readFileSync(require.resolve('../lib/supabaseAdmin.ts'), 'utf8');
 
 const requestId = 'checkout_request_123456';
+
+test('optional Meta consent storage cannot block checkout in privacy-restricted browsers', () => {
+  const previousWindow = global.window;
+  global.window = {
+    localStorage: {
+      getItem() { throw new Error('Storage access denied'); },
+      setItem() { throw new Error('Storage access denied'); },
+    },
+  };
+  try {
+    assert.equal(metaMeasurementAllowed(), false);
+    assert.doesNotThrow(() => setMetaMeasurementConsent('accepted'));
+    assert.equal(metaMeasurementAllowed(), true);
+    assert.doesNotThrow(() => setMetaMeasurementConsent('essential'));
+    assert.equal(metaMeasurementAllowed(), false);
+  } finally {
+    if (previousWindow === undefined) delete global.window;
+    else global.window = previousWindow;
+  }
+});
 
 function esimSession(plan = ESIM_PLANS[0]) {
   const session = {

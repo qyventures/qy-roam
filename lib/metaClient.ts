@@ -1,6 +1,38 @@
+type MetaConsent = 'accepted' | 'essential';
+
+const META_CONSENT_KEY = 'qyroam_consent';
+
+// Some privacy-focused browsers and embedded web views expose `localStorage`
+// but throw when it is accessed. Measurement must remain strictly opt-in, but
+// an optional analytics preference must never stop a customer from opening
+// Checkout. Retain an explicit choice for the current tab when persistence is
+// unavailable; a fresh tab defaults back to no measurement.
+let transientConsent: MetaConsent | null = null;
+
+export function metaMeasurementConsent(): MetaConsent | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const stored = window.localStorage.getItem(META_CONSENT_KEY);
+    if (stored === 'accepted' || stored === 'essential') return stored;
+  } catch {
+    // Fall through to the non-persistent, explicit choice for this tab.
+  }
+  return transientConsent;
+}
+
 export function metaMeasurementAllowed() {
-  if (typeof window === 'undefined') return false;
-  return window.localStorage.getItem('qyroam_consent') === 'accepted';
+  return metaMeasurementConsent() === 'accepted';
+}
+
+export function setMetaMeasurementConsent(consent: MetaConsent) {
+  transientConsent = consent;
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(META_CONSENT_KEY, consent);
+  } catch {
+    // The in-memory choice above still lets this tab honour the customer's
+    // explicit decision without making storage availability a checkout gate.
+  }
 }
 
 function cookieValue(name: string) {

@@ -2,11 +2,11 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import { metaMeasurementConsent, setMetaMeasurementConsent } from '@/lib/metaClient';
 
 declare global { interface Window { fbq?: (...args: any[]) => void; _fbq?: any; } }
 
 type Consent = 'accepted' | 'essential';
-const CONSENT_KEY = 'qyroam_consent';
 
 function loadPixel(pixelId: string) {
   if (!pixelId || window.fbq) return;
@@ -28,14 +28,17 @@ export default function MetaConsent() {
   const pixelId = process.env.NEXT_PUBLIC_META_PIXEL_ID || '';
 
   useEffect(() => {
-    const saved = localStorage.getItem(CONSENT_KEY) as Consent | null;
+    const saved = metaMeasurementConsent();
+    // The helper also tolerates storage being unavailable. In that case we do
+    // not invent a saved choice, so the banner remains available to collect an
+    // explicit, tab-local preference.
     setChoice(saved);
     setReady(true);
     if (saved === 'accepted' && pixelId) loadPixel(pixelId);
   }, [pixelId]);
 
   function choose(value: Consent) {
-    localStorage.setItem(CONSENT_KEY, value);
+    setMetaMeasurementConsent(value);
     setChoice(value);
     setSettingsOpen(false);
     if (value === 'accepted' && pixelId) loadPixel(pixelId);

@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from 'react';
 import { ESIM_PLANS, ESIM_PROMO } from '../../lib/esimPlans';
-import { metaAttribution, trackMeta } from '../../lib/metaClient';
+import { metaAttribution, metaMeasurementAllowed, trackMeta } from '../../lib/metaClient';
 
 export default function EsimPage() {
   const [planId, setPlanId] = useState<string>(ESIM_PLANS[0].id);
@@ -19,7 +19,7 @@ export default function EsimPage() {
     setBusy(true);
     setError('');
     try {
-      const measurementConsent = localStorage.getItem('qyroam_consent') === 'accepted';
+      const measurementConsent = metaMeasurementAllowed();
       if (checkoutAttempt.current?.planId !== planId) {
         checkoutAttempt.current = { planId, requestId: crypto.randomUUID() };
       }

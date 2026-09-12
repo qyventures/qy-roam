@@ -3,7 +3,7 @@
 import { FormEvent, useMemo, useRef, useState } from 'react';
 import { LAUNCH_PROMO, validLaunchPromo } from '../lib/promotions';
 import { WIFI_PLANS } from '../lib/wifiPlans';
-import { metaAttribution, trackMeta } from '../lib/metaClient';
+import { metaAttribution, metaMeasurementAllowed, trackMeta } from '../lib/metaClient';
 import { operationalIsoDateAfter } from '../lib/operationalDate';
 
 const plans = WIFI_PLANS;
@@ -101,7 +101,7 @@ export default function Home() {
     if (validationError) { setCheckoutError(validationError); checkoutInFlight.current = false; return; }
     let currentAvailability = availability;
     if (!currentAvailability?.available) { currentAvailability = await checkAvailability(); if (!currentAvailability.available) { checkoutInFlight.current = false; return; } }
-    const measurementConsent = localStorage.getItem('qyroam_consent') === 'accepted';
+    const measurementConsent = metaMeasurementAllowed();
     const fingerprint = JSON.stringify({ country, start, end, promoCode, measurementConsent });
     if (checkoutAttempt.current?.fingerprint !== fingerprint) {
       checkoutAttempt.current = { fingerprint, requestId: crypto.randomUUID() };
