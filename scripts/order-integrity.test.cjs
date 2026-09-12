@@ -40,6 +40,7 @@ const { hasRequiredMetaCapiPurchaseConfig } = require('../lib/runtimeConfig.ts')
 const { metaMeasurementAllowed, setMetaMeasurementConsent } = require('../lib/metaClient.ts');
 const { digitalDeliveryReferenceIssue, isSafeDigitalDeliveryReference } = require('../lib/digitalDeliveryReference.ts');
 const { SUPABASE_REQUEST_TIMEOUT_MS, fetchSupabaseWithTimeout } = require('../lib/supabaseAdmin.ts');
+const { checkoutAttempt, clearCheckoutAttempt, CHECKOUT_ATTEMPT_MAX_AGE_MS } = require('../lib/checkoutAttempt.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -77,6 +78,36 @@ const nextConfig = fs.readFileSync(require.resolve('../next.config.mjs'), 'utf8'
 const supabaseAdmin = fs.readFileSync(require.resolve('../lib/supabaseAdmin.ts'), 'utf8');
 
 const requestId = 'checkout_request_123456';
+
+test('checkout attempt identity survives reloads without becoming permanently stale', () => {
+  const previousWindow = global.window;
+  const previousCrypto = global.crypto;
+  const values = new Map();
+  global.window = { sessionStorage: {
+    getItem(key) { return values.get(key) || null; },
+    setItem(key, value) { values.set(key, value); },
+    removeItem(key) { values.delete(key); },
+  } };
+  global.crypto = { randomUUID: () => '12345678-1234-4234-8234-123456789abc' };
+  try {
+    const first = checkoutAttempt('esim', 'plan-a', null, 1_000_000);
+    const afterReload = checkoutAttempt('esim', 'plan-a', null, 1_000_001);
+    assert.deepEqual(afterReload, first);
+
+    const changedSelection = checkoutAttempt('esim', 'plan-b', null, 1_000_002);
+    assert.notEqual(changedSelection.fingerprint, first.fingerprint);
+
+    const expired = checkoutAttempt('esim', 'plan-b', null, 1_000_002 + CHECKOUT_ATTEMPT_MAX_AGE_MS + 1);
+    assert.ok(expired.createdAt > changedSelection.createdAt);
+    clearCheckoutAttempt('esim');
+    assert.equal(values.size, 0);
+  } finally {
+    if (previousWindow === undefined) delete global.window;
+    else global.window = previousWindow;
+    if (previousCrypto === undefined) delete global.crypto;
+    else global.crypto = previousCrypto;
+  }
+});
 
 test('optional Meta consent storage cannot block checkout in privacy-restricted browsers', () => {
   const previousWindow = global.window;
@@ -649,10 +680,10 @@ test('browser InitiateCheckout events share the durable Stripe attempt identity 
   // checkout-start funnel merely because a response was lost in transit.
   assert.match(metaClient, /export function trackMeta\(event: string, params: Record<string, unknown> = \{\}, options: Record<string, unknown> = \{\}\)/);
   assert.match(metaClient, /fbq\('track', event, params, options\)/);
-  assert.match(homePage, /trackMeta\('InitiateCheckout',[\s\S]*?\{ eventID: `checkout_\$\{checkoutAttempt\.current\.requestId\}` \}\);/);
-  assert.match(esimPage, /trackMeta\('InitiateCheckout',[\s\S]*?\{ eventID: `checkout_\$\{checkoutAttempt\.current\.requestId\}` \}\);/);
-  assert.match(homePage, /const fingerprint = JSON\.stringify[\s\S]*?trackMeta\('InitiateCheckout'/);
-  assert.match(esimPage, /checkoutAttempt\.current\?\.planId !== planId[\s\S]*?trackMeta\('InitiateCheckout'/);
+  assert.match(homePage, /trackMeta\('InitiateCheckout',[\s\S]*?\{ eventID: `checkout_\$\{activeCheckoutAttempt\.current\.requestId\}` \}\);/);
+  assert.match(esimPage, /trackMeta\('InitiateCheckout',[\s\S]*?\{ eventID: `checkout_\$\{activeCheckoutAttempt\.current\.requestId\}` \}\);/);
+  assert.match(homePage, /const fingerprint = JSON\.stringify[\s\S]*?checkoutAttempt\('pocket_wifi', fingerprint, activeCheckoutAttempt\.current\)[\s\S]*?trackMeta\('InitiateCheckout'/);
+  assert.match(esimPage, /const fingerprint = JSON\.stringify[\s\S]*?checkoutAttempt\('esim', fingerprint, activeCheckoutAttempt\.current\)[\s\S]*?trackMeta\('InitiateCheckout'/);
 });
 
 test('Pocket WiFi expiry and inventory scans share the Stripe-safe hold window', () => {

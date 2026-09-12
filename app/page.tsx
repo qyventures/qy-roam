@@ -5,6 +5,7 @@ import { LAUNCH_PROMO, validLaunchPromo } from '../lib/promotions';
 import { WIFI_PLANS } from '../lib/wifiPlans';
 import { metaAttribution, metaMeasurementAllowed, trackMeta } from '../lib/metaClient';
 import { operationalIsoDateAfter } from '../lib/operationalDate';
+import { checkoutAttempt, clearCheckoutAttempt, type CheckoutAttempt } from '../lib/checkoutAttempt';
 
 const plans = WIFI_PLANS;
 
@@ -46,7 +47,7 @@ export default function Home() {
   const [checking, setChecking] = useState(false);
   const [checkingOut, setCheckingOut] = useState(false);
   const [checkoutError, setCheckoutError] = useState('');
-  const checkoutAttempt = useRef<{ fingerprint: string; requestId: string } | null>(null);
+  const activeCheckoutAttempt = useRef<CheckoutAttempt | null>(null);
   const checkoutInFlight = useRef(false);
   const plan = useMemo(() => plans.find(p => p.country === country) || plans[0], [country]);
   const datesValid = Boolean(start && end && start >= earliestStart && end >= start);
@@ -103,9 +104,7 @@ export default function Home() {
     if (!currentAvailability?.available) { currentAvailability = await checkAvailability(); if (!currentAvailability.available) { checkoutInFlight.current = false; return; } }
     const measurementConsent = metaMeasurementAllowed();
     const fingerprint = JSON.stringify({ country, start, end, promoCode, measurementConsent });
-    if (checkoutAttempt.current?.fingerprint !== fingerprint) {
-      checkoutAttempt.current = { fingerprint, requestId: crypto.randomUUID() };
-    }
+    activeCheckoutAttempt.current = checkoutAttempt('pocket_wifi', fingerprint, activeCheckoutAttempt.current);
     // A transient browser/network failure can retry this exact Stripe
     // idempotency key. Give Pixel the same stable attempt identity so it does
     // not turn one customer's recovery attempt into multiple checkout starts.
@@ -119,10 +118,10 @@ export default function Home() {
       value: Number(subtotal.toFixed(2)),
       currency: 'SGD',
       num_items: 1
-    }, { eventID: `checkout_${checkoutAttempt.current.requestId}` });
+    }, { eventID: `checkout_${activeCheckoutAttempt.current.requestId}` });
     setCheckingOut(true);
     try {
-      const res = await fetch('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ country, start, end, promoCode, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: checkoutAttempt.current.requestId }) });
+      const res = await fetch('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ country, start, end, promoCode, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: activeCheckoutAttempt.current.requestId }) });
       const data = await res.json();
       if (data.url) window.location.href = data.url;
       else if (data.completed && typeof data.sessionId === 'string') window.location.href = `/success?session_id=${encodeURIComponent(data.sessionId)}`;
@@ -131,7 +130,10 @@ export default function Home() {
         // created a session before a network response was lost. Rotate it only
         // after the server has confirmed that the prior session expired or
         // belongs to different server-priced booking details.
-        if (data.checkoutExpired || data.checkoutRequestConflict) checkoutAttempt.current = null;
+        if (data.checkoutExpired || data.checkoutRequestConflict) {
+          activeCheckoutAttempt.current = null;
+          clearCheckoutAttempt('pocket_wifi');
+        }
         setCheckoutError(data.error || 'Checkout is temporarily unavailable. Please contact +65 8032 7183.');
       }
     } catch { setCheckoutError('Checkout is temporarily unavailable. Please contact +65 8032 7183.'); }

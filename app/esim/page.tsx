@@ -3,12 +3,13 @@
 import { useMemo, useRef, useState } from 'react';
 import { ESIM_PLANS, ESIM_PROMO } from '../../lib/esimPlans';
 import { metaAttribution, metaMeasurementAllowed, trackMeta } from '../../lib/metaClient';
+import { checkoutAttempt, clearCheckoutAttempt, type CheckoutAttempt } from '../../lib/checkoutAttempt';
 
 export default function EsimPage() {
   const [planId, setPlanId] = useState<string>(ESIM_PLANS[0].id);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const checkoutAttempt = useRef<{ planId: string; requestId: string } | null>(null);
+  const activeCheckoutAttempt = useRef<CheckoutAttempt | null>(null);
   const checkoutInFlight = useRef(false);
   const plan = useMemo(() => ESIM_PLANS.find((item) => item.id === planId) || ESIM_PLANS[0], [planId]);
   const dailyPrice = plan.qyPriceSgd / plan.days;
@@ -20,9 +21,8 @@ export default function EsimPage() {
     setError('');
     try {
       const measurementConsent = metaMeasurementAllowed();
-      if (checkoutAttempt.current?.planId !== planId) {
-        checkoutAttempt.current = { planId, requestId: crypto.randomUUID() };
-      }
+      const fingerprint = JSON.stringify({ planId, measurementConsent });
+      activeCheckoutAttempt.current = checkoutAttempt('esim', fingerprint, activeCheckoutAttempt.current);
       // Keep repeated attempts for the same Stripe idempotency key as one
       // browser checkout-start event. A different plan intentionally creates
       // a new request id and therefore a new funnel event.
@@ -34,11 +34,11 @@ export default function EsimPage() {
         value: Number(plan.qyPriceSgd.toFixed(2)),
         currency: 'SGD',
         num_items: 1
-      }, { eventID: `checkout_${checkoutAttempt.current.requestId}` });
+      }, { eventID: `checkout_${activeCheckoutAttempt.current.requestId}` });
       const res = await fetch('/api/esim-checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ planId, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: checkoutAttempt.current.requestId })
+        body: JSON.stringify({ planId, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: activeCheckoutAttempt.current.requestId })
       });
       const data = await res.json();
       if (data.url) window.location.href = data.url;
@@ -48,7 +48,10 @@ export default function EsimPage() {
         // may already have created the session. An explicit expiry or a
         // server-detected request/plan mismatch is safe to restart with a
         // fresh request id.
-        if (data.checkoutExpired || data.checkoutRequestConflict) checkoutAttempt.current = null;
+        if (data.checkoutExpired || data.checkoutRequestConflict) {
+          activeCheckoutAttempt.current = null;
+          clearCheckoutAttempt('esim');
+        }
         setError(data.error || 'Checkout is temporarily unavailable. Please contact +65 8032 7183.');
       }
     } catch {
