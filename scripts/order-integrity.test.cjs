@@ -30,6 +30,7 @@ const { WIFI_BENCHMARK, WIFI_PLANS } = require('../lib/wifiPlans.ts');
 const { allowedFulfilmentStatuses, fulfilmentNotificationActionable, validFulfilmentTransition, STRIPE_EVENT_CLAIM_STALE_MS } = require('../lib/orderLifecycle.ts');
 const { operationalConfig } = require('../lib/operationalConfig.ts');
 const { validStripeCheckoutSessionId } = require('../lib/stripeSessionId.ts');
+const { validStripeEventCreated, STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS } = require('../lib/stripeEventCreated.ts');
 const { readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError } = require('../lib/requestBody.ts');
 const { checkoutClientKey, createCheckoutAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = require('../lib/stripeCheckoutConfig.ts');
@@ -361,7 +362,7 @@ test('paid orders fail into the durable webhook recovery ledger when fulfilment 
   );
   const claim = processing.indexOf('claimStartedAt=claim.processingStartedAt');
   const detailsGuard = processing.indexOf('paidFulfilmentDetailsIssue(sessionForEvent,validation.productType)');
-  const persistence = processing.indexOf('await persistSession(sessionForEvent,event.type,event.created)');
+  const persistence = processing.indexOf('await persistSession(sessionForEvent,event.type,eventCreated)');
   assert.ok(claim >= 0 && detailsGuard > claim, 'fulfilment validation must run after the durable event claim');
   assert.ok(persistence > detailsGuard, 'an incomplete paid order must not enter the order ledger');
   assert.match(processing, /if\(claimStartedAt\) await recordEventFailure\(supabase,eventClaimId,claimStartedAt,error\)/);
@@ -1569,6 +1570,23 @@ test('Stripe terminal events must agree with their Checkout Session payment stat
   assert.ok(paidClaim < webhookRoute.indexOf('if(eventStateIssue) {', paidClaim), 'invalid paid-event state must be retained in the durable event ledger');
 });
 
+test('Stripe payment event timestamps are bounded before order persistence or CAPI delivery', () => {
+  const now = 1_800_000_000;
+  assert.equal(validStripeEventCreated(now, now), now);
+  assert.equal(validStripeEventCreated(now - 86_400, now), now - 86_400, 'historical Stripe retries remain valid');
+  assert.equal(validStripeEventCreated(0, now), null);
+  assert.equal(validStripeEventCreated(1.5, now), null);
+  assert.equal(validStripeEventCreated(now + STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS + 1, now), null);
+
+  const paidClaim = webhookRoute.lastIndexOf("const eventClaimId=`stripe:${stripeEventId}`");
+  const timestampValidation = webhookRoute.indexOf('const eventCreated=validStripeEventCreated(event.created)', paidClaim);
+  const persistence = webhookRoute.indexOf('await persistSession(sessionForEvent,event.type,eventCreated)', timestampValidation);
+  const capiDelivery = webhookRoute.indexOf('await deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated)', timestampValidation);
+  assert.ok(timestampValidation > paidClaim, 'invalid timestamp must be retained in the claimed webhook ledger');
+  assert.ok(persistence > timestampValidation && capiDelivery > timestampValidation);
+  assert.match(webhookRoute, /Invalid Stripe event timestamp/);
+});
+
 test('signed QY Roam integrity failures remain visible in the webhook recovery ledger', () => {
   const validation = webhookRoute.indexOf('const validation=validateQyRoamSession(sessionForEvent)');
   const paidClaim = webhookRoute.lastIndexOf("const eventClaimId=`stripe:${stripeEventId}`", validation);
@@ -1604,8 +1622,8 @@ test('retried completion events cannot steal a later asynchronous payment timest
   // paid Session and backdating both payment_confirmed_at and Meta Purchase.
   assert.match(webhookRoute, /const eventStateSession=event\.type==='checkout\.session\.expired'\?session:eventSession/);
   assert.match(webhookRoute, /status:eventSession\.status,[\s\S]*payment_status:eventSession\.payment_status/);
-  assert.match(webhookRoute, /persistSession\(sessionForEvent,event\.type,event\.created\)/);
-  assert.match(webhookRoute, /deliverPaidOrderSideEffects\(supabase,sessionForEvent,event\.created\)/);
+  assert.match(webhookRoute, /persistSession\(sessionForEvent,event\.type,eventCreated\)/);
+  assert.match(webhookRoute, /deliverPaidOrderSideEffects\(supabase,sessionForEvent,eventCreated\)/);
   assert.doesNotMatch(webhookRoute, /persistSession\(session,event\.type,event\.created\)/);
 });
 
@@ -1639,7 +1657,7 @@ test('paid-order email and Meta deliveries are attempted independently', () => {
   // invoked while the rejected result still causes Stripe to retry the event.
   assert.match(webhookRoute, /Promise\.allSettled\(\[\s*deliverFulfilmentNotification\(supabase,session\),\s*deliverMetaPurchase\(supabase,session,eventTime\),\s*\]\)/);
   assert.match(webhookRoute, /if\(failures\.length\) throw new AggregateError/);
-  assert.match(webhookRoute, /await deliverPaidOrderSideEffects\(supabase,sessionForEvent,event\.created\)/);
+  assert.match(webhookRoute, /await deliverPaidOrderSideEffects\(supabase,sessionForEvent,eventCreated\)/);
   assert.match(adminOrderRoute, /Promise\.allSettled\(\[/);
   assert.match(adminOrderRoute, /retryFulfilment \? \[deliverFulfilmentNotification\(supabase, session\)\]/);
   assert.match(adminOrderRoute, /retryMeta \? \[deliverMetaPurchase\(supabase, session, metaEventTime\)\]/);

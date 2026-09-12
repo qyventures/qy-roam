@@ -14,6 +14,7 @@ import { getEsimPlan } from '@/lib/esimPlans';
 import { fulfilmentNotificationActionable, STRIPE_EVENT_CLAIM_STALE_MS } from '@/lib/orderLifecycle';
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
 import { validStripeEventId } from '@/lib/stripeEventId';
+import { validStripeEventCreated } from '@/lib/stripeEventCreated';
 
 export const runtime = 'nodejs';
 
@@ -686,6 +687,15 @@ export async function POST(req:Request){
       console.error('stripe_webhook_event_state_error',{eventId:stripeEventId,sessionId:session.id,reason:eventStateIssue});
       throw new Error(`Stripe event state validation failed: ${eventStateIssue}`);
     }
+    // `event.created` is carried into both the durable payment-confirmation
+    // record and Meta's Purchase event. Validate it after claiming the event
+    // so a signed but malformed timestamp is retained as an actionable
+    // webhook exception instead of producing an invalid/future order time.
+    const eventCreated=validStripeEventCreated(event.created);
+    if(!eventCreated) {
+      console.error('stripe_webhook_invalid_event_created',{eventId:stripeEventId,sessionId:session.id});
+      throw new Error('Invalid Stripe event timestamp');
+    }
     // Combine current fulfilment details with the signed event's payment and
     // Checkout state. In particular, an unpaid completion remains an
     // awaiting-payment order even if the Session became paid before this
@@ -705,13 +715,13 @@ export async function POST(req:Request){
     }
     const fulfilmentDetailsIssue=paidFulfilmentDetailsIssue(sessionForEvent,validation.productType);
     if(fulfilmentDetailsIssue) throw new Error(fulfilmentDetailsIssue);
-    await persistSession(sessionForEvent,event.type,event.created);
+    await persistSession(sessionForEvent,event.type,eventCreated);
     // Pocket WiFi persistence atomically replaces the temporary reservation
     // with the durable order commitment inside qy_persist_stripe_pocket_wifi_order.
     if(event.type!=='checkout.session.async_payment_failed'&&sessionForEvent.payment_status==='paid'){
       // Use the signed Stripe event timestamp: the Checkout Session may have
       // been created well before an asynchronous payment actually succeeded.
-      await deliverPaidOrderSideEffects(supabase,sessionForEvent,event.created);
+      await deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated);
     }
     const completed=await supabase.from('stripe_events').update({processed_at:new Date().toISOString()}).eq('event_id',eventClaimId).eq('processing_started_at',claimStartedAt).is('processed_at',null).select('event_id');
     if(completed.error)throw completed.error;
