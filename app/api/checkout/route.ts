@@ -9,7 +9,7 @@ import { QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance, validQyRoamPro
 import { operationalConfig } from '../../../lib/operationalConfig';
 import { operationalIsoDate, operationalIsoDateAfter } from '../../../lib/operationalDate';
 import { hasRequiredFulfilmentEmailConfig, hasRequiredPaymentSchema, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '../../../lib/productionReadiness';
-import { InvalidRequestBodyLengthError, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
+import { InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
 import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { metaAttributionFromRequest } from '@/lib/metaAttribution';
 import { CHECKOUT_HOLD_WINDOW_SECONDS, checkoutExpiresAt, MAX_STRIPE_HOLD_SCAN_PAGES } from '@/lib/checkoutExpiry';
@@ -120,7 +120,7 @@ async function linkReservationToSession(supabase:NonNullable<ReturnType<typeof g
 export async function POST(req: Request) {
  try {
   if(limited(req)) return NextResponse.json({error:'Too many checkout attempts. Please try again shortly.'},{status:429,headers:{'Retry-After':'60'}});
-  const type=req.headers.get('content-type')||''; if(!type.toLowerCase().startsWith('application/json')) return NextResponse.json({error:'Expected JSON request.'},{status:415});
+  if(!isJsonRequestContentType(req.headers.get('content-type'))) return NextResponse.json({error:'Expected JSON request.'},{status:415});
   const key=process.env.STRIPE_SECRET_KEY; if(!hasRequiredStripeCheckoutConfig()||!key) return NextResponse.json({error:'Payment configuration incomplete.'},{status:503});
   if(!process.env.ORDER_INTEGRITY_SECRET||process.env.ORDER_INTEGRITY_SECRET.length<32) return NextResponse.json({error:'Order configuration incomplete.'},{status:503});
   if(!hasRequiredStripeWebhookConfig()) return NextResponse.json({error:'Pocket WiFi ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});

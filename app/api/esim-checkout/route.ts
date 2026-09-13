@@ -5,7 +5,7 @@ import { ESIM_PROMO, getEsimPlan } from '../../../lib/esimPlans';
 import { validCheckoutRequestId } from '../../../lib/checkoutValidation';
 import { QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance, validQyRoamProvenance } from '../../../lib/orderProvenance';
 import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '../../../lib/productionReadiness';
-import { InvalidRequestBodyLengthError, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
+import { InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
 import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { metaAttributionFromRequest } from '@/lib/metaAttribution';
 import { checkoutExpiresAt } from '@/lib/checkoutExpiry';
@@ -45,7 +45,7 @@ function matchesRequestedEsim(session: Stripe.Checkout.Session, requestId: strin
 export async function POST(req: Request) {
   try {
     if (limited(req)) return NextResponse.json({ error: 'Too many checkout attempts. Please try again shortly.' }, { status: 429, headers: { 'Retry-After': '60' } });
-    if (!(req.headers.get('content-type') || '').toLowerCase().startsWith('application/json')) {
+    if (!isJsonRequestContentType(req.headers.get('content-type'))) {
       return NextResponse.json({ error: 'Expected JSON request.' }, { status: 415 });
     }
 

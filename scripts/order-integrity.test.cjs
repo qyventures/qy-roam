@@ -31,7 +31,7 @@ const { allowedFulfilmentStatuses, fulfilmentNotificationActionable, validFulfil
 const { operationalConfig } = require('../lib/operationalConfig.ts');
 const { validStripeCheckoutSessionId } = require('../lib/stripeSessionId.ts');
 const { validStripeEventCreated, STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS } = require('../lib/stripeEventCreated.ts');
-const { readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError } = require('../lib/requestBody.ts');
+const { isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError } = require('../lib/requestBody.ts');
 const { checkoutClientKey, createCheckoutAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = require('../lib/stripeCheckoutConfig.ts');
 const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
@@ -511,6 +511,19 @@ test('checkout request ids use the same production boundary everywhere', () => {
   assert.equal(validCheckoutRequestId(requestId), requestId);
   for (const value of ['short', 'contains spaces 123456', 'bad/slashes/123456', 'x'.repeat(81)]) {
     assert.equal(validCheckoutRequestId(value), null);
+  }
+});
+
+test('JSON request content types require the exact JSON media type', () => {
+  for (const value of ['application/json', 'Application/JSON', 'application/json; charset=utf-8']) {
+    assert.equal(isJsonRequestContentType(value), true);
+  }
+  for (const value of [null, '', 'text/plain', 'application/jsonp', 'application/json-seq']) {
+    assert.equal(isJsonRequestContentType(value), false);
+  }
+  for (const source of [wifiCheckoutRoute, esimCheckoutRoute, adminOpsRoute, adminOrderRoute]) {
+    assert.match(source, /isJsonRequestContentType\(req\.headers\.get\('content-type'\)\)/);
+    assert.doesNotMatch(source, /startsWith\('application\/json'\)/);
   }
 });
 

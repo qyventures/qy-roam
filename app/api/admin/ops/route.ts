@@ -3,7 +3,7 @@ import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { initialFulfilmentStatus, validFulfilmentStatus } from '@/lib/orderLifecycle';
 import { parseExactIsoDate } from '@/lib/checkoutValidation';
 import { operationalConfig } from '@/lib/operationalConfig';
-import { InvalidRequestBodyLengthError, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '@/lib/requestBody';
+import { InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '@/lib/requestBody';
 import { isSafeSmtpMailbox } from '@/lib/smtp';
 
 export const dynamic = 'force-dynamic';
@@ -86,7 +86,7 @@ async function paidOrderGrossForPeriod(db: ReturnType<typeof getSupabaseAdmin>, 
 export async function POST(req: NextRequest) {
   const db = getSupabaseAdmin();
   if (!db) return NextResponse.json({ error: 'Database unavailable' }, { status: 503 });
-  if (!(req.headers.get('content-type') || '').toLowerCase().startsWith('application/json')) {
+  if (!isJsonRequestContentType(req.headers.get('content-type'))) {
     return NextResponse.json({ error: 'Expected JSON request' }, { status: 415 });
   }
   let raw: string;

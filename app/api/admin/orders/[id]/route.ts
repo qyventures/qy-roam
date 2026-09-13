@@ -4,7 +4,7 @@ import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { fulfilmentNotificationActionable, validFulfilmentStatus, validFulfilmentTransition } from '@/lib/orderLifecycle';
 import { validateQyRoamSession } from '@/lib/qyRoamSession';
 import { deliverFulfilmentNotification, deliverMetaPurchase } from '@/app/api/stripe-webhook/route';
-import { InvalidRequestBodyLengthError, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '@/lib/requestBody';
+import { InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '@/lib/requestBody';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
@@ -49,7 +49,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const supabase = getSupabaseAdmin();
   if (!supabase) return NextResponse.json({ error: 'Order database not configured' }, { status: 503 });
 
-  if (!(req.headers.get('content-type') || '').toLowerCase().startsWith('application/json')) {
+  if (!isJsonRequestContentType(req.headers.get('content-type'))) {
     return NextResponse.json({ error: 'Expected JSON request' }, { status: 415 });
   }
   let body: Record<string, unknown>;

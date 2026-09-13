@@ -5,6 +5,17 @@ export class RequestBodyTooLargeError extends Error {}
 export class RequestBodyTimeoutError extends Error {}
 export class InvalidRequestBodyLengthError extends Error {}
 
+/**
+ * Accept JSON media types with optional parameters (for example a charset),
+ * but do not treat a lookalike type such as `application/jsonp` as JSON.
+ * Public checkout and authenticated operations routes use this before reading
+ * a request body, keeping their declared and parsed formats aligned.
+ */
+export function isJsonRequestContentType(value: string | null) {
+  if (!value) return false;
+  return value.split(';', 1)[0].trim().toLowerCase() === 'application/json';
+}
+
 export async function readLimitedRequestText(req: Request, maxBytes: number, timeoutMs: number) {
   const contentLength = req.headers.get('content-length');
   if (contentLength !== null && !/^\d+$/.test(contentLength)) {
