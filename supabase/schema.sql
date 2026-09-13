@@ -108,6 +108,39 @@ create trigger qy_enforce_esim_delivery_reference_immutability
 before update of digital_delivery_reference on public.orders
 for each row execute function public.qy_enforce_esim_delivery_reference_immutability();
 
+-- The admin API applies the eSIM fulfilment graph, but service-role scripts
+-- and future operational tools can write the orders table directly. A valid
+-- status label alone is not enough: without this backstop, such a write could
+-- reopen a fulfilled digital entitlement or make it look cancelled after the
+-- QR code / activation instructions were sent. Stripe is the payment
+-- authority, so retain its two provisional transitions while making the
+-- irreversible delivery hand-off database-enforced as well.
+create or replace function public.qy_enforce_esim_fulfilment_transition()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public
+as $$
+begin
+  if old.product_type = 'esim'
+    and new.product_type = 'esim'
+    and new.fulfilment_status is distinct from old.fulfilment_status
+    and not (
+      (old.fulfilment_status = 'awaiting_payment' and new.fulfilment_status in ('awaiting_fulfilment', 'payment_failed')) or
+      (old.fulfilment_status = 'awaiting_fulfilment' and new.fulfilment_status in ('fulfilled', 'cancelled')) or
+      (old.fulfilment_status = 'fulfilled' and new.fulfilment_status = 'closed')
+    ) then
+    raise exception 'invalid eSIM fulfilment transition';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists qy_enforce_esim_fulfilment_transition on public.orders;
+create trigger qy_enforce_esim_fulfilment_transition
+before update of fulfilment_status on public.orders
+for each row execute function public.qy_enforce_esim_fulfilment_transition();
+
 -- The admin API and webhook each validate the lifecycle they write, but the
 -- service role is also used for migrations and operational recovery. Keep the
 -- product/status boundary in the database so a direct write cannot turn an

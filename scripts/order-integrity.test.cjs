@@ -1295,6 +1295,14 @@ test('fulfilled eSIM orders cannot be reopened or cancelled after digital delive
   assert.equal(validFulfilmentTransition('esim', 'fulfilled', 'closed'), true);
   assert.equal(validFulfilmentTransition('esim', 'fulfilled', 'awaiting_fulfilment'), false);
   assert.equal(validFulfilmentTransition('esim', 'fulfilled', 'cancelled'), false);
+  // The API graph is staff-facing validation; preserve the same irreversible
+  // hand-off boundary for direct service-role writes and future tools.
+  assert.match(schema, /create or replace function public\.qy_enforce_esim_fulfilment_transition\(\)/);
+  assert.match(schema, /old\.fulfilment_status = 'awaiting_payment' and new\.fulfilment_status in \('awaiting_fulfilment', 'payment_failed'\)/);
+  assert.match(schema, /old\.fulfilment_status = 'awaiting_fulfilment' and new\.fulfilment_status in \('fulfilled', 'cancelled'\)/);
+  assert.match(schema, /old\.fulfilment_status = 'fulfilled' and new\.fulfilment_status = 'closed'/);
+  assert.match(schema, /raise exception 'invalid eSIM fulfilment transition'/);
+  assert.match(schema, /create trigger qy_enforce_esim_fulfilment_transition\s+before update of fulfilment_status on public\.orders/);
 });
 
 test('eSIM fulfilment requires a non-secret delivery audit reference', () => {
