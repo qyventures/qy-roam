@@ -1663,6 +1663,11 @@ test('Stripe event idempotency records stay bound to one event type and Checkout
   assert.ok(identityGuard < processedAck);
   assert.ok(identityGuard < staleReclaim);
   assert.match(duplicateClaim, /Stripe event idempotency identity mismatch/);
+  // Application checks keep retries safe, and the database enforces the same
+  // immutable identity for direct service-role repairs or future workers.
+  assert.match(schema, /create or replace function public\.qy_enforce_stripe_event_identity_immutability\(\)/);
+  assert.match(schema, /Stripe event identity is immutable after creation/);
+  assert.match(schema, /create trigger qy_enforce_stripe_event_identity_immutability\s+before update of event_id, event_type, stripe_session_id on public\.stripe_events/);
 });
 
 test('Stripe terminal events must agree with their Checkout Session payment state before any mutation', () => {

@@ -214,6 +214,33 @@ alter table public.stripe_events add column if not exists last_failed_at timesta
 alter table public.stripe_events add column if not exists last_error text;
 alter table public.stripe_events enable row level security;
 
+-- Stripe's event id is the durable idempotency identity. The webhook checks
+-- this before it acknowledges a duplicate or reclaims a failed lease, but
+-- protect the ledger from a direct service-role repair accidentally rebinding
+-- an existing event id to a different Stripe event or Checkout Session. The
+-- normal retry path writes these fields with their original values, so this
+-- leaves safe retries and recovery metadata updates available.
+create or replace function public.qy_enforce_stripe_event_identity_immutability()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public
+as $$
+begin
+  if new.event_id is distinct from old.event_id
+    or new.event_type is distinct from old.event_type
+    or new.stripe_session_id is distinct from old.stripe_session_id then
+    raise exception 'Stripe event identity is immutable after creation';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists qy_enforce_stripe_event_identity_immutability on public.stripe_events;
+create trigger qy_enforce_stripe_event_identity_immutability
+before update of event_id, event_type, stripe_session_id on public.stripe_events
+for each row execute function public.qy_enforce_stripe_event_identity_immutability();
+
 -- Durable human-fulfilment notification ledger. One row per paid checkout.
 -- The webhook records pending before SMTP and sent after SMTP succeeds. Failed
 -- sends stay retryable without coupling the notification state to Stripe's
