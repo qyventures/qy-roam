@@ -35,7 +35,7 @@ const { isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutErro
 const { checkoutClientKey, createCheckoutAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = require('../lib/stripeCheckoutConfig.ts');
 const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
-const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
+const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, checkoutAttemptExpiresAt, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
 const { checkoutSiteOrigin, isProductionQyRoamOrigin } = require('../lib/siteOrigin.ts');
 const { hasRequiredMetaCapiPurchaseConfig } = require('../lib/runtimeConfig.ts');
 const { metaMeasurementAllowed, setMetaMeasurementConsent } = require('../lib/metaClient.ts');
@@ -707,9 +707,26 @@ test('eSIM Checkout Sessions use a bounded, recoverable payment window', () => {
   const nowMs = 1_700_000_000_999;
   assert.equal(checkoutExpiresAt(nowMs), Math.floor(nowMs / 1000) + CHECKOUT_HOLD_WINDOW_SECONDS);
   assert.ok(checkoutExpiresAt(nowMs) - Math.ceil(nowMs / 1000) >= 30 * 60);
-  assert.match(esimCheckoutRoute, /const expiresAt = checkoutExpiresAt\(\)/);
+  assert.match(esimCheckoutRoute, /const expiresAt = checkoutAttemptExpiresAt\(body\.checkoutAttemptCreatedAt\)/);
   assert.match(esimCheckoutRoute, /mode: 'payment',\s*expires_at: expiresAt,/);
   assert.match(esimPage, /data\.checkoutExpired \|\| data\.checkoutRequestConflict/);
+});
+
+test('checkout retries keep Stripe idempotency parameters stable', () => {
+  const createdAt = 1_800_000_000_000;
+  const expected = Math.floor(createdAt / 1000) + CHECKOUT_HOLD_WINDOW_SECONDS;
+  assert.equal(checkoutAttemptExpiresAt(createdAt, createdAt), expected);
+  assert.equal(checkoutAttemptExpiresAt(createdAt, createdAt + 30_000), expected);
+  assert.equal(checkoutAttemptExpiresAt(createdAt, createdAt + CHECKOUT_ATTEMPT_MAX_AGE_MS + 1), null);
+  assert.equal(checkoutAttemptExpiresAt(createdAt + 60_001, createdAt), null);
+  assert.equal(checkoutAttemptExpiresAt('1800000000000', createdAt), null);
+
+  assert.match(esimPage, /checkoutAttemptCreatedAt: activeCheckoutAttempt\.current\.createdAt/);
+  assert.match(homePage, /checkoutAttemptCreatedAt: activeCheckoutAttempt\.current\.createdAt/);
+  assert.match(esimCheckoutRoute, /const expiresAt = checkoutAttemptExpiresAt\(body\.checkoutAttemptCreatedAt\)/);
+  assert.match(wifiCheckoutRoute, /const expiresAtSeconds=checkoutAttemptExpiresAt\(body\.checkoutAttemptCreatedAt\)/);
+  assert.doesNotMatch(esimCheckoutRoute, /checkoutExpiresAt\(\)/);
+  assert.doesNotMatch(wifiCheckoutRoute, /checkoutExpiresAt\(\)/);
 });
 
 test('eSIM idempotent recovery uses a fresh Stripe session state before returning a payment URL', () => {
@@ -735,7 +752,7 @@ test('browser InitiateCheckout events share the durable Stripe attempt identity 
 });
 
 test('Pocket WiFi expiry and inventory scans share the Stripe-safe hold window', () => {
-  assert.match(wifiCheckoutRoute, /const expiresAtSeconds=checkoutExpiresAt\(\)/);
+  assert.match(wifiCheckoutRoute, /const expiresAtSeconds=checkoutAttemptExpiresAt\(body\.checkoutAttemptCreatedAt\)/);
   assert.match(wifiCheckoutRoute, /expires_at:expiresAtSeconds/);
   assert.match(wifiCheckoutRoute, /const cutoff=nowSeconds-CHECKOUT_HOLD_WINDOW_SECONDS/);
   assert.match(availabilityRoute, /const cutoff = nowSeconds - CHECKOUT_HOLD_WINDOW_SECONDS/);

@@ -1,4 +1,5 @@
 import { validCheckoutRequestId } from './checkoutValidation';
+import { CHECKOUT_ATTEMPT_MAX_AGE_MS } from './checkoutExpiry';
 
 export type CheckoutAttempt = {
   fingerprint: string;
@@ -10,7 +11,7 @@ const STORAGE_PREFIX = 'qyroam_checkout_attempt_v1_';
 // Checkout Sessions expire after the short server-side payment window. Keep a
 // little recovery margin for clock skew and delayed browser retries, without
 // letting an old tab reuse an idempotency key indefinitely.
-export const CHECKOUT_ATTEMPT_MAX_AGE_MS = 45 * 60 * 1000;
+export { CHECKOUT_ATTEMPT_MAX_AGE_MS } from './checkoutExpiry';
 
 function storageKey(product: 'esim' | 'pocket_wifi') {
   return `${STORAGE_PREFIX}${product}`;

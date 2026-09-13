@@ -8,7 +8,7 @@ import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig, hasRequir
 import { InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
 import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { metaAttributionFromRequest } from '@/lib/metaAttribution';
-import { checkoutExpiresAt } from '@/lib/checkoutExpiry';
+import { checkoutAttemptExpiresAt } from '@/lib/checkoutExpiry';
 import { checkoutSiteOrigin } from '@/lib/siteOrigin';
 
 export const runtime = 'nodejs';
@@ -81,6 +81,11 @@ export async function POST(req: Request) {
     } catch { return NextResponse.json({ error: 'Invalid request.' }, { status: 400 }); }
     const requestId = validCheckoutRequestId(body.checkoutRequestId);
     if (!requestId) return NextResponse.json({ error: 'Invalid checkout request.' }, { status: 400 });
+    const expiresAt = checkoutAttemptExpiresAt(body.checkoutAttemptCreatedAt);
+    if (!expiresAt) return NextResponse.json({ error: 'This checkout attempt has expired. Please refresh and try again.', checkoutExpired: true }, {
+      status: 409,
+      headers: { 'Cache-Control': 'no-store' },
+    });
     const plan = getEsimPlan(body.planId);
     if (!plan) return NextResponse.json({ error: 'Please select a valid eSIM plan.' }, { status: 400 });
 
@@ -103,8 +108,6 @@ export async function POST(req: Request) {
     const stripe = createStripeClient(key);
     const origin = checkoutSiteOrigin(req.url);
     const amount = Math.max(50, Math.round(plan.qyPriceSgd * 100));
-    const expiresAt = checkoutExpiresAt();
-
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       expires_at: expiresAt,

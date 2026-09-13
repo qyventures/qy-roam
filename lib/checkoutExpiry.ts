@@ -24,6 +24,22 @@ export const MAX_STRIPE_HOLD_SCAN_PAGES = 5;
 // delivery cannot create a paid commitment after the router was resold.
 export const CHECKOUT_WEBHOOK_HANDOFF_GRACE_MS = 4 * 24 * 60 * 60 * 1000;
 
+// The browser keeps this timestamp beside the checkout request id. Stripe
+// requires every request that reuses an idempotency key to have identical
+// parameters, so `expires_at` must be based on the original attempt rather
+// than recalculated on each retry. Bound the client-authored timestamp before
+// it can influence a payable Session: a small future allowance covers clock
+// skew, while the existing browser recovery window limits stale attempts.
+export const CHECKOUT_ATTEMPT_MAX_AGE_MS = 45 * 60 * 1000;
+export const CHECKOUT_ATTEMPT_MAX_FUTURE_MS = 60 * 1000;
+
+export function checkoutAttemptExpiresAt(value: unknown, nowMs = Date.now()) {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)) return null;
+  if (value > nowMs + CHECKOUT_ATTEMPT_MAX_FUTURE_MS) return null;
+  if (nowMs - value > CHECKOUT_ATTEMPT_MAX_AGE_MS) return null;
+  return Math.floor(value / 1000) + CHECKOUT_HOLD_WINDOW_SECONDS;
+}
+
 export function checkoutExpiresAt(nowMs = Date.now()) {
   return Math.floor(nowMs / 1000) + CHECKOUT_HOLD_WINDOW_SECONDS;
 }

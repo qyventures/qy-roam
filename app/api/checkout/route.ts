@@ -12,7 +12,7 @@ import { hasRequiredFulfilmentEmailConfig, hasRequiredPaymentSchema, hasRequired
 import { InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
 import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { metaAttributionFromRequest } from '@/lib/metaAttribution';
-import { CHECKOUT_HOLD_WINDOW_SECONDS, checkoutExpiresAt, MAX_STRIPE_HOLD_SCAN_PAGES } from '@/lib/checkoutExpiry';
+import { CHECKOUT_HOLD_WINDOW_SECONDS, checkoutAttemptExpiresAt, MAX_STRIPE_HOLD_SCAN_PAGES } from '@/lib/checkoutExpiry';
 import { checkoutSiteOrigin } from '@/lib/siteOrigin';
 
 export const runtime = 'nodejs';
@@ -142,6 +142,8 @@ export async function POST(req: Request) {
   } catch { return NextResponse.json({error:'Invalid request.'},{status:400}); }
   const requestId=validCheckoutRequestId(body.checkoutRequestId);
   if(!requestId) return NextResponse.json({error:'Invalid checkout request.'},{status:400});
+  const expiresAtSeconds=checkoutAttemptExpiresAt(body.checkoutAttemptCreatedAt);
+  if(!expiresAtSeconds) return NextResponse.json({error:'This checkout attempt has expired. Please refresh and try again.',checkoutExpired:true},{status:409,headers:{'Cache-Control':'no-store'}});
   const country=String(body.country||''); const wifiPlan=getWifiPlan(country); const daily=wifiPlan?.daily; const startDate=parseExactIsoDate(body.start); const endDate=parseExactIsoDate(body.end);
   if(!wifiPlan||!daily||!startDate||!endDate||endDate<startDate) return NextResponse.json({error:'Please select a valid destination and travel period.'},{status:400});
   // A reservation alone is not enough: once payment succeeds, the webhook
@@ -221,7 +223,6 @@ export async function POST(req: Request) {
     }
     return NextResponse.json({url:existing.url},{headers:{'Cache-Control':'no-store'}});
   }
-  const expiresAtSeconds=checkoutExpiresAt();
   const expiresAt=new Date(expiresAtSeconds*1000).toISOString();
   const reservation=await supabase.rpc('qy_reserve_pocket_wifi',{
     p_checkout_request_id:requestId,
