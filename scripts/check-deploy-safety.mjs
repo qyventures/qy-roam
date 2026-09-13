@@ -14,6 +14,13 @@ assert.match(deploy, /git diff --cached --quiet/);
 assert.doesNotMatch(deploy, /git checkout\s/);
 assert.match(deploy, /npm ci --no-audit --no-fund/);
 assert.doesNotMatch(deploy, /npm install --no-audit --no-fund/);
+// The checked-in unit carries the loopback and restart hardening relied on by
+// the app. A release must reload it before restarting, otherwise a source
+// deploy can leave a stale service definition running indefinitely.
+assert.match(deploy, /systemctl daemon-reload/);
+assert.match(deploy, /Unable to reload the systemd service definition/);
+assert.match(deploy, /if ! systemctl restart "\$SERVICE_NAME"; then/);
+assert.match(deploy, /QY Roam service restart failed/);
 
 // Checkout throttling and consented CAPI attribution use the single client IP
 // written by Nginx. The app must therefore never be reachable directly on a

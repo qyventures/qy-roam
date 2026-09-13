@@ -51,11 +51,26 @@ npm run check:deploy-safety
 npm run test:order-integrity
 npm run build
 
-echo "[5/7] Restarting service"
-systemctl restart "$SERVICE_NAME"
+echo "[5/8] Reloading service definition"
+# The unit file is shipped with the application. Reload it on every release so
+# changes to loopback binding, restart policy, or sandboxing do not sit on disk
+# unnoticed while an older systemd definition continues serving paid traffic.
+if ! systemctl daemon-reload; then
+  echo "Unable to reload the systemd service definition" >&2
+  systemctl --no-pager --full status "$SERVICE_NAME" >&2 || true
+  exit 1
+fi
+
+echo "[6/8] Restarting service"
+if ! systemctl restart "$SERVICE_NAME"; then
+  echo "QY Roam service restart failed" >&2
+  systemctl --no-pager --full status "$SERVICE_NAME" >&2 || true
+  journalctl -u "$SERVICE_NAME" -n 50 --no-pager >&2 || true
+  exit 1
+fi
 systemctl --no-pager --full status "$SERVICE_NAME" | sed -n '1,15p'
 
-echo "[6/7] Waiting for application readiness"
+echo "[7/8] Waiting for application readiness"
 health_output="$(mktemp /tmp/qyroam-health.XXXXXX.json)"
 health_config="$(mktemp /tmp/qyroam-curl.XXXXXX.conf)"
 trap 'rm -f "$health_output" "$health_config"' EXIT
@@ -84,5 +99,5 @@ fi
 cat "$health_output"
 printf '\n'
 
-echo "[7/7] Deployment verification complete"
+echo "[8/8] Deployment verification complete"
 printf 'Deploy completed successfully.\n'
