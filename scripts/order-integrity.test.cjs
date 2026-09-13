@@ -134,6 +134,7 @@ function esimSession(plan = ESIM_PLANS[0]) {
   const session = {
     id: 'cs_test_esim',
     mode: 'payment',
+    payment_status: 'unpaid',
     currency: 'sgd',
     amount_total: Math.max(50, Math.round(plan.qyPriceSgd * 100)),
     metadata: {
@@ -161,6 +162,7 @@ function wifiSession(plan = WIFI_PLANS[0]) {
   const session = {
     id: 'cs_test_wifi',
     mode: 'payment',
+    payment_status: 'unpaid',
     currency: 'sgd',
     amount_total: rental - discount,
     metadata: {
@@ -245,6 +247,18 @@ test('rejects non-payment Checkout modes even with valid signed order metadata',
   assert.match(wifiCheckoutRoute, /return session\.mode==='payment' &&/);
   assert.match(wifiCheckoutRoute, /if\(session\.mode!=='payment'\|\|session\.created<cutoff/);
   assert.match(availabilityRoute, /if \(session\.mode !== 'payment' \|\| session\.created < cutoff/);
+});
+
+test('rejects unsupported Stripe payment states before order persistence', () => {
+  const session = esimSession(ESIM_PLANS[0]);
+  session.payment_status = 'no_payment_required';
+  assert.deepEqual(validateQyRoamSession(session), {
+    valid: false,
+    reason: 'QY Roam order has an unsupported payment status',
+  });
+
+  assert.match(schema, /if p_payment_status not in \('paid', 'unpaid'\) then raise exception 'unsupported Stripe payment status'/);
+  assert.match(schema, /if p_payment_failed and p_payment_status <> 'unpaid' then raise exception 'failed payment must be unpaid'/);
 });
 
 test('rejects unsigned, copied, and session-id-replayed checkout provenance', () => {

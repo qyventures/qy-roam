@@ -532,6 +532,14 @@ declare
   v_fulfilment text;
 begin
   if coalesce(length(trim(p_stripe_session_id)), 0) = 0 then raise exception 'Stripe session id is required'; end if;
+  -- Keep the privileged persistence boundary aligned with the application
+  -- validator. This RPC is deliberately callable only by service_role, but a
+  -- future worker or recovery script must not be able to create a capacity-
+  -- consuming order in a payment state that the Stripe lifecycle cannot
+  -- settle. Paid QY Roam products always have a positive charge, so
+  -- no_payment_required is not a valid operational state here.
+  if p_payment_status not in ('paid', 'unpaid') then raise exception 'unsupported Stripe payment status'; end if;
+  if p_payment_failed and p_payment_status <> 'unpaid' then raise exception 'failed payment must be unpaid'; end if;
   if p_travel_start is null or p_travel_end is null or p_travel_end < p_travel_start then raise exception 'invalid Pocket WiFi travel dates'; end if;
   if p_amount_sgd is null or p_amount_sgd <= 0 then raise exception 'invalid Pocket WiFi payment amount'; end if;
 

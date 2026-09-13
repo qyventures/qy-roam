@@ -94,6 +94,16 @@ export function validateQyRoamSession(session: Stripe.Checkout.Session): QyRoamS
   if (session.mode !== 'payment') {
     return { valid: false, reason: 'QY Roam orders must use one-time payment Checkout mode' };
   }
+  // Every QY Roam Checkout Session has a positive payable amount. Stripe's
+  // `no_payment_required` state (and any future/unknown SDK value) therefore
+  // cannot represent one of our orders. Keep this explicit at the shared
+  // webhook/admin validation boundary: otherwise an unexpected state could be
+  // persisted as an apparently legitimate awaiting-payment order and consume
+  // Pocket WiFi capacity indefinitely without a matching success/failure
+  // transition that our lifecycle understands.
+  if (session.payment_status !== 'paid' && session.payment_status !== 'unpaid') {
+    return { valid: false, reason: 'QY Roam order has an unsupported payment status' };
+  }
   if (!validCheckoutRequestId(session.metadata?.checkout_request_id)) {
     return { valid: false, reason: 'missing or invalid checkout request id' };
   }
