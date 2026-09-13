@@ -99,7 +99,10 @@ export default async function BookingPage({ searchParams }: Props) {
     const start = session.metadata?.start || '';
     const end = session.metadata?.end || '';
     const amount = session.amount_total != null ? `S$${(session.amount_total / 100).toFixed(2)}` : '';
-    const paid = session.payment_status === 'paid';
+    // A paid Checkout Session should be complete. Mirror the webhook's
+    // terminal-session boundary here so a malformed or unexpectedly stale
+    // Stripe object cannot be shown to a customer as a confirmed order.
+    const paid = session.status === 'complete' && session.payment_status === 'paid';
     const checkoutExpired = session.status === 'expired';
 
     return (

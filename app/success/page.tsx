@@ -51,7 +51,11 @@ export default async function SuccessPage({ searchParams }: Props) {
       if (!validation.valid) throw new Error(`Invalid QY Roam Checkout Session: ${validation.reason}`);
       productType = validation.productType;
       checkoutExpired = session.status === 'expired';
-      paid = session.payment_status === 'paid';
+      // Keep the customer-visible payment boundary as strict as webhook
+      // persistence. A paid flag on an unexpected non-complete Session must
+      // not become a fulfilment-looking confirmation page before Stripe has
+      // completed the Checkout lifecycle.
+      paid = session.status === 'complete' && session.payment_status === 'paid';
       destination = session.metadata?.country || '';
       start = session.metadata?.start || '';
       end = session.metadata?.end || '';

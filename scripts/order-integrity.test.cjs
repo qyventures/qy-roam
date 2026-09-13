@@ -858,6 +858,14 @@ test('customer payment confirmation and status views enforce the Stripe credenti
   assert.match(adminOrderRoute, /Stripe Checkout Session mode does not match configured credential/);
 });
 
+test('customer confirmation views require a completed Checkout Session before presenting payment as confirmed', () => {
+  // Keep the customer-facing state machine aligned with the webhook. Stripe
+  // owns both fields, but an inconsistent response must fail closed instead
+  // of showing an order-confirmed view or emitting a browser Purchase event.
+  assert.match(successPage, /paid = session\.status === 'complete' && session\.payment_status === 'paid';/);
+  assert.match(bookingPage, /const paid = session\.status === 'complete' && session\.payment_status === 'paid';/);
+});
+
 test('fulfilment recipients are explicitly configured and never fall back to a historical mailbox', () => {
   assert.match(productionReadiness, /ORDER_FULFILMENT_EMAIL \|\| process\.env\.FULFILMENT_TO \|\| ''/);
   assert.match(webhookRoute, /to=\(process\.env\.ORDER_FULFILMENT_EMAIL\|\|process\.env\.FULFILMENT_TO\|\|''\)\.trim\(\)/);
