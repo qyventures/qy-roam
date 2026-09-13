@@ -1643,7 +1643,7 @@ test('Stripe payment event timestamps are bounded before order persistence or CA
 test('signed QY Roam integrity failures remain visible in the webhook recovery ledger', () => {
   const validation = webhookRoute.indexOf('const validation=validateQyRoamSession(sessionForEvent)');
   const paidClaim = webhookRoute.lastIndexOf("const eventClaimId=`stripe:${stripeEventId}`", validation);
-  const failureRecord = webhookRoute.indexOf('if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error)', paidClaim);
+  const failureRecord = webhookRoute.indexOf('if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error)', validation);
   assert.ok(paidClaim >= 0 && validation > paidClaim, 'claim before validating the persisted order boundary');
   assert.ok(failureRecord > validation, 'malformed signed events must be recorded for operator recovery');
   assert.match(webhookRoute, /Order integrity validation failed: \$\{validation\.reason\}/);
@@ -1668,6 +1668,21 @@ test('Stripe terminal events refresh the Checkout Session before persisting or d
   assert.match(processing, /Retrieved Checkout Session does not match webhook event/);
 });
 
+test('fulfilment-bearing Stripe events are durably claimed before the outbound Session refresh', () => {
+  const claimPosition = webhookRoute.indexOf("claimOnce(supabase,eventClaimId,event.type,eventSessionId)");
+  const retrievePosition = webhookRoute.indexOf('stripe.checkout.sessions.retrieve(eventSessionId)');
+  assert.ok(claimPosition >= 0 && claimPosition < retrievePosition);
+  assert.match(webhookRoute, /stripe_webhook_session_retrieve_error[\s\S]*recordEventFailure\(supabase,eventClaimId,claimStartedAt,error\)/);
+  assert.match(webhookRoute, /stripe_webhook_session_identity_mismatch[\s\S]*recordEventFailure\(supabase,eventClaimId,claimStartedAt,new Error\('Retrieved Checkout Session does not match webhook event'\)\)/);
+  // Inventory-release events retain their stricter provenance-before-claim
+  // ordering so sessions from another product in a shared account cannot
+  // pollute QY Roam's operational recovery ledger.
+  const expiryBranch = webhookRoute.indexOf("if(event.type==='checkout.session.expired'){");
+  const expiryProvenance = webhookRoute.indexOf('if(!validQyRoamProvenance(session.id,session.metadata))', expiryBranch);
+  const expiryClaim = webhookRoute.indexOf('claimOnce(supabase,expiryEventClaimId,event.type,session.id)', expiryBranch);
+  assert.ok(expiryProvenance >= 0 && expiryProvenance < expiryClaim);
+});
+
 test('retried completion events cannot steal a later asynchronous payment timestamp', () => {
   // Customer and shipping data come from the fresh Stripe read, but the
   // signed event snapshot remains authoritative for the transition. This
@@ -1685,7 +1700,7 @@ test('failed Stripe webhook records identify the affected Checkout Session for r
   assert.match(productionReadiness, /event_id,event_type,stripe_session_id,processing_started_at/);
   assert.match(webhookRoute, /claimOnce\(supabase:ReturnType<[^>]+>, id:string, type:string, sessionId:string\)/);
   assert.match(webhookRoute, /stripe_session_id:sessionId/);
-  assert.match(webhookRoute, /claimOnce\(supabase,eventClaimId,event\.type,session\.id\)/);
+  assert.match(webhookRoute, /claimOnce\(supabase,eventClaimId,event\.type,eventSessionId\)/);
   assert.match(adminPage, /event_id,event_type,stripe_session_id,attempts/);
   assert.match(adminPage, /failure\.stripe_session_id/);
 });
@@ -1909,10 +1924,10 @@ test('expired lookalike sessions are ignored before claiming the webhook event',
   // durable event ledger, release inventory, or mutate a provisional order.
   const expiryBranch = webhookRoute.slice(
     webhookRoute.indexOf("if(event.type==='checkout.session.expired')"),
-    webhookRoute.indexOf('const validation=validateQyRoamSession(session)'),
+    webhookRoute.indexOf("if(!claimStartedAt) throw new Error('Stripe event claim was not acquired')"),
   );
   const provenanceGuard = expiryBranch.indexOf('if(!validQyRoamProvenance(session.id,session.metadata))');
-  const eventClaim = expiryBranch.indexOf('await claimOnce(supabase,eventClaimId,event.type,session.id)');
+  const eventClaim = expiryBranch.indexOf('await claimOnce(supabase,expiryEventClaimId,event.type,session.id)');
   assert.notEqual(provenanceGuard, -1);
   assert.notEqual(eventClaim, -1);
   assert.ok(provenanceGuard < eventClaim);

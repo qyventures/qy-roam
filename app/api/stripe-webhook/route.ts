@@ -596,6 +596,25 @@ export async function POST(req:Request){
     console.error('stripe_webhook_invalid_session_id',{eventId:stripeEventId});
     return NextResponse.json({error:'Invalid Checkout Session identifier'},{status:400});
   }
+  // Claim fulfilment-bearing events before the outbound Stripe refresh. If
+  // that dependency is unavailable until Stripe exhausts its delivery retry
+  // window, operations still need a durable record identifying the affected
+  // Checkout Session. Expiry remains claimed later, after provenance has been
+  // verified, because an expiry only releases inventory and shared-account
+  // lookalikes must not enter this application's recovery ledger.
+  const eventClaimId=`stripe:${stripeEventId}`;
+  let claimStartedAt:string|undefined;
+  if(event.type!=='checkout.session.expired'){
+    try{
+      const claim=await claimOnce(supabase,eventClaimId,event.type,eventSessionId);
+      if(claim.status==='processed') return NextResponse.json({received:true,duplicate:true});
+      if(claim.status==='in_progress') return NextResponse.json({error:'Event is still processing'},{status:500});
+      claimStartedAt=claim.processingStartedAt;
+    }catch(error){
+      console.error('stripe_webhook_claim_error',{eventId:stripeEventId,sessionId:eventSessionId});
+      return NextResponse.json({error:'Processing failed'},{status:500});
+    }
+  }
   // Stripe signs the event snapshot, but fetch the Checkout Session again
   // before using it as an order or delivery record. This keeps a delayed
   // terminal event from persisting incomplete customer/shipping fields that
@@ -611,6 +630,7 @@ export async function POST(req:Request){
     // acknowledging a paid order whose durable fulfilment record we cannot
     // safely reconstruct from a complete Checkout Session.
     console.error('stripe_webhook_session_retrieve_error',{eventId:stripeEventId,sessionId:eventSessionId});
+    if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error);
     return NextResponse.json({error:'Unable to retrieve Checkout Session'},{status:500});
   }
   // The signed event selects the Checkout Session to process; the refreshed
@@ -627,6 +647,7 @@ export async function POST(req:Request){
       eventLivemode:event.livemode,
       retrievedLivemode:session.livemode,
     });
+    if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,new Error('Retrieved Checkout Session does not match webhook event'));
     return NextResponse.json({error:'Retrieved Checkout Session does not match webhook event'},{status:500});
   }
   // The retrieved Session is the freshest source for customer, shipping,
@@ -651,33 +672,28 @@ export async function POST(req:Request){
       console.error('stripe_webhook_expiry_integrity_error',{sessionId:session.id});
       return NextResponse.json({received:true,ignored:true});
     }
-    const eventClaimId=`stripe:${stripeEventId}`;
-    let claimStartedAt:string|undefined;
+    const expiryEventClaimId=eventClaimId;
+    let expiryClaimStartedAt:string|undefined;
     try{
-      const claim=await claimOnce(supabase,eventClaimId,event.type,session.id);
+      const claim=await claimOnce(supabase,expiryEventClaimId,event.type,session.id);
       if(claim.status==='processed') return NextResponse.json({received:true,duplicate:true});
       if(claim.status==='in_progress') return NextResponse.json({error:'Event is still processing'},{status:500});
-      claimStartedAt=claim.processingStartedAt;
+      expiryClaimStartedAt=claim.processingStartedAt;
       if(eventStateIssue) throw new Error(`Stripe event state validation failed: ${eventStateIssue}`);
       await releaseExpiredPocketWifiReservation(supabase,session);
       await closeExpiredAwaitingPaymentOrder(supabase,session);
-      const completed=await supabase.from('stripe_events').update({processed_at:new Date().toISOString()}).eq('event_id',eventClaimId).eq('processing_started_at',claimStartedAt).is('processed_at',null).select('event_id');
+      const completed=await supabase.from('stripe_events').update({processed_at:new Date().toISOString()}).eq('event_id',expiryEventClaimId).eq('processing_started_at',expiryClaimStartedAt).is('processed_at',null).select('event_id');
       if(completed.error) throw completed.error;
       if(completed.data?.length!==1) throw new Error('Stripe event claim ownership was lost');
     }catch(error){
       console.error('stripe_webhook_expiry_processing_error',error);
-      if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error);
+      if(expiryClaimStartedAt) await recordEventFailure(supabase,expiryEventClaimId,expiryClaimStartedAt,error);
       return NextResponse.json({error:'Processing failed'},{status:500});
     }
     return NextResponse.json({received:true});
   }
-  const eventClaimId=`stripe:${stripeEventId}`;
-  let claimStartedAt:string|undefined;
   try{
-    const claim=await claimOnce(supabase,eventClaimId,event.type,session.id);
-    if(claim.status==='processed') return NextResponse.json({received:true,duplicate:true});
-    if(claim.status==='in_progress') return NextResponse.json({error:'Event is still processing'},{status:500});
-    claimStartedAt=claim.processingStartedAt;
+    if(!claimStartedAt) throw new Error('Stripe event claim was not acquired');
     // Claim before the validation boundary. A signed QY Roam event that has
     // become malformed due to configuration drift or an unexpected Stripe
     // snapshot must remain visible in the durable recovery ledger; otherwise
