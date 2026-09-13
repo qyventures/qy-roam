@@ -1578,6 +1578,16 @@ test('Stripe order persistence cannot overwrite concurrent fulfilment progress',
   assert.doesNotMatch(webhookRoute, /if\(inserted\.error\.code!==['"]23505['"]\)[\s\S]{0,300}from\('orders'\)\.update\(order\)/);
 });
 
+test('terminal failed payment states cannot be reopened by a later paid event', () => {
+  // A delayed payment is allowed to progress from awaiting_payment to paid.
+  // Once Stripe has sent async_payment_failed (or an expiry closed that
+  // provisional row), its temporary router reservation can be released and
+  // the same dates may be sold again. Both persistence implementations must
+  // therefore fail closed instead of recreating a fulfilment commitment.
+  assert.match(webhookRoute, /if\(paid&&current==='payment_failed'\) throw new Error\('Paid Stripe event cannot reopen a terminally failed order'\)/);
+  assert.match(schema, /if found and v_paid and v_order\.fulfilment_status = 'payment_failed' then\s+raise exception 'paid Stripe event cannot reopen a terminally failed order';/);
+});
+
 test('failed Stripe webhook claims remain visible and immediately retryable', () => {
   assert.match(schema, /stripe_events add column if not exists attempts integer not null default 1/);
   assert.match(schema, /stripe_events add column if not exists last_failed_at timestamptz/);

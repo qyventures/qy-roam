@@ -327,6 +327,15 @@ async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.E
     if(existing.error) throw existing.error;
     const current=existing.data?.fulfilment_status;
     if(!paid&&existing.data?.payment_status==='paid') return;
+    // `async_payment_failed` and an authenticated expiry close an unpaid
+    // Checkout Session permanently.  A later paid event for that same
+    // Session is not a normal delayed-payment transition (the valid path is
+    // awaiting_payment -> paid); accepting it would recreate an eSIM
+    // fulfilment obligation or, worse, turn a released Pocket WiFi hold into
+    // a new booking after its dates may have been sold to someone else. Keep
+    // the signed event in the retry ledger for operator reconciliation rather
+    // than silently overriding this terminal payment failure.
+    if(paid&&current==='payment_failed') throw new Error('Paid Stripe event cannot reopen a terminally failed order');
     const fulfilment=paid?(current&&!['awaiting_payment','payment_failed'].includes(current)?current:defaultPaidStatus):failed?(current&&!['awaiting_payment','payment_failed'].includes(current)?current:'payment_failed'):(current||'awaiting_payment');
     // Retain the first signed payment time so CAPI recovery uses one stable
     // event timestamp even when a later paid event refreshes customer details.

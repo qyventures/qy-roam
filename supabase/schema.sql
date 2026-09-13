@@ -553,6 +553,17 @@ begin
     return v_order;
   end if;
 
+  -- `payment_failed` is a terminal Checkout outcome. The only supported
+  -- delayed-payment promotion is awaiting_payment -> paid. Reopening a failed
+  -- Pocket WiFi row here would be especially dangerous: the failed terminal
+  -- event releases its short-lived reservation, so another traveller may
+  -- already hold the same rental dates. Keep this check in the privileged
+  -- RPC as well as the application persistence path so a future worker cannot
+  -- bypass the inventory boundary.
+  if found and v_paid and v_order.fulfilment_status = 'payment_failed' then
+    raise exception 'paid Stripe event cannot reopen a terminally failed order';
+  end if;
+
   v_fulfilment := case
     when v_paid and found and v_order.fulfilment_status not in ('awaiting_payment','payment_failed') then v_order.fulfilment_status
     when v_paid then 'paid'
