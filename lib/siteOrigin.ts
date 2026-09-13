@@ -37,3 +37,17 @@ export function isProductionQyRoamOrigin(value: string | URL | undefined) {
     return false;
   }
 }
+
+/**
+ * Return the canonical page URL attached to server-side Meta Purchase events.
+ *
+ * This is intentionally stricter than accepting any configured public URL.
+ * CAPI can be retried independently of checkout after a configuration change,
+ * so it must not inherit a path-bearing, malformed, or third-party value and
+ * turn a valid paid purchase into incorrectly attributed campaign data.
+ */
+export function metaPurchaseEventSourceUrl() {
+  const configured = process.env.NEXT_PUBLIC_SITE_URL;
+  if (isProductionQyRoamOrigin(configured)) return `${new URL(configured!).origin}/success`;
+  return 'https://qyroam.com/success';
+}

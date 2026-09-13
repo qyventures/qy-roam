@@ -36,7 +36,7 @@ const { checkoutClientKey, createCheckoutAttemptLimiter } = require('../lib/chec
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = require('../lib/stripeCheckoutConfig.ts');
 const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
 const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, checkoutAttemptExpiresAt, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
-const { checkoutSiteOrigin, isProductionQyRoamOrigin } = require('../lib/siteOrigin.ts');
+const { checkoutSiteOrigin, isProductionQyRoamOrigin, metaPurchaseEventSourceUrl } = require('../lib/siteOrigin.ts');
 const { hasRequiredMetaCapiPurchaseConfig } = require('../lib/runtimeConfig.ts');
 const { metaMeasurementAllowed, setMetaMeasurementConsent } = require('../lib/metaClient.ts');
 const { digitalDeliveryReferenceIssue, isSafeDigitalDeliveryReference } = require('../lib/digitalDeliveryReference.ts');
@@ -2117,6 +2117,24 @@ test('Stripe Checkout redirects fail closed unless production uses a canonical Q
     assert.doesNotMatch(route, /function siteOrigin\(/);
   }
   assert.match(healthRoute, /isProductionQyRoamOrigin\(process\.env\.NEXT_PUBLIC_SITE_URL\)/);
+});
+
+test('Meta Purchase source URLs remain canonical after deployment configuration drift', () => {
+  const priorSiteUrl = process.env.NEXT_PUBLIC_SITE_URL;
+  try {
+    process.env.NEXT_PUBLIC_SITE_URL = 'https://www.qyroam.com/store/';
+    assert.equal(metaPurchaseEventSourceUrl(), 'https://www.qyroam.com/success');
+
+    for (const value of ['https://not-qyroam.example/success', 'http://qyroam.com', 'https://staff@qyroam.com', 'not a URL']) {
+      process.env.NEXT_PUBLIC_SITE_URL = value;
+      assert.equal(metaPurchaseEventSourceUrl(), 'https://qyroam.com/success');
+    }
+  } finally {
+    if (priorSiteUrl === undefined) delete process.env.NEXT_PUBLIC_SITE_URL;
+    else process.env.NEXT_PUBLIC_SITE_URL = priorSiteUrl;
+  }
+  assert.match(webhookRoute, /event_source_url:metaPurchaseEventSourceUrl\(\)/);
+  assert.doesNotMatch(webhookRoute, /event_source_url:`\$\{process\.env\.NEXT_PUBLIC_SITE_URL/);
 });
 
 test('customer confirmation and booking URLs are never cacheable or indexable', () => {
