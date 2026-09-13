@@ -1801,6 +1801,20 @@ test('consented browser and CAPI Purchases share a stable deduplication identity
   assert.match(webhookRoute, /content_type:'product'/);
 });
 
+test('browser Purchase waits for the same durable paid-order boundary as CAPI', () => {
+  // Stripe is the payment authority, but an order that was not persisted is
+  // not yet safe to count as a completed QY Roam conversion. The webhook
+  // persists before delivering CAPI, and the browser Pixel must follow that
+  // boundary rather than reporting an operationally unrecoverable payment.
+  assert.match(successPage, /orderPersisted=\{orderPersisted\}/);
+  assert.match(metaPurchase, /orderPersisted: boolean/);
+  assert.match(metaPurchase, /if \(!orderPersisted \|\| !measurementConsent/);
+  assert.match(metaPurchase, /\[contentId, measurementConsent, orderPersisted, productType, sessionId, value\]/);
+  const persisted = webhookRoute.indexOf('await persistSession(sessionForEvent,event.type,eventCreated)');
+  const capi = webhookRoute.indexOf('await deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated)');
+  assert.ok(persisted >= 0 && capi > persisted, 'CAPI must remain after durable order persistence');
+});
+
 test('browser Purchase is marked delivered only after the Pixel accepts it', () => {
   const trackingCall = metaPurchase.indexOf("trackMetaWhenReady('Purchase'");
   const storageWrite = metaPurchase.indexOf("window.sessionStorage.setItem(key, '1')");

@@ -126,7 +126,7 @@ export default async function SuccessPage({ searchParams }: Props) {
   const purchaseValue = amount ? Number(amount.slice(2)) : Number.NaN;
   return (
     <main className="wrap section legal">
-      {sessionId && <MetaPurchase sessionId={sessionId} measurementConsent={measurementConsent} productType={productType} contentId={contentId} value={purchaseValue} />}
+      {sessionId && <MetaPurchase sessionId={sessionId} measurementConsent={measurementConsent} orderPersisted={orderPersisted} productType={productType} contentId={contentId} value={purchaseValue} />}
       <span className="eyebrow">{orderPersisted ? 'Order confirmed' : 'Payment confirmed'}</span>
       <h1>{orderPersisted ? 'Thank you — your QY Roam order is confirmed.' : 'Thank you — your payment is confirmed.'}</h1>
       {(destination || planName) && <p><strong>{planName || destination}</strong>{start && end ? ` · ${start} to ${end}` : ''}{amount ? ` · ${amount}` : ''}</p>}

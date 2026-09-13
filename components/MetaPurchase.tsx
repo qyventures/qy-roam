@@ -6,6 +6,7 @@ import { metaMeasurementAllowed, trackMetaWhenReady } from '@/lib/metaClient';
 type Props = {
   sessionId: string;
   measurementConsent: boolean;
+  orderPersisted: boolean;
   productType: 'esim' | 'pocket_wifi';
   contentId: string;
   value: number;
@@ -15,10 +16,13 @@ const PURCHASE_KEY_PREFIX = 'qyroam_meta_purchase_';
 
 // Stripe can redirect to this page more than once and the customer can refresh
 // it. CAPI deduplicates by event_id, but do not intentionally inflate browser
-// Pixel reporting or repeatedly queue the same client conversion either.
-export default function MetaPurchase({ sessionId, measurementConsent, productType, contentId, value }: Props) {
+// Pixel reporting or repeatedly queue the same client conversion either. More
+// importantly, a Stripe payment alone is not the operational order boundary:
+// wait until the webhook has durably recorded the paid order, just as CAPI
+// does, so reporting never counts a payment whose fulfilment record failed.
+export default function MetaPurchase({ sessionId, measurementConsent, orderPersisted, productType, contentId, value }: Props) {
   useEffect(() => {
-    if (!measurementConsent || !metaMeasurementAllowed() || !Number.isFinite(value) || value < 0) return;
+    if (!orderPersisted || !measurementConsent || !metaMeasurementAllowed() || !Number.isFinite(value) || value < 0) return;
     const key = `${PURCHASE_KEY_PREFIX}${sessionId}`;
     try {
       if (window.sessionStorage.getItem(key)) return;
@@ -40,7 +44,7 @@ export default function MetaPurchase({ sessionId, measurementConsent, productTyp
         // The stable eventID still deduplicates browser and CAPI delivery.
       }
     });
-  }, [contentId, measurementConsent, productType, sessionId, value]);
+  }, [contentId, measurementConsent, orderPersisted, productType, sessionId, value]);
 
   return null;
 }
