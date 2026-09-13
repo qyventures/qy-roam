@@ -197,15 +197,15 @@ async function readDeliveryResponseBody(response: Response) {
   return Buffer.concat(chunks,total).toString('utf8');
 }
 
-async function postJsonWithTimeout(url:string,body:unknown,timeoutMs=DELIVERY_TIMEOUT_MS){
+async function postJsonWithTimeout(url:string,body:unknown,timeoutMs=DELIVERY_TIMEOUT_MS,headers:Record<string,string>={}){
   const controller=new AbortController();
   const deadline=setTimeout(()=>controller.abort(),timeoutMs);
   try{
-    // Both the optional SMTP relay payload and Meta URL contain credentials.
-    // Following a redirect would resend those values to a different endpoint,
+    // Both the optional SMTP relay payload and Meta authorization header carry
+    // credentials. Following a redirect would resend those values to a different endpoint,
     // and can turn a harmless relay typo into a paid-order data leak. Treat a
     // redirect as a failed retryable delivery instead.
-    const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:controller.signal,redirect:'error'});
+    const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify(body),signal:controller.signal,redirect:'error'});
     // Consume the response while the deadline is still active. A provider that
     // sends headers and then stalls its body must not hold the webhook open.
     const responseBody=await readDeliveryResponseBody(response);
@@ -232,7 +232,11 @@ async function sendMetaPurchase(session: Stripe.Checkout.Session, eventTime: num
   const productType=session.metadata?.product_type||'pocket_wifi';
   const contentId=productType==='esim' ? `esim:${session.metadata?.plan_id||''}` : `pocket_wifi:${session.metadata?.country||''}`;
   const payload={data:[{event_name:'Purchase',event_time:eventTime,action_source:'website',event_source_url:metaPurchaseEventSourceUrl(),event_id:`stripe_${session.id}`,user_data:{...userData,...(clientUserAgent?{client_user_agent:clientUserAgent}:{}),...(clientIp?{client_ip_address:clientIp}:{})},custom_data:{currency:'SGD',value:(session.amount_total||0)/100,order_id:session.id,content_type:'product',content_ids:[contentId],contents:[{id:contentId,quantity:1}],content_category:productType==='esim'?'Travel eSIM':'Pocket WiFi'}}]};
-  const response=await postJsonWithTimeout(`https://graph.facebook.com/${META_GRAPH_API_VERSION}/${pixel}/events?access_token=${encodeURIComponent(token)}`,payload);
+  // Keep the CAPI credential out of the URL. Query strings are commonly
+  // retained by reverse proxies, request tracing, and provider diagnostics;
+  // an Authorization header reaches the same Graph endpoint without making a
+  // durable/loggable URL carry a paid-order delivery credential.
+  const response=await postJsonWithTimeout(`https://graph.facebook.com/${META_GRAPH_API_VERSION}/${pixel}/events`,payload,DELIVERY_TIMEOUT_MS,{Authorization:`Bearer ${token}`});
   // Provider responses are not a safe diagnostic channel: an intermediary
   // can echo request data or credentials. The error is persisted in the
   // operator-visible retry ledger and logged by the webhook, so retain only

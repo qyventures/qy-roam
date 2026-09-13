@@ -1931,7 +1931,7 @@ test('paid-order delivery endpoints are fail-closed and never follow credential-
   // A relay typo must stop checkout before a customer pays, rather than
   // failing only when the webhook tries to send fulfilment data. Redirects
   // are unsafe here because the relay body has SMTP credentials and the Meta
-  // request URL carries its access token.
+  // request carries its access token in an authorization header.
   assert.match(productionReadiness, /const relayUrl = process\.env\.SMTP_RELAY_URL\?\.trim\(\)/);
   assert.match(productionReadiness, /const relaySecret = process\.env\.SMTP_RELAY_SECRET\?\.trim\(\)/);
   assert.equal(safeHttpsDeliveryEndpoint('https://relay.example.com/orders'), 'https://relay.example.com/orders');
@@ -1946,12 +1946,15 @@ test('paid-order delivery endpoints are fail-closed and never follow credential-
   assert.match(productionReadiness, /relaySecret\.length >= 24/);
   assert.match(productionReadiness, /isSafeSmtpMailbox\(from\) && isSafeSmtpMailbox\(recipient\) && relayConfigured/);
   assert.match(webhookRoute, /redirect:'error'/);
+  assert.match(webhookRoute, /Authorization:`Bearer \$\{token\}`/);
+  assert.match(webhookRoute, /https:\/\/graph\.facebook\.com\/\$\{META_GRAPH_API_VERSION\}\/\$\{pixel\}\/events/);
+  assert.doesNotMatch(webhookRoute, /events\?access_token=/);
 });
 
 test('third-party delivery failures never copy response bodies into logs or recovery records', () => {
   // Both provider calls carry sensitive data: the SMTP relay receives its
   // transport credentials and paid-order details, while Meta uses an access
-  // token in its request URL. Their response bodies are untrusted and can be
+  // token in its authorization header. Their response bodies are untrusted and can be
   // surfaced by webhook error logging or the durable retry ledger.
   assert.match(webhookRoute, /Meta CAPI failed \(\$\{response\.status\}\)/);
   assert.match(webhookRoute, /SMTP relay failed \(\$\{response\.status\}\)/);
