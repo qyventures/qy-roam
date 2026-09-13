@@ -521,6 +521,13 @@ test('Pocket WiFi availability publishes only validated public booking terms for
   assert.match(homePage, /Total due today: S\$\{payableTotal\.toFixed\(2\)\}/);
 });
 
+test('Pocket WiFi checkout renders live availability terms before opening Stripe Checkout', () => {
+  // The availability endpoint is also the public source for delivery lead
+  // time and courier pricing. A first click must not redirect to payment in
+  // the same render pass that receives a revised total.
+  assert.match(homePage, /if \(!currentAvailability\?\.available\) \{[\s\S]*?currentAvailability = await checkAvailability\(\);[\s\S]*?if \(currentAvailability\.available\) \{[\s\S]*?setCheckoutError\('Availability confirmed\. Please review the updated total, then select Reserve\.'\);[\s\S]*?checkoutInFlight\.current = false;[\s\S]*?return;/);
+});
+
 test('checkout request ids use the same production boundary everywhere', () => {
   assert.equal(validCheckoutRequestId(requestId), requestId);
   for (const value of ['short', 'contains spaces 123456', 'bad/slashes/123456', 'x'.repeat(81)]) {

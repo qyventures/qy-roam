@@ -101,7 +101,20 @@ export default function Home() {
     const validationError = validateDates();
     if (validationError) { setCheckoutError(validationError); checkoutInFlight.current = false; return; }
     let currentAvailability = availability;
-    if (!currentAvailability?.available) { currentAvailability = await checkAvailability(); if (!currentAvailability.available) { checkoutInFlight.current = false; return; } }
+    if (!currentAvailability?.available) {
+      currentAvailability = await checkAvailability();
+      // Availability also returns the live courier fee and delivery lead time.
+      // Do not send a shopper directly to Stripe on the same click that first
+      // learns those terms: React has not rendered the revised total yet, so
+      // that flow could make a newly configured courier charge a surprise.
+      // The next explicit action uses this checked availability snapshot;
+      // Checkout still recalculates and validates the amount on the server.
+      if (currentAvailability.available) {
+        setCheckoutError('Availability confirmed. Please review the updated total, then select Reserve.');
+      }
+      checkoutInFlight.current = false;
+      return;
+    }
     const measurementConsent = metaMeasurementAllowed();
     const fingerprint = JSON.stringify({ country, start, end, promoCode, measurementConsent });
     activeCheckoutAttempt.current = checkoutAttempt('pocket_wifi', fingerprint, activeCheckoutAttempt.current);
