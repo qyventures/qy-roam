@@ -1,6 +1,7 @@
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import crypto from 'crypto';
 import { isSafeSmtpHost, isSafeSmtpMailbox } from '@/lib/smtp';
+import { safeHttpsDeliveryEndpoint } from '@/lib/deliveryEndpoint';
 export { hasRequiredStripeCheckoutConfig } from '@/lib/stripeCheckoutConfig';
 
 // Checkout invokes these guards immediately before creating a payable Stripe
@@ -150,12 +151,7 @@ export function hasRequiredFulfilmentEmailConfig() {
   // HTTPS endpoint without embedded credentials whenever the relay is used.
   let relayConfigured = !relayUrl && !relaySecret;
   if (relayUrl && relaySecret && relaySecret.length >= 24 && !/[\r\n]/.test(relaySecret)) {
-    try {
-      const url = new URL(relayUrl);
-      relayConfigured = url.protocol === 'https:' && Boolean(url.hostname) && !url.username && !url.password;
-    } catch {
-      relayConfigured = false;
-    }
+    relayConfigured = Boolean(safeHttpsDeliveryEndpoint(relayUrl));
   }
   return Boolean(
     isSafeSmtpHost(host) &&

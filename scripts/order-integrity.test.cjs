@@ -42,6 +42,7 @@ const { metaMeasurementAllowed, setMetaMeasurementConsent } = require('../lib/me
 const { digitalDeliveryReferenceIssue, isSafeDigitalDeliveryReference } = require('../lib/digitalDeliveryReference.ts');
 const { SUPABASE_REQUEST_TIMEOUT_MS, fetchSupabaseWithTimeout } = require('../lib/supabaseAdmin.ts');
 const { checkoutAttempt, clearCheckoutAttempt, CHECKOUT_ATTEMPT_MAX_AGE_MS } = require('../lib/checkoutAttempt.ts');
+const { safeHttpsDeliveryEndpoint } = require('../lib/deliveryEndpoint.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -1846,7 +1847,15 @@ test('paid-order delivery endpoints are fail-closed and never follow credential-
   // request URL carries its access token.
   assert.match(productionReadiness, /const relayUrl = process\.env\.SMTP_RELAY_URL\?\.trim\(\)/);
   assert.match(productionReadiness, /const relaySecret = process\.env\.SMTP_RELAY_SECRET\?\.trim\(\)/);
-  assert.match(productionReadiness, /relayConfigured = url\.protocol === 'https:'/);
+  assert.equal(safeHttpsDeliveryEndpoint('https://relay.example.com/orders'), 'https://relay.example.com/orders');
+  for (const unsafe of ['http://relay.example.com/orders', 'https://user:pass@relay.example.com/orders', 'not a URL', '']) {
+    assert.equal(safeHttpsDeliveryEndpoint(unsafe), null);
+  }
+  // Runtime settings can change after checkout or before an admin retry. The
+  // outbound webhook path must enforce the same boundary as readiness.
+  assert.match(productionReadiness, /safeHttpsDeliveryEndpoint\(relayUrl\)/);
+  assert.match(webhookRoute, /const relayUrl=safeHttpsDeliveryEndpoint\(configuredRelayUrl\)/);
+  assert.match(webhookRoute, /if\(!relayUrl\) throw new Error\('SMTP relay endpoint is invalid'\)/);
   assert.match(productionReadiness, /relaySecret\.length >= 24/);
   assert.match(productionReadiness, /isSafeSmtpMailbox\(from\) && isSafeSmtpMailbox\(recipient\) && relayConfigured/);
   assert.match(webhookRoute, /redirect:'error'/);
