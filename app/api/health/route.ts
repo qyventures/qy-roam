@@ -7,6 +7,11 @@ import { isProductionQyRoamOrigin } from '@/lib/siteOrigin';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
+// Health credentials are machine-issued bearer tokens, not an unbounded
+// request payload. Bound the comparison loop as a defence in depth measure
+// for deployments that do not enforce a proxy header limit.
+const MAX_HEALTH_AUTHORIZATION_HEADER_LENGTH = 1_024;
+
 function hasPrefix(value: string | undefined, prefixes: string[]) {
   return Boolean(value && prefixes.some((prefix) => value.startsWith(prefix)));
 }
@@ -38,7 +43,11 @@ function isAuthorized(req: Request) {
   const expected = process.env.HEALTH_CHECK_TOKEN;
   if (!expected || expected.length < 24) return false;
   const supplied = req.headers.get('authorization');
-  return Boolean(supplied?.startsWith('Bearer ') && constantTimeEqual(supplied.slice(7), expected));
+  return Boolean(
+    supplied?.startsWith('Bearer ') &&
+    supplied.length <= MAX_HEALTH_AUTHORIZATION_HEADER_LENGTH &&
+    constantTimeEqual(supplied.slice(7), expected),
+  );
 }
 
 export async function GET(req: Request) {

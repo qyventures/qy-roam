@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminCredentials } from './lib/runtimeConfig';
 
+// Reverse proxies normally impose a header limit, but authentication is a
+// public edge of the operations surface and must retain a bounded CPU/memory
+// cost when the application is reached through a different proxy. This still
+// leaves substantially more room than a normal username/password pair.
+const MAX_BASIC_AUTH_HEADER_LENGTH = 8_192;
+const MAX_BASIC_AUTH_DECODED_LENGTH = 4_096;
+
 function safeEqual(a: string, b: string) {
   const maxLength = Math.max(a.length, b.length);
   let diff = a.length ^ b.length;
@@ -53,10 +60,10 @@ export function middleware(req: NextRequest) {
   }
 
   const auth = req.headers.get('authorization');
-  if (auth?.startsWith('Basic ')) {
+  if (auth?.startsWith('Basic ') && auth.length <= MAX_BASIC_AUTH_HEADER_LENGTH) {
     try {
       const decoded = atob(auth.slice(6));
-      const separator = decoded.indexOf(':');
+      const separator = decoded.length <= MAX_BASIC_AUTH_DECODED_LENGTH ? decoded.indexOf(':') : -1;
       if (separator > -1) {
         const givenUser = decoded.slice(0, separator);
         const givenPass = decoded.slice(separator + 1);

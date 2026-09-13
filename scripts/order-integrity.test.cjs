@@ -1976,6 +1976,18 @@ test('authenticated admin browser mutations reject cross-site request triggering
   assert.match(middleware, /'Cache-Control': 'no-store'/);
 });
 
+test('admin and authenticated health checks bound credential inputs before comparison', () => {
+  // Authentication headers are attacker-controlled at the application edge.
+  // Keep the constant-time comparison work bounded even if a deployment's
+  // outer proxy does not impose its usual header-size limit.
+  assert.match(middleware, /MAX_BASIC_AUTH_HEADER_LENGTH = 8_192/);
+  assert.match(middleware, /MAX_BASIC_AUTH_DECODED_LENGTH = 4_096/);
+  assert.match(middleware, /auth\.length <= MAX_BASIC_AUTH_HEADER_LENGTH/);
+  assert.match(middleware, /decoded\.length <= MAX_BASIC_AUTH_DECODED_LENGTH/);
+  assert.match(healthRoute, /MAX_HEALTH_AUTHORIZATION_HEADER_LENGTH = 1_024/);
+  assert.match(healthRoute, /supplied\.length <= MAX_HEALTH_AUTHORIZATION_HEADER_LENGTH/);
+});
+
 test('paid orders reconcile into CRM records idempotently without overwriting operator workflow fields', () => {
   // The CRM must follow the authoritative paid-orders ledger, including a
   // delayed payment that changes an existing order from awaiting payment to
