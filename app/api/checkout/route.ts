@@ -47,6 +47,11 @@ function matchesRequestedPocketWifi(session:Stripe.Checkout.Session,requestId:st
     session.metadata?.promo_code===requested.promoCode &&
     session.metadata?.promo_discount_sgd===(requested.promoDiscount/100).toFixed(2) &&
     session.metadata?.courier_fee_sgd===(requested.courierFee/100).toFixed(2) &&
+    // The webhook independently validates this snapshot before recording a
+    // paid order. Keep retries on the same boundary so a session modified in
+    // Stripe cannot be re-signed and exposed when its amount field happens
+    // to still match the requested booking.
+    session.metadata?.checkout_amount_cents===String(expectedAmount) &&
     session.currency?.toLowerCase()==='sgd' && session.amount_total===expectedAmount;
 }
 

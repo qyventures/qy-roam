@@ -38,6 +38,11 @@ function matchesRequestedEsim(session: Stripe.Checkout.Session, requestId: strin
     session.metadata?.promo_code === ESIM_PROMO.code &&
     session.metadata?.benchmark_price_sgd === plan.benchmarkPriceSgd.toFixed(2) &&
     session.metadata?.promo_discount_percent === String(ESIM_PROMO.percent) &&
+    // This snapshot is independently validated by the paid-order boundary.
+    // Include it in idempotent recovery too: otherwise a dashboard-edited
+    // session with matching Stripe amount could be signed again and exposed
+    // for payment even though the webhook would correctly reject it later.
+    session.metadata?.checkout_amount_cents === String(Math.max(50, Math.round(plan.qyPriceSgd * 100))) &&
     session.currency?.toLowerCase() === 'sgd' &&
     session.amount_total === Math.max(50, Math.round(plan.qyPriceSgd * 100));
 }
