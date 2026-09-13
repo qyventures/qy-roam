@@ -144,6 +144,11 @@ function stripeCheckoutEventStateIssue(eventType:Stripe.Event.Type,session:Strip
   return null;
 }
 const DELIVERY_TIMEOUT_MS=20_000;
+// Meta retires Graph API versions on a rolling schedule. Keep this explicit
+// (rather than burying it in the delivery URL) so the production-boundary
+// test can prevent a long-lived release from continuing to send paid Purchase
+// events to the retired v21 endpoint.
+const META_GRAPH_API_VERSION='v26.0';
 // Delivery ledgers are normally protected by a non-null database timestamp,
 // but a partially migrated or manually repaired record can still contain an
 // invalid value. Treat that lease as abandoned instead of leaving a paid
@@ -226,7 +231,7 @@ async function sendMetaPurchase(session: Stripe.Checkout.Session, eventTime: num
   const productType=session.metadata?.product_type||'pocket_wifi';
   const contentId=productType==='esim' ? `esim:${session.metadata?.plan_id||''}` : `pocket_wifi:${session.metadata?.country||''}`;
   const payload={data:[{event_name:'Purchase',event_time:eventTime,action_source:'website',event_source_url:`${process.env.NEXT_PUBLIC_SITE_URL||'https://qyroam.com'}/success`,event_id:`stripe_${session.id}`,user_data:{...userData,...(clientUserAgent?{client_user_agent:clientUserAgent}:{}),...(clientIp?{client_ip_address:clientIp}:{})},custom_data:{currency:'SGD',value:(session.amount_total||0)/100,order_id:session.id,content_type:'product',content_ids:[contentId],contents:[{id:contentId,quantity:1}],content_category:productType==='esim'?'Travel eSIM':'Pocket WiFi'}}]};
-  const response=await postJsonWithTimeout(`https://graph.facebook.com/v21.0/${pixel}/events?access_token=${encodeURIComponent(token)}`,payload);
+  const response=await postJsonWithTimeout(`https://graph.facebook.com/${META_GRAPH_API_VERSION}/${pixel}/events?access_token=${encodeURIComponent(token)}`,payload);
   // Provider responses are not a safe diagnostic channel: an intermediary
   // can echo request data or credentials. The error is persisted in the
   // operator-visible retry ledger and logged by the webhook, so retain only

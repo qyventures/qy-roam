@@ -1529,6 +1529,15 @@ test('admin CAPI recovery is limited to consented purchases and remains availabl
   assert.match(adminOrderActions, /Retry order deliveries/);
 });
 
+test('Meta CAPI Purchase delivery uses the supported Graph API generation', () => {
+  // A retired Graph version turns otherwise healthy paid-order webhooks into
+  // durable delivery failures. Keep the version visible and reject the
+  // historical v21 endpoint rather than relying on a manual release review.
+  assert.match(webhookRoute, /const META_GRAPH_API_VERSION='v26\.0';/);
+  assert.match(webhookRoute, /https:\/\/graph\.facebook\.com\/\$\{META_GRAPH_API_VERSION\}\/\$\{pixel\}\/events/);
+  assert.doesNotMatch(webhookRoute, /graph\.facebook\.com\/v21\.0\//);
+});
+
 test('admin recovery only resumes actionable fulfilment while preserving consented CAPI recovery', () => {
   assert.match(adminOrderRoute, /export async function POST/);
   assert.match(adminOrderRoute, /validateQyRoamSession\(session\)/);
