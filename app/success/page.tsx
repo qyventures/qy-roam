@@ -27,6 +27,7 @@ export default async function SuccessPage({ searchParams }: Props) {
   let productType: QyRoamProductType | null = null;
   let planName = '';
   let planId = '';
+  let checkoutExpired = false;
   let measurementConsent = false;
   let orderPersisted = false;
   let orderLookupFailed = false;
@@ -49,6 +50,7 @@ export default async function SuccessPage({ searchParams }: Props) {
       const validation = validateQyRoamSession(session);
       if (!validation.valid) throw new Error(`Invalid QY Roam Checkout Session: ${validation.reason}`);
       productType = validation.productType;
+      checkoutExpired = session.status === 'expired';
       paid = session.payment_status === 'paid';
       destination = session.metadata?.country || '';
       start = session.metadata?.start || '';
@@ -102,11 +104,15 @@ export default async function SuccessPage({ searchParams }: Props) {
     return (
       <main className="wrap section legal">
         <span className="eyebrow">Payment status</span>
-        <h1>We’re still confirming your payment.</h1>
-        <p>If you completed payment, please wait a moment and refresh this page. Some payment methods can take a little longer to confirm.</p>
-        {sessionId && <p><a className="secondary" href={`/booking?session_id=${encodeURIComponent(sessionId)}`}>Check booking status</a></p>}
+        <h1>{checkoutExpired ? 'This secure checkout session has expired.' : 'We’re still confirming your payment.'}</h1>
+        {checkoutExpired ? (
+          <p>No payment was completed for this session. Please return to the plans page to start a new secure checkout.</p>
+        ) : (
+          <p>If you completed payment, please wait a moment and refresh this page. Some payment methods can take a little longer to confirm.</p>
+        )}
+        {sessionId && !checkoutExpired && <p><a className="secondary" href={`/booking?session_id=${encodeURIComponent(sessionId)}`}>Check booking status</a></p>}
         <p>If you need help, contact us at <a href="tel:+6580327183"><strong>+65 8032 7183</strong></a>.</p>
-        <a className="secondary" href="/">Back to QY Roam</a>
+        <a className="secondary" href={productType === 'esim' ? '/esim' : '/'}>{checkoutExpired ? 'Choose a plan' : 'Back to QY Roam'}</a>
       </main>
     );
   }

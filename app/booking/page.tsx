@@ -100,14 +100,17 @@ export default async function BookingPage({ searchParams }: Props) {
     const end = session.metadata?.end || '';
     const amount = session.amount_total != null ? `S$${(session.amount_total / 100).toFixed(2)}` : '';
     const paid = session.payment_status === 'paid';
+    const checkoutExpired = session.status === 'expired';
 
     return (
       <main className="wrap section legal">
         <span className="eyebrow">Order status</span>
-        <h1>{paid ? statusLabels[fulfilment] || 'Order confirmed' : 'Payment not yet confirmed'}</h1>
+        <h1>{checkoutExpired ? 'This secure checkout session has expired' : paid ? statusLabels[fulfilment] || 'Order confirmed' : 'Payment not yet confirmed'}</h1>
         <p><strong>{planName}</strong>{start && end ? ` · ${start} to ${end}` : ''}{amount ? ` · ${amount}` : ''}</p>
 
-        {paid && !orderPersisted ? (
+        {checkoutExpired ? (
+          <p>No payment was completed for this session. Return to the plans page to start a new secure checkout.</p>
+        ) : paid && !orderPersisted ? (
           <div role="alert">
             <p><strong>Your payment is confirmed.</strong> We’re {orderLookupFailed ? 'temporarily unable to verify' : 'still finalising'} the order record, so fulfilment details are not available just yet.</p>
             <p>Please do not place a second order. Refresh this page shortly; if this message remains, contact us at <a href="tel:+6580327183"><strong>+65 8032 7183</strong></a> and quote your checkout confirmation.</p>
@@ -131,7 +134,7 @@ export default async function BookingPage({ searchParams }: Props) {
         )}
 
         <p>Need help? Call <a href="tel:+6580327183"><strong>+65 8032 7183</strong></a>.</p>
-        <a className="secondary" href={isEsim ? '/esim' : '/'}>{isEsim ? 'Back to eSIM plans' : 'Back to QY Roam'}</a>
+        <a className="secondary" href={isEsim ? '/esim' : '/'}>{checkoutExpired ? 'Choose a plan' : isEsim ? 'Back to eSIM plans' : 'Back to QY Roam'}</a>
       </main>
     );
   } catch (error) {

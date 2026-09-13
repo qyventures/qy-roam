@@ -463,6 +463,18 @@ test('success confirmation does not imply fulfilment is durable before the paid 
   assert.match(successPage, /orderLookupFailed \? 'temporarily unable to verify' : 'finalising'/);
 });
 
+test('customer confirmation views distinguish expired Checkout Sessions from delayed payment confirmation', () => {
+  // An expired session cannot settle successfully. Presenting it as a delayed
+  // payment encourages a customer to wait on an unrecoverable link instead of
+  // deliberately starting a new idempotent checkout attempt.
+  assert.match(successPage, /checkoutExpired = session\.status === 'expired'/);
+  assert.match(successPage, /This secure checkout session has expired\./);
+  assert.match(successPage, /sessionId && !checkoutExpired/);
+  assert.match(bookingPage, /const checkoutExpired = session\.status === 'expired';/);
+  assert.match(bookingPage, /This secure checkout session has expired/);
+  assert.match(bookingPage, /checkoutExpired \? \(/);
+});
+
 test('checkout validation rejects normalized and malformed calendar dates', () => {
   assert.equal(parseExactIsoDate('2026-09-10')?.toISOString().slice(0, 10), '2026-09-10');
   for (const value of ['2026-02-29', '2026-04-31', '2026-13-01', '2026-9-10', '', null]) {
