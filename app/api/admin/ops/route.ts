@@ -203,7 +203,14 @@ export async function POST(req: NextRequest) {
       });
       if (error) throw error;
     } else if (action === 'inventory_adjust') {
-      const { error } = await db.rpc('qy_adjust_inventory', { p_item_id: int(body.item_id), p_delta: int(body.delta), p_type: text(body.movement_type, 40) || 'adjustment', p_reference: text(body.reference, 120) || null, p_notes: text(body.notes, 1000) || null }); if (error) throw error;
+      const movementType = text(body.movement_type, 40).toLowerCase() || 'adjustment';
+      const reference = text(body.reference, 120);
+      // Dispatch and return are not generic stock adjustments: they must
+      // remain tied to a paid order, assigned device and courier/receipt
+      // evidence through the guarded order lifecycle.
+      if (['dispatch', 'return'].includes(movementType)) return NextResponse.json({ error: 'Use the Pocket WiFi order workflow to record dispatches and returns' }, { status: 400 });
+      if (!reference) return NextResponse.json({ error: 'An inventory adjustment reference is required' }, { status: 400 });
+      const { error } = await db.rpc('qy_adjust_inventory', { p_item_id: int(body.item_id), p_delta: int(body.delta), p_type: movementType, p_reference: reference, p_notes: text(body.notes, 1000) || null }); if (error) throw error;
     } else if (action === 'inventory_status') {
       const itemId = int(body.item_id);
       const status = text(body.status, 40).toLowerCase();
@@ -214,13 +221,15 @@ export async function POST(req: NextRequest) {
       if (!['available', 'quarantined', 'damaged', 'maintenance'].includes(status)) {
         return NextResponse.json({ error: 'Choose a valid inventory status' }, { status: 400 });
       }
+      const reference = text(body.reference, 120);
+      if (!reference) return NextResponse.json({ error: 'An inspection or repair reference is required before changing device status' }, { status: 400 });
       // Status changes control whether a router can be dispatched. Keep them
       // in the inventory movement ledger instead of making an unaudited table
       // update that could silently restore a quarantined unit to saleable use.
       const { error } = await db.rpc('qy_set_inventory_status', {
         p_item_id: itemId,
         p_status: status,
-        p_reference: text(body.reference, 120) || null,
+        p_reference: reference,
         p_notes: text(body.notes, 1000) || null,
       });
       if (error) {

@@ -675,8 +675,10 @@ $$;
 revoke all on function public.qy_create_inventory_item(text,text,text,text,text,integer,integer,numeric,text,text) from public;
 grant execute on function public.qy_create_inventory_item(text,text,text,text,text,integer,integer,numeric,text,text) to service_role;
 
--- Inventory quantity and its audit record must change atomically. The admin
--- API uses only this function for adjustments, dispatches and returns.
+-- Inventory quantity and its audit record must change atomically. This is for
+-- counted receipts, write-offs and corrections only: physical dispatch and
+-- returns must use the order-transition function below, which ties the exact
+-- device movement to its paid booking and its hand-off/receipt evidence.
 create or replace function public.qy_adjust_inventory(
   p_item_id bigint,
   p_delta integer,
@@ -695,6 +697,12 @@ begin
   if p_item_id is null or p_item_id < 1 then raise exception 'invalid inventory item'; end if;
   if p_delta is null or p_delta = 0 then raise exception 'inventory adjustment must not be zero'; end if;
   if coalesce(length(trim(p_type)), 0) = 0 then raise exception 'movement type is required'; end if;
+  if lower(trim(p_type)) in ('dispatch', 'return') then
+    raise exception 'dispatches and returns must be recorded through the Pocket WiFi order workflow';
+  end if;
+  if nullif(trim(coalesce(p_reference, '')), '') is null then
+    raise exception 'inventory adjustment reference is required';
+  end if;
 
   update public.inventory_items
   set quantity_on_hand = quantity_on_hand + p_delta,
@@ -720,7 +728,8 @@ grant execute on function public.qy_adjust_inventory(bigint,integer,text,text,te
 -- Inspection state is part of the physical-stock boundary too. A direct
 -- table update would let a quarantined or damaged router become dispatchable
 -- without leaving any evidence of the inspection decision. Keep this
--- zero-quantity movement in the same transaction as the status change.
+-- zero-quantity movement in the same transaction as the status change, and
+-- require an inspection/repair reference before an item can be made available.
 create or replace function public.qy_set_inventory_status(
   p_item_id bigint,
   p_status text,
@@ -740,6 +749,9 @@ begin
   v_status := lower(trim(coalesce(p_status, '')));
   if v_status not in ('available', 'quarantined', 'damaged', 'maintenance') then
     raise exception 'invalid inventory status';
+  end if;
+  if nullif(trim(coalesce(p_reference, '')), '') is null then
+    raise exception 'inventory status reference is required';
   end if;
 
   update public.inventory_items

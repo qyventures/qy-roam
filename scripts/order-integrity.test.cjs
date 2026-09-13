@@ -58,6 +58,7 @@ const availabilityRoute = fs.readFileSync(require.resolve('../app/api/availabili
 const esimPage = fs.readFileSync(require.resolve('../app/esim/page.tsx'), 'utf8');
 const homePage = fs.readFileSync(require.resolve('../app/page.tsx'), 'utf8');
 const manualOrderForm = fs.readFileSync(require.resolve('../components/ManualOrderForm.tsx'), 'utf8');
+const adminOpsForms = fs.readFileSync(require.resolve('../components/AdminOpsForms.tsx'), 'utf8');
 const adminOpsRoute = fs.readFileSync(require.resolve('../app/api/admin/ops/route.ts'), 'utf8');
 const productionReadiness = fs.readFileSync(require.resolve('../lib/productionReadiness.ts'), 'utf8');
 const stripeCheckoutConfig = fs.readFileSync(require.resolve('../lib/stripeCheckoutConfig.ts'), 'utf8');
@@ -1353,8 +1354,21 @@ test('Pocket WiFi inspection status changes are durably audited before a unit ca
   assert.match(schema, /grant execute on function public\.qy_set_inventory_status\(bigint,text,text,text\) to service_role/);
   assert.match(adminOpsRoute, /rpc\('qy_set_inventory_status'/);
   assert.doesNotMatch(adminOpsRoute, /from\('inventory_items'\)\s*\n\s*\.update\(\{ status/);
-  assert.match(adminOpsRoute, /p_reference: text\(body\.reference, 120\) \|\| null/);
+  assert.match(adminOpsRoute, /p_reference: reference/);
   assert.match(adminOpsRoute, /p_notes: text\(body\.notes, 1000\) \|\| null/);
+});
+
+test('generic inventory adjustments cannot bypass the Pocket WiFi hand-off and inspection audit boundaries', () => {
+  assert.match(schema, /dispatches and returns must be recorded through the Pocket WiFi order workflow/);
+  assert.match(schema, /inventory adjustment reference is required/);
+  assert.match(schema, /inventory status reference is required/);
+  assert.match(adminOpsRoute, /Use the Pocket WiFi order workflow to record dispatches and returns/);
+  assert.match(adminOpsRoute, /An inventory adjustment reference is required/);
+  assert.match(adminOpsRoute, /An inspection or repair reference is required before changing device status/);
+  assert.doesNotMatch(adminOpsForms, /<option>dispatch<\/option>/);
+  assert.doesNotMatch(adminOpsForms, /<option>return<\/option>/);
+  assert.match(adminOpsForms, /name="reference" placeholder="Count sheet \/ PO reference" required/);
+  assert.match(adminOpsForms, /name="reference" placeholder="Inspection \/ repair reference" required/);
 });
 
 test('production readiness verifies the deployed Pocket WiFi dispatch and return contract', () => {
