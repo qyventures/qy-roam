@@ -22,19 +22,24 @@ export default function MetaPurchase({ sessionId, measurementConsent, productTyp
     const key = `${PURCHASE_KEY_PREFIX}${sessionId}`;
     try {
       if (window.sessionStorage.getItem(key)) return;
-      window.sessionStorage.setItem(key, '1');
     } catch {
       // Storage can be unavailable in privacy-restricted browsers. The event
       // ID below still gives Meta a stable browser/CAPI deduplication key.
     }
-    trackMetaWhenReady('Purchase', {
+    return trackMetaWhenReady('Purchase', {
       value: Number(value.toFixed(2)),
       currency: 'SGD',
       content_type: 'product',
       content_ids: [contentId],
       contents: [{ id: contentId, quantity: 1 }],
       content_category: productType === 'esim' ? 'Travel eSIM' : 'Pocket WiFi',
-    }, { eventID: `stripe_${sessionId}` });
+    }, { eventID: `stripe_${sessionId}` }, () => {
+      try {
+        window.sessionStorage.setItem(key, '1');
+      } catch {
+        // The stable eventID still deduplicates browser and CAPI delivery.
+      }
+    });
   }, [contentId, measurementConsent, productType, sessionId, value]);
 
   return null;

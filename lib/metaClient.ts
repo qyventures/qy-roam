@@ -64,12 +64,34 @@ export function trackMeta(event: string, params: Record<string, unknown> = {}, o
 // rendered immediately after Stripe redirects back, so allow a short bounded
 // wait for the Pixel instead of silently losing the browser half of a
 // browser/CAPI-deduplicated Purchase event.
-export function trackMetaWhenReady(event: string, params: Record<string, unknown> = {}, options: Record<string, unknown> = {}, attemptsLeft = 20) {
-  if (!metaMeasurementAllowed() || typeof window === 'undefined') return;
-  const fbq = (window as Window & { fbq?: (...args: any[]) => void }).fbq;
-  if (typeof fbq === 'function') {
-    fbq('track', event, params, options);
-    return;
-  }
-  if (attemptsLeft > 0) window.setTimeout(() => trackMetaWhenReady(event, params, options, attemptsLeft - 1), 100);
+export function trackMetaWhenReady(
+  event: string,
+  params: Record<string, unknown> = {},
+  options: Record<string, unknown> = {},
+  onTracked?: () => void,
+  attemptsLeft = 20,
+) {
+  let cancelled = false;
+  // This helper runs only in the browser; use the DOM timer handle rather
+  // than Node's Timeout type from the mixed Next.js type environment.
+  let timer: number | undefined;
+
+  const attempt = (remaining: number) => {
+    if (cancelled || !metaMeasurementAllowed() || typeof window === 'undefined') return;
+    const fbq = (window as Window & { fbq?: (...args: any[]) => void }).fbq;
+    if (typeof fbq === 'function') {
+      // Treat the event as locally delivered only after the Pixel queue has
+      // accepted it. A missing/late Pixel must remain retryable on refresh.
+      fbq('track', event, params, options);
+      onTracked?.();
+      return;
+    }
+    if (remaining > 0) timer = window.setTimeout(() => attempt(remaining - 1), 100);
+  };
+
+  attempt(attemptsLeft);
+  return () => {
+    cancelled = true;
+    if (timer !== undefined) window.clearTimeout(timer);
+  };
 }

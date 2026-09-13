@@ -1801,6 +1801,16 @@ test('consented browser and CAPI Purchases share a stable deduplication identity
   assert.match(webhookRoute, /content_type:'product'/);
 });
 
+test('browser Purchase is marked delivered only after the Pixel accepts it', () => {
+  const trackingCall = metaPurchase.indexOf("trackMetaWhenReady('Purchase'");
+  const storageWrite = metaPurchase.indexOf("window.sessionStorage.setItem(key, '1')");
+  assert.ok(trackingCall >= 0);
+  assert.ok(storageWrite > trackingCall, 'Purchase storage marker must be written by the delivery callback');
+  assert.match(metaPurchase, /return trackMetaWhenReady\('Purchase',[\s\S]*\(\) => \{[\s\S]*sessionStorage\.setItem\(key, '1'\)/);
+  assert.match(metaClient, /fbq\('track', event, params, options\);\s*onTracked\?\.\(\);/);
+  assert.match(metaClient, /return \(\) => \{\s*cancelled = true;\s*if \(timer !== undefined\) window\.clearTimeout\(timer\);/);
+});
+
 test('consented CAPI Purchases retain only safe browser matching context', () => {
   const validFbp = 'fb.1.1725000000000.123456789012345';
   const validFbc = 'fb.1.1725000000000.AbCdEf_123-xyz';
