@@ -823,7 +823,13 @@ test('signed Stripe webhooks cannot cross the configured test/live boundary', ()
   assert.equal(stripeEventMatchesConfiguredMode('sk_test_secret', false), true);
   assert.equal(stripeEventMatchesConfiguredMode('rk_test_secret', false), true);
   assert.equal(stripeEventMatchesConfiguredMode('sk_test_secret', true), false);
+  // Runtime webhook/API data is deserialised. A truthy value must not be
+  // mistaken for the boolean `true` required by a live Stripe credential.
+  assert.equal(stripeEventMatchesConfiguredMode('sk_live_secret', 'true'), false);
+  assert.equal(stripeEventMatchesConfiguredMode('sk_live_secret', 1), false);
+  assert.equal(stripeEventMatchesConfiguredMode('sk_test_secret', null), false);
   assert.equal(stripeEventMatchesConfiguredMode('unknown_secret', false), false);
+  assert.match(stripeCheckoutConfig, /if \(typeof livemode !== 'boolean'\) return false/);
   assert.match(webhookRoute, /stripeEventMatchesConfiguredMode\(key,event\.livemode\)/);
   assert.match(webhookRoute, /Stripe event mode mismatch/);
   assert.match(webhookRoute, /return NextResponse\.json\(\{error:'Stripe event mode mismatch'\},\{status:400\}\)/);

@@ -17,7 +17,13 @@ export function hasRequiredStripeCheckoutConfig() {
  * API credential that cannot establish the event mode is not a safe payment
  * authority.
  */
-export function stripeEventMatchesConfiguredMode(key: string, livemode: boolean) {
+export function stripeEventMatchesConfiguredMode(key: string, livemode: unknown) {
+  // `livemode` is declared as boolean by Stripe's TypeScript types, but this
+  // boundary receives deserialised webhook and API data at runtime. Do not
+  // let a truthy string (for example, an unexpectedly shaped test double or
+  // SDK response) pass the live-key branch and turn an untyped value into
+  // payment authority.
+  if (typeof livemode !== 'boolean') return false;
   const configuredKey = key.trim();
   if (configuredKey.startsWith('sk_live_') || configuredKey.startsWith('rk_live_')) return livemode;
   if (configuredKey.startsWith('sk_test_') || configuredKey.startsWith('rk_test_')) return !livemode;
