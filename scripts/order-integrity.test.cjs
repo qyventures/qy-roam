@@ -74,6 +74,10 @@ const stripeClient = fs.readFileSync(require.resolve('../lib/stripeClient.ts'), 
 const metaAttribution = fs.readFileSync(require.resolve('../lib/metaAttribution.ts'), 'utf8');
 const adminPage = fs.readFileSync(require.resolve('../app/admin/page.tsx'), 'utf8');
 const inventoryPage = fs.readFileSync(require.resolve('../app/admin/inventory/page.tsx'), 'utf8');
+const reportsPage = fs.readFileSync(require.resolve('../app/admin/reports/page.tsx'), 'utf8');
+const crmPage = fs.readFileSync(require.resolve('../app/admin/crm/page.tsx'), 'utf8');
+const forecastingPage = fs.readFileSync(require.resolve('../app/admin/forecasting/page.tsx'), 'utf8');
+const closingPage = fs.readFileSync(require.resolve('../app/admin/closing/page.tsx'), 'utf8');
 const launchPage = fs.readFileSync(require.resolve('../app/admin/launch/page.tsx'), 'utf8');
 const middleware = fs.readFileSync(require.resolve('../middleware.ts'), 'utf8');
 const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
@@ -1464,6 +1468,30 @@ test('admin order visibility fails loudly instead of presenting a database failu
   assert.match(adminPage, /const failedPanels = \[/);
   assert.match(adminPage, /Operational data is currently unavailable:/);
   assert.match(adminPage, /Do not treat empty panels as no orders/);
+});
+
+test('admin reporting screens do not present failed database reads as empty operational data', () => {
+  // Revenue, forecasting, customer follow-up, and month-end decisions are all
+  // unsafe when a failed query silently renders the same zero/empty state as
+  // a healthy new account. Keep the reporting surfaces explicit about each
+  // unavailable panel, just as the order and inventory dashboards are.
+  assert.match(reportsPage, /const reportUnavailable=Boolean\(reportResult\?\.error\)/);
+  assert.match(reportsPage, /Sales reporting data is currently unavailable/);
+  assert.match(reportsPage, /reportUnavailable\?<p>Sales reporting is unavailable/);
+
+  assert.match(crmPage, /const unavailablePanels=\[customersResult\?\.error&&'customers',oppsResult\?\.error&&'sales pipeline',actsResult\?\.error&&'CRM activity'\]/);
+  assert.match(crmPage, /CRM data is currently unavailable/);
+  assert.match(crmPage, /customersResult\?\.error\?<p>Customer data is unavailable/);
+  assert.match(crmPage, /oppsResult\?\.error\?<p>Sales pipeline data is unavailable/);
+  assert.match(crmPage, /actsResult\?\.error\?<p>CRM activity is unavailable/);
+
+  assert.match(forecastingPage, /const unavailablePanels=\[forecastResult\?\.error&&'saved forecast plan',dailyResult\?\.error&&'recent paid sales'\]/);
+  assert.match(forecastingPage, /Forecast inputs are currently unavailable/);
+  assert.match(forecastingPage, /forecastResult\?\.error\?<p>Forecast plan is unavailable/);
+
+  assert.match(closingPage, /const periodsUnavailable=Boolean\(periodsResult\?\.error\)/);
+  assert.match(closingPage, /Closing-period data is currently unavailable/);
+  assert.match(closingPage, /periodsUnavailable\?<p>Closing-period data is unavailable/);
 });
 
 test('admin operational visibility pages beyond one Supabase response and warns before a bounded view can hide work', () => {
