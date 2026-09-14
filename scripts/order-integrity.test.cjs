@@ -83,6 +83,8 @@ const middleware = fs.readFileSync(require.resolve('../middleware.ts'), 'utf8');
 const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
 const nextConfig = fs.readFileSync(require.resolve('../next.config.mjs'), 'utf8');
 const supabaseAdmin = fs.readFileSync(require.resolve('../lib/supabaseAdmin.ts'), 'utf8');
+const robots = fs.readFileSync(require.resolve('../app/robots.ts'), 'utf8');
+const sitemap = fs.readFileSync(require.resolve('../app/sitemap.ts'), 'utf8');
 
 const requestId = 'checkout_request_123456';
 
@@ -2240,6 +2242,18 @@ test('customer confirmation and booking URLs are never cacheable or indexable', 
     const source = new RegExp(`source: '${path}',[\\s\\S]{0,700}Cache-Control', value: 'no-store, max-age=0, private'[\\s\\S]{0,700}X-Robots-Tag', value: 'noindex, nofollow, nosnippet'[\\s\\S]{0,700}Referrer-Policy', value: 'no-referrer'`);
     assert.match(nextConfig, source);
   }
+});
+
+test('crawler directives keep customer checkout capability URLs out of discovery', () => {
+  // The noindex headers protect a direct request, while robots.txt reduces
+  // the chance that a shared confirmation/status URL is fetched, cached, or
+  // exposed by a compliant crawler in the first place.
+  assert.match(robots, /disallow:\s*\['\/admin', '\/api\/', '\/success', '\/booking'\]/);
+  // Only public marketing pages belong in the sitemap. Do not mint a dynamic
+  // last-modified date for every URL on every sitemap request: it causes
+  // crawlers to recrawl unchanged pages and makes the sitemap signal noisy.
+  assert.doesNotMatch(sitemap, /lastModified:\s*new Date\(\)/);
+  assert.doesNotMatch(sitemap, /path:\s*'\/(?:success|booking)'/);
 });
 
 test('production CSP does not permit JavaScript eval', () => {
