@@ -1876,6 +1876,20 @@ test('Meta CAPI requires a complete destination and admin recovery never reports
   assert.doesNotMatch(launchPage, /Boolean\(process\.env\.NEXT_PUBLIC_META_PIXEL_ID\)/);
 });
 
+test('Meta CAPI settles a Purchase only after acknowledging the submitted event', () => {
+  // A successful HTTP response can still be malformed or report no accepted
+  // events. This single-event delivery must remain retryable unless Meta
+  // explicitly confirms that one Purchase was accepted.
+  assert.match(webhookRoute, /const acknowledgement: unknown = JSON\.parse\(response\.responseBody\)/);
+  assert.match(webhookRoute, /eventsReceived = \(acknowledgement as \{ events_received\?: unknown \}\)\.events_received/);
+  assert.match(webhookRoute, /if\(eventsReceived!==1\) throw new Error\('Meta CAPI did not acknowledge the Purchase event'\)/);
+  assert.ok(
+    webhookRoute.indexOf("if(!response.ok) throw new Error(`Meta CAPI failed (${response.status})`)") <
+      webhookRoute.indexOf("if(eventsReceived!==1) throw new Error('Meta CAPI did not acknowledge the Purchase event')"),
+    'HTTP failures must remain distinct from a malformed or partial CAPI acknowledgement',
+  );
+});
+
 test('admin delivery recovery requires a completed Stripe session and matching persisted product identity', () => {
   assert.match(adminOrderRoute, /!validation\.valid \|\| session\.status !== 'complete' \|\| session\.payment_status !== 'paid'/);
   assert.match(adminOrderRoute, /if \(order\.product_type !== validation\.productType\)/);
