@@ -2172,7 +2172,7 @@ test('Meta Purchase source URLs remain canonical after deployment configuration 
 test('customer confirmation and booking URLs are never cacheable or indexable', () => {
   assert.match(successPage, /robots:\s*\{\s*index:\s*false,\s*follow:\s*false\s*\}/);
   for (const path of ['/success', '/booking']) {
-    const source = new RegExp(`source: '${path}',[\\s\\S]{0,260}Cache-Control', value: 'no-store, max-age=0, private'[\\s\\S]{0,260}X-Robots-Tag', value: 'noindex, nofollow, nosnippet'`);
+    const source = new RegExp(`source: '${path}',[\\s\\S]{0,700}Cache-Control', value: 'no-store, max-age=0, private'[\\s\\S]{0,700}X-Robots-Tag', value: 'noindex, nofollow, nosnippet'[\\s\\S]{0,700}Referrer-Policy', value: 'no-referrer'`);
     assert.match(nextConfig, source);
   }
 });

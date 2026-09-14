@@ -62,6 +62,13 @@ const nextConfig = {
         headers: [
           { key: 'Cache-Control', value: 'no-store, max-age=0, private' },
           { key: 'X-Robots-Tag', value: 'noindex, nofollow, nosnippet' },
+          // The Checkout Session id in this URL is a customer capability
+          // reference. The site-wide policy already removes its query string
+          // on cross-origin navigation, but this stricter route-level rule
+          // keeps the reference out of all downstream navigation metadata if
+          // this confirmation page later gains a third-party support or
+          // analytics link.
+          { key: 'Referrer-Policy', value: 'no-referrer' },
         ],
       },
       {
@@ -69,6 +76,9 @@ const nextConfig = {
         headers: [
           { key: 'Cache-Control', value: 'no-store, max-age=0, private' },
           { key: 'X-Robots-Tag', value: 'noindex, nofollow, nosnippet' },
+          // Like /success, this page accepts the Checkout Session reference
+          // in its query string and must never pass it on as a referrer.
+          { key: 'Referrer-Policy', value: 'no-referrer' },
         ],
       },
       {
