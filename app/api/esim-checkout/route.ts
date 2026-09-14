@@ -110,6 +110,18 @@ export async function POST(req: Request) {
       });
     }
 
+    // The fixed expiry is part of Stripe's idempotency parameters, so it
+    // cannot be extended during a retry. Recheck after readiness work and
+    // immediately before creating payment: a slow dependency must return the
+    // existing recoverable expiry response, not ask Stripe to create a
+    // Session whose expiry is now too close.
+    if (checkoutAttemptExpiresAt(body.checkoutAttemptCreatedAt) !== expiresAt) {
+      return NextResponse.json({ error: 'This checkout attempt has expired. Please refresh and try again.', checkoutExpired: true }, {
+        status: 409,
+        headers: { 'Cache-Control': 'no-store' },
+      });
+    }
+
     const stripe = createStripeClient(key);
     const origin = checkoutSiteOrigin(req.url);
     const amount = Math.max(50, Math.round(plan.qyPriceSgd * 100));

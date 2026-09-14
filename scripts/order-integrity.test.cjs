@@ -35,7 +35,7 @@ const { isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutErro
 const { checkoutClientKey, createCheckoutAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = require('../lib/stripeCheckoutConfig.ts');
 const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
-const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, checkoutAttemptExpiresAt, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
+const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_EXPIRY_CREATION_MARGIN_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, checkoutAttemptExpiresAt, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
 const { checkoutSiteOrigin, isProductionQyRoamOrigin, metaPurchaseEventSourceUrl } = require('../lib/siteOrigin.ts');
 const { hasRequiredMetaCapiPurchaseConfig } = require('../lib/runtimeConfig.ts');
 const { metaMeasurementAllowed, setMetaMeasurementConsent } = require('../lib/metaClient.ts');
@@ -731,6 +731,12 @@ test('checkout retries keep Stripe idempotency parameters stable', () => {
   const expected = Math.floor(createdAt / 1000) + CHECKOUT_HOLD_WINDOW_SECONDS;
   assert.equal(checkoutAttemptExpiresAt(createdAt, createdAt), expected);
   assert.equal(checkoutAttemptExpiresAt(createdAt, createdAt + 30_000), expected);
+  // The idempotent expiry is anchored to the original browser attempt. Its
+  // retry window must be short enough that Stripe still sees at least its
+  // required 30-minute expiry interval when it receives the create request.
+  assert.ok(CHECKOUT_EXPIRY_CREATION_MARGIN_SECONDS > 0);
+  assert.ok(CHECKOUT_ATTEMPT_MAX_AGE_MS < CHECKOUT_PAYMENT_WINDOW_MINUTES * 60 * 1000);
+  assert.ok(expected - Math.ceil((createdAt + CHECKOUT_ATTEMPT_MAX_AGE_MS) / 1000) >= CHECKOUT_PAYMENT_WINDOW_MINUTES * 60 + CHECKOUT_EXPIRY_CREATION_MARGIN_SECONDS);
   assert.equal(checkoutAttemptExpiresAt(createdAt, createdAt + CHECKOUT_ATTEMPT_MAX_AGE_MS + 1), null);
   assert.equal(checkoutAttemptExpiresAt(createdAt + 60_001, createdAt), null);
   assert.equal(checkoutAttemptExpiresAt('1800000000000', createdAt), null);
@@ -738,7 +744,9 @@ test('checkout retries keep Stripe idempotency parameters stable', () => {
   assert.match(esimPage, /checkoutAttemptCreatedAt: activeCheckoutAttempt\.current\.createdAt/);
   assert.match(homePage, /checkoutAttemptCreatedAt: activeCheckoutAttempt\.current\.createdAt/);
   assert.match(esimCheckoutRoute, /const expiresAt = checkoutAttemptExpiresAt\(body\.checkoutAttemptCreatedAt\)/);
+  assert.match(esimCheckoutRoute, /checkoutAttemptExpiresAt\(body\.checkoutAttemptCreatedAt\) !== expiresAt/);
   assert.match(wifiCheckoutRoute, /const expiresAtSeconds=checkoutAttemptExpiresAt\(body\.checkoutAttemptCreatedAt\)/);
+  assert.match(wifiCheckoutRoute, /checkoutAttemptExpiresAt\(body\.checkoutAttemptCreatedAt\)!==expiresAtSeconds/);
   assert.doesNotMatch(esimCheckoutRoute, /checkoutExpiresAt\(\)/);
   assert.doesNotMatch(wifiCheckoutRoute, /checkoutExpiresAt\(\)/);
 });

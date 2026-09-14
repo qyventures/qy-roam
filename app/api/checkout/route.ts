@@ -244,6 +244,15 @@ export async function POST(req: Request) {
   const origin=checkoutSiteOrigin(req.url);
   const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[]=[{quantity:1,price_data:{currency:'sgd',unit_amount:rentalAmount,product_data:{name:`QY Roam Pocket WiFi — ${country}`,description:`${start} to ${end} · ${days} day${days===1?'':'s'}${promo.discountCents>0?` · ${normalisePromoCode(body.promoCode)} applied`:''}`}}}];
   if(courierFee>0) lineItems.push({quantity:1,price_data:{currency:'sgd',unit_amount:courierFee,product_data:{name:'Singapore courier delivery & return handling'}}});
+  // Readiness, hold scans and the reservation RPC can take time after the
+  // original expiry validation. Since `expires_at` must remain stable for
+  // Stripe idempotency, fail this attempt cleanly rather than submitting an
+  // expiry that has become too close for Stripe to accept.
+  if(checkoutAttemptExpiresAt(body.checkoutAttemptCreatedAt)!==expiresAtSeconds){
+    const released=await supabase.from('checkout_reservations').delete().eq('checkout_request_id',requestId).is('stripe_session_id',null);
+    if(released.error) throw released.error;
+    return NextResponse.json({error:'This checkout attempt has expired. Please try again to start a new one.',checkoutExpired:true},{status:409,headers:{'Cache-Control':'no-store'}});
+  }
   let session:Stripe.Checkout.Session;
   try{
     session=await stripe.checkout.sessions.create({mode:'payment',line_items:lineItems,expires_at:expiresAtSeconds,billing_address_collection:'required',shipping_address_collection:{allowed_countries:['SG']},phone_number_collection:{enabled:true},customer_creation:'always',success_url:`${origin}/success?session_id={CHECKOUT_SESSION_ID}`,cancel_url:`${origin}/?checkout=cancelled`,metadata:{product_type:'pocket_wifi',plan_name:`${country} Pocket WiFi`,country,start,end,days:String(days),daily_rate_sgd:daily.toFixed(2),benchmark_provider:WIFI_BENCHMARK.provider,benchmark_rate_sgd:wifiPlan.benchmarkRateSgd.toFixed(2),benchmark_verified_on:WIFI_BENCHMARK.verifiedOn,rental_before_promo_sgd:(rentalBeforePromo/100).toFixed(2),promo_code:promo.promoCode,promo_discount_sgd:(promo.discountCents/100).toFixed(2),courier_fee_sgd:(courierFee/100).toFixed(2),checkout_amount_cents:String(rentalAmount+courierFee),checkout_request_id:requestId,source:'qyroam.com',measurement_consent:body.measurementConsent===true?'accepted':'essential',...(body.measurementConsent===true?metaAttributionFromRequest(body.attribution,req.headers.get('user-agent'),req.headers.get('x-real-ip')):{})},consent_collection:{terms_of_service:'required'}},{idempotencyKey:`qyroam_wifi_${requestId}`});
