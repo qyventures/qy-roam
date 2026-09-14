@@ -1013,6 +1013,15 @@ test('Pocket WiFi availability does not promise stock when checkout cannot safel
 test('Pocket WiFi availability bounds public Stripe and database capacity scans', () => {
   assert.match(availabilityRoute, /import \{ createCheckoutAttemptLimiter \} from '@\/lib\/checkoutRateLimit';/);
   assert.match(availabilityRoute, /const limited = createCheckoutAttemptLimiter\(60_000, 30\)/);
+  // PostgREST caps a response page. Availability must scan the same complete
+  // reservation set that the checkout RPC counts, or fail closed once its
+  // bounded work budget is exhausted instead of overstating capacity.
+  assert.match(availabilityRoute, /const RESERVATION_SCAN_PAGE_SIZE = 1_000/);
+  assert.match(availabilityRoute, /const MAX_RESERVATION_SCAN_PAGES = 5/);
+  assert.match(availabilityRoute, /async function activeReservations\(/);
+  assert.match(availabilityRoute, /\.range\(from, from \+ RESERVATION_SCAN_PAGE_SIZE - 1\)/);
+  assert.match(availabilityRoute, /Pocket WiFi reservation scan exceeded its safe page limit/);
+  assert.match(availabilityRoute, /activeReservations\(supabase, start, end, reservationCutoff\)/);
   assert.match(availabilityRoute, /if \(limited\(req\)\)/);
   assert.match(availabilityRoute, /Too many availability checks/);
   assert.match(availabilityRoute, /status: 429/);

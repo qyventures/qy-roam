@@ -23,6 +23,14 @@ export const dynamic = 'force-dynamic';
 // deliberately separate from the stricter checkout limiter because checking
 // a date range is safe to repeat a little more often than opening payment.
 const limited = createCheckoutAttemptLimiter(60_000, 30);
+// Supabase/PostgREST applies a per-response row ceiling. A single response is
+// not a safe capacity authority: a larger fleet can legitimately have more
+// than that many unexpired, overlapping reservations across a long (up to
+// 90-day) rental range. Scan every page we rely on, with a firm work ceiling;
+// an incomplete scan must make availability unavailable rather than promise a
+// router that checkout's database-side count will correctly reject.
+const RESERVATION_SCAN_PAGE_SIZE = 1_000;
+const MAX_RESERVATION_SCAN_PAGES = 5;
 
 // Availability is a purchase promise, rather than a rough stock estimate.
 // Keep its unavailable response identical across prerequisite failures so the
@@ -82,6 +90,28 @@ async function activeStripeHolds(stripe: Stripe, start: string, end: string) {
   return { holds, requestIds };
 }
 
+async function activeReservations(
+  supabase: NonNullable<ReturnType<typeof getSupabaseAdmin>>,
+  start: string,
+  end: string,
+  reservationCutoff: string,
+) {
+  const reservations: { checkout_request_id: string }[] = [];
+  for (let page = 0; page < MAX_RESERVATION_SCAN_PAGES; page += 1) {
+    const from = page * RESERVATION_SCAN_PAGE_SIZE;
+    const response = await supabase.from('checkout_reservations').select('checkout_request_id')
+      .gt('expires_at', reservationCutoff)
+      .lte('travel_start', end)
+      .gte('travel_end', start)
+      .range(from, from + RESERVATION_SCAN_PAGE_SIZE - 1);
+    if (response.error) throw response.error;
+    const rows = response.data || [];
+    reservations.push(...rows);
+    if (rows.length < RESERVATION_SCAN_PAGE_SIZE) return reservations;
+  }
+  throw new Error('Pocket WiFi reservation scan exceeded its safe page limit');
+}
+
 async function committedInventory(start: string, end: string, stripeHoldRequestIds: Set<string>) {
   const supabase = getSupabaseAdmin();
   if (!supabase) throw new Error('Supabase is not configured');
@@ -100,10 +130,7 @@ async function committedInventory(start: string, end: string, stripeHoldRequestI
       // inventory was decremented. This mirrors the reservation RPC.
       .or('dispatched_at.is.null,inventory_item_id.is.null')
       .or('fulfilment_status.not.in.(cancelled,payment_failed,returned,closed),and(fulfilment_status.eq.cancelled,dispatched_at.not.is.null,returned_at.is.null,inventory_item_id.is.null)'),
-    supabase.from('checkout_reservations').select('checkout_request_id')
-      .gt('expires_at', reservationCutoff)
-      .lte('travel_start', end)
-      .gte('travel_end', start),
+    activeReservations(supabase, start, end, reservationCutoff),
     // The configured fleet size is a safety cap, not evidence that a router
     // is physically dispatchable. Keep the public availability promise tied
     // to the same available-status, on-hand inventory pool used at dispatch.
@@ -113,12 +140,11 @@ async function committedInventory(start: string, end: string, stripeHoldRequestI
       .gt('quantity_on_hand', 0),
   ]);
   if (orders.error) throw orders.error;
-  if (reservations.error) throw reservations.error;
   if (saleableItems.error) throw saleableItems.error;
 
   // A checkout session normally has a matching reservation. Count that session
   // once via Stripe, then add only reservations that have no open session yet.
-  const unlinkedReservations = (reservations.data || []).filter(
+  const unlinkedReservations = reservations.filter(
     ({ checkout_request_id }) => !stripeHoldRequestIds.has(checkout_request_id),
   ).length;
   return {
