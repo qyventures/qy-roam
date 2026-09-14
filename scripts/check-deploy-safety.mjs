@@ -15,8 +15,11 @@ assert.doesNotMatch(deploy, /git checkout\s/);
 assert.match(deploy, /npm ci --no-audit --no-fund/);
 assert.doesNotMatch(deploy, /npm install --no-audit --no-fund/);
 // The checked-in unit carries the loopback and restart hardening relied on by
-// the app. A release must reload it before restarting, otherwise a source
-// deploy can leave a stale service definition running indefinitely.
+// the app. `daemon-reload` cannot install that file, so a release must first
+// fail closed if the active unit has drifted before it reloads and restarts.
+assert.match(deploy, /SYSTEMD_UNIT_PATH=/);
+assert.match(deploy, /cmp -s deploy\/qy-roam\.service/);
+assert.match(deploy, /Installed systemd unit does not match deploy\/qy-roam\.service/);
 assert.match(deploy, /systemctl daemon-reload/);
 assert.match(deploy, /Unable to reload the systemd service definition/);
 assert.match(deploy, /if ! systemctl restart "\$SERVICE_NAME"; then/);

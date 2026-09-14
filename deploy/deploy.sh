@@ -5,10 +5,11 @@ APP_DIR="${APP_DIR:-/root/qy-roam}"
 ENV_FILE="${ENV_FILE:-/root/.config/qyroam/.env}"
 SERVICE_NAME="${SERVICE_NAME:-qy-roam}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3100/api/health}"
+SYSTEMD_UNIT_PATH="${SYSTEMD_UNIT_PATH:-/etc/systemd/system/${SERVICE_NAME}.service}"
 
 cd "$APP_DIR"
 
-echo "[1/7] Updating source"
+echo "[1/8] Updating source"
 if [[ "$(git branch --show-current)" != "main" ]]; then
   echo "Refusing to deploy: production checkout must already be on main" >&2
   exit 1
@@ -20,21 +21,21 @@ fi
 git fetch --prune origin
 git pull --ff-only origin main
 
-echo "[2/7] Checking environment file"
+echo "[2/8] Checking environment file"
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "Missing $ENV_FILE" >&2
   exit 1
 fi
 chmod 600 "$ENV_FILE"
 
-echo "[3/7] Installing locked dependencies"
+echo "[3/8] Installing locked dependencies"
 if [[ ! -f package-lock.json ]]; then
   echo "package-lock.json is required for a reproducible production deploy" >&2
   exit 1
 fi
 npm ci --no-audit --no-fund
 
-echo "[4/7] Building"
+echo "[4/8] Building"
 set -a
 # shellcheck disable=SC1090
 source "$ENV_FILE"
@@ -51,17 +52,27 @@ npm run check:deploy-safety
 npm run test:order-integrity
 npm run build
 
-echo "[5/8] Reloading service definition"
-# The unit file is shipped with the application. Reload it on every release so
-# changes to loopback binding, restart policy, or sandboxing do not sit on disk
-# unnoticed while an older systemd definition continues serving paid traffic.
+echo "[5/8] Verifying service definition"
+# `daemon-reload` only rereads the installed unit; it does not copy the
+# checked-in definition into /etc. Refuse a release if the installed unit has
+# drifted, so loopback binding, restart policy, and sandboxing changes cannot
+# sit in the worktree while an older service definition keeps serving checkout.
+# Deliberately do not overwrite /etc here: service-local operator changes need
+# an explicit reviewed install before they become part of a paid-order release.
+if [[ ! -f "$SYSTEMD_UNIT_PATH" ]] || ! cmp -s deploy/qy-roam.service "$SYSTEMD_UNIT_PATH"; then
+  echo "Installed systemd unit does not match deploy/qy-roam.service: $SYSTEMD_UNIT_PATH" >&2
+  echo "Review and install the checked-in unit, then rerun deployment." >&2
+  exit 1
+fi
+
+echo "[6/8] Reloading service definition"
 if ! systemctl daemon-reload; then
   echo "Unable to reload the systemd service definition" >&2
   systemctl --no-pager --full status "$SERVICE_NAME" >&2 || true
   exit 1
 fi
 
-echo "[6/8] Restarting service"
+echo "[7/8] Restarting service"
 if ! systemctl restart "$SERVICE_NAME"; then
   echo "QY Roam service restart failed" >&2
   systemctl --no-pager --full status "$SERVICE_NAME" >&2 || true
@@ -70,7 +81,7 @@ if ! systemctl restart "$SERVICE_NAME"; then
 fi
 systemctl --no-pager --full status "$SERVICE_NAME" | sed -n '1,15p'
 
-echo "[7/8] Waiting for application readiness"
+echo "[8/8] Waiting for application readiness"
 health_output="$(mktemp /tmp/qyroam-health.XXXXXX.json)"
 health_config="$(mktemp /tmp/qyroam-curl.XXXXXX.conf)"
 trap 'rm -f "$health_output" "$health_config"' EXIT
@@ -99,5 +110,5 @@ fi
 cat "$health_output"
 printf '\n'
 
-echo "[8/8] Deployment verification complete"
+echo "Deployment verification complete"
 printf 'Deploy completed successfully.\n'
