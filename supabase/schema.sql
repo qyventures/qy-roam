@@ -606,6 +606,26 @@ begin
   perform pg_advisory_xact_lock(hashtext('qy_roam_pocket_wifi_checkout'));
   select * into v_order from public.orders where stripe_session_id = p_stripe_session_id for update;
 
+  -- Offline sales use a deterministic, hashed internal id derived from the
+  -- operator's payment/sales reference. Treat a retry of the same sale as an
+  -- idempotent read, never as permission to rewrite a paid rental or reserve
+  -- a second overlapping router. Different details under one reference need
+  -- explicit operational reconciliation instead of an implicit overwrite.
+  if found and p_stripe_session_id like 'manual_%' then
+    if v_order.payment_status is distinct from p_payment_status
+      or v_order.customer_name is distinct from p_customer_name
+      or v_order.email is distinct from p_email
+      or v_order.phone is distinct from p_phone
+      or v_order.amount_sgd is distinct from p_amount_sgd
+      or v_order.plan_name is distinct from p_plan_name
+      or v_order.country is distinct from p_country
+      or v_order.travel_start is distinct from p_travel_start
+      or v_order.travel_end is distinct from p_travel_end then
+      raise exception 'manual order reference already belongs to different order details';
+    end if;
+    return v_order;
+  end if;
+
   -- An out-of-order failed event must never downgrade an already-paid order.
   if found and v_order.payment_status = 'paid' and not v_paid then
     delete from public.checkout_reservations

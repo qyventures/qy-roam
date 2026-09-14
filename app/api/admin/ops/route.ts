@@ -5,6 +5,7 @@ import { parseExactIsoDate } from '@/lib/checkoutValidation';
 import { operationalConfig } from '@/lib/operationalConfig';
 import { InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '@/lib/requestBody';
 import { isSafeSmtpMailbox } from '@/lib/smtp';
+import crypto from 'crypto';
 
 export const dynamic = 'force-dynamic';
 
@@ -58,6 +59,20 @@ function optionalTravelDates(body: Record<string, unknown>) {
   const start = parseExactIsoDate(startRaw), end = parseExactIsoDate(endRaw);
   if (!start || !end || end < start) return null;
   return { start: startRaw, end: endRaw };
+}
+
+// Offline sales do not have Stripe's Checkout Session idempotency key.  Bind
+// a retry to a real, operator-visible payment or sales reference instead of
+// minting a fresh random order identity for every POST.  The reference itself
+// remains in the order notes for reconciliation; its deterministic internal
+// key avoids exposing a payment-provider reference as a public-looking ID.
+function manualOrderReference(value: unknown) {
+  const reference = text(value, 120);
+  return /^[A-Za-z0-9][A-Za-z0-9._:/#-]{4,119}$/.test(reference) ? reference : null;
+}
+
+function manualOrderSessionId(reference: string) {
+  return `manual_${crypto.createHash('sha256').update(reference).digest('hex').slice(0, 48)}`;
 }
 
 async function paidOrderGrossForPeriod(db: ReturnType<typeof getSupabaseAdmin>, start: string, end: string) {
@@ -114,6 +129,8 @@ export async function POST(req: NextRequest) {
       if (product !== 'pocket_wifi' && product !== 'esim') return NextResponse.json({ error: 'Invalid product type' }, { status: 400 });
       const paymentStatus = text(body.payment_status, 40) || 'paid';
       if (!['paid', 'unpaid', 'pending', 'failed'].includes(paymentStatus)) return NextResponse.json({ error: 'Invalid payment status' }, { status: 400 });
+      const reference = manualOrderReference(body.order_reference);
+      if (!reference) return NextResponse.json({ error: 'A payment or sales reference of 5–120 letters, numbers, or . _ : / # - characters is required' }, { status: 400 });
       const requestedStatus = text(body.fulfilment_status, 40);
       if (requestedStatus && !validFulfilmentStatus(product, requestedStatus)) return NextResponse.json({ error: 'Invalid fulfilment status for this product' }, { status: 400 });
       const initialStatus = initialFulfilmentStatus(product, paymentStatus);
@@ -129,15 +146,14 @@ export async function POST(req: NextRequest) {
       if (product === 'pocket_wifi' && (!country || !travel.start || !travel.end)) {
         return NextResponse.json({ error: 'Pocket WiFi orders require a destination and valid travel start and end dates' }, { status: 400 });
       }
-      const now = Date.now();
       const row = {
-        stripe_session_id: `manual_${now}_${Math.random().toString(36).slice(2,8)}`,
+        stripe_session_id: manualOrderSessionId(reference),
         payment_status: paymentStatus, customer_name: text(body.customer_name, 120) || null,
         email: text(body.email, 200).toLowerCase() || null, phone: text(body.phone, 60) || null,
         amount_sgd: amountCents / 100, product_type: product, plan_name: text(body.plan_name, 160) || null,
         country, travel_start: travel.start, travel_end: travel.end,
         fulfilment_status: initialStatus,
-        notes: `Manual order${text(body.notes, 1500) ? ` · ${text(body.notes,1500)}` : ''}`,
+        notes: `Manual order · Reference: ${reference}${text(body.notes, 1500) ? ` · ${text(body.notes,1500)}` : ''}`,
         updated_at: new Date().toISOString()
       };
       if (!row.email && !row.phone) return NextResponse.json({ error: 'Customer email or phone is required' }, { status: 400 });
@@ -171,9 +187,37 @@ export async function POST(req: NextRequest) {
           p_notes: row.notes,
           p_inventory: config.pocketWifiInventory,
         });
-        if (error) throw error;
+        if (error) {
+          if (/manual order reference already belongs to different order details/i.test(error.message || '')) {
+            return NextResponse.json({ error: 'This payment or sales reference already belongs to different order details. Reconcile the existing order before continuing.' }, { status: 409 });
+          }
+          throw error;
+        }
       } else {
-        const { error } = await db.from('orders').insert(row); if (error) throw error;
+        const { error } = await db.from('orders').insert(row);
+        if (error?.code === '23505') {
+          // The deterministic internal id is a unique retry boundary. A
+          // duplicate is safe only when it is the same manual sale; never
+          // let a reused payment reference overwrite or silently create a
+          // second eSIM entitlement with changed order details.
+          const existing = await db.from('orders')
+            .select('payment_status,customer_name,email,phone,amount_sgd,product_type,plan_name,country,travel_start,travel_end')
+            .eq('stripe_session_id', row.stripe_session_id)
+            .maybeSingle();
+          if (existing.error) throw existing.error;
+          const sameOrder = existing.data &&
+            existing.data.payment_status === row.payment_status &&
+            existing.data.customer_name === row.customer_name &&
+            existing.data.email === row.email &&
+            existing.data.phone === row.phone &&
+            Number(existing.data.amount_sgd) === row.amount_sgd &&
+            existing.data.product_type === row.product_type &&
+            existing.data.plan_name === row.plan_name &&
+            existing.data.country === row.country &&
+            existing.data.travel_start === row.travel_start &&
+            existing.data.travel_end === row.travel_end;
+          if (!sameOrder) return NextResponse.json({ error: 'This payment or sales reference already belongs to different order details. Reconcile the existing order before continuing.' }, { status: 409 });
+        } else if (error) throw error;
       }
     } else if (action === 'inventory_create') {
       const row = {

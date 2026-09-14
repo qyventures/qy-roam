@@ -1254,6 +1254,18 @@ test('manual orders cannot bypass paid-order lifecycle, pricing, or WiFi capacit
   assert.match(adminOpsRoute, /Pocket WiFi orders require a destination and valid travel start and end dates/);
 });
 
+test('manual sales use one retry-safe payment or sales reference instead of minting duplicate paid orders', () => {
+  assert.match(manualOrderForm, /name="order_reference"/);
+  assert.match(manualOrderForm, /Payment \/ sales reference/);
+  assert.match(adminOpsRoute, /function manualOrderReference\(value: unknown\)/);
+  assert.match(adminOpsRoute, /manualOrderSessionId\(reference\)/);
+  assert.match(adminOpsRoute, /createHash\('sha256'\)/);
+  assert.match(adminOpsRoute, /This payment or sales reference already belongs to different order details/);
+  assert.doesNotMatch(adminOpsRoute, /Math\.random\(\)\.toString\(36\)/);
+  assert.match(schema, /if found and p_stripe_session_id like 'manual_%' then/);
+  assert.match(schema, /manual order reference already belongs to different order details/);
+});
+
 test('manual eSIM orders retain the same safe email delivery boundary as Checkout', () => {
   assert.match(adminOpsRoute, /import \{ isSafeSmtpMailbox \} from '@\/lib\/smtp';/);
   assert.match(adminOpsRoute, /product === 'esim' && !isSafeSmtpMailbox\(row\.email \|\| undefined\)/);
