@@ -1912,6 +1912,16 @@ test('Meta CAPI settles a Purchase only after acknowledging the submitted event'
   );
 });
 
+test('SMTP fulfilment transport bounds untrusted relay responses', () => {
+  // A paid-order webhook talks to an external SMTP relay. Keep each protocol
+  // response bounded so a malformed peer cannot make an in-flight fulfilment
+  // notification consume unbounded application memory.
+  assert.match(smtpClient, /const MAX_SMTP_RESPONSE_BYTES = 64 \* 1024;/);
+  assert.match(smtpClient, /responseBytes \+= chunk\.byteLength;/);
+  assert.match(smtpClient, /if \(responseBytes > MAX_SMTP_RESPONSE_BYTES\)/);
+  assert.match(smtpClient, /reject\(new Error\('SMTP response is too large'\)\);/);
+});
+
 test('admin delivery recovery requires a completed Stripe session and matching persisted product identity', () => {
   assert.match(adminOrderRoute, /!validation\.valid \|\| session\.status !== 'complete' \|\| session\.payment_status !== 'paid'/);
   assert.match(adminOrderRoute, /if \(order\.product_type !== validation\.productType\)/);

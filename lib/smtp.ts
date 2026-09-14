@@ -18,6 +18,13 @@ type SmtpOptions = {
   timeoutMs?: number;
 };
 
+// SMTP replies are supplied by an external relay. A healthy server sends a
+// few short protocol lines, so there is never a reason to retain an unbounded
+// response while waiting for its final status. This is particularly important
+// on the paid-order webhook path: a malformed relay must not turn one pending
+// fulfilment notification into an avoidable worker-memory exhaustion.
+const MAX_SMTP_RESPONSE_BYTES = 64 * 1024;
+
 // Fulfilment delivery is retried independently from checkout, including for
 // sessions created before a deployment changes its environment validation.
 // Keep the transport boundary defensive as well: these values are interpolated
@@ -73,7 +80,17 @@ function safeMessageId(value: string | undefined) {
 function waitForResponse(socket: net.Socket | tls.TLSSocket, expected: number[]) {
   return new Promise<string>((resolve, reject) => {
     let buffer = '';
+    let responseBytes = 0;
     const onData = (chunk: Buffer) => {
+      responseBytes += chunk.byteLength;
+      if (responseBytes > MAX_SMTP_RESPONSE_BYTES) {
+        cleanup();
+        // Close without attaching an Error to destroy(), which could otherwise
+        // emit an unhandled socket error after this listener has been removed.
+        socket.destroy();
+        reject(new Error('SMTP response is too large'));
+        return;
+      }
       buffer += chunk.toString('utf8');
       const lines = buffer.split(/\r?\n/).filter(Boolean);
       const last = lines[lines.length - 1];
