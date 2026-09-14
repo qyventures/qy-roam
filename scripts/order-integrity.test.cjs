@@ -2001,7 +2001,18 @@ test('paid-order delivery endpoints are fail-closed and never follow credential-
   assert.match(productionReadiness, /const relayUrl = process\.env\.SMTP_RELAY_URL\?\.trim\(\)/);
   assert.match(productionReadiness, /const relaySecret = process\.env\.SMTP_RELAY_SECRET\?\.trim\(\)/);
   assert.equal(safeHttpsDeliveryEndpoint('https://relay.example.com/orders'), 'https://relay.example.com/orders');
-  for (const unsafe of ['http://relay.example.com/orders', 'https://user:pass@relay.example.com/orders', 'not a URL', '']) {
+  for (const unsafe of [
+    'http://relay.example.com/orders',
+    'https://user:pass@relay.example.com/orders',
+    'https://relay.example.com/orders?relay_secret=unsafe',
+    'https://relay.example.com/orders#relay_secret=unsafe',
+    'https://localhost/orders',
+    'https://mail.localhost/orders',
+    'https://127.0.0.1/orders',
+    'https://[::1]/orders',
+    'not a URL',
+    '',
+  ]) {
     assert.equal(safeHttpsDeliveryEndpoint(unsafe), null);
   }
   // Runtime settings can change after checkout or before an admin retry. The
