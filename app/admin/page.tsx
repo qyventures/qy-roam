@@ -85,7 +85,17 @@ export default async function AdminPage() {
         // durable claim is inserted and before its catch handler runs. Recent
         // claims are filtered below, while abandoned leases must be visible to
         // operations even before Stripe's next scheduled retry arrives.
-        supabase.from('stripe_events').select('event_id,event_type,stripe_session_id,attempts,processing_started_at,last_failed_at,last_error').is('processed_at', null).or(`last_error.not.is.null,processing_started_at.lt.${webhookExceptionCutoff}`).order('processing_started_at', { ascending: false }).limit(100),
+        // Webhook exceptions are paid-order recovery work, not a diagnostic
+        // sample. Apply the same bounded pagination policy as the other
+        // operational ledgers so a busy incident cannot silently hide older
+        // failed/abandoned events after the first 100 rows.
+        loadPages((from, to) => supabase.from('stripe_events')
+          .select('event_id,event_type,stripe_session_id,attempts,processing_started_at,last_failed_at,last_error')
+          .is('processed_at', null)
+          .or(`last_error.not.is.null,processing_started_at.lt.${webhookExceptionCutoff}`)
+          .order('processing_started_at', { ascending: false })
+          .order('event_id', { ascending: false })
+          .range(from, to)),
       ])
     : [unavailable, unavailable, unavailable, unavailable, unavailable];
   const orders: any[] = result.data ?? [];
@@ -131,6 +141,7 @@ export default async function AdminPage() {
     result.truncated && 'orders',
     notificationResult.truncated && 'fulfilment notifications',
     metaDeliveryResult.truncated && 'Meta delivery status',
+    stripeEventResult.truncated && 'Stripe webhook failures',
   ].filter(Boolean) as string[];
 
   const paid = orders.filter((o:any)=>o.payment_status === 'paid');

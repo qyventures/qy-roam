@@ -1555,6 +1555,16 @@ test('admin operational visibility pages beyond one Supabase response and warns 
   assert.doesNotMatch(adminPage, /from\('orders'\)\.select\('\*'\)\.order\('created_at', \{ ascending: false \}\)\.limit\(500\)/);
 });
 
+test('admin webhook recovery visibility pages every actionable Stripe exception within its declared bound', () => {
+  // A newest-100 diagnostic sample can hide a failed payment event from the
+  // same dashboard staff use to reconcile fulfilment. Keep this recovery
+  // ledger on the dashboard's explicit pagination/truncation contract.
+  assert.match(adminPage, /loadPages\(\(from, to\) => supabase\.from\('stripe_events'\)/);
+  assert.match(adminPage, /\.order\('event_id', \{ ascending: false \}\)\s*\.range\(from, to\)/);
+  assert.match(adminPage, /stripeEventResult\.truncated && 'Stripe webhook failures'/);
+  assert.doesNotMatch(adminPage, /from\('stripe_events'\)[\s\S]{0,500}\.limit\(100\)/);
+});
+
 test('launch control reports the same checkout prerequisites that protect real orders', () => {
   // The launch dashboard is an operational decision surface. It must not show
   // a green storefront state based only on a Stripe key and partial schema
