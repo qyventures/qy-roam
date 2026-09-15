@@ -1311,6 +1311,18 @@ test('eSIM lifecycle cannot use router statuses or reopen closed orders', () => 
   assert.equal(validFulfilmentTransition('esim', 'closed', 'awaiting_fulfilment'), false);
 });
 
+test('database lifecycle backstop prevents direct eSIM fulfilment inserts and product rewrites', () => {
+  // The application route validates the same workflow, but this protects
+  // service-role scripts and future operational clients that write orders
+  // directly. A digital order must enter the ledger before fulfilment, and an
+  // order can never be reclassified to evade product-specific controls.
+  assert.match(schema, /if tg_op = 'INSERT' then/);
+  assert.match(schema, /new\.product_type = 'esim'[\s\S]*new\.fulfilment_status not in \('awaiting_payment', 'payment_failed', 'awaiting_fulfilment'\)/);
+  assert.match(schema, /raise exception 'new eSIM order must begin before digital fulfilment'/);
+  assert.match(schema, /if new\.product_type is distinct from old\.product_type then[\s\S]*raise exception 'order product type is immutable'/);
+  assert.match(schema, /before insert or update of product_type, fulfilment_status on public\.orders/);
+});
+
 test('database enforces product-specific fulfilment status domains on new order writes', () => {
   // API validation is useful feedback for staff, but this constraint is the
   // final persistence boundary for webhook recovery and service-role work.
@@ -1350,7 +1362,7 @@ test('fulfilled eSIM orders cannot be reopened or cancelled after digital delive
   assert.match(schema, /old\.fulfilment_status = 'awaiting_fulfilment' and new\.fulfilment_status in \('fulfilled', 'cancelled'\)/);
   assert.match(schema, /old\.fulfilment_status = 'fulfilled' and new\.fulfilment_status = 'closed'/);
   assert.match(schema, /raise exception 'invalid eSIM fulfilment transition'/);
-  assert.match(schema, /create trigger qy_enforce_esim_fulfilment_transition\s+before update of fulfilment_status on public\.orders/);
+  assert.match(schema, /create trigger qy_enforce_esim_fulfilment_transition\s+before insert or update of product_type, fulfilment_status on public\.orders/);
 });
 
 test('eSIM fulfilment requires a non-secret delivery audit reference', () => {

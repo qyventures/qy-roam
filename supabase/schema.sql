@@ -111,10 +111,13 @@ for each row execute function public.qy_enforce_esim_delivery_reference_immutabi
 -- The admin API applies the eSIM fulfilment graph, but service-role scripts
 -- and future operational tools can write the orders table directly. A valid
 -- status label alone is not enough: without this backstop, such a write could
--- reopen a fulfilled digital entitlement or make it look cancelled after the
--- QR code / activation instructions were sent. Stripe is the payment
--- authority, so retain its two provisional transitions while making the
--- irreversible delivery hand-off database-enforced as well.
+-- create an eSIM as already fulfilled, reopen a fulfilled entitlement, or
+-- make it look cancelled after the QR code / activation instructions were
+-- sent. Product identity is also immutable: changing an order from eSIM to
+-- Pocket WiFi (or the reverse) would otherwise evade the product-specific
+-- lifecycle and delivery-evidence controls. Stripe is the payment authority,
+-- so retain its two provisional transitions while making the irreversible
+-- delivery hand-off database-enforced as well.
 create or replace function public.qy_enforce_esim_fulfilment_transition()
 returns trigger
 language plpgsql
@@ -122,8 +125,23 @@ security invoker
 set search_path = public
 as $$
 begin
+  if tg_op = 'INSERT' then
+    -- Checkout can first observe an eSIM as awaiting payment, payment failed,
+    -- or (after a signed paid event) awaiting fulfilment. A fulfilled/closed
+    -- insert would falsely claim that a digital credential had already been
+    -- handed off without a recorded operational transition.
+    if new.product_type = 'esim'
+      and new.fulfilment_status not in ('awaiting_payment', 'payment_failed', 'awaiting_fulfilment') then
+      raise exception 'new eSIM order must begin before digital fulfilment';
+    end if;
+    return new;
+  end if;
+
+  if new.product_type is distinct from old.product_type then
+    raise exception 'order product type is immutable';
+  end if;
+
   if old.product_type = 'esim'
-    and new.product_type = 'esim'
     and new.fulfilment_status is distinct from old.fulfilment_status
     and not (
       (old.fulfilment_status = 'awaiting_payment' and new.fulfilment_status in ('awaiting_fulfilment', 'payment_failed')) or
@@ -138,7 +156,7 @@ $$;
 
 drop trigger if exists qy_enforce_esim_fulfilment_transition on public.orders;
 create trigger qy_enforce_esim_fulfilment_transition
-before update of fulfilment_status on public.orders
+before insert or update of product_type, fulfilment_status on public.orders
 for each row execute function public.qy_enforce_esim_fulfilment_transition();
 
 -- The admin API and webhook each validate the lifecycle they write, but the
