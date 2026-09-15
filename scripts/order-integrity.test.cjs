@@ -1324,6 +1324,19 @@ test('database enforces product-specific fulfilment status domains on new order 
   assert.match(schema, /\) not valid;/);
 });
 
+test('database requires a confirmed payment before a direct write can claim fulfilment', () => {
+  // The webhook and admin route already validate this, but service-role
+  // imports and recovery scripts can bypass those TypeScript boundaries. A
+  // nullable SQL comparison is not sufficient: CHECK treats NULL as passing,
+  // so the constraint explicitly coalesces the payment condition to false.
+  assert.match(schema, /orders_fulfilment_requires_paid_payment_check/);
+  assert.match(schema, /coalesce\(payment_status = 'paid', false\) or fulfilment_status in \(\s*'awaiting_payment', 'payment_failed', 'cancelled'/);
+  assert.match(schema, /orders_payment_confirmed_at_requires_paid_payment_check/);
+  assert.match(schema, /payment_confirmed_at is null or coalesce\(payment_status = 'paid', false\)/);
+  assert.match(schema, /orders_fulfilment_requires_paid_payment_check check \([\s\S]*?\) not valid;/);
+  assert.match(schema, /orders_payment_confirmed_at_requires_paid_payment_check check \([\s\S]*?\) not valid;/);
+});
+
 test('fulfilled eSIM orders cannot be reopened or cancelled after digital delivery', () => {
   assert.equal(validFulfilmentTransition('esim', 'awaiting_fulfilment', 'fulfilled'), true);
   assert.equal(validFulfilmentTransition('esim', 'awaiting_fulfilment', 'cancelled'), true);

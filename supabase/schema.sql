@@ -160,6 +160,31 @@ alter table public.orders add constraint orders_product_fulfilment_status_check 
     'closed', 'cancelled'
   ))
 ) not valid;
+
+-- A fulfilment state is a customer-facing operational claim, so its payment
+-- boundary must survive direct service-role writes as well as the webhook and
+-- admin API validation. Without this constraint, a repair/import script could
+-- insert an unpaid order as dispatched, returned, or digitally fulfilled and
+-- make inventory or entitlement reports appear settled when no payment was
+-- actually recorded. Cancellation and the two pre-payment outcomes remain
+-- valid for unpaid/failed orders. `coalesce` matters here: PostgreSQL CHECK
+-- constraints accept an unknown (NULL) result, which would otherwise let a
+-- missing payment status bypass the paid-state requirement.
+alter table public.orders drop constraint if exists orders_fulfilment_requires_paid_payment_check;
+alter table public.orders add constraint orders_fulfilment_requires_paid_payment_check check (
+  coalesce(payment_status = 'paid', false) or fulfilment_status in (
+    'awaiting_payment', 'payment_failed', 'cancelled'
+  )
+) not valid;
+
+-- `payment_confirmed_at` is used as the canonical Purchase timestamp for
+-- recovery and CAPI deduplication. It must never be attached to an unpaid
+-- order by a direct data repair, otherwise later recovery could report a
+-- payment that Stripe has not confirmed.
+alter table public.orders drop constraint if exists orders_payment_confirmed_at_requires_paid_payment_check;
+alter table public.orders add constraint orders_payment_confirmed_at_requires_paid_payment_check check (
+  payment_confirmed_at is null or coalesce(payment_status = 'paid', false)
+) not valid;
 alter table public.orders enable row level security;
 
 -- Create the physical stock register before any reservation/manual-order
