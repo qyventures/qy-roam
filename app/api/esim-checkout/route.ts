@@ -5,6 +5,7 @@ import { ESIM_PROMO, getEsimPlan } from '../../../lib/esimPlans';
 import { validCheckoutRequestId } from '../../../lib/checkoutValidation';
 import { QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance, validQyRoamProvenance } from '../../../lib/orderProvenance';
 import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '../../../lib/productionReadiness';
+import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
 import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { metaAttributionFromRequest } from '@/lib/metaAttribution';
@@ -164,6 +165,17 @@ export async function POST(req: Request) {
       consent_collection: { terms_of_service: 'required' }
     }, { idempotencyKey: `qyroam_esim_${requestId}` });
 
+    // A Stripe credential should only return Sessions from its own mode, but
+    // this response becomes a customer payment capability. Match the mode
+    // boundary already enforced by webhook and confirmation flows before
+    // signing metadata or returning any Checkout state.
+    if (!stripeEventMatchesConfiguredMode(key, session.livemode)) {
+      console.error('esim_checkout_session_mode_mismatch', { sessionId: session.id });
+      return NextResponse.json({ error: 'Secure checkout confirmation is temporarily unavailable. Please try again shortly.' }, {
+        status: 503,
+        headers: { 'Cache-Control': 'no-store', 'Retry-After': '10' },
+      });
+    }
     if (!matchesRequestedEsim(session, requestId, plan)) {
       // Do not update provenance on a session that belongs to a different
       // selection. The client will create a new idempotency key on its next
@@ -189,6 +201,13 @@ export async function POST(req: Request) {
     // choosing a recovery response: a completed payment must lead to its
     // confirmation page, never back to an unusable Checkout URL.
     const currentSession = await stripe.checkout.sessions.retrieve(session.id);
+    if (!stripeEventMatchesConfiguredMode(key, currentSession.livemode)) {
+      console.error('esim_checkout_session_mode_mismatch', { sessionId: currentSession.id });
+      return NextResponse.json({ error: 'Secure checkout confirmation is temporarily unavailable. Please try again shortly.' }, {
+        status: 503,
+        headers: { 'Cache-Control': 'no-store', 'Retry-After': '10' },
+      });
+    }
     if (!matchesRequestedEsim(currentSession, requestId, plan)) {
       return NextResponse.json({ error: 'This checkout attempt belongs to a different eSIM plan. Please try again.', checkoutRequestConflict: true }, {
         status: 409,

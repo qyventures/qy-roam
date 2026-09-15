@@ -9,6 +9,7 @@ import { QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance, validQyRoamPro
 import { operationalConfig } from '../../../lib/operationalConfig';
 import { operationalIsoDate, operationalIsoDateAfter } from '../../../lib/operationalDate';
 import { hasRequiredFulfilmentEmailConfig, hasRequiredPaymentSchema, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '../../../lib/productionReadiness';
+import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
 import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { metaAttributionFromRequest } from '@/lib/metaAttribution';
@@ -183,6 +184,13 @@ export async function POST(req: Request) {
     // call. The fresh state, not the URL snapshot from that list, determines
     // whether the browser may return to Checkout.
     const existing=await stripe.checkout.sessions.retrieve(holdState.existingSessionId);
+    // The Stripe credential normally scopes this read to one mode, but this
+    // is a payment-capability boundary. Do not re-sign or return a session if
+    // an unexpected SDK/provider response crosses the configured mode.
+    if(!stripeEventMatchesConfiguredMode(key,existing.livemode)){
+      console.error('checkout_session_mode_mismatch',{sessionId:existing.id});
+      return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
+    }
     if(!matchesRequestedPocketWifi(existing,requestId,requested)){
       return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.',checkoutRequestConflict:true},{status:409,headers:{'Cache-Control':'no-store'}});
     }
@@ -269,6 +277,14 @@ export async function POST(req: Request) {
   // holds. An idempotency key can also replay a completed or expired Session,
   // so validate the response from the create call itself before linking the
   // newly-created reservation or returning any checkout state to the browser.
+  if(!stripeEventMatchesConfiguredMode(key,session.livemode)){
+    // Preserve the unlinked reservation. A response that fails this
+    // credential-mode boundary must never be exposed or treated as a safe
+    // checkout session, and releasing its capacity could oversell a session
+    // whose creation outcome is otherwise ambiguous.
+    console.error('checkout_session_mode_mismatch',{sessionId:session.id});
+    return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
+  }
   if(!matchesRequestedPocketWifi(session,requestId,requested)){
     const released=await supabase.from('checkout_reservations').delete().eq('checkout_request_id',requestId).is('stripe_session_id',null);
     if(released.error) throw released.error;
@@ -296,6 +312,10 @@ export async function POST(req: Request) {
   // update is visible before exposing a URL that can create a paid inventory
   // obligation.
   const currentSession=await stripe.checkout.sessions.retrieve(session.id);
+  if(!stripeEventMatchesConfiguredMode(key,currentSession.livemode)){
+    console.error('checkout_session_mode_mismatch',{sessionId:currentSession.id});
+    return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
+  }
   if(!matchesRequestedPocketWifi(currentSession,requestId,requested)){
     // The reservation has not been linked yet, so only this unlinked attempt
     // is safe to release. A mismatched Stripe response must never inherit the

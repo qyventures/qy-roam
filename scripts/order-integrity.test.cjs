@@ -868,6 +868,14 @@ test('production checkout and recovery reject test-mode Stripe server credential
   assert.match(stripeCheckoutConfig, /key\.startsWith\('sk_live_'\).*key\.startsWith\('rk_live_'\)/);
 });
 
+test('Checkout Session creation and recovery enforce the configured Stripe credential mode before exposing payment', () => {
+  assert.match(esimCheckoutRoute, /stripeEventMatchesConfiguredMode\(key, session\.livemode\)/);
+  assert.match(esimCheckoutRoute, /stripeEventMatchesConfiguredMode\(key, currentSession\.livemode\)/);
+  assert.match(wifiCheckoutRoute, /stripeEventMatchesConfiguredMode\(key,existing\.livemode\)/);
+  assert.match(wifiCheckoutRoute, /stripeEventMatchesConfiguredMode\(key,session\.livemode\)/);
+  assert.match(wifiCheckoutRoute, /stripeEventMatchesConfiguredMode\(key,currentSession\.livemode\)/);
+});
+
 test('signed Stripe webhooks cannot cross the configured test/live boundary', () => {
   assert.equal(stripeEventMatchesConfiguredMode('sk_live_secret', true), true);
   assert.equal(stripeEventMatchesConfiguredMode('rk_live_secret', true), true);
