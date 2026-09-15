@@ -203,6 +203,19 @@ alter table public.orders drop constraint if exists orders_payment_confirmed_at_
 alter table public.orders add constraint orders_payment_confirmed_at_requires_paid_payment_check check (
   payment_confirmed_at is null or coalesce(payment_status = 'paid', false)
 ) not valid;
+
+-- Checkout and the protected manual-sale flow already require a positive
+-- server-priced amount. Preserve that financial boundary for direct
+-- service-role repairs and imports too: a paid order with a zero, missing, or
+-- negative amount would corrupt revenue, Purchase value reporting, and period
+-- close totals even though it appears successfully paid. Keep historical
+-- incomplete unpaid rows reviewable while enforcing the rule for every new or
+-- changed row.
+alter table public.orders drop constraint if exists orders_paid_amount_positive_check;
+alter table public.orders add constraint orders_paid_amount_positive_check check (
+  (amount_sgd is null or amount_sgd >= 0) and
+  (payment_status is distinct from 'paid' or amount_sgd > 0)
+) not valid;
 alter table public.orders enable row level security;
 
 -- Create the physical stock register before any reservation/manual-order

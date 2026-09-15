@@ -1357,6 +1357,16 @@ test('database requires a confirmed payment before a direct write can claim fulf
   assert.match(schema, /orders_payment_confirmed_at_requires_paid_payment_check check \([\s\S]*?\) not valid;/);
 });
 
+test('database prevents direct writes from recording invalid paid-order amounts', () => {
+  // Revenue, Purchase value, and accounting close all rely on this durable
+  // financial boundary. Application validation is not sufficient because
+  // service-role recovery/import work can write the table directly.
+  assert.match(schema, /orders_paid_amount_positive_check/);
+  assert.match(schema, /\(amount_sgd is null or amount_sgd >= 0\) and/);
+  assert.match(schema, /payment_status is distinct from 'paid' or amount_sgd > 0/);
+  assert.match(schema, /orders_paid_amount_positive_check check \([\s\S]*?\) not valid;/);
+});
+
 test('fulfilled eSIM orders cannot be reopened or cancelled after digital delivery', () => {
   assert.equal(validFulfilmentTransition('esim', 'awaiting_fulfilment', 'fulfilled'), true);
   assert.equal(validFulfilmentTransition('esim', 'awaiting_fulfilment', 'cancelled'), true);
