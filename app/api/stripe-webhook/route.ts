@@ -222,7 +222,12 @@ function metaPurchaseConfigured(session: Stripe.Checkout.Session) {
 }
 
 async function sendMetaPurchase(session: Stripe.Checkout.Session, eventTime: number) {
-  const token=getMetaCapiToken(), pixel=process.env.NEXT_PUBLIC_META_PIXEL_ID;
+  // Readiness deliberately tolerates surrounding deployment whitespace while
+  // rejecting control characters. Use the same canonical values at the
+  // outbound boundary: otherwise health can report CAPI configured while a
+  // space in an environment value produces an invalid Bearer token or Graph
+  // path and leaves every paid Purchase retrying.
+  const token=getMetaCapiToken()?.trim(), pixel=process.env.NEXT_PUBLIC_META_PIXEL_ID?.trim();
   if (!token || !pixel) throw new Error('Meta CAPI is not configured');
   const email=normalizeEmail(session.customer_details?.email), phone=normalizePhone(session.customer_details?.phone);
   const userData:Record<string,string|string[]>={}; if(email) userData.em=[sha256(email)!]; if(phone) userData.ph=[sha256(phone)!];

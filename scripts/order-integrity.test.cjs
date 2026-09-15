@@ -62,6 +62,7 @@ const manualOrderForm = fs.readFileSync(require.resolve('../components/ManualOrd
 const adminOpsForms = fs.readFileSync(require.resolve('../components/AdminOpsForms.tsx'), 'utf8');
 const adminOpsRoute = fs.readFileSync(require.resolve('../app/api/admin/ops/route.ts'), 'utf8');
 const productionReadiness = fs.readFileSync(require.resolve('../lib/productionReadiness.ts'), 'utf8');
+const runtimeConfig = fs.readFileSync(require.resolve('../lib/runtimeConfig.ts'), 'utf8');
 const stripeCheckoutConfig = fs.readFileSync(require.resolve('../lib/stripeCheckoutConfig.ts'), 'utf8');
 const operationalDate = fs.readFileSync(require.resolve('../lib/operationalDate.ts'), 'utf8');
 const smtpClient = fs.readFileSync(require.resolve('../lib/smtp.ts'), 'utf8');
@@ -1949,6 +1950,16 @@ test('Meta CAPI requires a complete destination and admin recovery never reports
   assert.match(launchPage, /hasRequiredMetaCapiPurchaseConfig/);
   assert.match(launchPage, /const metaCapi=hasRequiredMetaCapiPurchaseConfig\(\)/);
   assert.doesNotMatch(launchPage, /Boolean\(process\.env\.NEXT_PUBLIC_META_PIXEL_ID\)/);
+});
+
+test('Meta CAPI delivery canonicalizes the same environment values accepted by readiness', () => {
+  // Configuration validation trims ordinary deployment whitespace. The
+  // outbound Graph request must use that same canonical form so a formatted
+  // secret or Pixel ID cannot make health look ready while every Purchase
+  // delivery fails authentication or targets an invalid path.
+  assert.match(webhookRoute, /const token=getMetaCapiToken\(\)\?\.trim\(\), pixel=process\.env\.NEXT_PUBLIC_META_PIXEL_ID\?\.trim\(\);/);
+  assert.match(runtimeConfig, /const pixelId = process\.env\.NEXT_PUBLIC_META_PIXEL_ID\?\.trim\(\);/);
+  assert.match(runtimeConfig, /const accessToken = configuredToken\?\.trim\(\);/);
 });
 
 test('Meta CAPI settles a Purchase only after acknowledging the submitted event', () => {
