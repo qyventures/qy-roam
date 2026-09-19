@@ -617,6 +617,101 @@ create index if not exists fulfilment_notifications_status_idx on public.fulfilm
 create index if not exists meta_purchase_deliveries_status_idx on public.meta_purchase_deliveries(status, updated_at);
 create index if not exists checkout_reservations_dates_idx on public.checkout_reservations(travel_start, travel_end, expires_at);
 
+-- eSIM payment transitions are a digital-entitlement boundary. Distinct
+-- completed/succeeded/failed events may run concurrently, so decide the
+-- payment and fulfilment transition under one per-Session database lock. This
+-- also prevents a webhook refresh from overwriting an operator who has already
+-- fulfilled or closed the order.
+create or replace function public.qy_persist_stripe_esim_order(
+  p_stripe_session_id text,
+  p_payment_status text,
+  p_customer_name text,
+  p_email text,
+  p_phone text,
+  p_amount_sgd numeric,
+  p_plan_id text,
+  p_plan_name text,
+  p_data_allowance text,
+  p_country text,
+  p_measurement_consent text,
+  p_shipping_address jsonb,
+  p_payment_confirmed_at timestamptz,
+  p_payment_failed boolean
+)
+returns public.orders
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_order public.orders%rowtype;
+  v_paid boolean := p_payment_status = 'paid';
+  v_fulfilment text;
+begin
+  if coalesce(length(trim(p_stripe_session_id)), 0) = 0 then raise exception 'Stripe session id is required'; end if;
+  if p_payment_status not in ('paid', 'unpaid') then raise exception 'unsupported Stripe payment status'; end if;
+  if p_payment_failed and p_payment_status <> 'unpaid' then raise exception 'failed payment must be unpaid'; end if;
+  if v_paid and p_payment_confirmed_at is null then raise exception 'paid Stripe order requires a payment confirmation time'; end if;
+  if not v_paid and p_payment_confirmed_at is not null then raise exception 'unpaid Stripe order cannot have a payment confirmation time'; end if;
+  if p_amount_sgd is null or p_amount_sgd <= 0 then raise exception 'invalid eSIM payment amount'; end if;
+  if coalesce(length(trim(p_plan_id)), 0) = 0 then raise exception 'eSIM plan id is required'; end if;
+
+  perform pg_advisory_xact_lock(hashtext('qy_roam_esim:' || p_stripe_session_id));
+  select * into v_order from public.orders where stripe_session_id = p_stripe_session_id for update;
+
+  if v_order.id is not null and v_order.product_type <> 'esim' then
+    raise exception 'stored order product does not match eSIM checkout';
+  end if;
+  -- Never let an older unpaid/failed event downgrade a paid entitlement.
+  if v_order.id is not null and v_order.payment_status = 'paid' and not v_paid then
+    return v_order;
+  end if;
+  -- A failed/expired Session is terminal. Reopening it could issue a digital
+  -- entitlement for a payment lifecycle that operations already closed.
+  if v_order.id is not null and v_paid and v_order.fulfilment_status = 'payment_failed' then
+    raise exception 'paid Stripe event cannot reopen a terminally failed order';
+  end if;
+
+  v_fulfilment := case
+    when v_paid and v_order.id is not null and v_order.fulfilment_status not in ('awaiting_payment','payment_failed') then v_order.fulfilment_status
+    when v_paid then 'awaiting_fulfilment'
+    when p_payment_failed and v_order.id is not null and v_order.fulfilment_status not in ('awaiting_payment','payment_failed') then v_order.fulfilment_status
+    when p_payment_failed then 'payment_failed'
+    when v_order.id is not null then v_order.fulfilment_status
+    else 'awaiting_payment'
+  end;
+
+  insert into public.orders (
+    stripe_session_id,payment_status,customer_name,email,phone,amount_sgd,
+    product_type,plan_id,plan_name,data_allowance,country,fulfilment_status,
+    payment_confirmed_at,measurement_consent,shipping_address,updated_at
+  ) values (
+    p_stripe_session_id,p_payment_status,p_customer_name,p_email,p_phone,p_amount_sgd,
+    'esim',p_plan_id,p_plan_name,p_data_allowance,p_country,v_fulfilment,
+    case when v_paid then p_payment_confirmed_at else null end,p_measurement_consent,p_shipping_address,now()
+  )
+  on conflict (stripe_session_id) do update set
+    payment_status = excluded.payment_status,
+    customer_name = excluded.customer_name,
+    email = excluded.email,
+    phone = excluded.phone,
+    amount_sgd = excluded.amount_sgd,
+    plan_id = excluded.plan_id,
+    plan_name = excluded.plan_name,
+    data_allowance = excluded.data_allowance,
+    country = excluded.country,
+    fulfilment_status = v_fulfilment,
+    payment_confirmed_at = case when v_paid then coalesce(orders.payment_confirmed_at, p_payment_confirmed_at) else orders.payment_confirmed_at end,
+    measurement_consent = excluded.measurement_consent,
+    shipping_address = excluded.shipping_address,
+    updated_at = now()
+  returning * into v_order;
+  return v_order;
+end;
+$$;
+revoke all on function public.qy_persist_stripe_esim_order(text,text,text,text,text,numeric,text,text,text,text,text,jsonb,timestamptz,boolean) from public;
+grant execute on function public.qy_persist_stripe_esim_order(text,text,text,text,text,numeric,text,text,text,text,text,jsonb,timestamptz,boolean) to service_role;
+
 -- Stripe completion must cross from a temporary checkout hold to a durable
 -- router commitment under the reservation lock. This also records completed
 -- checkouts that are awaiting an asynchronous payment: after their short

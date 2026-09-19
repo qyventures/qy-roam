@@ -292,6 +292,29 @@ async function checkRequiredEsimOrderSchema() {
         console.error('production_esim_order_schema_check_failed', { tables: failures });
         return false;
       }
+      // Resolve the exact atomic eSIM persistence signature and service-role
+      // grant without creating an order. The expected validation error proves
+      // checkout is not relying on an older table-only schema.
+      const persistenceProbe = await database.rpc('qy_persist_stripe_esim_order', {
+        p_stripe_session_id: '',
+        p_payment_status: 'unpaid',
+        p_customer_name: null,
+        p_email: null,
+        p_phone: null,
+        p_amount_sgd: 0,
+        p_plan_id: null,
+        p_plan_name: null,
+        p_data_allowance: null,
+        p_country: null,
+        p_measurement_consent: 'essential',
+        p_shipping_address: null,
+        p_payment_confirmed_at: null,
+        p_payment_failed: false,
+      }).abortSignal(signal);
+      if (!persistenceProbe.error || !/Stripe session id is required/i.test(persistenceProbe.error.message || '')) {
+        console.error('production_esim_order_persistence_rpc_check_failed');
+        return false;
+      }
       return true;
     });
   } catch {

@@ -309,7 +309,6 @@ async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.E
   const paid=session.payment_status==='paid', failed=eventType==='checkout.session.async_payment_failed';
   const productType=session.metadata?.product_type;
   if(productType!=='esim'&&productType!=='pocket_wifi') throw new Error('Unknown or missing product_type on Stripe session');
-  const defaultPaidStatus=productType==='esim'?'awaiting_fulfilment':'paid';
   const paymentConfirmedAt=new Date(eventCreated*1000).toISOString();
   const measurementConsent=session.metadata?.measurement_consent==='accepted'?'accepted':'essential';
   const esimPlan=productType==='esim'?getEsimPlan(session.metadata?.plan_id):undefined;
@@ -345,51 +344,30 @@ async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.E
     return;
   }
 
-  // Stripe can deliver distinct events for one Checkout Session concurrently,
-  // while an operator may advance fulfilment at the same time. Use the current
-  // payment and fulfilment values as an optimistic-concurrency token. A stale
-  // webhook then retries from the new row instead of overwriting `packing`,
-  // `fulfilled`, dispatch/return progress, or a newer paid payment snapshot.
-  for(let attempt=0;attempt<5;attempt+=1){
-    const existing=await supabase.from('orders').select('payment_status,fulfilment_status,payment_confirmed_at').eq('stripe_session_id',session.id).maybeSingle();
-    if(existing.error) throw existing.error;
-    const current=existing.data?.fulfilment_status;
-    if(!paid&&existing.data?.payment_status==='paid') return;
-    // `async_payment_failed` and an authenticated expiry close an unpaid
-    // Checkout Session permanently.  A later paid event for that same
-    // Session is not a normal delayed-payment transition (the valid path is
-    // awaiting_payment -> paid); accepting it would recreate an eSIM
-    // fulfilment obligation or, worse, turn a released Pocket WiFi hold into
-    // a new booking after its dates may have been sold to someone else. Keep
-    // the signed event in the retry ledger for operator reconciliation rather
-    // than silently overriding this terminal payment failure.
-    if(paid&&current==='payment_failed') throw new Error('Paid Stripe event cannot reopen a terminally failed order');
-    const fulfilment=paid?(current&&!['awaiting_payment','payment_failed'].includes(current)?current:defaultPaidStatus):failed?(current&&!['awaiting_payment','payment_failed'].includes(current)?current:'payment_failed'):(current||'awaiting_payment');
-    // Retain the first signed payment time so CAPI recovery uses one stable
-    // event timestamp even when a later paid event refreshes customer details.
-    const confirmedAt=paid?(existing.data?.payment_confirmed_at||paymentConfirmedAt):(existing.data?.payment_confirmed_at||null);
-    const order={...orderSnapshot,fulfilment_status:fulfilment,payment_confirmed_at:confirmedAt,updated_at:new Date().toISOString()};
-
-    if(!existing.data){
-      const inserted=await supabase.from('orders').insert(order);
-      if(!inserted.error) return;
-      // Another event inserted the row after our read. Re-read it so all of
-      // the same paid and fulfilment-state guards apply to the retry.
-      if(inserted.error.code==='23505') continue;
-      throw inserted.error;
-    }
-
-    let update=supabase.from('orders').update(order)
-      .eq('stripe_session_id',session.id)
-      .eq('fulfilment_status',existing.data.fulfilment_status);
-    update=existing.data.payment_status===null
-      ? update.is('payment_status',null)
-      : update.eq('payment_status',existing.data.payment_status);
-    const updated=await update.select('stripe_session_id');
-    if(updated.error) throw updated.error;
-    if(updated.data?.length===1) return;
-  }
-  throw new Error('Order changed repeatedly while applying Stripe event');
+  // Serialize every payment transition for this digital entitlement inside
+  // Postgres. Distinct Stripe events can arrive on different workers while an
+  // operator is fulfilling the eSIM; a client-side read/update loop cannot
+  // make that whole decision atomic. The RPC preserves advanced fulfilment,
+  // the first payment timestamp, and terminal payment failure under one lock.
+  const persisted=await supabase.rpc('qy_persist_stripe_esim_order',{
+    p_stripe_session_id:session.id,
+    p_payment_status:session.payment_status,
+    p_customer_name:orderSnapshot.customer_name,
+    p_email:orderSnapshot.email,
+    p_phone:orderSnapshot.phone,
+    p_amount_sgd:orderSnapshot.amount_sgd,
+    p_plan_id:orderSnapshot.plan_id,
+    p_plan_name:orderSnapshot.plan_name,
+    p_data_allowance:orderSnapshot.data_allowance,
+    p_country:orderSnapshot.country,
+    p_measurement_consent:measurementConsent,
+    p_shipping_address:orderSnapshot.shipping_address,
+    p_payment_confirmed_at:paid?paymentConfirmedAt:null,
+    p_payment_failed:failed,
+  });
+  if(persisted.error) throw persisted.error;
+  const persistedOrder=Array.isArray(persisted.data)?persisted.data[0]:persisted.data;
+  if(!persistedOrder?.stripe_session_id) throw new Error('eSIM order persistence returned no order');
 }
 
 type EventClaim =

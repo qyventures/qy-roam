@@ -1025,6 +1025,15 @@ test('Pocket WiFi payment persistence atomically replaces its checkout hold with
   assert.match(productionReadiness, /production_payment_persistence_rpc_check_failed/);
 });
 
+test('eSIM payment persistence serializes digital entitlement transitions in the database', () => {
+  assert.match(webhookRoute, /qy_persist_stripe_esim_order/);
+  assert.match(schema, /create or replace function public\.qy_persist_stripe_esim_order/);
+  assert.match(schema, /pg_advisory_xact_lock\(hashtext\('qy_roam_esim:' \|\| p_stripe_session_id\)\)/);
+  assert.match(schema, /when v_paid and v_order\.id is not null and v_order\.fulfilment_status not in \('awaiting_payment','payment_failed'\) then v_order\.fulfilment_status/);
+  assert.match(schema, /payment_confirmed_at = case when v_paid then coalesce\(orders\.payment_confirmed_at, p_payment_confirmed_at\)/);
+  assert.match(productionReadiness, /production_esim_order_persistence_rpc_check_failed/);
+});
+
 test('Pocket WiFi reservation retries revalidate current physical capacity', () => {
   // A worker may die after reserving but before creating its Stripe Session.
   // Reusing that request id must not bypass a router that was subsequently
@@ -1746,14 +1755,12 @@ test('invalid delivery-lease timestamps are recoverable instead of permanently b
 });
 
 test('Stripe order persistence cannot overwrite concurrent fulfilment progress', () => {
-  // An operator or another webhook can change either field after the initial
-  // read. The update must compare both values and retry from the winning row.
-  assert.match(webhookRoute, /for\(let attempt=0;attempt<5;attempt\+=1\)/);
-  assert.match(webhookRoute, /\.eq\('fulfilment_status',existing\.data\.fulfilment_status\)/);
-  assert.match(webhookRoute, /update\.is\('payment_status',null\)/);
-  assert.match(webhookRoute, /update\.eq\('payment_status',existing\.data\.payment_status\)/);
-  assert.match(webhookRoute, /if\(updated\.data\?\.length===1\) return/);
-  assert.doesNotMatch(webhookRoute, /if\(inserted\.error\.code!==['"]23505['"]\)[\s\S]{0,300}from\('orders'\)\.update\(order\)/);
+  // Both product persistence paths decide transitions under database locks;
+  // webhook workers never perform a stale read followed by a broad update.
+  assert.match(webhookRoute, /qy_persist_stripe_esim_order/);
+  assert.match(webhookRoute, /qy_persist_stripe_pocket_wifi_order/);
+  assert.doesNotMatch(webhookRoute, /from\('orders'\)\.update\(order\)/);
+  assert.match(schema, /v_order\.fulfilment_status not in \('awaiting_payment','payment_failed'\) then v_order\.fulfilment_status/g);
 });
 
 test('terminal failed payment states cannot be reopened by a later paid event', () => {
@@ -1762,8 +1769,8 @@ test('terminal failed payment states cannot be reopened by a later paid event', 
   // provisional row), its temporary router reservation can be released and
   // the same dates may be sold again. Both persistence implementations must
   // therefore fail closed instead of recreating a fulfilment commitment.
-  assert.match(webhookRoute, /if\(paid&&current==='payment_failed'\) throw new Error\('Paid Stripe event cannot reopen a terminally failed order'\)/);
-  assert.match(schema, /if found and v_paid and v_order\.fulfilment_status = 'payment_failed' then\s+raise exception 'paid Stripe event cannot reopen a terminally failed order';/);
+  const terminalGuards = schema.match(/raise exception 'paid Stripe event cannot reopen a terminally failed order';/g) || [];
+  assert.equal(terminalGuards.length, 2);
 });
 
 test('failed Stripe webhook claims remain visible and immediately retryable', () => {
@@ -1934,7 +1941,7 @@ test('Meta Purchase retries preserve one durable event timestamp for deduplicati
   assert.match(schema, /payment_confirmed_at timestamptz/);
   assert.match(webhookRoute, /insert\(\{stripe_session_id:session\.id,status:'pending',event_time:requestedEventTime\}\)/);
   assert.match(webhookRoute, /async function persistSession\(session:Stripe\.Checkout\.Session,eventType:Stripe\.Event\.Type,eventCreated:number\)/);
-  assert.match(webhookRoute, /payment_confirmed_at:confirmedAt/);
+  assert.match(schema, /payment_confirmed_at = case when v_paid then coalesce\(orders\.payment_confirmed_at, p_payment_confirmed_at\)/);
   assert.match(webhookRoute, /await sendMetaPurchase\(session,Number\(attempt\.data\[0\]\.event_time\)\)/);
   assert.match(adminOrderRoute, /select\('stripe_session_id,payment_status,payment_confirmed_at,product_type,fulfilment_status,measurement_consent'\)/);
   assert.match(adminOrderRoute, /const metaEventTime=Number\.isFinite\(confirmedAtMs\)/);
