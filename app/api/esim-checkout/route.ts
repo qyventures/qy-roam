@@ -201,6 +201,16 @@ export async function POST(req: Request) {
     // choosing a recovery response: a completed payment must lead to its
     // confirmation page, never back to an unusable Checkout URL.
     const currentSession = await stripe.checkout.sessions.retrieve(session.id);
+    // This fresh object can expose either a paid-order confirmation or a live
+    // payment URL. Bind it to the idempotent create result before trusting any
+    // metadata, status, provenance, or URL on it.
+    if (currentSession.id !== session.id) {
+      console.error('esim_checkout_session_identity_mismatch', { expectedSessionId: session.id, retrievedSessionId: currentSession.id });
+      return NextResponse.json({ error: 'Secure checkout confirmation is temporarily unavailable. Please try again shortly.' }, {
+        status: 503,
+        headers: { 'Cache-Control': 'no-store', 'Retry-After': '10' },
+      });
+    }
     if (!stripeEventMatchesConfiguredMode(key, currentSession.livemode)) {
       console.error('esim_checkout_session_mode_mismatch', { sessionId: currentSession.id });
       return NextResponse.json({ error: 'Secure checkout confirmation is temporarily unavailable. Please try again shortly.' }, {

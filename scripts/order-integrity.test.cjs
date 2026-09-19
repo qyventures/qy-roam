@@ -762,6 +762,29 @@ test('eSIM idempotent recovery uses a fresh Stripe session state before returnin
   assert.doesNotMatch(esimCheckoutRoute, /if \(session\.status === 'complete' && session\.payment_status === 'paid'\)/);
 });
 
+test('checkout recovery binds every fresh Stripe response to the requested Session id', () => {
+  // A fresh retrieve supplies status and customer data, but only the requested
+  // Session may confirm payment, mutate a reservation, or return a payment URL.
+  assert.match(esimCheckoutRoute, /currentSession\.id !== session\.id/);
+  assert.match(esimCheckoutRoute, /esim_checkout_session_identity_mismatch/);
+  assert.ok(
+    esimCheckoutRoute.indexOf('currentSession.id !== session.id') <
+      esimCheckoutRoute.indexOf("if (!stripeEventMatchesConfiguredMode(key, currentSession.livemode))"),
+    'eSIM response identity must be checked before its mode, metadata, status, or URL',
+  );
+
+  assert.match(wifiCheckoutRoute, /existing\.id!==holdState\.existingSessionId/);
+  assert.match(wifiCheckoutRoute, /currentSession\.id!==session\.id/);
+  const existingRead = wifiCheckoutRoute.indexOf('const existing=await stripe.checkout.sessions.retrieve(holdState.existingSessionId)');
+  const existingIdentity = wifiCheckoutRoute.indexOf('existing.id!==holdState.existingSessionId', existingRead);
+  const existingUrl = wifiCheckoutRoute.indexOf('{url:existing.url}', existingRead);
+  assert.ok(existingRead >= 0 && existingIdentity > existingRead && existingIdentity < existingUrl);
+  const currentRead = wifiCheckoutRoute.indexOf('const currentSession=await stripe.checkout.sessions.retrieve(session.id)');
+  const currentIdentity = wifiCheckoutRoute.indexOf('currentSession.id!==session.id', currentRead);
+  const currentUrl = wifiCheckoutRoute.indexOf('{url:currentSession.url}', currentRead);
+  assert.ok(currentRead >= 0 && currentIdentity > currentRead && currentIdentity < currentUrl);
+});
+
 test('browser InitiateCheckout events share the durable Stripe attempt identity on retries', () => {
   // Pixel events are client-side, but checkout retries are an important
   // measurement boundary: one Stripe idempotency key must not inflate the

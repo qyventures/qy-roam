@@ -184,6 +184,12 @@ export async function POST(req: Request) {
     // call. The fresh state, not the URL snapshot from that list, determines
     // whether the browser may return to Checkout.
     const existing=await stripe.checkout.sessions.retrieve(holdState.existingSessionId);
+    // This object can release a reservation, confirm a paid order, or expose a
+    // payment URL. Require it to remain bound to the exact hold selected above.
+    if(existing.id!==holdState.existingSessionId){
+      console.error('checkout_session_identity_mismatch',{expectedSessionId:holdState.existingSessionId,retrievedSessionId:existing.id});
+      return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
+    }
     // The Stripe credential normally scopes this read to one mode, but this
     // is a payment-capability boundary. Do not re-sign or return a session if
     // an unexpected SDK/provider response crosses the configured mode.
@@ -312,6 +318,12 @@ export async function POST(req: Request) {
   // update is visible before exposing a URL that can create a paid inventory
   // obligation.
   const currentSession=await stripe.checkout.sessions.retrieve(session.id);
+  // Keep the fresh response bound to the idempotent create result before it
+  // can confirm payment, mutate this booking's reservation, or expose a URL.
+  if(currentSession.id!==session.id){
+    console.error('checkout_session_identity_mismatch',{expectedSessionId:session.id,retrievedSessionId:currentSession.id});
+    return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
+  }
   if(!stripeEventMatchesConfiguredMode(key,currentSession.livemode)){
     console.error('checkout_session_mode_mismatch',{sessionId:currentSession.id});
     return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
