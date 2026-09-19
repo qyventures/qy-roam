@@ -1348,14 +1348,22 @@ test('database enforces product-specific fulfilment status domains on new order 
 test('database requires a confirmed payment before a direct write can claim fulfilment', () => {
   // The webhook and admin route already validate this, but service-role
   // imports and recovery scripts can bypass those TypeScript boundaries. A
-  // nullable SQL comparison is not sufficient: CHECK treats NULL as passing,
-  // so the constraint explicitly coalesces the payment condition to false.
+  // nullable SQL comparison is not sufficient: CHECK treats NULL as passing.
+  // Keep fulfilment paid-only and keep payment time aligned with paid state.
   assert.match(schema, /orders_fulfilment_requires_paid_payment_check/);
   assert.match(schema, /coalesce\(payment_status = 'paid', false\) or fulfilment_status in \(\s*'awaiting_payment', 'payment_failed', 'cancelled'/);
   assert.match(schema, /orders_payment_confirmed_at_requires_paid_payment_check/);
-  assert.match(schema, /payment_confirmed_at is null or coalesce\(payment_status = 'paid', false\)/);
+  assert.match(schema, /payment_status = 'paid' and payment_confirmed_at is not null/);
+  assert.match(schema, /payment_status is distinct from 'paid' and payment_confirmed_at is null/);
   assert.match(schema, /orders_fulfilment_requires_paid_payment_check check \([\s\S]*?\) not valid;/);
   assert.match(schema, /orders_payment_confirmed_at_requires_paid_payment_check check \([\s\S]*?\) not valid;/);
+});
+
+test('every newly written paid order retains a canonical payment confirmation time', () => {
+  assert.match(adminOpsRoute, /payment_confirmed_at:\s*paymentStatus === 'paid' \? recordedAt : null/);
+  assert.match(schema, /orders_payment_confirmed_at_requires_paid_payment_check check \([\s\S]*?payment_status = 'paid' and payment_confirmed_at is not null[\s\S]*?payment_status is distinct from 'paid' and payment_confirmed_at is null[\s\S]*?\) not valid;/);
+  assert.match(schema, /'pocket_wifi', p_plan_name, p_country, p_travel_start, p_travel_end, 'paid',[\s\S]*?now\(\), p_notes, now\(\)/);
+  assert.match(schema, /if v_paid and p_payment_confirmed_at is null then raise exception 'paid Stripe order requires a payment confirmation time'/);
 });
 
 test('database prevents direct writes from recording invalid paid-order amounts', () => {

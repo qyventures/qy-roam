@@ -146,6 +146,7 @@ export async function POST(req: NextRequest) {
       if (product === 'pocket_wifi' && (!country || !travel.start || !travel.end)) {
         return NextResponse.json({ error: 'Pocket WiFi orders require a destination and valid travel start and end dates' }, { status: 400 });
       }
+      const recordedAt = new Date().toISOString();
       const row = {
         stripe_session_id: manualOrderSessionId(reference),
         payment_status: paymentStatus, customer_name: text(body.customer_name, 120) || null,
@@ -153,8 +154,12 @@ export async function POST(req: NextRequest) {
         amount_sgd: amountCents / 100, product_type: product, plan_name: text(body.plan_name, 160) || null,
         country, travel_start: travel.start, travel_end: travel.end,
         fulfilment_status: initialStatus,
+        // Manual sales do not have a signed Stripe event timestamp. Record
+        // the protected staff-entry time instead so every paid order has a
+        // durable payment boundary for revenue reports and later recovery.
+        payment_confirmed_at: paymentStatus === 'paid' ? recordedAt : null,
         notes: `Manual order · Reference: ${reference}${text(body.notes, 1500) ? ` · ${text(body.notes,1500)}` : ''}`,
-        updated_at: new Date().toISOString()
+        updated_at: recordedAt
       };
       if (!row.email && !row.phone) return NextResponse.json({ error: 'Customer email or phone is required' }, { status: 400 });
       // A manual eSIM sale joins the same fulfilment lifecycle as a Stripe

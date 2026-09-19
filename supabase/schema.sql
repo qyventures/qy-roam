@@ -196,12 +196,14 @@ alter table public.orders add constraint orders_fulfilment_requires_paid_payment
 ) not valid;
 
 -- `payment_confirmed_at` is used as the canonical Purchase timestamp for
--- recovery and CAPI deduplication. It must never be attached to an unpaid
--- order by a direct data repair, otherwise later recovery could report a
--- payment that Stripe has not confirmed.
+-- recovery, revenue reporting, and CAPI deduplication. Require it on every
+-- newly written paid order and forbid it on an unpaid order. NOT VALID keeps
+-- untouched legacy rows reviewable, while application and privileged RPC
+-- writes below now populate this boundary for both Stripe and manual sales.
 alter table public.orders drop constraint if exists orders_payment_confirmed_at_requires_paid_payment_check;
 alter table public.orders add constraint orders_payment_confirmed_at_requires_paid_payment_check check (
-  payment_confirmed_at is null or coalesce(payment_status = 'paid', false)
+  (payment_status = 'paid' and payment_confirmed_at is not null) or
+  (payment_status is distinct from 'paid' and payment_confirmed_at is null)
 ) not valid;
 
 -- Checkout and the protected manual-sale flow already require a positive
@@ -592,11 +594,11 @@ begin
   insert into public.orders (
     stripe_session_id, payment_status, customer_name, email, phone, amount_sgd,
     product_type, plan_name, country, travel_start, travel_end, fulfilment_status,
-    notes, updated_at
+    payment_confirmed_at, notes, updated_at
   ) values (
     p_stripe_session_id, 'paid', p_customer_name, p_email, p_phone, p_amount_sgd,
     'pocket_wifi', p_plan_name, p_country, p_travel_start, p_travel_end, 'paid',
-    p_notes, now()
+    now(), p_notes, now()
   ) returning * into v_order;
   return v_order;
 end;
@@ -656,6 +658,8 @@ begin
   -- no_payment_required is not a valid operational state here.
   if p_payment_status not in ('paid', 'unpaid') then raise exception 'unsupported Stripe payment status'; end if;
   if p_payment_failed and p_payment_status <> 'unpaid' then raise exception 'failed payment must be unpaid'; end if;
+  if v_paid and p_payment_confirmed_at is null then raise exception 'paid Stripe order requires a payment confirmation time'; end if;
+  if not v_paid and p_payment_confirmed_at is not null then raise exception 'unpaid Stripe order cannot have a payment confirmation time'; end if;
   if p_travel_start is null or p_travel_end is null or p_travel_end < p_travel_start then raise exception 'invalid Pocket WiFi travel dates'; end if;
   if p_amount_sgd is null or p_amount_sgd <= 0 then raise exception 'invalid Pocket WiFi payment amount'; end if;
 
