@@ -1624,6 +1624,21 @@ test('admin webhook recovery visibility pages every actionable Stripe exception 
   assert.doesNotMatch(adminPage, /from\('stripe_events'\)[\s\S]{0,500}\.limit\(100\)/);
 });
 
+test('admin webhook exceptions expose a safe manual Stripe resend path and order-persistence state', () => {
+  assert.match(adminPage, /function stripeEventDashboardUrl\(eventId: unknown\)/);
+  assert.match(adminPage, /\^stripe:\(evt_\[A-Za-z0-9\]\{8,96\}\)\$/);
+  assert.match(adminPage, /if \(!stripeKey\?\.startsWith\('sk_live_'\) && !stripeKey\?\.startsWith\('sk_test_'\)\) return null/);
+  assert.match(adminPage, /const testMode = stripeKey\.startsWith\('sk_test_'\)/);
+  assert.match(adminPage, /automatic retries are finite/);
+  assert.match(adminPage, /Stripe’s manual resend/);
+  assert.match(adminPage, /const orderByStripeSession = new Map/);
+  assert.match(adminPage, /persistedOrder \? <>order #\{persistedOrder\.id\} recorded as/);
+  assert.match(adminPage, /<strong> no order record<\/strong>/);
+  assert.match(adminPage, /target="_blank" rel="noreferrer"/);
+  assert.match(adminPage, /webhookFailures\.slice\(0,50\)/);
+  assert.match(adminPage, /more webhook exceptions are not expanded here/);
+});
+
 test('launch control reports the same checkout prerequisites that protect real orders', () => {
   // The launch dashboard is an operational decision surface. It must not show
   // a green storefront state based only on a Stripe key and partial schema

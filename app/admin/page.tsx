@@ -37,6 +37,17 @@ function daysFromToday(value: string | null | undefined) {
 function isEsim(order: any) { return order.product_type === 'esim'; }
 function money(value: number) { return `S$${Number(value || 0).toFixed(2)}`; }
 function isStripeCheckoutOrder(order: any) { return typeof order.stripe_session_id === 'string' && order.stripe_session_id.startsWith('cs_'); }
+function stripeEventDashboardUrl(eventId: unknown) {
+  const match = typeof eventId === 'string' ? /^stripe:(evt_[A-Za-z0-9]{8,96})$/.exec(eventId) : null;
+  if (!match) return null;
+  // The admin page never exposes the credential itself. Its mode only selects
+  // the matching Stripe dashboard so an operator cannot accidentally inspect
+  // or resend a test event while reconciling a live paid order (or vice versa).
+  const stripeKey = process.env.STRIPE_SECRET_KEY?.trim();
+  if (!stripeKey?.startsWith('sk_live_') && !stripeKey?.startsWith('sk_test_')) return null;
+  const testMode = stripeKey.startsWith('sk_test_');
+  return `https://dashboard.stripe.com/${testMode ? 'test/' : ''}events/${match[1]}`;
+}
 function customerKey(order: any) {
   return String(order.email || order.phone || order.customer_name || order.stripe_session_id || '').trim().toLowerCase();
 }
@@ -99,6 +110,7 @@ export default async function AdminPage() {
       ])
     : [unavailable, unavailable, unavailable, unavailable, unavailable];
   const orders: any[] = result.data ?? [];
+  const orderByStripeSession = new Map(orders.map((order:any)=>[order.stripe_session_id,order]));
   const inventoryItems: any[] = inventoryResult.data ?? [];
   const notifications: any[] = notificationResult.data ?? [];
   const notificationBySession = new Map(notifications.map((n:any)=>[n.stripe_session_id,n]));
@@ -230,8 +242,20 @@ export default async function AdminPage() {
         </div>
         {webhookFailures.length > 0 && <div role="alert" style={{...cardStyle,borderColor:'#dc2626',background:'#fef2f2',marginTop:14}}>
           <strong>Payment processing needs attention.</strong>
-          <div style={{marginTop:6}}>Stripe will retry these events automatically. Check the order and delivery ledgers before asking a customer to pay again.</div>
-          <ul>{webhookFailures.slice(0,10).map((failure:any)=><li key={failure.event_id}><code>{failure.event_type}</code>{failure.stripe_session_id && <> · session <code>{failure.stripe_session_id}</code></>} · attempt {failure.attempts} · {String(failure.last_error||'Processing worker stopped before completion').slice(0,180)}</li>)}</ul>
+          <div style={{marginTop:6}}>Stripe may still retry recent events, but automatic retries are finite. Open the signed event in Stripe, reconcile it against the order and delivery ledgers, then use Stripe’s manual resend when needed. Do not ask the customer to pay again.</div>
+          <ul>{webhookFailures.slice(0,50).map((failure:any)=>{
+            const stripeUrl = stripeEventDashboardUrl(failure.event_id);
+            const persistedOrder = orderByStripeSession.get(failure.stripe_session_id);
+            return <li key={failure.event_id} style={{marginBottom:8}}>
+              <code>{failure.event_type}</code>
+              {failure.stripe_session_id && <> · session <code>{failure.stripe_session_id}</code></>}
+              {' · '}attempt {failure.attempts}
+              {' · '}{persistedOrder ? <>order #{persistedOrder.id} recorded as <code>{persistedOrder.payment_status || 'unknown'}</code></> : <strong> no order record</strong>}
+              {' · '}{String(failure.last_error||'Processing worker stopped before completion').slice(0,180)}
+              {stripeUrl && <> · <a href={stripeUrl} target="_blank" rel="noreferrer"><strong>Open Stripe event ↗</strong></a></>}
+            </li>;
+          })}</ul>
+          {webhookFailures.length > 50 && <div><strong>{webhookFailures.length - 50} more webhook exceptions are not expanded here.</strong> Use the total above and Stripe/Supabase ledgers to reconcile the full queue.</div>}
         </div>}
       </section>
     </>}
