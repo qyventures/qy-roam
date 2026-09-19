@@ -2,6 +2,9 @@
   "name": "qy-roam",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22.0.0 <23"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "NEXT_IGNORE_INCORRECT_LOCKFILE=1 next build",

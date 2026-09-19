@@ -9,7 +9,18 @@ SYSTEMD_UNIT_PATH="${SYSTEMD_UNIT_PATH:-/etc/systemd/system/${SERVICE_NAME}.serv
 
 cd "$APP_DIR"
 
-echo "[1/8] Updating source"
+echo "[1/9] Checking production runtime"
+# Keep the build and systemd runtime on the same supported Node release line.
+# npm's engines field is advisory by default, so enforce it before touching
+# source or dependencies; otherwise an obsolete VPS runtime can appear to
+# deploy successfully and fail only when checkout first reaches Supabase.
+node_major="$(node -p "Number(process.versions.node.split('.')[0])")"
+if [[ "$node_major" -ne 22 ]]; then
+  echo "Refusing to deploy: Node.js 22.x is required (found $(node --version))" >&2
+  exit 1
+fi
+
+echo "[2/9] Updating source"
 if [[ "$(git branch --show-current)" != "main" ]]; then
   echo "Refusing to deploy: production checkout must already be on main" >&2
   exit 1
@@ -21,21 +32,21 @@ fi
 git fetch --prune origin
 git pull --ff-only origin main
 
-echo "[2/8] Checking environment file"
+echo "[3/9] Checking environment file"
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "Missing $ENV_FILE" >&2
   exit 1
 fi
 chmod 600 "$ENV_FILE"
 
-echo "[3/8] Installing locked dependencies"
+echo "[4/9] Installing locked dependencies"
 if [[ ! -f package-lock.json ]]; then
   echo "package-lock.json is required for a reproducible production deploy" >&2
   exit 1
 fi
 npm ci --no-audit --no-fund
 
-echo "[4/8] Building"
+echo "[5/9] Building"
 set -a
 # shellcheck disable=SC1090
 source "$ENV_FILE"
@@ -52,7 +63,7 @@ npm run check:deploy-safety
 npm run test:order-integrity
 npm run build
 
-echo "[5/8] Verifying service definition"
+echo "[6/9] Verifying service definition"
 # `daemon-reload` only rereads the installed unit; it does not copy the
 # checked-in definition into /etc. Refuse a release if the installed unit has
 # drifted, so loopback binding, restart policy, and sandboxing changes cannot
@@ -65,14 +76,14 @@ if [[ ! -f "$SYSTEMD_UNIT_PATH" ]] || ! cmp -s deploy/qy-roam.service "$SYSTEMD_
   exit 1
 fi
 
-echo "[6/8] Reloading service definition"
+echo "[7/9] Reloading service definition"
 if ! systemctl daemon-reload; then
   echo "Unable to reload the systemd service definition" >&2
   systemctl --no-pager --full status "$SERVICE_NAME" >&2 || true
   exit 1
 fi
 
-echo "[7/8] Restarting service"
+echo "[8/9] Restarting service"
 if ! systemctl restart "$SERVICE_NAME"; then
   echo "QY Roam service restart failed" >&2
   systemctl --no-pager --full status "$SERVICE_NAME" >&2 || true
@@ -81,7 +92,7 @@ if ! systemctl restart "$SERVICE_NAME"; then
 fi
 systemctl --no-pager --full status "$SERVICE_NAME" | sed -n '1,15p'
 
-echo "[8/8] Waiting for application readiness"
+echo "[9/9] Waiting for application readiness"
 health_output="$(mktemp /tmp/qyroam-health.XXXXXX.json)"
 health_config="$(mktemp /tmp/qyroam-curl.XXXXXX.conf)"
 trap 'rm -f "$health_output" "$health_config"' EXIT

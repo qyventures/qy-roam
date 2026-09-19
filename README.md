@@ -19,6 +19,8 @@ configure only the canonical endpoint in Stripe to avoid duplicate deliveries.
 ## VPS deployment
 
 The repo is expected at `/root/qy-roam` and production secrets at `/root/.config/qyroam/.env` with mode `600`.
+The VPS must run Node.js 22.x; deployment fails before updating source or
+installing dependencies when a different runtime is active.
 
 Install the service once:
 
@@ -35,7 +37,7 @@ cd /root/qy-roam
 bash deploy/deploy.sh
 ```
 
-The script requires an already-clean `main` checkout, fast-forwards it, installs from the committed dependency lock, validates pricing, operations schema and order integrity, builds with the protected env file, reloads the checked-in systemd unit, restarts the service, then uses `HEALTH_CHECK_TOKEN` to verify launch readiness at `http://127.0.0.1:3100/api/health`. A failed unit reload or restart prints bounded service/journal diagnostics and stops the release before the readiness loop.
+The script requires Node.js 22.x and an already-clean `main` checkout, fast-forwards it, installs from the committed dependency lock, validates pricing, operations schema and order integrity, builds with the protected env file, reloads the checked-in systemd unit, restarts the service, then uses `HEALTH_CHECK_TOKEN` to verify launch readiness at `http://127.0.0.1:3100/api/health`. A failed runtime check, unit reload, or restart stops the release; service failures print bounded service/journal diagnostics before the readiness loop.
 
 ## Nginx and TLS
 

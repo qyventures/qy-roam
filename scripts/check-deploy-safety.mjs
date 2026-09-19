@@ -7,6 +7,13 @@ const nginx = readFileSync(new URL('../deploy/nginx-qyroam.conf', import.meta.ur
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 assert.ok(existsSync(new URL('../package-lock.json', import.meta.url)), 'package-lock.json is required for reproducible production installs');
+assert.equal(packageJson.engines?.node, '>=22.0.0 <23', 'production Node release line must be explicit');
+assert.match(deploy, /process\.versions\.node\.split/);
+assert.match(deploy, /Node\.js 22\.x is required/);
+assert.ok(
+  deploy.indexOf('Node.js 22.x is required') < deploy.indexOf('git fetch --prune origin'),
+  'runtime compatibility must fail before deployment mutates the checkout',
+);
 assert.match(deploy, /git branch --show-current/);
 assert.match(deploy, /production checkout must already be on main/);
 assert.match(deploy, /git diff --quiet/);
@@ -61,4 +68,4 @@ for (const command of [
   assert.ok(deploy.includes(command), `Deployment preflight is missing ${command}`);
 }
 
-console.log('Deployment safety guard passed: clean main checkout, locked install, and release checks required.');
+console.log('Deployment safety guard passed: Node 22, clean main checkout, locked install, and release checks required.');

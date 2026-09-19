@@ -45,6 +45,15 @@ window has cleared.
 
 ## 2. Deploy privately on VPS
 
+Confirm the VPS uses the supported Node.js 22 release line:
+
+```bash
+node --version
+```
+
+`deploy/deploy.sh` fails before pulling source or installing dependencies when
+the active runtime is not Node.js 22.x.
+
 From the privileged VPS account:
 
 ```bash
