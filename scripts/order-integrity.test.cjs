@@ -1800,6 +1800,23 @@ test('durable Stripe delivery ledgers upgrade every retry and ownership field ad
   }
 });
 
+test('upgraded Stripe delivery ledgers retain database-enforced retry state machines', () => {
+  // Inline CREATE TABLE and ADD COLUMN checks do not repair constraints that
+  // are absent from an already-upgraded production table. Require explicit,
+  // idempotent constraints that protect all future service-role writes while
+  // allowing historical drift to be inspected and repaired after deployment.
+  for (const contract of [
+    /stripe_events add constraint stripe_events_attempts_check\s+check \(attempts > 0\) not valid/,
+    /fulfilment_notifications add constraint fulfilment_notifications_status_check\s+check \(status in \('pending','sending','sent'\)\) not valid/,
+    /fulfilment_notifications add constraint fulfilment_notifications_attempts_check\s+check \(attempts >= 0\) not valid/,
+    /fulfilment_notifications add constraint fulfilment_notifications_sent_at_check\s+check \(status <> 'sent' or sent_at is not null\) not valid/,
+    /meta_purchase_deliveries add constraint meta_purchase_deliveries_status_check\s+check \(status in \('pending','sending','sent'\)\) not valid/,
+    /meta_purchase_deliveries add constraint meta_purchase_deliveries_attempts_check\s+check \(attempts >= 0\) not valid/,
+    /meta_purchase_deliveries add constraint meta_purchase_deliveries_event_time_check\s+check \(event_time is null or event_time > 0\) not valid/,
+    /meta_purchase_deliveries add constraint meta_purchase_deliveries_sent_at_check\s+check \(status <> 'sent' or sent_at is not null\) not valid/,
+  ]) assert.match(schema, contract);
+});
+
 test('admin visibility detects abandoned Stripe claims using the webhook recovery lease', () => {
   // A process can terminate before recordEventFailure runs. Such a claim has
   // no last_error, but it is just as actionable once the webhook lease expires.

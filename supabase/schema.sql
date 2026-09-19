@@ -303,6 +303,15 @@ alter table public.stripe_events alter column processed_at drop not null;
 alter table public.stripe_events add column if not exists attempts integer not null default 1 check (attempts > 0);
 alter table public.stripe_events add column if not exists last_failed_at timestamptz;
 alter table public.stripe_events add column if not exists last_error text;
+-- An existing table skips both the CREATE TABLE definition and any inline
+-- constraint attached to an ADD COLUMN that has already run. Reassert the
+-- retry counter contract explicitly so a partially migrated/imported ledger
+-- cannot acquire a zero or negative attempt count that the webhook then
+-- treats as a valid retry baseline. NOT VALID avoids blocking deployment on
+-- historical drift while still protecting every new insert and update.
+alter table public.stripe_events drop constraint if exists stripe_events_attempts_check;
+alter table public.stripe_events add constraint stripe_events_attempts_check
+  check (attempts > 0) not valid;
 alter table public.stripe_events enable row level security;
 
 -- Stripe's event id is the durable idempotency identity. The webhook checks
@@ -359,6 +368,17 @@ alter table public.fulfilment_notifications add column if not exists sent_at tim
 alter table public.fulfilment_notifications add column if not exists last_error text;
 alter table public.fulfilment_notifications add column if not exists created_at timestamptz not null default now();
 alter table public.fulfilment_notifications add column if not exists updated_at timestamptz not null default now();
+-- Repeat the state-machine checks outside CREATE TABLE so upgrades from an
+-- older ledger receive the same write boundary as clean installations.
+alter table public.fulfilment_notifications drop constraint if exists fulfilment_notifications_status_check;
+alter table public.fulfilment_notifications add constraint fulfilment_notifications_status_check
+  check (status in ('pending','sending','sent')) not valid;
+alter table public.fulfilment_notifications drop constraint if exists fulfilment_notifications_attempts_check;
+alter table public.fulfilment_notifications add constraint fulfilment_notifications_attempts_check
+  check (attempts >= 0) not valid;
+alter table public.fulfilment_notifications drop constraint if exists fulfilment_notifications_sent_at_check;
+alter table public.fulfilment_notifications add constraint fulfilment_notifications_sent_at_check
+  check (status <> 'sent' or sent_at is not null) not valid;
 alter table public.fulfilment_notifications enable row level security;
 
 -- Durable Meta CAPI delivery ledger. Stripe retries remain safe when Meta is
@@ -388,6 +408,18 @@ alter table public.meta_purchase_deliveries add column if not exists last_error 
 alter table public.meta_purchase_deliveries add column if not exists created_at timestamptz not null default now();
 alter table public.meta_purchase_deliveries add column if not exists updated_at timestamptz not null default now();
 alter table public.meta_purchase_deliveries add column if not exists event_time bigint check (event_time is null or event_time > 0);
+alter table public.meta_purchase_deliveries drop constraint if exists meta_purchase_deliveries_status_check;
+alter table public.meta_purchase_deliveries add constraint meta_purchase_deliveries_status_check
+  check (status in ('pending','sending','sent')) not valid;
+alter table public.meta_purchase_deliveries drop constraint if exists meta_purchase_deliveries_attempts_check;
+alter table public.meta_purchase_deliveries add constraint meta_purchase_deliveries_attempts_check
+  check (attempts >= 0) not valid;
+alter table public.meta_purchase_deliveries drop constraint if exists meta_purchase_deliveries_event_time_check;
+alter table public.meta_purchase_deliveries add constraint meta_purchase_deliveries_event_time_check
+  check (event_time is null or event_time > 0) not valid;
+alter table public.meta_purchase_deliveries drop constraint if exists meta_purchase_deliveries_sent_at_check;
+alter table public.meta_purchase_deliveries add constraint meta_purchase_deliveries_sent_at_check
+  check (status <> 'sent' or sent_at is not null) not valid;
 alter table public.meta_purchase_deliveries enable row level security;
 
 -- Short-lived inventory reservations close the gap between an availability
