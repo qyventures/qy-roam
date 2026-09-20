@@ -1426,6 +1426,21 @@ test('Pocket WiFi payment persistence atomically replaces its checkout hold with
   assert.match(productionReadiness, /production_payment_persistence_rpc_check_failed/);
 });
 
+test('database rejects paid Stripe orders without their product delivery destination', () => {
+  // The application webhook validates these fields before persistence. Keep
+  // the same fail-closed contract for privileged RPCs and future service-role
+  // recovery writers, while preserving the separate manual/offline workflow.
+  assert.match(schema, /orders_paid_stripe_fulfilment_details_check/);
+  assert.match(schema, /stripe_session_id !~ '\^cs_\(test\|live\)_\[A-Za-z0-9\]\+\$'/);
+  assert.match(schema, /email ~ '\^\[\^\[:space:\]@\]\+@\[\^\[:space:\]@\]\+\\\.\[\^\[:space:\]@\]\+\$'/);
+  assert.match(schema, /length\(regexp_replace\(coalesce\(phone, ''\), '\[\^0-9\]', '', 'g'\)\) between 7 and 15/);
+  assert.match(schema, /jsonb_typeof\(shipping_address\) = 'object'/);
+  assert.match(schema, /shipping_address ->> 'country' = 'SG'/);
+  assert.match(schema, /nullif\(btrim\(shipping_address ->> 'line1'\), ''\) is not null/);
+  assert.match(schema, /nullif\(btrim\(shipping_address ->> 'postal_code'\), ''\) is not null/);
+  assert.match(schema, /'orders_paid_stripe_fulfilment_details_check',[\s\S]*?\)\) = 11 and/);
+});
+
 test('eSIM payment persistence serializes digital entitlement transitions in the database', () => {
   assert.match(webhookRoute, /qy_persist_stripe_esim_order/);
   assert.match(schema, /create or replace function public\.qy_persist_stripe_esim_order/);

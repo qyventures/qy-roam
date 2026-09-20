@@ -298,6 +298,37 @@ alter table public.orders add constraint orders_paid_amount_positive_check check
   (amount_sgd is null or amount_sgd >= 0) and
   (payment_status is distinct from 'paid' or amount_sgd > 0)
 ) not valid;
+
+-- Stripe Checkout collects the fulfilment destination before payment and the
+-- webhook validates it again before persistence. Preserve that invariant at
+-- the database boundary too: privileged recovery workers and service-role
+-- scripts must not be able to create an apparently actionable paid Stripe
+-- order that cannot be delivered. Manual/offline orders use a separate
+-- `manual_` reference and deliberately retain their phone-only Pocket WiFi
+-- workflow, so this constraint is scoped to real Checkout Session ids.
+-- NOT VALID keeps any historical exception visible for reconciliation while
+-- protecting every new or changed row immediately.
+alter table public.orders drop constraint if exists orders_paid_stripe_fulfilment_details_check;
+alter table public.orders add constraint orders_paid_stripe_fulfilment_details_check check (
+  payment_status is distinct from 'paid' or
+  stripe_session_id !~ '^cs_(test|live)_[A-Za-z0-9]+$' or
+  (
+    email is not null and
+    length(email) <= 254 and
+    email ~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$' and
+    (
+      product_type = 'esim' or
+      (
+        product_type = 'pocket_wifi' and
+        length(regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g')) between 7 and 15 and
+        jsonb_typeof(shipping_address) = 'object' and
+        shipping_address ->> 'country' = 'SG' and
+        nullif(btrim(shipping_address ->> 'line1'), '') is not null and
+        nullif(btrim(shipping_address ->> 'postal_code'), '') is not null
+      )
+    )
+  )
+) not valid;
 alter table public.orders enable row level security;
 
 -- Create the physical stock register before any reservation/manual-order
@@ -770,9 +801,10 @@ as $$
       'orders_fulfilment_requires_paid_payment_check',
       'orders_payment_confirmed_at_requires_paid_payment_check',
       'orders_paid_amount_positive_check',
+      'orders_paid_stripe_fulfilment_details_check',
       'orders_pocket_wifi_dispatch_evidence_check',
       'orders_pocket_wifi_return_evidence_check'
-    )) = 10 and
+    )) = 11 and
     (select count(*) from pg_constraint where conrelid = 'public.stripe_events'::regclass and conname = 'stripe_events_attempts_check') = 1 and
     (select count(*) from pg_constraint where conrelid = 'public.fulfilment_notifications'::regclass and conname in (
       'fulfilment_notifications_status_check',
