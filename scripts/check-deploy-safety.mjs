@@ -64,6 +64,13 @@ assert.match(service, /^Environment=HOSTNAME=127\.0\.0\.1$/m, 'standalone Next.j
 assert.match(service, /^TimeoutStopSec=150$/m, 'systemd graceful-stop budget must exceed the webhook proxy deadline');
 assert.match(nginx, /proxy_pass http:\/\/127\.0\.0\.1:3100;/);
 assert.match(nginx, /proxy_set_header X-Real-IP \$remote_addr;/);
+// Do not retain a client-supplied forwarding chain behind the trusted
+// loopback ingress. Checkout throttling currently uses X-Real-IP, but the
+// reviewed proxy contract must keep every forwarded client-IP header equally
+// authoritative so a future consumer cannot accidentally trust a spoofed
+// first hop.
+assert.match(nginx, /proxy_set_header X-Forwarded-For \$remote_addr;/);
+assert.doesNotMatch(nginx, /proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;/);
 // The public proxy must enforce the same coarse body boundary as the signed
 // Stripe webhook reader. This stops oversized or stalled uploads before they
 // consume an application worker; checkout/admin routes apply narrower limits
