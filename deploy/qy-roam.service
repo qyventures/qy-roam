@@ -14,7 +14,10 @@ Environment=PORT=3100
 # generated server otherwise defaults to 0.0.0.0, which would let callers
 # bypass the TLS/security-header ingress and supply spoofed forwarding headers.
 Environment=HOSTNAME=127.0.0.1
-ExecStart=/usr/bin/npm run start
+# Let systemd supervise the actual HTTP server, not an npm wrapper process.
+# This ensures SIGTERM reaches Next.js immediately so its graceful shutdown
+# can drain an in-flight paid-order webhook before the replacement starts.
+ExecStart=/usr/bin/node /root/qy-roam/.next/standalone/server.js
 Restart=always
 RestartSec=5
 # Nginx allows a bounded paid-order webhook up to 120 seconds for Stripe

@@ -79,6 +79,16 @@ assert.match(deploy, /QY Roam service restart failed/);
 // written by Nginx. The app must therefore never be reachable directly on a
 // public interface where a caller could provide its own X-Real-IP header.
 assert.match(service, /^Environment=HOSTNAME=127\.0\.0\.1$/m, 'standalone Next.js must bind only to loopback behind Nginx');
+// systemd must own the actual Next server process. Supervising `npm run start`
+// leaves a wrapper between systemd's SIGTERM and the HTTP worker, so a deploy
+// can wait for the hard stop while the child retains port 3100 instead of
+// immediately beginning the graceful webhook drain configured below.
+assert.match(
+  service,
+  /^ExecStart=\/usr\/bin\/node \/root\/qy-roam\/\.next\/standalone\/server\.js$/m,
+  'systemd must directly supervise the standalone Next.js server',
+);
+assert.doesNotMatch(service, /^ExecStart=.*\bnpm\b/m, 'systemd must not supervise an npm wrapper');
 // A deploy must not force-kill a legitimate in-flight paid-order webhook
 // before Nginx's reviewed proxy window can complete. Stripe retries are an
 // idempotent recovery mechanism, not the normal outcome of a healthy restart.

@@ -131,6 +131,9 @@ echo "[7/11] Verifying service definition"
 # checked-in definition into /etc. Refuse a release if the installed unit has
 # drifted, so loopback binding, restart policy, and sandboxing changes cannot
 # sit in the worktree while an older service definition keeps serving checkout.
+# The reviewed unit also supervises the Node server directly so SIGTERM begins
+# graceful request draining immediately rather than stopping an npm wrapper
+# and leaving its child to retain the production port until the hard timeout.
 # Deliberately do not overwrite /etc here: service-local operator changes need
 # an explicit reviewed install before they become part of a paid-order release.
 if [[ ! -f "$SYSTEMD_UNIT_PATH" ]] || ! cmp -s deploy/qy-roam.service "$SYSTEMD_UNIT_PATH"; then
