@@ -1196,6 +1196,7 @@ test('Pocket WiFi dispatch requires an operationally available inventory item at
 
 test('operational pricing and inventory configuration is strict and fail-closed', () => {
   const saved = {
+    nodeEnv: process.env.NODE_ENV,
     inventory: process.env.POCKET_WIFI_INVENTORY,
     leadDays: process.env.MIN_DELIVERY_LEAD_DAYS,
     courierFee: process.env.COURIER_FEE_SGD,
@@ -1205,6 +1206,17 @@ test('operational pricing and inventory configuration is strict and fail-closed'
     delete process.env.MIN_DELIVERY_LEAD_DAYS;
     delete process.env.COURIER_FEE_SGD;
     assert.deepEqual(operationalConfig(), { pocketWifiInventory: 10, minDeliveryLeadDays: 2, courierFeeCents: 0 });
+
+    // Development defaults are useful for a local storefront, but production
+    // must never sell routers against guessed stock, courier pricing, or lead
+    // time. The release health signal uses this same parser.
+    process.env.NODE_ENV = 'production';
+    assert.equal(operationalConfig(), null);
+    process.env.POCKET_WIFI_INVENTORY = '12';
+    process.env.MIN_DELIVERY_LEAD_DAYS = '2';
+    process.env.COURIER_FEE_SGD = '4.50';
+    assert.deepEqual(operationalConfig(), { pocketWifiInventory: 12, minDeliveryLeadDays: 2, courierFeeCents: 450 });
+    process.env.NODE_ENV = saved.nodeEnv;
 
     process.env.POCKET_WIFI_INVENTORY = '12';
     process.env.MIN_DELIVERY_LEAD_DAYS = '0';
@@ -1224,6 +1236,7 @@ test('operational pricing and inventory configuration is strict and fail-closed'
     }
   } finally {
     for (const [key, value] of Object.entries({
+      NODE_ENV: saved.nodeEnv,
       POCKET_WIFI_INVENTORY: saved.inventory,
       MIN_DELIVERY_LEAD_DAYS: saved.leadDays,
       COURIER_FEE_SGD: saved.courierFee,

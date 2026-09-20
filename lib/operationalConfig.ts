@@ -28,12 +28,27 @@ function moneyCents(value: string | undefined, fallback: number) {
   return Number.isSafeInteger(total) && total <= MAX_COURIER_FEE_CENTS ? total : null;
 }
 
+// Local defaults keep the storefront convenient to run during development,
+// but they must never become an accidental production sales policy. In
+// particular, a missing inventory value must not silently advertise ten
+// routers, and an omitted courier fee must not silently make delivery free.
+// Production configuration is therefore explicit for every value that affects
+// saleable capacity, customer pricing, or the promised booking lead time.
+function requiredProductionValue(value: string | undefined) {
+  return process.env.NODE_ENV === 'production' && !value?.trim();
+}
+
 /**
  * Parse the operational values that affect whether a customer can buy a router
  * and what Stripe will charge. A malformed deployed value must fail closed,
  * rather than silently becoming zero, Infinity, or a rounded amount.
  */
 export function operationalConfig(): OperationalConfig | null {
+  if (
+    requiredProductionValue(process.env.POCKET_WIFI_INVENTORY) ||
+    requiredProductionValue(process.env.MIN_DELIVERY_LEAD_DAYS) ||
+    requiredProductionValue(process.env.COURIER_FEE_SGD)
+  ) return null;
   const pocketWifiInventory = wholeNumber(process.env.POCKET_WIFI_INVENTORY, 10, MAX_INVENTORY);
   const minDeliveryLeadDays = wholeNumber(process.env.MIN_DELIVERY_LEAD_DAYS, 2, MAX_LEAD_DAYS);
   const courierFeeCents = moneyCents(process.env.COURIER_FEE_SGD, 0);

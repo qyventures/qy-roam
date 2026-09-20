@@ -17,8 +17,9 @@ Required before launch:
 - `ADMIN_USER`
 - `ADMIN_PASSWORD` — strong unique password
 - `NEXT_PUBLIC_SITE_URL=https://qyroam.com`
-- `POCKET_WIFI_INVENTORY` — actual units available for sale
-- `MIN_DELIVERY_LEAD_DAYS=2` unless operations approves another value
+- `POCKET_WIFI_INVENTORY` — actual units available for sale (required; no production fallback)
+- `MIN_DELIVERY_LEAD_DAYS=2` unless operations approves another value (required; no production fallback)
+- `COURIER_FEE_SGD` — customer courier fee in SGD, including `0` when delivery is intentionally free (required; no production fallback)
 - `HEALTH_CHECK_TOKEN` — random value of at least 24 characters used by the private deployment readiness check
 - SMTP host, credentials, sender and fulfilment recipient for paid-order alerts
 
