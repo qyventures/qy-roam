@@ -176,6 +176,10 @@ export async function POST(req: NextRequest) {
         // the protected staff-entry time instead so every paid order has a
         // durable payment boundary for revenue reports and later recovery.
         payment_confirmed_at: paymentStatus === 'paid' ? recordedAt : null,
+        // Manual sales have no browser measurement-consent flow. Record that
+        // explicitly instead of leaving a nullable value that a later report
+        // or recovery job could misinterpret as permission to send CAPI.
+        measurement_consent: 'essential',
         notes: `Manual order · Reference: ${reference}${text(body.notes, 1500) ? ` · ${text(body.notes,1500)}` : ''}`,
         updated_at: recordedAt
       };

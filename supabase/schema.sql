@@ -103,12 +103,14 @@ for each row execute function public.qy_enforce_paid_order_identity_immutability
 -- Application writes normalize every checkout and manual order to one of
 -- these two values. Reassert that contract in Postgres so a future import or
 -- service-role repair cannot create an ambiguous value that is interpreted
--- differently by reporting and CAPI recovery code. NOT VALID keeps legacy
--- rows available for reconciliation while protecting every new or updated
--- record immediately.
+-- differently by reporting and CAPI recovery code. `CHECK` treats NULL as
+-- passing, so coalesce the predicate to false: an absent consent value must
+-- not create a new order that is ambiguous to analytics recovery. NOT VALID
+-- keeps legacy rows available for reconciliation while protecting every new
+-- or updated record immediately.
 alter table public.orders drop constraint if exists orders_measurement_consent_check;
 alter table public.orders add constraint orders_measurement_consent_check check (
-  measurement_consent in ('essential', 'accepted')
+  coalesce(measurement_consent in ('essential', 'accepted'), false)
 ) not valid;
 
 -- A digital entitlement is not operationally complete without the exact
@@ -877,11 +879,11 @@ begin
   insert into public.orders (
     stripe_session_id, payment_status, customer_name, email, phone, amount_sgd,
     product_type, plan_name, country, travel_start, travel_end, fulfilment_status,
-    payment_confirmed_at, notes, updated_at
+    payment_confirmed_at, measurement_consent, notes, updated_at
   ) values (
     p_stripe_session_id, 'paid', p_customer_name, p_email, p_phone, p_amount_sgd,
     'pocket_wifi', p_plan_name, p_country, p_travel_start, p_travel_end, 'paid',
-    now(), p_notes, now()
+    now(), 'essential', p_notes, now()
   ) returning * into v_order;
   return v_order;
 end;

@@ -1375,6 +1375,11 @@ test('manual orders cannot bypass paid-order lifecycle, pricing, or WiFi capacit
   assert.match(adminOpsRoute, /parseExactIsoDate\(startRaw\)/);
   assert.match(adminOpsRoute, /New orders must start in their initial fulfilment status/);
   assert.match(adminOpsRoute, /Pocket WiFi orders require a destination and valid travel start and end dates/);
+  // Offline/manual sales do not receive browser measurement consent. They
+  // must be persisted as essential-only rather than as an ambiguous NULL
+  // that a later CAPI recovery could mistake for consent.
+  assert.match(adminOpsRoute, /measurement_consent: 'essential'/);
+  assert.match(schema, /'pocket_wifi', p_plan_name, p_country, p_travel_start, p_travel_end, 'paid',[\s\S]*?now\(\), 'essential', p_notes, now\(\)/);
 });
 
 test('manual sales use one retry-safe payment or sales reference instead of minting duplicate paid orders', () => {
@@ -1478,7 +1483,7 @@ test('database requires a confirmed payment before a direct write can claim fulf
 test('every newly written paid order retains a canonical payment confirmation time', () => {
   assert.match(adminOpsRoute, /payment_confirmed_at:\s*paymentStatus === 'paid' \? recordedAt : null/);
   assert.match(schema, /orders_payment_confirmed_at_requires_paid_payment_check check \([\s\S]*?payment_status = 'paid' and payment_confirmed_at is not null[\s\S]*?payment_status is distinct from 'paid' and payment_confirmed_at is null[\s\S]*?\) not valid;/);
-  assert.match(schema, /'pocket_wifi', p_plan_name, p_country, p_travel_start, p_travel_end, 'paid',[\s\S]*?now\(\), p_notes, now\(\)/);
+  assert.match(schema, /'pocket_wifi', p_plan_name, p_country, p_travel_start, p_travel_end, 'paid',[\s\S]*?now\(\), 'essential', p_notes, now\(\)/);
   assert.match(schema, /if v_paid and p_payment_confirmed_at is null then raise exception 'paid Stripe order requires a payment confirmation time'/);
 });
 
@@ -1504,7 +1509,7 @@ test('paid-order measurement consent cannot be broadened after checkout', () => 
     schema,
     /before update of stripe_session_id, payment_status, payment_confirmed_at,[\s\S]{0,180}measurement_consent[\s\S]{0,180}execute function public\.qy_enforce_paid_order_identity_immutability\(\)/,
   );
-  assert.match(schema, /orders_measurement_consent_check check \(\s*measurement_consent in \('essential', 'accepted'\)\s*\) not valid/);
+  assert.match(schema, /orders_measurement_consent_check check \(\s*coalesce\(measurement_consent in \('essential', 'accepted'\), false\)\s*\) not valid/);
 });
 
 test('fulfilled eSIM orders cannot be reopened or cancelled after digital delivery', () => {
