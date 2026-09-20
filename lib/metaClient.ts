@@ -1,6 +1,7 @@
 type MetaConsent = 'accepted' | 'essential';
 
 const META_CONSENT_KEY = 'qyroam_consent';
+export const META_CONSENT_CHANGED_EVENT = 'qyroam:meta-consent-changed';
 
 // Some privacy-focused browsers and embedded web views expose `localStorage`
 // but throw when it is accessed. Measurement must remain strictly opt-in, but
@@ -32,6 +33,14 @@ export function setMetaMeasurementConsent(consent: MetaConsent) {
   } catch {
     // The in-memory choice above still lets this tab honour the customer's
     // explicit decision without making storage availability a checkout gate.
+  }
+  // Components such as the paid-order confirmation can mount before a
+  // first-time visitor answers the consent prompt. Notify them immediately so
+  // granting consent can deliver the browser Purchase during this visit (and
+  // revoking it can cancel an in-flight Pixel wait) without requiring a page
+  // refresh. This event is tab-local and contains no customer data.
+  if (typeof window.dispatchEvent === 'function') {
+    window.dispatchEvent(new Event(META_CONSENT_CHANGED_EVENT));
   }
 }
 

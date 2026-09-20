@@ -9,7 +9,13 @@ declare global { interface Window { fbq?: (...args: any[]) => void; _fbq?: any; 
 type Consent = 'accepted' | 'essential';
 
 function loadPixel(pixelId: string) {
-  if (!pixelId || window.fbq) return;
+  if (!pixelId) return;
+  if (window.fbq) {
+    // A visitor can revoke and later re-grant measurement in the same page.
+    // Reuse the existing Pixel instance while explicitly restoring consent.
+    window.fbq('consent', 'grant');
+    return;
+  }
   const f: any = function(){ f.callMethod ? f.callMethod.apply(f, arguments) : f.queue.push(arguments); };
   f.queue = []; f.loaded = true; f.version = '2.0';
   window.fbq = f;
@@ -17,8 +23,16 @@ function loadPixel(pixelId: string) {
   script.async = true;
   script.src = 'https://connect.facebook.net/en_US/fbevents.js';
   document.head.appendChild(script);
+  f('consent', 'grant');
   f('init', pixelId);
   f('track', 'PageView');
+}
+
+function revokePixel() {
+  // The script may already be resident after an earlier opt-in. Tell Meta to
+  // stop measurement immediately; all QY Roam event helpers independently
+  // check the stored choice before queueing another event.
+  window.fbq?.('consent', 'revoke');
 }
 
 export default function MetaConsent() {
@@ -42,6 +56,7 @@ export default function MetaConsent() {
     setChoice(value);
     setSettingsOpen(false);
     if (value === 'accepted' && pixelId) loadPixel(pixelId);
+    if (value === 'essential') revokePixel();
   }
 
   if (!ready) return null;

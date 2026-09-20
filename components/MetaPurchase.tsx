@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect } from 'react';
-import { metaMeasurementAllowed, trackMetaWhenReady } from '@/lib/metaClient';
+import { useEffect, useState } from 'react';
+import { META_CONSENT_CHANGED_EVENT, metaMeasurementAllowed, trackMetaWhenReady } from '@/lib/metaClient';
 
 type Props = {
   sessionId: string;
@@ -21,6 +21,14 @@ const PURCHASE_KEY_PREFIX = 'qyroam_meta_purchase_';
 // wait until the webhook has durably recorded the paid order, just as CAPI
 // does, so reporting never counts a payment whose fulfilment record failed.
 export default function MetaPurchase({ sessionId, measurementConsent, orderPersisted, productType, contentId, value }: Props) {
+  const [consentRevision, setConsentRevision] = useState(0);
+
+  useEffect(() => {
+    const consentChanged = () => setConsentRevision((revision) => revision + 1);
+    window.addEventListener(META_CONSENT_CHANGED_EVENT, consentChanged);
+    return () => window.removeEventListener(META_CONSENT_CHANGED_EVENT, consentChanged);
+  }, []);
+
   useEffect(() => {
     if (!orderPersisted || !measurementConsent || !metaMeasurementAllowed() || !Number.isFinite(value) || value < 0) return;
     const key = `${PURCHASE_KEY_PREFIX}${sessionId}`;
@@ -44,7 +52,7 @@ export default function MetaPurchase({ sessionId, measurementConsent, orderPersi
         // The stable eventID still deduplicates browser and CAPI delivery.
       }
     });
-  }, [contentId, measurementConsent, orderPersisted, productType, sessionId, value]);
+  }, [consentRevision, contentId, measurementConsent, orderPersisted, productType, sessionId, value]);
 
   return null;
 }

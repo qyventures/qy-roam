@@ -70,6 +70,7 @@ const webhookRoute = fs.readFileSync(require.resolve('../app/api/stripe-webhook/
 const healthRoute = fs.readFileSync(require.resolve('../app/api/health/route.ts'), 'utf8');
 const successPage = fs.readFileSync(require.resolve('../app/success/page.tsx'), 'utf8');
 const metaPurchase = fs.readFileSync(require.resolve('../components/MetaPurchase.tsx'), 'utf8');
+const metaConsent = fs.readFileSync(require.resolve('../components/MetaConsent.tsx'), 'utf8');
 const metaClient = fs.readFileSync(require.resolve('../lib/metaClient.ts'), 'utf8');
 const stripeClient = fs.readFileSync(require.resolve('../lib/stripeClient.ts'), 'utf8');
 const metaAttribution = fs.readFileSync(require.resolve('../lib/metaAttribution.ts'), 'utf8');
@@ -2084,7 +2085,7 @@ test('browser Purchase waits for the same durable paid-order boundary as CAPI', 
   assert.match(successPage, /orderPersisted=\{orderPersisted\}/);
   assert.match(metaPurchase, /orderPersisted: boolean/);
   assert.match(metaPurchase, /if \(!orderPersisted \|\| !measurementConsent/);
-  assert.match(metaPurchase, /\[contentId, measurementConsent, orderPersisted, productType, sessionId, value\]/);
+  assert.match(metaPurchase, /\[consentRevision, contentId, measurementConsent, orderPersisted, productType, sessionId, value\]/);
   const persisted = webhookRoute.indexOf('await persistSession(sessionForEvent,event.type,eventCreated)');
   const capi = webhookRoute.indexOf('await deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated)');
   assert.ok(persisted >= 0 && capi > persisted, 'CAPI must remain after durable order persistence');
@@ -2098,6 +2099,15 @@ test('browser Purchase is marked delivered only after the Pixel accepts it', () 
   assert.match(metaPurchase, /return trackMetaWhenReady\('Purchase',[\s\S]*\(\) => \{[\s\S]*sessionStorage\.setItem\(key, '1'\)/);
   assert.match(metaClient, /fbq\('track', event, params, options\);\s*onTracked\?\.\(\);/);
   assert.match(metaClient, /return \(\) => \{\s*cancelled = true;\s*if \(timer !== undefined\) window\.clearTimeout\(timer\);/);
+});
+
+test('first-time consent on the confirmation page delivers Purchase without a refresh and revocation stops Pixel measurement', () => {
+  assert.match(metaClient, /export const META_CONSENT_CHANGED_EVENT = 'qyroam:meta-consent-changed'/);
+  assert.match(metaClient, /window\.dispatchEvent\(new Event\(META_CONSENT_CHANGED_EVENT\)\)/);
+  assert.match(metaPurchase, /window\.addEventListener\(META_CONSENT_CHANGED_EVENT, consentChanged\)/);
+  assert.match(metaPurchase, /\[consentRevision, contentId, measurementConsent, orderPersisted, productType, sessionId, value\]/);
+  assert.match(metaConsent, /f\('consent', 'grant'\)/);
+  assert.match(metaConsent, /window\.fbq\?\.\('consent', 'revoke'\)/);
 });
 
 test('consented CAPI Purchases retain only safe browser matching context', () => {
