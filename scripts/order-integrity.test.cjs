@@ -1598,6 +1598,14 @@ test('eSIM delivery references are safe audit pointers and cannot be changed aft
   assert.match(adminOrderActions, /readOnly=\{currentStatus === 'fulfilled'\}/);
   assert.match(schema, /orders_digital_delivery_reference_safe_check/);
   assert.match(schema, /digital_delivery_reference !~\* '\(lpa:/);
+  // PostgreSQL standard-conforming strings pass a single backslash through to
+  // the regex engine. Double escaping would make this database backstop look
+  // for a literal backslash, allowing direct service-role writes to retain an
+  // SM-DP+ activation reference or `www.` URL that the application rejects.
+  assert.match(schema, /smdp\\\+\?\|activation/);
+  assert.match(schema, /https\?:\/\/\|www\\\./);
+  assert.doesNotMatch(schema, /smdp\\\\\+\?\|activation/);
+  assert.doesNotMatch(schema, /https\?:\/\/\|www\\\\\./);
   assert.match(schema, /orders_esim_fulfilled_delivery_reference_required_check/);
   assert.match(schema, /digital_delivery_reference is not null and btrim\(digital_delivery_reference\) <> ''/);
   assert.match(schema, /qy_enforce_esim_delivery_reference_immutability/);

@@ -139,7 +139,12 @@ alter table public.orders add constraint orders_digital_delivery_reference_safe_
     length(digital_delivery_reference) between 1 and 200 and
     btrim(digital_delivery_reference) <> '' and
     digital_delivery_reference !~ '[[:cntrl:]]' and
-    digital_delivery_reference !~* '(lpa:|smdp\\+?|activation[[:space:]]*(code|token)|qr[[:space:]]*code|iccid|imsi|eid|confirmation[[:space:]]*code|https?://|www\\.)'
+    -- With PostgreSQL standard-conforming strings, a regex escape needs one
+    -- backslash in this literal. Two backslashes make the regex look for a
+    -- literal backslash instead, which would let direct service-role writes
+    -- retain an SM-DP+ activation reference or a `www.` delivery URL even
+    -- though the application validator rejects them.
+    digital_delivery_reference !~* '(lpa:|smdp\+?|activation[[:space:]]*(code|token)|qr[[:space:]]*code|iccid|imsi|eid|confirmation[[:space:]]*code|https?://|www\.)'
   )
 ) not valid;
 
