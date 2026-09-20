@@ -1624,6 +1624,27 @@ test('Pocket WiFi custody transitions cannot skip stock movements because eviden
   assert.match(adminOrderRoute, /evidence exists before the \(dispatch\|return\) transition/);
 });
 
+test('database enforces the Pocket WiFi lifecycle and stock evidence for every writer', () => {
+  const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
+  const guard = schema.slice(
+    schema.indexOf('create or replace function public.qy_enforce_pocket_wifi_fulfilment_transition()'),
+    schema.indexOf('-- Stripe event idempotency ledger:'),
+  );
+
+  assert.match(guard, /new Pocket WiFi order must begin before dispatch/);
+  assert.match(guard, /old\.fulfilment_status = 'awaiting_payment' and new\.fulfilment_status in \('paid', 'payment_failed'\)/);
+  assert.match(guard, /old\.fulfilment_status = 'dispatched' and new\.fulfilment_status in \('with_customer', 'return_due', 'returned'\)/);
+  assert.match(guard, /old\.fulfilment_status = 'returned' and new\.fulfilment_status = 'closed'/);
+  assert.match(guard, /movement_type = 'dispatch'[\s\S]*quantity = -1[\s\S]*reference = left\(new\.stripe_session_id, 120\)/);
+  assert.match(guard, /when 'restock' then 'return'[\s\S]*when 'damaged' then 'return_damaged'[\s\S]*when 'quarantine' then 'return_quarantined'/);
+  assert.match(guard, /Pocket WiFi return requires a matching inventory movement/);
+  assert.match(guard, /new\.fulfilment_status in \('dispatched', 'with_customer', 'return_due', 'returned', 'closed'\)/);
+  assert.match(guard, /Pocket WiFi custody requires a matching dispatch inventory movement/);
+  assert.match(guard, /new\.fulfilment_status in \('returned', 'closed'\)/);
+  assert.match(guard, /Pocket WiFi completed custody requires a matching return inventory movement/);
+  assert.match(schema, /create trigger qy_enforce_pocket_wifi_fulfilment_transition[\s\S]*before insert or update of product_type, fulfilment_status, stripe_session_id,[\s\S]*inventory_item_id, return_disposition on public\.orders/);
+});
+
 test('admin actions advance their transition baseline after each save', () => {
   assert.match(adminOrderActions, /allowedFulfilmentStatuses\(productType, currentStatus\)/);
   assert.match(adminOrderActions, /setCurrentStatus\(result\.fulfilment_status\)/);

@@ -352,6 +352,131 @@ alter table public.orders add constraint orders_pocket_wifi_return_evidence_chec
   )
 ) not valid;
 
+-- Pocket WiFi custody is just as irreversible as digital fulfilment, but its
+-- state graph was previously enforced only by the admin API and transition
+-- RPC. A service-role repair or future worker could therefore jump directly
+-- from a paid order to closed (or reopen a dispatched device as packing),
+-- bypassing the return workflow and corrupting operational capacity. Enforce
+-- the same graph on every database writer. Physical hand-off and receipt also
+-- require the matching stock movement to exist in the same transaction; the
+-- supported transition RPC inserts that movement before updating the order.
+create or replace function public.qy_enforce_pocket_wifi_fulfilment_transition()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  v_expected_return_movement text;
+  v_expected_return_quantity integer;
+begin
+  if tg_op = 'INSERT' then
+    -- Stripe persistence and the protected manual-order flow may first record
+    -- any of these pre-custody states. A new row must never claim that a
+    -- physical device has already left or returned to the warehouse.
+    if new.product_type = 'pocket_wifi'
+      and new.fulfilment_status not in ('awaiting_payment', 'payment_failed', 'paid') then
+      raise exception 'new Pocket WiFi order must begin before dispatch';
+    end if;
+    return new;
+  end if;
+
+  if old.product_type = 'pocket_wifi'
+    and new.fulfilment_status is distinct from old.fulfilment_status
+    and not (
+      (old.fulfilment_status = 'awaiting_payment' and new.fulfilment_status in ('paid', 'payment_failed')) or
+      (old.fulfilment_status = 'paid' and new.fulfilment_status in ('packing', 'dispatched', 'cancelled')) or
+      (old.fulfilment_status = 'packing' and new.fulfilment_status in ('paid', 'dispatched', 'cancelled')) or
+      (old.fulfilment_status = 'dispatched' and new.fulfilment_status in ('with_customer', 'return_due', 'returned')) or
+      (old.fulfilment_status = 'with_customer' and new.fulfilment_status in ('return_due', 'returned')) or
+      (old.fulfilment_status = 'return_due' and new.fulfilment_status = 'returned') or
+      (old.fulfilment_status = 'returned' and new.fulfilment_status = 'closed')
+    ) then
+    raise exception 'invalid Pocket WiFi fulfilment transition';
+  end if;
+
+  if old.product_type = 'pocket_wifi'
+    and old.fulfilment_status <> 'dispatched'
+    and new.fulfilment_status = 'dispatched'
+    and not exists (
+      select 1 from public.inventory_movements
+      where inventory_item_id = new.inventory_item_id
+        and movement_type = 'dispatch'
+        and quantity = -1
+        and reference = left(new.stripe_session_id, 120)
+    ) then
+    raise exception 'Pocket WiFi dispatch requires a matching inventory movement';
+  end if;
+
+  if old.product_type = 'pocket_wifi'
+    and old.fulfilment_status <> 'returned'
+    and new.fulfilment_status = 'returned' then
+    v_expected_return_movement := case new.return_disposition
+      when 'restock' then 'return'
+      when 'damaged' then 'return_damaged'
+      when 'quarantine' then 'return_quarantined'
+      else null
+    end;
+    v_expected_return_quantity := case when new.return_disposition = 'restock' then 1 else 0 end;
+    if v_expected_return_movement is null or not exists (
+      select 1 from public.inventory_movements
+      where inventory_item_id = new.inventory_item_id
+        and movement_type = v_expected_return_movement
+        and quantity = v_expected_return_quantity
+        and reference = left(new.stripe_session_id, 120)
+    ) then
+      raise exception 'Pocket WiFi return requires a matching inventory movement';
+    end if;
+  end if;
+
+  -- The transition checks above protect the moment a device leaves or returns
+  -- to operations. Keep the same ledger binding true for later direct writes
+  -- as well: changing the assigned inventory item, Stripe reference, or
+  -- return disposition on an in-custody order must not detach it from the
+  -- stock movement that proves its physical history. The transition RPC has
+  -- already inserted the movement before it writes the order, so this also
+  -- remains compatible with the supported atomic workflow.
+  if new.product_type = 'pocket_wifi'
+    and new.fulfilment_status in ('dispatched', 'with_customer', 'return_due', 'returned', 'closed')
+    and not exists (
+      select 1 from public.inventory_movements
+      where inventory_item_id = new.inventory_item_id
+        and movement_type = 'dispatch'
+        and quantity = -1
+        and reference = left(new.stripe_session_id, 120)
+    ) then
+    raise exception 'Pocket WiFi custody requires a matching dispatch inventory movement';
+  end if;
+
+  if new.product_type = 'pocket_wifi'
+    and new.fulfilment_status in ('returned', 'closed') then
+    v_expected_return_movement := case new.return_disposition
+      when 'restock' then 'return'
+      when 'damaged' then 'return_damaged'
+      when 'quarantine' then 'return_quarantined'
+      else null
+    end;
+    v_expected_return_quantity := case when new.return_disposition = 'restock' then 1 else 0 end;
+    if v_expected_return_movement is null or not exists (
+      select 1 from public.inventory_movements
+      where inventory_item_id = new.inventory_item_id
+        and movement_type = v_expected_return_movement
+        and quantity = v_expected_return_quantity
+        and reference = left(new.stripe_session_id, 120)
+    ) then
+      raise exception 'Pocket WiFi completed custody requires a matching return inventory movement';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists qy_enforce_pocket_wifi_fulfilment_transition on public.orders;
+create trigger qy_enforce_pocket_wifi_fulfilment_transition
+before insert or update of product_type, fulfilment_status, stripe_session_id,
+  inventory_item_id, return_disposition on public.orders
+for each row execute function public.qy_enforce_pocket_wifi_fulfilment_transition();
+
 -- Stripe event idempotency ledger: Stripe may retry the same event multiple times.
 -- processed_at stays null while side effects are in flight so an interrupted
 -- delivery is retried instead of being mistaken for a completed event.
