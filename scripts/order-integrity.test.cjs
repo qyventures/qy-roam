@@ -1853,10 +1853,12 @@ test('SMTP and Meta delivery settlement retain ownership of their sending leases
   assert.match(webhookRoute, /from\('meta_purchase_deliveries'\)[\s\S]{0,700}\.eq\('status','sending'\)\.eq\('updated_at',now\)/);
 });
 
-test('invalid delivery-lease timestamps are recoverable instead of permanently blocking paid-order retries', () => {
+test('invalid or implausibly future delivery-lease timestamps are recoverable instead of permanently blocking paid-order retries', () => {
   assert.match(webhookRoute, /const DELIVERY_LEASE_STALE_MS=15\*60_000/);
+  assert.match(webhookRoute, /const DELIVERY_LEASE_CLOCK_SKEW_MS=5\*60_000/);
   assert.match(webhookRoute, /function deliveryLeaseIsStale\(updatedAt: string \| null \| undefined\)/);
-  assert.match(webhookRoute, /return !Number\.isFinite\(updatedAtMs\)\|\|Date\.now\(\)-updatedAtMs>DELIVERY_LEASE_STALE_MS/);
+  assert.match(webhookRoute, /updatedAtMs>now\+DELIVERY_LEASE_CLOCK_SKEW_MS/);
+  assert.match(webhookRoute, /now-updatedAtMs>DELIVERY_LEASE_STALE_MS/);
   assert.match(webhookRoute, /notification\.status==='sending'&&deliveryLeaseIsStale\(notification\.updated_at\)/);
   assert.match(webhookRoute, /delivery\.status==='sending'&&deliveryLeaseIsStale\(delivery\.updated_at\)/);
 });

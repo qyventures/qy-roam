@@ -158,10 +158,17 @@ const META_GRAPH_API_VERSION='v26.0';
 // status-and-timestamp compare-and-swap below, so this does not permit two
 // healthy workers to send the same delivery concurrently.
 const DELIVERY_LEASE_STALE_MS=15*60_000;
+// `updated_at` is written by the database, so a value materially ahead of
+// this worker's clock cannot be a healthy in-flight lease. Treat it like an
+// abandoned lease rather than waiting months (or years) for a corrupted or
+// manually repaired timestamp to become old enough. The modest allowance
+// avoids duplicate sends during ordinary application/database clock drift.
+const DELIVERY_LEASE_CLOCK_SKEW_MS=5*60_000;
 
 function deliveryLeaseIsStale(updatedAt: string | null | undefined) {
   const updatedAtMs=updatedAt ? new Date(updatedAt).getTime() : Number.NaN;
-  return !Number.isFinite(updatedAtMs)||Date.now()-updatedAtMs>DELIVERY_LEASE_STALE_MS;
+  const now=Date.now();
+  return !Number.isFinite(updatedAtMs)||updatedAtMs>now+DELIVERY_LEASE_CLOCK_SKEW_MS||now-updatedAtMs>DELIVERY_LEASE_STALE_MS;
 }
 // Meta and an optional SMTP relay return tiny JSON responses. Bound their
 // bodies as well as the request deadline: a misbehaving upstream must not be
