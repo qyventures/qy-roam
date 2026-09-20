@@ -56,6 +56,12 @@ export default async function BookingPage({ searchParams }: Props) {
   try {
     const stripe = createStripeClient(key);
     const session = await stripe.checkout.sessions.retrieve(sessionId);
+    // The customer capability URL authorises visibility of one Checkout
+    // Session only. Keep the requested id authoritative even if an SDK or
+    // upstream edge case supplies a different object for the retrieval.
+    if (session.id !== sessionId) {
+      throw new Error('Retrieved Checkout Session does not match booking reference');
+    }
     // Keep the status page on the identical credential-mode boundary as
     // checkout, success and webhook processing. Do not disclose status for a
     // session if Stripe ever returns one from the other account mode.

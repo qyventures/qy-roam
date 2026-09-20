@@ -804,6 +804,11 @@ test('customer-facing Stripe session lookups accept only one bounded Checkout Se
   assert.equal(validStripeCheckoutSessionId(`cs_test_${'a'.repeat(300)}`), null);
   assert.match(bookingPage, /validStripeCheckoutSessionId\(searchParams\?\.session_id\)/);
   assert.match(successPage, /validStripeCheckoutSessionId\(searchParams\?\.session_id\)/);
+  // A bounded URL parameter only chooses the outbound Stripe request. The
+  // returned object must still be bound to that same capability before either
+  // customer page can display payment or fulfilment data.
+  assert.match(bookingPage, /if \(session\.id !== sessionId\)/);
+  assert.match(successPage, /if \(session\.id !== sessionId\)/);
 });
 
 test('admin delivery recovery validates its stored Stripe Checkout Session id before retrieval', () => {

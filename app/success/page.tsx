@@ -40,6 +40,13 @@ export default async function SuccessPage({ searchParams }: Props) {
     try {
       const stripe = createStripeClient(key);
       const session = await stripe.checkout.sessions.retrieve(sessionId);
+      // The URL reference selected this exact Checkout Session. Stripe
+      // credentials normally scope retrieval correctly, but an unexpected SDK
+      // or upstream response must never let a different customer's session be
+      // rendered as this customer's payment confirmation.
+      if (session.id !== sessionId) {
+        throw new Error('Retrieved Checkout Session does not match confirmation reference');
+      }
       // Stripe credentials normally scope reads to one mode, but make the
       // trust boundary explicit here as it is in the webhook. A misrouted
       // client or an unexpected Stripe response must never turn a session
