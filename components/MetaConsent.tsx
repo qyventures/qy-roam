@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { metaMeasurementConsent, setMetaMeasurementConsent } from '@/lib/metaClient';
+import { metaPixelId } from '@/lib/runtimeConfig';
 
 declare global { interface Window { fbq?: (...args: any[]) => void; _fbq?: any; } }
 
@@ -39,7 +40,10 @@ export default function MetaConsent() {
   const [choice, setChoice] = useState<Consent | null>(null);
   const [ready, setReady] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const pixelId = process.env.NEXT_PUBLIC_META_PIXEL_ID || '';
+  // Use the exact validated identifier accepted by server-side CAPI. This
+  // keeps browser Pixel and CAPI conversion reporting aligned when an
+  // environment value contains deploy-time whitespace or an invalid value.
+  const pixelId = metaPixelId() || '';
 
   useEffect(() => {
     const saved = metaMeasurementConsent();

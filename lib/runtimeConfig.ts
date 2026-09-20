@@ -40,13 +40,22 @@ export function getMetaCapiToken() {
   return process.env.META_CAPI_ACCESS_TOKEN || process.env.META_CAPI_TOKEN;
 }
 
+// This identifier is embedded into the browser bundle as well as used by the
+// server-side CAPI sender. Keep one canonical parser for both boundaries: a
+// harmless-looking space in a deployment value must not make CAPI appear
+// ready while the browser loader initialises a different (invalid) Pixel.
+export function metaPixelId(value = process.env.NEXT_PUBLIC_META_PIXEL_ID) {
+  const pixelId = value?.trim();
+  return pixelId && /^\d{6,25}$/.test(pixelId) ? pixelId : undefined;
+}
+
 // Keep the server-side Purchase delivery boundary in one place. A truthy
 // placeholder Pixel id or access token is not a configured CAPI destination:
 // attempting delivery with either would make a paid Stripe webhook retry as
 // though Meta were temporarily unavailable, and an admin retry could report a
 // no-op as a completed recovery.
 export function hasRequiredMetaCapiPurchaseConfig() {
-  const pixelId = process.env.NEXT_PUBLIC_META_PIXEL_ID?.trim();
+  const pixelId = metaPixelId();
   const configuredToken = getMetaCapiToken();
   const accessToken = configuredToken?.trim();
   return Boolean(

@@ -39,7 +39,7 @@ const { stripeWebhookSigningSecret } = require('../lib/stripeWebhookSecret.ts');
 const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
 const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_EXPIRY_CREATION_MARGIN_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, checkoutAttemptExpiresAt, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
 const { checkoutSiteOrigin, isProductionQyRoamOrigin, metaPurchaseEventSourceUrl } = require('../lib/siteOrigin.ts');
-const { hasRequiredAdminCredentials, hasRequiredMetaCapiPurchaseConfig } = require('../lib/runtimeConfig.ts');
+const { hasRequiredAdminCredentials, hasRequiredMetaCapiPurchaseConfig, metaPixelId } = require('../lib/runtimeConfig.ts');
 const { metaMeasurementAllowed, setMetaMeasurementConsent } = require('../lib/metaClient.ts');
 const { digitalDeliveryReferenceIssue, isSafeDigitalDeliveryReference } = require('../lib/digitalDeliveryReference.ts');
 const { SUPABASE_REQUEST_TIMEOUT_MS, fetchSupabaseWithTimeout } = require('../lib/supabaseAdmin.ts');
@@ -2684,9 +2684,11 @@ test('Meta CAPI requires a complete destination and admin recovery never reports
     process.env.NEXT_PUBLIC_META_PIXEL_ID = 'not-a-pixel';
     process.env.META_CAPI_ACCESS_TOKEN = 'token-that-is-long-enough-to-look-configured';
     delete process.env.META_CAPI_TOKEN;
+    assert.equal(metaPixelId(), undefined);
     assert.equal(hasRequiredMetaCapiPurchaseConfig(), false);
-    process.env.NEXT_PUBLIC_META_PIXEL_ID = '123456789';
+    process.env.NEXT_PUBLIC_META_PIXEL_ID = ' 123456789 ';
     process.env.META_CAPI_ACCESS_TOKEN = 'token-that-is-long-enough-to-look-configured';
+    assert.equal(metaPixelId(), '123456789');
     assert.equal(hasRequiredMetaCapiPurchaseConfig(), true);
     process.env.META_CAPI_ACCESS_TOKEN = 'token-with-a-newline\n';
     assert.equal(hasRequiredMetaCapiPurchaseConfig(), false);
@@ -2710,8 +2712,9 @@ test('Meta CAPI delivery canonicalizes the same environment values accepted by r
   // outbound Graph request must use that same canonical form so a formatted
   // secret or Pixel ID cannot make health look ready while every Purchase
   // delivery fails authentication or targets an invalid path.
-  assert.match(webhookRoute, /const token=getMetaCapiToken\(\)\?\.trim\(\), pixel=process\.env\.NEXT_PUBLIC_META_PIXEL_ID\?\.trim\(\);/);
-  assert.match(runtimeConfig, /const pixelId = process\.env\.NEXT_PUBLIC_META_PIXEL_ID\?\.trim\(\);/);
+  assert.match(webhookRoute, /const token=getMetaCapiToken\(\)\?\.trim\(\), pixel=metaPixelId\(\);/);
+  assert.match(runtimeConfig, /export function metaPixelId\(value = process\.env\.NEXT_PUBLIC_META_PIXEL_ID\)/);
+  assert.match(metaConsent, /const pixelId = metaPixelId\(\) \|\| '';/);
   assert.match(runtimeConfig, /const accessToken = configuredToken\?\.trim\(\);/);
 });
 

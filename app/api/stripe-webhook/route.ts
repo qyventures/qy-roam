@@ -4,7 +4,7 @@ import { createStripeClient } from '../../../lib/stripeClient';
 import crypto from 'crypto';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { isSafeSmtpMailbox, sendSmtpMail } from '@/lib/smtp';
-import { getMetaCapiToken, hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
+import { getMetaCapiToken, hasRequiredMetaCapiPurchaseConfig, metaPixelId } from '@/lib/runtimeConfig';
 import { validateQyRoamSession } from '@/lib/qyRoamSession';
 import { validCheckoutRequestId } from '@/lib/checkoutValidation';
 import { hasOrderIntegritySigningConfig, validQyRoamProvenance } from '@/lib/orderProvenance';
@@ -257,7 +257,7 @@ async function sendMetaPurchase(session: Stripe.Checkout.Session, eventTime: num
   // outbound boundary: otherwise health can report CAPI configured while a
   // space in an environment value produces an invalid Bearer token or Graph
   // path and leaves every paid Purchase retrying.
-  const token=getMetaCapiToken()?.trim(), pixel=process.env.NEXT_PUBLIC_META_PIXEL_ID?.trim();
+  const token=getMetaCapiToken()?.trim(), pixel=metaPixelId();
   if (!token || !pixel) throw new Error('Meta CAPI is not configured');
   const email=normalizeEmail(session.customer_details?.email), phone=normalizePhone(session.customer_details?.phone);
   const userData:Record<string,string|string[]>={}; if(email) userData.em=[sha256(email)!]; if(phone) userData.ph=[sha256(phone)!];
