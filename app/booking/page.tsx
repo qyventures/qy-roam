@@ -140,8 +140,10 @@ export default async function BookingPage({ searchParams }: Props) {
         <a className="secondary" href={isEsim ? '/esim' : '/'}>{checkoutExpired ? 'Choose a plan' : isEsim ? 'Back to eSIM plans' : 'Back to QY Roam'}</a>
       </main>
     );
-  } catch (error) {
-    console.error('booking_status_lookup_error', error);
+  } catch {
+    // Stripe and database errors are untrusted diagnostics. The order URL is
+    // a customer capability, so never mirror those details into logs.
+    console.error('booking_status_lookup_error');
     return (
       <main className="wrap section legal">
         <span className="eyebrow">Order status</span>

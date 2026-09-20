@@ -263,8 +263,11 @@ export async function POST(req: Request) {
       });
     }
     return NextResponse.json({ url: currentSession.url }, { headers: { 'Cache-Control': 'no-store' } });
-  } catch (error) {
-    console.error('esim_checkout_error', error);
+  } catch {
+    // This boundary can catch Stripe or database failures. Do not write their
+    // arbitrary response text to logs; the stable event name is sufficient
+    // for alerting and avoids retaining a provider-echoed secret or PII.
+    console.error('esim_checkout_error');
     return NextResponse.json({ error: 'Unable to start eSIM checkout.' }, { status: 500 });
   }
 }

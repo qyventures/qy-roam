@@ -87,8 +87,10 @@ export default async function SuccessPage({ searchParams }: Props) {
           orderLookupFailed = Boolean(orderResult.error);
         }
       }
-    } catch (error) {
-      console.error('success_session_lookup_error', error);
+    } catch {
+      // A customer confirmation page may call Stripe and the database. Keep
+      // third-party failure text out of application logs.
+      console.error('success_session_lookup_error');
     }
   }
 

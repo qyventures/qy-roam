@@ -185,6 +185,23 @@ test('Stripe webhook failure logging does not print raw dependency errors', () =
   assert.match(webhookRoute, /console\.error\('stripe_webhook_processing_error'\)/);
 });
 
+test('public sales and confirmation paths do not log raw provider failures', () => {
+  // Checkout, availability, and customer capability pages can all catch
+  // Stripe or PostgREST failures. Those errors may contain provider-echoed
+  // request details, so logging is intentionally a stable event name only.
+  for (const [source, event] of [
+    [wifiCheckoutRoute, 'checkout_error'],
+    [wifiCheckoutRoute, 'checkout_expired_reservation_release_error'],
+    [esimCheckoutRoute, 'esim_checkout_error'],
+    [availabilityRoute, 'availability_check_failed'],
+    [successPage, 'success_session_lookup_error'],
+    [bookingPage, 'booking_status_lookup_error'],
+  ]) {
+    assert.match(source, new RegExp(`console\\.error\\('${event}'\\)`));
+    assert.doesNotMatch(source, new RegExp(`console\\.error\\('${event}',`));
+  }
+});
+
 function esimSession(plan = ESIM_PLANS[0]) {
   const session = {
     id: 'cs_test_esim',

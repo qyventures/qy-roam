@@ -231,7 +231,7 @@ export async function POST(req: Request) {
       const released=await supabase.from('checkout_reservations').delete()
         .eq('checkout_request_id',requestId)
         .or(`stripe_session_id.is.null,stripe_session_id.eq.${existing.id}`);
-      if(released.error) console.error('checkout_expired_reservation_release_error',released.error);
+      if(released.error) console.error('checkout_expired_reservation_release_error');
       return NextResponse.json({error:'This secure checkout session has expired. Please try again to start a new one.',checkoutExpired:true},{status:409,headers:{'Cache-Control':'no-store'}});
     }
     if(!await linkReservationToSession(supabase,requestId,existing.id)){
@@ -373,7 +373,7 @@ export async function POST(req: Request) {
   // checkout request id for the next attempt.
   if(currentSession.status==='expired'){
     const released=await supabase.from('checkout_reservations').delete().eq('checkout_request_id',requestId).is('stripe_session_id',null);
-    if(released.error) console.error('checkout_expired_reservation_release_error',released.error);
+    if(released.error) console.error('checkout_expired_reservation_release_error');
     return NextResponse.json({error:'This secure checkout session has expired. Please try again to start a new one.',checkoutExpired:true},{status:409,headers:{'Cache-Control':'no-store'}});
   }
   // A completed asynchronous payment may not yet be paid. Preserve its
@@ -390,5 +390,5 @@ export async function POST(req: Request) {
     return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
   }
   return NextResponse.json({url:currentSession.url},{headers:{'Cache-Control':'no-store'}});
- } catch(error){ console.error('checkout_error',error); return NextResponse.json({error:'Unable to start checkout.'},{status:500}); }
+ } catch { console.error('checkout_error'); return NextResponse.json({error:'Unable to start checkout.'},{status:500}); }
 }

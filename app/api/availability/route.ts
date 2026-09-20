@@ -216,8 +216,12 @@ export async function GET(req: NextRequest) {
     const effectiveInventory = Math.min(inventory, inventoryState.saleableInventory);
     const remaining = Math.max(0, effectiveInventory - committed);
     return NextResponse.json({ available: remaining > 0, remaining, inventoryMode: 'live', temporaryHolds: stripeHolds.holds, ...bookingTerms }, { headers: { 'Cache-Control': 'no-store' } });
-  } catch (error) {
-    console.error('availability check failed', error);
+  } catch {
+    // Stripe and PostgREST errors can include upstream response text. This is
+    // a public capacity path, so keep the log useful for alerting without
+    // turning provider diagnostics into a place that can retain credentials,
+    // customer data, or implementation details.
+    console.error('availability_check_failed');
     return NextResponse.json({ available: false, remaining: 0, inventoryMode: 'unavailable', error: 'Live availability is temporarily unavailable. Please try again shortly or contact +65 8032 7183.' }, { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '30' } });
   }
 }
