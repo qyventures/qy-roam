@@ -1209,6 +1209,13 @@ test('SMTP fulfilment delivery upgrades every non-implicit-TLS transport before 
   assert.doesNotMatch(smtpClient, /!options\.secure\s*&&\s*options\.port\s*===\s*587/);
 });
 
+test('SMTP relay delivery canonicalizes the same relay secret accepted by readiness', () => {
+  // Readiness deliberately tolerates surrounding deployment whitespace for
+  // relay secrets. The outbound paid-order path must use that same canonical
+  // value, or health can report ready while the relay rejects every delivery.
+  assert.match(webhookRoute, /relaySecret=process\.env\.SMTP_RELAY_SECRET\?\.trim\(\)/);
+});
+
 test('payment-readiness checks coalesce healthy checkout probes without caching failures', () => {
   assert.match(productionReadiness, /const READINESS_CACHE_MS = 15_000/);
   assert.match(productionReadiness, /let paymentSchemaCheckInFlight: Promise<boolean> \| null = null/);

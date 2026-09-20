@@ -312,7 +312,12 @@ async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
   const shippingText=shipping?[shipping.line1,shipping.line2,shipping.city,shipping.state,shipping.postal_code,shipping.country].filter(Boolean).join(', '):'Not applicable / not supplied';
   const subject=`[QY Roam] Paid ${isEsim?'eSIM':'Pocket WiFi'} order — ${destination||planName||session.id}`;
   const text=['A paid QY Roam order requires human fulfilment.','',`Order reference: ${session.id}`,`Product: ${isEsim?'Travel eSIM':'Pocket WiFi'}`,`Destination: ${destination||'-'}`,`Plan: ${planName||'-'}`,...(isEsim?[`Plan ID: ${planId||'-'}`,`Data allowance: ${dataAllowance||'-'}`]:[]),`Travel dates: ${start||'-'}${end?` to ${end}`:''}`,`Amount paid: S$${amount}`,`Promo code: ${session.metadata?.promo_code||'-'}`,'',`Customer name: ${customer?.name||'-'}`,`Email: ${customer?.email||'-'}`,`Phone: ${customer?.phone||'-'}`,`Delivery address: ${shippingText}`,'',isEsim?'Action: Please process the eSIM manually and send the QR code / activation instructions to the customer.':'Action: Please prepare and fulfil the Pocket WiFi order according to the travel dates and delivery details.','','Customer support: +65 8032 7183'].join('\n');
-  const configuredRelayUrl=process.env.SMTP_RELAY_URL, relaySecret=process.env.SMTP_RELAY_SECRET;
+  // Readiness trims the relay secret before validating it. Use the exact same
+  // canonical credential here so a common deployment formatting artifact
+  // (for example a trailing newline from a secret manager) cannot make
+  // checkout appear ready while every paid-order notification is rejected by
+  // the relay.
+  const configuredRelayUrl=process.env.SMTP_RELAY_URL, relaySecret=process.env.SMTP_RELAY_SECRET?.trim();
   if(configuredRelayUrl&&relaySecret){
     // Checkout readiness rejects an unsafe relay before payment, but delivery
     // can run later from a Stripe retry or an admin recovery after environment
