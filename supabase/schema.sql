@@ -891,6 +891,12 @@ grant execute on function public.qy_create_manual_pocket_wifi_order(text,text,te
 
 -- No client policies: all operational tables are server/service-role only.
 create index if not exists orders_created_at_idx on public.orders(created_at desc);
+-- Accounting closes select paid revenue by the immutable payment boundary,
+-- not the earlier Checkout/order creation time. Keep this common period-close
+-- query indexed as the order ledger grows.
+create index if not exists orders_paid_payment_confirmed_at_idx
+  on public.orders(payment_confirmed_at desc)
+  where payment_status = 'paid';
 create index if not exists orders_product_type_idx on public.orders(product_type);
 create index if not exists orders_fulfilment_status_idx on public.orders(fulfilment_status);
 create index if not exists orders_travel_start_idx on public.orders(travel_start);

@@ -85,8 +85,12 @@ async function paidOrderGrossForPeriod(db: ReturnType<typeof getSupabaseAdmin>, 
       .from('orders')
       .select('amount_sgd')
       .eq('payment_status', 'paid')
-      .gte('created_at', `${start}T00:00:00+08:00`)
-      .lte('created_at', `${end}T23:59:59+08:00`)
+      // Checkout can be opened on one accounting day and settle on another
+      // (notably for asynchronous methods). A period close is a cash-sales
+      // record, so group revenue by the immutable Stripe/manual payment
+      // confirmation boundary rather than when the draft order was created.
+      .gte('payment_confirmed_at', `${start}T00:00:00+08:00`)
+      .lte('payment_confirmed_at', `${end}T23:59:59+08:00`)
       .range(offset, offset + CLOSING_ORDER_PAGE_SIZE - 1);
     if (error) throw error;
     const page = orders || [];

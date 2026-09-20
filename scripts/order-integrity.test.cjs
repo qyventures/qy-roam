@@ -630,6 +630,10 @@ test('admin operational mutations bound and validate their JSON request bodies',
 test('admin sales-period close totals every Supabase page instead of silently using its row cap', () => {
   assert.match(adminOpsRoute, /async function paidOrderGrossForPeriod/);
   assert.match(adminOpsRoute, /CLOSING_ORDER_PAGE_SIZE = 1_000/);
+  assert.match(adminOpsRoute, /\.gte\('payment_confirmed_at', `\$\{start\}T00:00:00\+08:00`\)/);
+  assert.match(adminOpsRoute, /\.lte\('payment_confirmed_at', `\$\{end\}T23:59:59\+08:00`\)/);
+  assert.doesNotMatch(adminOpsRoute, /\.gte\('created_at', `\$\{start\}T00:00:00\+08:00`\)/);
+  assert.match(schema, /create index if not exists orders_paid_payment_confirmed_at_idx\s+on public\.orders\(payment_confirmed_at desc\)\s+where payment_status = 'paid'/);
   assert.match(adminOpsRoute, /\.range\(offset, offset \+ CLOSING_ORDER_PAGE_SIZE - 1\)/);
   assert.match(adminOpsRoute, /if \(page\.length < CLOSING_ORDER_PAGE_SIZE\) return gross/);
   assert.match(adminOpsRoute, /if \(offset >= MAX_CLOSING_ORDERS\)/);
