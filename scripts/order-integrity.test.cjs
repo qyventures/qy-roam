@@ -2544,14 +2544,17 @@ test('Stripe terminal events refresh the Checkout Session before persisting or d
   );
   const sourceBoundary = processing.indexOf('if(!hasQyRoamWebhookSource(eventSession.metadata))');
   const sessionIdBoundary = processing.indexOf('const eventSessionId=validStripeCheckoutSessionId(eventSession.id)');
-  const refresh = processing.indexOf('session=await stripe.checkout.sessions.retrieve(eventSessionId)');
+  const refresh = processing.indexOf('refreshedSession=await stripe.checkout.sessions.retrieve(eventSessionId)');
+  const refreshedObjectBoundary = processing.indexOf('const session=stripeWebhookCheckoutSession(refreshedSession)');
   const identityBoundary = processing.indexOf('if(session.id!==eventSessionId||session.livemode!==event.livemode)');
   const eventState = processing.indexOf('const eventStateIssue=stripeCheckoutEventStateIssue(event.type,eventStateSession)');
   assert.ok(sourceBoundary >= 0 && sessionIdBoundary > sourceBoundary && refresh > sessionIdBoundary, 'only QY Roam events with a valid bounded Session id should cause a Stripe Session refresh');
-  assert.ok(identityBoundary > refresh, 'the refreshed Session must match the signed event identity and mode');
+  assert.ok(refreshedObjectBoundary > refresh, 'the refreshed Stripe response must be validated before its fields are read');
+  assert.ok(identityBoundary > refreshedObjectBoundary, 'the refreshed Session must match the signed event identity and mode');
   assert.ok(eventState > identityBoundary, 'terminal-state validation must occur after the refreshed Session identity boundary');
   assert.match(processing, /stripe_webhook_invalid_session_id/);
   assert.match(processing, /stripe_webhook_session_retrieve_error/);
+  assert.match(processing, /stripe_webhook_invalid_retrieved_session/);
   assert.match(processing, /stripe_webhook_session_identity_mismatch/);
   assert.match(processing, /Retrieved Checkout Session does not match webhook event/);
 });
@@ -2561,6 +2564,7 @@ test('fulfilment-bearing Stripe events are durably claimed before the outbound S
   const retrievePosition = webhookRoute.indexOf('stripe.checkout.sessions.retrieve(eventSessionId)');
   assert.ok(claimPosition >= 0 && claimPosition < retrievePosition);
   assert.match(webhookRoute, /stripe_webhook_session_retrieve_error[\s\S]*recordEventFailure\(supabase,eventClaimId,claimStartedAt,error\)/);
+  assert.match(webhookRoute, /stripe_webhook_invalid_retrieved_session[\s\S]*recordEventFailure\(supabase,eventClaimId,claimStartedAt,new Error\('Stripe returned an invalid Checkout Session object'\)\)/);
   assert.match(webhookRoute, /stripe_webhook_session_identity_mismatch[\s\S]*recordEventFailure\(supabase,eventClaimId,claimStartedAt,new Error\('Retrieved Checkout Session does not match webhook event'\)\)/);
   // Inventory-release events retain their stricter provenance-before-claim
   // ordering so sessions from another product in a shared account cannot

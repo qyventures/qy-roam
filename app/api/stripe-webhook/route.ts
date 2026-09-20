@@ -755,9 +755,9 @@ export async function POST(req:Request){
   // fulfilment/CAPI retry one current Stripe-owned snapshot. The signed event
   // type and its created time remain the authority for the transition and the
   // original Purchase timestamp respectively.
-  let session: Stripe.Checkout.Session;
+  let refreshedSession: unknown;
   try {
-    session=await stripe.checkout.sessions.retrieve(eventSessionId);
+    refreshedSession=await stripe.checkout.sessions.retrieve(eventSessionId);
   } catch (error) {
     // A temporary Stripe read failure must remain retryable rather than
     // acknowledging a paid order whose durable fulfilment record we cannot
@@ -765,6 +765,18 @@ export async function POST(req:Request){
     console.error('stripe_webhook_session_retrieve_error',{eventId:stripeEventId,sessionId:eventSessionId});
     if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error);
     return NextResponse.json({error:'Unable to retrieve Checkout Session'},{status:500});
+  }
+  // An authenticated Stripe API response is still deserialised runtime data.
+  // Validate the same minimal object boundary used for the signed event before
+  // dereferencing fields below. Without this check, an unexpected API-version
+  // shape can throw after a fulfilment-bearing event was claimed but before
+  // its failure is written, leaving operations with an opaque in-progress
+  // lease instead of an immediately actionable recovery record.
+  const session=stripeWebhookCheckoutSession(refreshedSession);
+  if(!session){
+    console.error('stripe_webhook_invalid_retrieved_session',{eventId:stripeEventId,sessionId:eventSessionId});
+    if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,new Error('Stripe returned an invalid Checkout Session object'));
+    return NextResponse.json({error:'Invalid retrieved Checkout Session'},{status:500});
   }
   // The signed event selects the Checkout Session to process; the refreshed
   // object only supplies its current customer and payment fields. Keep those
