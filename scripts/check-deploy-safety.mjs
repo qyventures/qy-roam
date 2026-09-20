@@ -29,6 +29,16 @@ assert.match(deploy, /cmp -s deploy\/qy-roam\.service/);
 assert.match(deploy, /Installed systemd unit does not match deploy\/qy-roam\.service/);
 assert.match(deploy, /systemctl daemon-reload/);
 assert.match(deploy, /Unable to reload the systemd service definition/);
+// Nginx is part of the paid-order trust boundary: it keeps the standalone
+// app on loopback, supplies the trusted client IP, and rejects oversized or
+// stalled public uploads. A production release must fail if that installed
+// ingress file drifts from the reviewed version, then validate the complete
+// effective Nginx configuration before restarting the app.
+assert.match(deploy, /NGINX_CONFIG_PATH=/);
+assert.match(deploy, /cmp -s deploy\/nginx-qyroam\.conf/);
+assert.match(deploy, /Installed Nginx site does not match deploy\/nginx-qyroam\.conf/);
+assert.match(deploy, /if ! nginx -t; then/);
+assert.match(deploy, /Nginx configuration validation failed/);
 assert.match(deploy, /if ! systemctl restart "\$SERVICE_NAME"; then/);
 assert.match(deploy, /QY Roam service restart failed/);
 

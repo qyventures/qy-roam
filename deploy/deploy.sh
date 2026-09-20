@@ -6,10 +6,11 @@ ENV_FILE="${ENV_FILE:-/root/.config/qyroam/.env}"
 SERVICE_NAME="${SERVICE_NAME:-qy-roam}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3100/api/health}"
 SYSTEMD_UNIT_PATH="${SYSTEMD_UNIT_PATH:-/etc/systemd/system/${SERVICE_NAME}.service}"
+NGINX_CONFIG_PATH="${NGINX_CONFIG_PATH:-/etc/nginx/sites-available/qyroam}"
 
 cd "$APP_DIR"
 
-echo "[1/9] Checking production runtime"
+echo "[1/10] Checking production runtime"
 # Keep the build and systemd runtime on the same supported Node release line.
 # npm's engines field is advisory by default, so enforce it before touching
 # source or dependencies; otherwise an obsolete VPS runtime can appear to
@@ -20,7 +21,7 @@ if [[ "$node_major" -ne 22 ]]; then
   exit 1
 fi
 
-echo "[2/9] Updating source"
+echo "[2/10] Updating source"
 if [[ "$(git branch --show-current)" != "main" ]]; then
   echo "Refusing to deploy: production checkout must already be on main" >&2
   exit 1
@@ -32,21 +33,21 @@ fi
 git fetch --prune origin
 git pull --ff-only origin main
 
-echo "[3/9] Checking environment file"
+echo "[3/10] Checking environment file"
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "Missing $ENV_FILE" >&2
   exit 1
 fi
 chmod 600 "$ENV_FILE"
 
-echo "[4/9] Installing locked dependencies"
+echo "[4/10] Installing locked dependencies"
 if [[ ! -f package-lock.json ]]; then
   echo "package-lock.json is required for a reproducible production deploy" >&2
   exit 1
 fi
 npm ci --no-audit --no-fund
 
-echo "[5/9] Building"
+echo "[5/10] Building"
 set -a
 # shellcheck disable=SC1090
 source "$ENV_FILE"
@@ -63,7 +64,7 @@ npm run check:deploy-safety
 npm run test:order-integrity
 npm run build
 
-echo "[6/9] Verifying service definition"
+echo "[6/10] Verifying service definition"
 # `daemon-reload` only rereads the installed unit; it does not copy the
 # checked-in definition into /etc. Refuse a release if the installed unit has
 # drifted, so loopback binding, restart policy, and sandboxing changes cannot
@@ -76,14 +77,31 @@ if [[ ! -f "$SYSTEMD_UNIT_PATH" ]] || ! cmp -s deploy/qy-roam.service "$SYSTEMD_
   exit 1
 fi
 
-echo "[7/9] Reloading service definition"
+echo "[7/10] Verifying Nginx ingress definition"
+# The app trusts X-Real-IP only because the checked-in Nginx configuration
+# overwrites it while proxying to a loopback-only listener.  A drifted proxy
+# can therefore weaken checkout rate limiting/CAPI attribution or expose the
+# app directly without its TLS and request-size boundaries.  As with the
+# systemd unit above, do not overwrite an operator-managed file here: require
+# an explicit reviewed install before a paid-order release can proceed.
+if [[ ! -f "$NGINX_CONFIG_PATH" ]] || ! cmp -s deploy/nginx-qyroam.conf "$NGINX_CONFIG_PATH"; then
+  echo "Installed Nginx site does not match deploy/nginx-qyroam.conf: $NGINX_CONFIG_PATH" >&2
+  echo "Review and install the checked-in Nginx site, then rerun deployment." >&2
+  exit 1
+fi
+if ! nginx -t; then
+  echo "Nginx configuration validation failed" >&2
+  exit 1
+fi
+
+echo "[8/10] Reloading service definition"
 if ! systemctl daemon-reload; then
   echo "Unable to reload the systemd service definition" >&2
   systemctl --no-pager --full status "$SERVICE_NAME" >&2 || true
   exit 1
 fi
 
-echo "[8/9] Restarting service"
+echo "[9/10] Restarting service"
 if ! systemctl restart "$SERVICE_NAME"; then
   echo "QY Roam service restart failed" >&2
   systemctl --no-pager --full status "$SERVICE_NAME" >&2 || true
@@ -92,7 +110,7 @@ if ! systemctl restart "$SERVICE_NAME"; then
 fi
 systemctl --no-pager --full status "$SERVICE_NAME" | sed -n '1,15p'
 
-echo "[9/9] Waiting for application readiness"
+echo "[10/10] Waiting for application readiness"
 health_output="$(mktemp /tmp/qyroam-health.XXXXXX.json)"
 health_config="$(mktemp /tmp/qyroam-curl.XXXXXX.conf)"
 trap 'rm -f "$health_output" "$health_config"' EXIT
