@@ -17,7 +17,13 @@ Environment=HOSTNAME=127.0.0.1
 ExecStart=/usr/bin/npm run start
 Restart=always
 RestartSec=5
-TimeoutStopSec=20
+# Nginx allows a bounded paid-order webhook up to 120 seconds for Stripe
+# retrieval, persistence, and independent fulfilment/analytics delivery.
+# Give the standalone server enough graceful-stop time to finish that work
+# during a release instead of killing the worker at 20 seconds and making
+# Stripe retry an otherwise healthy event. The application still has bounded
+# request/dependency deadlines, while systemd retains a finite hard stop.
+TimeoutStopSec=150
 
 # Basic hardening while retaining access to app files and outbound network.
 NoNewPrivileges=true

@@ -46,6 +46,10 @@ assert.match(deploy, /QY Roam service restart failed/);
 // written by Nginx. The app must therefore never be reachable directly on a
 // public interface where a caller could provide its own X-Real-IP header.
 assert.match(service, /^Environment=HOSTNAME=127\.0\.0\.1$/m, 'standalone Next.js must bind only to loopback behind Nginx');
+// A deploy must not force-kill a legitimate in-flight paid-order webhook
+// before Nginx's reviewed proxy window can complete. Stripe retries are an
+// idempotent recovery mechanism, not the normal outcome of a healthy restart.
+assert.match(service, /^TimeoutStopSec=150$/m, 'systemd graceful-stop budget must exceed the webhook proxy deadline');
 assert.match(nginx, /proxy_pass http:\/\/127\.0\.0\.1:3100;/);
 assert.match(nginx, /proxy_set_header X-Real-IP \$remote_addr;/);
 // The public proxy must enforce the same coarse body boundary as the signed
