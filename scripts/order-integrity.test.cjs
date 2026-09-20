@@ -1761,7 +1761,7 @@ test('admin recovery only resumes actionable fulfilment while preserving consent
   assert.match(adminOrderRoute, /if \(metaRequested && !hasRequiredMetaCapiPurchaseConfig\(\)\)/);
   assert.match(adminOrderRoute, /const retryMeta = metaRequested/);
   assert.match(adminOrderRoute, /deliverFulfilmentNotification\(supabase, session\)/);
-  assert.match(adminOrderRoute, /deliverMetaPurchase\(supabase, session, metaEventTime\)/);
+  assert.match(adminOrderRoute, /deliverMetaPurchase\(supabase, session, metaEventTime!\)/);
   assert.match(adminOrderActions, /Retry order deliveries/);
 });
 
@@ -2019,8 +2019,8 @@ test('Meta Purchase retries preserve one durable event timestamp for deduplicati
   assert.match(schema, /payment_confirmed_at = case when v_paid then coalesce\(orders\.payment_confirmed_at, p_payment_confirmed_at\)/);
   assert.match(webhookRoute, /await sendMetaPurchase\(session,Number\(attempt\.data\[0\]\.event_time\)\)/);
   assert.match(adminOrderRoute, /select\('stripe_session_id,payment_status,payment_confirmed_at,product_type,fulfilment_status,measurement_consent'\)/);
-  assert.match(adminOrderRoute, /const metaEventTime=Number\.isFinite\(confirmedAtMs\)/);
-  assert.match(adminOrderRoute, /deliverMetaPurchase\(supabase, session, metaEventTime\)/);
+  assert.match(adminOrderRoute, /const metaEventTime=validStripeEventCreated\(confirmedAtSeconds\)/);
+  assert.match(adminOrderRoute, /deliverMetaPurchase\(supabase, session, metaEventTime!\)/);
   assert.doesNotMatch(adminOrderRoute, /Math\.floor\(Date\.now\(\) \/ 1000\)/);
 });
 
@@ -2033,7 +2033,7 @@ test('paid-order email and Meta deliveries are attempted independently', () => {
   assert.match(webhookRoute, /await deliverPaidOrderSideEffects\(supabase,sessionForEvent,eventCreated\)/);
   assert.match(adminOrderRoute, /Promise\.allSettled\(\[/);
   assert.match(adminOrderRoute, /retryFulfilment \? \[deliverFulfilmentNotification\(supabase, session\)\]/);
-  assert.match(adminOrderRoute, /retryMeta \? \[deliverMetaPurchase\(supabase, session, metaEventTime\)\]/);
+  assert.match(adminOrderRoute, /retryMeta \? \[deliverMetaPurchase\(supabase, session, metaEventTime!\)\]/);
 });
 
 test('Meta CAPI requires a complete destination and admin recovery never reports a no-op retry', () => {
@@ -2100,9 +2100,17 @@ test('SMTP fulfilment transport bounds untrusted relay responses', () => {
 });
 
 test('admin delivery recovery requires a completed Stripe session and matching persisted product identity', () => {
+  assert.match(adminOrderRoute, /if \(session\.id !== sessionId\)/);
   assert.match(adminOrderRoute, /!validation\.valid \|\| session\.status !== 'complete' \|\| session\.payment_status !== 'paid'/);
   assert.match(adminOrderRoute, /if \(order\.product_type !== validation\.productType\)/);
   assert.match(adminOrderRoute, /stored order product does not match its signed Stripe session/);
+});
+
+test('admin Meta recovery rejects corrupt or future payment timestamps', () => {
+  assert.match(adminOrderRoute, /validStripeEventCreated\(confirmedAtSeconds\)/);
+  assert.match(adminOrderRoute, /validStripeEventCreated\(session\.created\)/);
+  assert.match(adminOrderRoute, /if \(retryMeta && !metaEventTime\)/);
+  assert.match(adminOrderRoute, /Reconcile the order before retrying analytics delivery/);
 });
 
 test('consented browser and CAPI Purchases share a stable deduplication identity', () => {

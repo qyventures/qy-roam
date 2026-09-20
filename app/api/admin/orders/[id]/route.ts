@@ -10,6 +10,7 @@ import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
 import { digitalDeliveryReferenceIssue, normalizeDigitalDeliveryReference } from '@/lib/digitalDeliveryReference';
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
+import { validStripeEventCreated } from '@/lib/stripeEventCreated';
 
 export const runtime = 'nodejs';
 
@@ -210,6 +211,13 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
 
     const stripe = createStripeClient(stripeKey);
     const session = await stripe.checkout.sessions.retrieve(sessionId);
+    // Stripe should return the requested object, but this is an external
+    // recovery boundary with fulfilment and analytics side effects. Keep the
+    // durable order reference authoritative if an SDK edge case, test double,
+    // or upstream response ever supplies a different Checkout Session.
+    if (session.id !== sessionId) {
+      throw new Error('Retrieved Checkout Session does not match the order');
+    }
     // Recovery is an operational mutation with external side effects. Keep it
     // on the same Stripe credential-mode boundary as checkout, webhook, and
     // the customer confirmation pages: a misrouted or unexpected test-mode
@@ -258,12 +266,19 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     // payment-confirmation time persisted by the webhook. Session creation
     // remains a stable fallback only for legacy orders.
     const confirmedAtMs=order.payment_confirmed_at ? new Date(order.payment_confirmed_at).getTime() : Number.NaN;
-    const metaEventTime=Number.isFinite(confirmedAtMs) && confirmedAtMs>0
-      ? Math.floor(confirmedAtMs/1000)
-      : session.created;
+    const confirmedAtSeconds=Number.isFinite(confirmedAtMs) ? Math.floor(confirmedAtMs/1000) : null;
+    // Apply the webhook's timestamp boundary to manual recovery too. A
+    // damaged/imported payment timestamp must not create a far-future Meta
+    // Purchase, and an invalid Stripe fallback must not become a permanent
+    // poison value in the durable delivery ledger.
+    const metaEventTime=validStripeEventCreated(confirmedAtSeconds)
+      ?? validStripeEventCreated(session.created);
+    if (retryMeta && !metaEventTime) {
+      return NextResponse.json({ error: 'The payment timestamp is invalid. Reconcile the order before retrying analytics delivery.' }, { status: 409 });
+    }
     const deliveries = await Promise.allSettled([
       ...(retryFulfilment ? [deliverFulfilmentNotification(supabase, session)] : []),
-      ...(retryMeta ? [deliverMetaPurchase(supabase, session, metaEventTime)] : []),
+      ...(retryMeta ? [deliverMetaPurchase(supabase, session, metaEventTime!)] : []),
     ]);
     const failures = deliveries.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
     if (failures.length) throw new AggregateError(failures.map((failure) => failure.reason), 'One or more order deliveries failed');
