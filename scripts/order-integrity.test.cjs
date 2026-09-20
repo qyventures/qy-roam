@@ -1439,6 +1439,12 @@ test('database prevents direct writes from recording invalid paid-order amounts'
   assert.match(schema, /orders_paid_amount_positive_check check \([\s\S]*?\) not valid;/);
 });
 
+test('paid order commercial identity cannot be rewritten after payment', () => {
+  assert.match(schema, /create or replace function public\.qy_enforce_paid_order_identity_immutability\(\)/);
+  assert.match(schema, /if old\.payment_status = 'paid' and \([\s\S]*new\.stripe_session_id is distinct from old\.stripe_session_id[\s\S]*new\.payment_status is distinct from old\.payment_status[\s\S]*new\.payment_confirmed_at is distinct from old\.payment_confirmed_at[\s\S]*new\.amount_sgd is distinct from old\.amount_sgd[\s\S]*new\.product_type is distinct from old\.product_type[\s\S]*new\.plan_id is distinct from old\.plan_id[\s\S]*new\.plan_name is distinct from old\.plan_name[\s\S]*new\.data_allowance is distinct from old\.data_allowance[\s\S]*new\.country is distinct from old\.country[\s\S]*new\.travel_start is distinct from old\.travel_start[\s\S]*new\.travel_end is distinct from old\.travel_end/);
+  assert.match(schema, /create trigger qy_enforce_paid_order_identity_immutability[\s\S]*before update of stripe_session_id, payment_status, payment_confirmed_at,[\s\S]*amount_sgd, product_type, plan_id, plan_name, data_allowance, country,[\s\S]*travel_start, travel_end on public\.orders/);
+});
+
 test('fulfilled eSIM orders cannot be reopened or cancelled after digital delivery', () => {
   assert.equal(validFulfilmentTransition('esim', 'awaiting_fulfilment', 'fulfilled'), true);
   assert.equal(validFulfilmentTransition('esim', 'awaiting_fulfilment', 'cancelled'), true);

@@ -54,6 +54,47 @@ alter table public.orders add column if not exists dispatched_at timestamptz;
 alter table public.orders add column if not exists returned_at timestamptz;
 alter table public.orders add column if not exists notes text;
 
+-- A paid order is the financial and fulfilment source of truth. Application
+-- paths already preserve its server-priced identity, but service-role repair
+-- scripts and future workers can bypass those paths. Once payment has been
+-- confirmed, do not let an update silently change the Stripe reference,
+-- product/plan, amount, destination or rental period, and never permit the
+-- payment itself to be downgraded. Customer contact and shipping details stay
+-- editable because Stripe or operations may legitimately correct them; the
+-- operational fulfilment fields have their own transition/audit boundaries.
+create or replace function public.qy_enforce_paid_order_identity_immutability()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public
+as $$
+begin
+  if old.payment_status = 'paid' and (
+    new.stripe_session_id is distinct from old.stripe_session_id or
+    new.payment_status is distinct from old.payment_status or
+    new.payment_confirmed_at is distinct from old.payment_confirmed_at or
+    new.amount_sgd is distinct from old.amount_sgd or
+    new.product_type is distinct from old.product_type or
+    new.plan_id is distinct from old.plan_id or
+    new.plan_name is distinct from old.plan_name or
+    new.data_allowance is distinct from old.data_allowance or
+    new.country is distinct from old.country or
+    new.travel_start is distinct from old.travel_start or
+    new.travel_end is distinct from old.travel_end
+  ) then
+    raise exception 'paid order commercial identity is immutable';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists qy_enforce_paid_order_identity_immutability on public.orders;
+create trigger qy_enforce_paid_order_identity_immutability
+before update of stripe_session_id, payment_status, payment_confirmed_at,
+  amount_sgd, product_type, plan_id, plan_name, data_allowance, country,
+  travel_start, travel_end on public.orders
+for each row execute function public.qy_enforce_paid_order_identity_immutability();
+
 -- A digital entitlement is not operationally complete without the exact
 -- package identity staff must provision. Checkout and the protected manual
 -- sales flow both persist these fields from the server catalogue. Keep the
