@@ -2058,6 +2058,19 @@ test('durable Stripe delivery ledgers upgrade every retry and ownership field ad
   }
 });
 
+test('paid-order delivery ledgers cannot be orphaned from their Checkout order', () => {
+  // The webhook persists the order before creating either delivery ledger.
+  // Keep that dependency at the database boundary as well, so a service-role
+  // repair cannot mark email or CAPI delivery for a Checkout Session with no
+  // operational order to fulfil or reconcile. NOT VALID keeps historical
+  // orphaned records available for review while enforcing every new write.
+  assert.match(schema, /alter table public\.fulfilment_notifications add constraint fulfilment_notifications_order_fk\s+foreign key \(stripe_session_id\) references public\.orders\(stripe_session_id\)\s+on delete restrict not valid;/);
+  assert.match(schema, /alter table public\.meta_purchase_deliveries add constraint meta_purchase_deliveries_order_fk\s+foreign key \(stripe_session_id\) references public\.orders\(stripe_session_id\)\s+on delete restrict not valid;/);
+  const persisted = webhookRoute.indexOf('await persistSession(sessionForEvent,event.type,eventCreated)');
+  const delivery = webhookRoute.indexOf('await deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated)');
+  assert.ok(persisted >= 0 && delivery > persisted, 'orders must remain durable before delivery ledgers are created');
+});
+
 test('upgraded Stripe delivery ledgers retain database-enforced retry state machines', () => {
   // Inline CREATE TABLE and ADD COLUMN checks do not repair constraints that
   // are absent from an already-upgraded production table. Require explicit,

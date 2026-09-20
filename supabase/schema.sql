@@ -584,6 +584,17 @@ alter table public.fulfilment_notifications add constraint fulfilment_notificati
 alter table public.fulfilment_notifications drop constraint if exists fulfilment_notifications_sent_at_check;
 alter table public.fulfilment_notifications add constraint fulfilment_notifications_sent_at_check
   check (status <> 'sent' or sent_at is not null) not valid;
+-- A notification is an irreversible side effect of one durable order. The
+-- webhook persists the order before it creates this record, but retain that
+-- relationship in Postgres as well: a repair script or future worker must
+-- not mark an orphaned Checkout Session as emailed when there is no order
+-- for staff to reconcile. NOT VALID preserves visibility of any historical
+-- orphan while requiring every new or changed delivery record to belong to
+-- the authoritative order ledger.
+alter table public.fulfilment_notifications drop constraint if exists fulfilment_notifications_order_fk;
+alter table public.fulfilment_notifications add constraint fulfilment_notifications_order_fk
+  foreign key (stripe_session_id) references public.orders(stripe_session_id)
+  on delete restrict not valid;
 alter table public.fulfilment_notifications enable row level security;
 
 -- Durable Meta CAPI delivery ledger. Stripe retries remain safe when Meta is
@@ -625,6 +636,16 @@ alter table public.meta_purchase_deliveries add constraint meta_purchase_deliver
 alter table public.meta_purchase_deliveries drop constraint if exists meta_purchase_deliveries_sent_at_check;
 alter table public.meta_purchase_deliveries add constraint meta_purchase_deliveries_sent_at_check
   check (status <> 'sent' or sent_at is not null) not valid;
+-- CAPI retries use this row as the durable Purchase-deduplication ledger.
+-- Keep it attached to the same authoritative order boundary as fulfilment
+-- notifications so an orphaned analytics record cannot be settled or retried
+-- independently of the paid order it is meant to represent. As above, the
+-- additive NOT VALID migration leaves legacy records reviewable while
+-- enforcing the relationship for all future writes.
+alter table public.meta_purchase_deliveries drop constraint if exists meta_purchase_deliveries_order_fk;
+alter table public.meta_purchase_deliveries add constraint meta_purchase_deliveries_order_fk
+  foreign key (stripe_session_id) references public.orders(stripe_session_id)
+  on delete restrict not valid;
 alter table public.meta_purchase_deliveries enable row level security;
 
 -- A successful provider hand-off is an irreversible idempotency boundary.
