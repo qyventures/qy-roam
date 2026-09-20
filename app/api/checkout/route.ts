@@ -243,8 +243,16 @@ export async function POST(req: Request) {
           .eq('checkout_request_id',requestId)
           .eq('stripe_session_id',existing.id);
         if(released.error) throw released.error;
-      }else if(!await linkReservationToSession(supabase,requestId,existing.id)){
-        return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
+      }else{
+        if(!await linkReservationToSession(supabase,requestId,existing.id)){
+          return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
+        }
+        // Stripe has accepted payment, but customer confirmation is only safe
+        // once the signed webhook has made the paid booking durable. Retain
+        // the exact session-linked reservation while that hand-off catches up
+        // and ask the idempotent browser retry to poll rather than presenting
+        // a successful order that operations cannot yet see or fulfil.
+        return NextResponse.json({error:'Your payment is confirmed and your order is still being recorded. Please wait a moment and try again.',paymentPending:true},{status:409,headers:{'Cache-Control':'no-store','Retry-After':'3'}});
       }
       return NextResponse.json({completed:true,sessionId:existing.id},{headers:{'Cache-Control':'no-store'}});
     }
@@ -385,8 +393,15 @@ export async function POST(req: Request) {
         .eq('checkout_request_id',requestId)
         .eq('stripe_session_id',currentSession.id);
       if(released.error) throw released.error;
-    }else if(!await linkReservationToSession(supabase,requestId,currentSession.id)){
-      return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
+    }else{
+      if(!await linkReservationToSession(supabase,requestId,currentSession.id)){
+        return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
+      }
+      // Do not let an idempotent Stripe replay outrun webhook persistence.
+      // The linked hold continues protecting physical capacity, while the
+      // retryable response prevents an undurable booking from being shown as
+      // completed to the traveller.
+      return NextResponse.json({error:'Your payment is confirmed and your order is still being recorded. Please wait a moment and try again.',paymentPending:true},{status:409,headers:{'Cache-Control':'no-store','Retry-After':'3'}});
     }
     return NextResponse.json({completed:true,sessionId:currentSession.id},{headers:{'Cache-Control':'no-store'}});
   }

@@ -1615,6 +1615,29 @@ test('Pocket WiFi create recovery uses fresh Stripe state and confirms provenanc
   assert.doesNotMatch(wifiCheckoutRoute.slice(currentRead), /\{url:session\.url\}/);
 });
 
+test('Pocket WiFi paid checkout recovery waits for the durable paid order ledger', () => {
+  const replayStart = wifiCheckoutRoute.indexOf('if(holdState.existingUrl&&holdState.existingSessionId)');
+  const replayEnd = wifiCheckoutRoute.indexOf('const expiresAt=', replayStart);
+  const replayBranch = wifiCheckoutRoute.slice(replayStart, replayEnd);
+  const createStart = wifiCheckoutRoute.indexOf("if(currentSession.status==='complete'&&currentSession.payment_status==='paid')", replayEnd);
+  const createEnd = wifiCheckoutRoute.indexOf("if(currentSession.status==='expired')", createStart);
+  const createBranch = wifiCheckoutRoute.slice(createStart, createEnd);
+
+  for (const [name, branch, sessionId] of [
+    ['open-session replay', replayBranch, 'existing.id'],
+    ['idempotent create replay', createBranch, 'currentSession.id'],
+  ]) {
+    const orderLookup = branch.indexOf(`.eq('stripe_session_id',${sessionId})`);
+    const durableGuard = branch.indexOf("order.data?.payment_status==='paid'");
+    const pendingResponse = branch.indexOf('paymentPending:true');
+    const completedResponse = branch.indexOf('completed:true');
+    assert.ok(orderLookup > -1 && durableGuard > orderLookup && pendingResponse > durableGuard && completedResponse > pendingResponse,
+      `${name} must report completion only after the durable paid order exists`);
+    assert.match(branch, /'Retry-After':'3'/);
+    assert.match(branch, new RegExp(`linkReservationToSession\\(supabase,requestId,${sessionId.replace('.', '\\.')}\\)`));
+  }
+});
+
 test('Pocket WiFi open-session retries honor the freshly retrieved Stripe state', () => {
   // Listing and retrieving are separate Stripe calls. A traveller can pay or
   // the session can expire between them, so the stale listed URL must never be
