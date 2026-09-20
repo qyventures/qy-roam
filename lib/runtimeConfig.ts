@@ -19,6 +19,14 @@ export function hasRequiredAdminCredentials() {
     password &&
     password.length >= 16 &&
     password.length <= 1_024 &&
+    // Middleware compares the Basic Auth credential after `atob`, whose
+    // result is a byte string. Keep the configured password in the portable
+    // printable-ASCII subset so a deployment cannot report admin readiness
+    // while browsers or command-line clients encode a Unicode password as
+    // UTF-8 bytes that can never equal the JavaScript environment string.
+    // (Control characters were already rejected below; this also excludes
+    // non-ASCII whitespace and lookalike punctuation.)
+    /^[\x20-\x7e]+$/.test(password) &&
     !/[\u0000-\u001f\u007f]/.test(password) &&
     /[a-z]/.test(password) &&
     /[A-Z]/.test(password) &&

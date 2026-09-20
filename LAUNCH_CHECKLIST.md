@@ -15,7 +15,7 @@ Required before launch:
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `ADMIN_USER`
-- `ADMIN_PASSWORD` — strong unique password
+- `ADMIN_PASSWORD` — strong unique 16+ character printable-ASCII password
 - `NEXT_PUBLIC_SITE_URL=https://qyroam.com`
 - `POCKET_WIFI_INVENTORY` — actual units available for sale (required; no production fallback)
 - `MIN_DELIVERY_LEAD_DAYS=2` unless operations approves another value (required; no production fallback)

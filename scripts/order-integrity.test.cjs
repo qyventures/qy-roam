@@ -179,6 +179,8 @@ test('admin authentication shares the health release boundary and rejects unsafe
     assert.equal(hasRequiredAdminCredentials(), false);
     process.env.ADMIN_PASSWORD = 'A-strong-admin-password-2026!\n';
     assert.equal(hasRequiredAdminCredentials(), false);
+    process.env.ADMIN_PASSWORD = 'A-strong-admin-password-2026!\u{1F512}';
+    assert.equal(hasRequiredAdminCredentials(), false);
     process.env.ADMIN_PASSWORD = 'A-strong-admin-password-2026!';
     process.env.ADMIN_USER = 'ops admin';
     assert.equal(hasRequiredAdminCredentials(), false);
