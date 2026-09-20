@@ -1147,6 +1147,17 @@ test('eSIM idempotent recovery uses a fresh Stripe session state before returnin
   assert.doesNotMatch(esimCheckoutRoute, /if \(session\.status === 'complete' && session\.payment_status === 'paid'\)/);
 });
 
+test('eSIM paid checkout recovery waits for the durable paid order ledger', () => {
+  const paidBranch = esimCheckoutRoute.indexOf("if (currentSession.status === 'complete' && currentSession.payment_status === 'paid')");
+  const completedResponse = esimCheckoutRoute.indexOf('{ completed: true, sessionId: currentSession.id }', paidBranch);
+  const orderLookup = esimCheckoutRoute.indexOf(".eq('stripe_session_id', currentSession.id)", paidBranch);
+  const paidOrderGuard = esimCheckoutRoute.indexOf("order.data?.payment_status !== 'paid'", paidBranch);
+  assert.ok(paidBranch > -1 && orderLookup > paidBranch && paidOrderGuard > orderLookup && completedResponse > paidOrderGuard,
+    'eSIM recovery must verify the durable paid order before reporting completion');
+  assert.match(esimCheckoutRoute.slice(paidBranch, completedResponse), /paymentPending: true/);
+  assert.match(esimCheckoutRoute.slice(paidBranch, completedResponse), /'Retry-After': '3'/);
+});
+
 test('checkout recovery binds every fresh Stripe response to the requested Session id', () => {
   // A fresh retrieve supplies status and customer data, but only the requested
   // Session may confirm payment, mutate a reservation, or return a payment URL.

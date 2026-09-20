@@ -11,6 +11,7 @@ import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { metaAttributionFromRequest } from '@/lib/metaAttribution';
 import { checkoutAttemptExpiresAt } from '@/lib/checkoutExpiry';
 import { checkoutSiteOrigin } from '@/lib/siteOrigin';
+import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 
 export const runtime = 'nodejs';
 
@@ -242,9 +243,26 @@ export async function POST(req: Request) {
     }
 
     // A browser can retry after Stripe accepted payment but before it received
-    // the original response. The durable idempotency key must lead to the
-    // existing order confirmation, never a second attempted purchase.
+    // the original response. Stripe payment alone is not yet a recoverable
+    // QY Roam order: require the signed webhook's paid snapshot to exist
+    // before directing the customer to confirmation. This keeps an
+    // idempotent retry from outrunning webhook persistence (or hiding a
+    // webhook failure) while still preventing a second payment attempt.
     if (currentSession.status === 'complete' && currentSession.payment_status === 'paid') {
+      const supabase = getSupabaseAdmin();
+      if (!supabase) throw new Error('Order persistence unavailable');
+      const order = await supabase
+        .from('orders')
+        .select('payment_status')
+        .eq('stripe_session_id', currentSession.id)
+        .maybeSingle();
+      if (order.error) throw order.error;
+      if (order.data?.payment_status !== 'paid') {
+        return NextResponse.json({ error: 'Your payment is confirmed and your order is still being recorded. Please wait a moment and try again.', paymentPending: true }, {
+          status: 409,
+          headers: { 'Cache-Control': 'no-store', 'Retry-After': '3' },
+        });
+      }
       return NextResponse.json({ completed: true, sessionId: currentSession.id }, { headers: { 'Cache-Control': 'no-store' } });
     }
     // Stripe can return the prior response for this idempotency key after its
