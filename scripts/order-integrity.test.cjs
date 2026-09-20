@@ -1238,13 +1238,23 @@ test('production checkout and recovery reject test-mode Stripe server credential
     process.env.NODE_ENV = 'production';
     process.env.STRIPE_SECRET_KEY = 'sk_test_not_for_a_production_storefront';
     assert.equal(hasRequiredStripeCheckoutConfig(), false);
-    process.env.STRIPE_SECRET_KEY = 'sk_live_production_checkout_key';
+    process.env.STRIPE_SECRET_KEY = 'sk_live_productioncheckoutkey';
     assert.equal(hasRequiredStripeCheckoutConfig(), true);
-    process.env.STRIPE_SECRET_KEY = 'rk_live_production_checkout_key';
+    process.env.STRIPE_SECRET_KEY = 'rk_live_productioncheckoutkey';
     assert.equal(hasRequiredStripeCheckoutConfig(), true);
+    process.env.STRIPE_SECRET_KEY = 'sk_live_';
+    assert.equal(hasRequiredStripeCheckoutConfig(), false);
+    process.env.STRIPE_SECRET_KEY = 'sk_live_short';
+    assert.equal(hasRequiredStripeCheckoutConfig(), false);
+    process.env.STRIPE_SECRET_KEY = `sk_live_${'a'.repeat(300)}`;
+    assert.equal(hasRequiredStripeCheckoutConfig(), false);
+    process.env.STRIPE_SECRET_KEY = 'sk_live_validcredential\nsmuggled';
+    assert.equal(hasRequiredStripeCheckoutConfig(), false);
     process.env.NODE_ENV = 'test';
-    process.env.STRIPE_SECRET_KEY = 'sk_test_local_test_key';
+    process.env.STRIPE_SECRET_KEY = 'sk_test_localtestcredential';
     assert.equal(hasRequiredStripeCheckoutConfig(), true);
+    process.env.STRIPE_SECRET_KEY = 'not_a_stripe_key';
+    assert.equal(hasRequiredStripeCheckoutConfig(), false);
   } finally {
     if (previousKey === undefined) delete process.env.STRIPE_SECRET_KEY;
     else process.env.STRIPE_SECRET_KEY = previousKey;
@@ -1260,7 +1270,7 @@ test('production checkout and recovery reject test-mode Stripe server credential
   assert.match(availabilityRoute, /!hasRequiredStripeCheckoutConfig\(\)/);
   assert.match(healthRoute, /stripe: hasRequiredStripeCheckoutConfig\(\)/);
   assert.match(productionReadiness, /export \{ hasRequiredStripeCheckoutConfig \} from '@\/lib\/stripeCheckoutConfig';/);
-  assert.match(stripeCheckoutConfig, /key\.startsWith\('sk_live_'\).*key\.startsWith\('rk_live_'\)/);
+  assert.match(stripeCheckoutConfig, /\^\(\?:sk\|rk\)_\(live\|test\)_\[A-Za-z0-9\]\{16,/);
 });
 
 test('Stripe API consumers canonicalize the same formatted credential accepted by readiness', () => {
@@ -1271,7 +1281,7 @@ test('Stripe API consumers canonicalize the same formatted credential accepted b
   for (const source of [esimCheckoutRoute, wifiCheckoutRoute, availabilityRoute, webhookRoute, adminOrderRoute, bookingPage, successPage]) {
     assert.match(source, /process\.env\.STRIPE_SECRET_KEY\?\.trim\(\)/);
   }
-  assert.match(launchPage, /const key=value\?\.trim\(\)/);
+  assert.match(launchPage, /const stripe=hasRequiredStripeCheckoutConfig\(\)/);
 });
 
 test('Checkout Session creation and recovery enforce the configured Stripe credential mode before exposing payment', () => {
@@ -1283,18 +1293,18 @@ test('Checkout Session creation and recovery enforce the configured Stripe crede
 });
 
 test('signed Stripe webhooks cannot cross the configured test/live boundary', () => {
-  assert.equal(stripeEventMatchesConfiguredMode('sk_live_secret', true), true);
-  assert.equal(stripeEventMatchesConfiguredMode('rk_live_secret', true), true);
-  assert.equal(stripeEventMatchesConfiguredMode('sk_live_secret', false), false);
-  assert.equal(stripeEventMatchesConfiguredMode('rk_live_secret', false), false);
-  assert.equal(stripeEventMatchesConfiguredMode('sk_test_secret', false), true);
-  assert.equal(stripeEventMatchesConfiguredMode('rk_test_secret', false), true);
-  assert.equal(stripeEventMatchesConfiguredMode('sk_test_secret', true), false);
+  assert.equal(stripeEventMatchesConfiguredMode('sk_live_abcdefghijklmnop', true), true);
+  assert.equal(stripeEventMatchesConfiguredMode('rk_live_abcdefghijklmnop', true), true);
+  assert.equal(stripeEventMatchesConfiguredMode('sk_live_abcdefghijklmnop', false), false);
+  assert.equal(stripeEventMatchesConfiguredMode('rk_live_abcdefghijklmnop', false), false);
+  assert.equal(stripeEventMatchesConfiguredMode('sk_test_abcdefghijklmnop', false), true);
+  assert.equal(stripeEventMatchesConfiguredMode('rk_test_abcdefghijklmnop', false), true);
+  assert.equal(stripeEventMatchesConfiguredMode('sk_test_abcdefghijklmnop', true), false);
   // Runtime webhook/API data is deserialised. A truthy value must not be
   // mistaken for the boolean `true` required by a live Stripe credential.
-  assert.equal(stripeEventMatchesConfiguredMode('sk_live_secret', 'true'), false);
-  assert.equal(stripeEventMatchesConfiguredMode('sk_live_secret', 1), false);
-  assert.equal(stripeEventMatchesConfiguredMode('sk_test_secret', null), false);
+  assert.equal(stripeEventMatchesConfiguredMode('sk_live_abcdefghijklmnop', 'true'), false);
+  assert.equal(stripeEventMatchesConfiguredMode('sk_live_abcdefghijklmnop', 1), false);
+  assert.equal(stripeEventMatchesConfiguredMode('sk_test_abcdefghijklmnop', null), false);
   assert.equal(stripeEventMatchesConfiguredMode('unknown_secret', false), false);
   assert.match(stripeCheckoutConfig, /if \(typeof livemode !== 'boolean'\) return false/);
   assert.match(webhookRoute, /stripeEventMatchesConfiguredMode\(key,event\.livemode\)/);
@@ -2191,7 +2201,8 @@ test('launch control reports the same checkout prerequisites that protect real o
   // a green storefront state based only on a Stripe key and partial schema
   // probe while either public checkout route would reject a customer.
   assert.match(launchPage, /function isProductionSiteUrl/);
-  assert.match(launchPage, /function hasLiveStripeSecret/);
+  assert.doesNotMatch(launchPage, /function hasLiveStripeSecret/);
+  assert.match(launchPage, /hasRequiredStripeCheckoutConfig/);
   assert.match(launchPage, /hasRequiredStripeWebhookConfig\(\)/);
   assert.match(launchPage, /hasOrderIntegritySigningConfig/);
   assert.match(launchPage, /hasRequiredEsimOrderSchema\(\)/);

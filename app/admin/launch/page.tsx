@@ -1,5 +1,5 @@
 import { hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
-import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig, hasRequiredOperationsSchema, hasRequiredPaymentSchema, hasRequiredPocketWifiFulfilmentSchema, hasRequiredStripeWebhookConfig } from '@/lib/productionReadiness';
+import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig, hasRequiredOperationsSchema, hasRequiredPaymentSchema, hasRequiredPocketWifiFulfilmentSchema, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '@/lib/productionReadiness';
 import { operationalConfig } from '@/lib/operationalConfig';
 import { hasOrderIntegritySigningConfig } from '@/lib/orderProvenance';
 
@@ -11,14 +11,13 @@ function Row({label,ok,note}:{label:string,ok:boolean,note:string}){return <div 
 function isProductionSiteUrl(value?:string){
  try{const url=new URL(value||'');return url.protocol==='https:'&&['qyroam.com','www.qyroam.com'].includes(url.hostname);}catch{return false;}
 }
-// Match checkout readiness: surrounding deployment whitespace is harmless,
-// but must not make this operator signal disagree with the runnable routes.
-function hasLiveStripeSecret(value?:string){const key=value?.trim();return Boolean(key?.startsWith('sk_live_')||key?.startsWith('rk_live_'));}
-
 export default async function LaunchPage(){
  const [esimOrderDbOk, paymentDbOk, pocketWifiFulfilmentDbOk, operationsDbOk]=await Promise.all([hasRequiredEsimOrderSchema(),hasRequiredPaymentSchema(),hasRequiredPocketWifiFulfilmentSchema(),hasRequiredOperationsSchema()]);
  const config=operationalConfig();
- const stripe=hasLiveStripeSecret(process.env.STRIPE_SECRET_KEY);
+ // Use the checkout route's canonical credential boundary. A duplicated
+ // prefix-only check can otherwise tell operators the store is ready while
+ // the customer-facing route correctly rejects a malformed credential.
+ const stripe=hasRequiredStripeCheckoutConfig();
  const webhook=hasRequiredStripeWebhookConfig();
  const smtp=hasRequiredFulfilmentEmailConfig();
  // Paid acquisition is only ready when the same validated Meta destination
