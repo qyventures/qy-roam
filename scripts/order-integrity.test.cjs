@@ -975,6 +975,19 @@ test('checkout never exposes payment when signed Stripe webhook processing is no
   assert.match(productionReadiness, /\^whsec_\[A-Za-z0-9\]\+\$/);
 });
 
+test('Stripe webhook rejects malformed signing-secret configuration as unavailable before signature parsing', () => {
+  // Checkout and health already use this strict boundary. The receiving
+  // endpoint must match it so a malformed deployment secret produces a
+  // retryable configuration failure, not an indistinguishable 400 response
+  // for every genuine Stripe delivery.
+  assert.match(webhookRoute, /hasRequiredStripeWebhookConfig/);
+  assert.match(webhookRoute, /!hasRequiredStripeWebhookConfig\(\)/);
+  assert.ok(
+    webhookRoute.indexOf('!hasRequiredStripeWebhookConfig()') < webhookRoute.indexOf('stripe.webhooks.constructEvent'),
+    'webhook configuration must be checked before signature parsing',
+  );
+});
+
 test('production checkout and recovery reject test-mode Stripe server credentials', () => {
   const previousKey = process.env.STRIPE_SECRET_KEY;
   const previousNodeEnv = process.env.NODE_ENV;
