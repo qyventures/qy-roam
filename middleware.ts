@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAdminCredentials } from './lib/runtimeConfig';
+import { getAdminCredentials, hasRequiredAdminCredentials } from './lib/runtimeConfig';
 
 // Reverse proxies normally impose a header limit, but authentication is a
 // public edge of the operations surface and must retain a bounded CPU/memory
@@ -47,7 +47,12 @@ export function middleware(req: NextRequest) {
   }
 
   const { user, password: pass } = getAdminCredentials();
-  if (!user || !pass) return new NextResponse('Admin access is not configured.', { status: 503 });
+  if (!hasRequiredAdminCredentials() || !user || !pass) {
+    return new NextResponse('Admin access is not configured securely.', {
+      status: 503,
+      headers: { 'Cache-Control': 'no-store' },
+    });
+  }
 
   // Check browser request provenance before credentials so a cross-site page
   // cannot use an authenticated admin session to create orders, move stock,

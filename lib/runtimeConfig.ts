@@ -5,6 +5,29 @@ export function getAdminCredentials() {
   };
 }
 
+// The admin surface can move inventory, change fulfilment state, and replay
+// paid-order deliveries. Keep its runtime admission rule identical to the
+// authenticated health signal: otherwise a deployment with a weak password
+// can be reported as not release-ready while still exposing a usable Basic
+// Auth prompt. These bounds also match the middleware's bounded Basic Auth
+// decoder, so malformed environment values cannot create an unexpectedly
+// broad credential comparison boundary.
+export function hasRequiredAdminCredentials() {
+  const { user, password } = getAdminCredentials();
+  const safeUser = Boolean(user && user.length <= 128 && /^[A-Za-z0-9._@-]+$/.test(user));
+  const safePassword = Boolean(
+    password &&
+    password.length >= 16 &&
+    password.length <= 1_024 &&
+    !/[\u0000-\u001f\u007f]/.test(password) &&
+    /[a-z]/.test(password) &&
+    /[A-Z]/.test(password) &&
+    /\d/.test(password) &&
+    /[^A-Za-z0-9]/.test(password),
+  );
+  return safeUser && safePassword;
+}
+
 export function getMetaCapiToken() {
   return process.env.META_CAPI_ACCESS_TOKEN || process.env.META_CAPI_TOKEN;
 }

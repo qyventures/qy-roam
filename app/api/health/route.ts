@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getAdminCredentials, hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
+import { hasRequiredAdminCredentials, hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
 import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig, hasRequiredOperationsSchema, hasRequiredPaymentSchema, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '@/lib/productionReadiness';
 import { operationalConfig } from '@/lib/operationalConfig';
 import { isProductionQyRoamOrigin } from '@/lib/siteOrigin';
@@ -11,11 +11,6 @@ export const runtime = 'nodejs';
 // request payload. Bound the comparison loop as a defence in depth measure
 // for deployments that do not enforce a proxy header limit.
 const MAX_HEALTH_AUTHORIZATION_HEADER_LENGTH = 1_024;
-
-function isStrongAdminPassword(value?: string) {
-  if (!value || value.length < 16) return false;
-  return /[a-z]/.test(value) && /[A-Z]/.test(value) && /\d/.test(value) && /[^A-Za-z0-9]/.test(value);
-}
 
 function isOrderIntegrityConfigured() {
   const current = process.env.ORDER_INTEGRITY_SECRET;
@@ -55,7 +50,6 @@ export async function GET(req: Request) {
     return NextResponse.json({ ok: true, service: 'qy-roam' }, { status: 200, headers });
   }
 
-  const { user: adminUser, password: adminPassword } = getAdminCredentials();
   const config = operationalConfig();
   // Checkout has product-specific post-payment contracts. In particular, an
   // eSIM requires its non-secret digital-delivery audit field, which is not a
@@ -76,7 +70,7 @@ export async function GET(req: Request) {
     esimOrderSchema,
     paymentSchema,
     operationsSchema,
-    admin: Boolean(adminUser && isStrongAdminPassword(adminPassword)),
+    admin: hasRequiredAdminCredentials(),
     inventory: Boolean(config && config.pocketWifiInventory > 0),
     deliveryLeadDays: Boolean(config),
     courierFee: Boolean(config),

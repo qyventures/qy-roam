@@ -37,7 +37,7 @@ const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = re
 const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
 const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_EXPIRY_CREATION_MARGIN_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, checkoutAttemptExpiresAt, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
 const { checkoutSiteOrigin, isProductionQyRoamOrigin, metaPurchaseEventSourceUrl } = require('../lib/siteOrigin.ts');
-const { hasRequiredMetaCapiPurchaseConfig } = require('../lib/runtimeConfig.ts');
+const { hasRequiredAdminCredentials, hasRequiredMetaCapiPurchaseConfig } = require('../lib/runtimeConfig.ts');
 const { metaMeasurementAllowed, setMetaMeasurementConsent } = require('../lib/metaClient.ts');
 const { digitalDeliveryReferenceIssue, isSafeDigitalDeliveryReference } = require('../lib/digitalDeliveryReference.ts');
 const { SUPABASE_REQUEST_TIMEOUT_MS, fetchSupabaseWithTimeout } = require('../lib/supabaseAdmin.ts');
@@ -155,6 +155,43 @@ test('optional Meta consent storage cannot block checkout in privacy-restricted 
     if (previousWindow === undefined) delete global.window;
     else global.window = previousWindow;
   }
+});
+
+test('admin authentication shares the health release boundary and rejects unsafe credentials', () => {
+  const original = {
+    user: process.env.ADMIN_USER,
+    password: process.env.ADMIN_PASSWORD,
+    basicUser: process.env.ADMIN_BASIC_USER,
+    basicPassword: process.env.ADMIN_BASIC_PASSWORD,
+  };
+  try {
+    process.env.ADMIN_BASIC_USER = '';
+    process.env.ADMIN_BASIC_PASSWORD = '';
+    process.env.ADMIN_USER = 'ops.admin';
+    process.env.ADMIN_PASSWORD = 'A-strong-admin-password-2026!';
+    assert.equal(hasRequiredAdminCredentials(), true);
+
+    process.env.ADMIN_PASSWORD = 'short1!A';
+    assert.equal(hasRequiredAdminCredentials(), false);
+    process.env.ADMIN_PASSWORD = 'A-strong-admin-password-2026!\n';
+    assert.equal(hasRequiredAdminCredentials(), false);
+    process.env.ADMIN_PASSWORD = 'A-strong-admin-password-2026!';
+    process.env.ADMIN_USER = 'ops admin';
+    assert.equal(hasRequiredAdminCredentials(), false);
+  } finally {
+    for (const [name, value] of Object.entries({
+      ADMIN_USER: original.user,
+      ADMIN_PASSWORD: original.password,
+      ADMIN_BASIC_USER: original.basicUser,
+      ADMIN_BASIC_PASSWORD: original.basicPassword,
+    })) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+  assert.match(runtimeConfig, /export function hasRequiredAdminCredentials\(\)/);
+  assert.match(middleware, /hasRequiredAdminCredentials\(\)/);
+  assert.match(healthRoute, /admin: hasRequiredAdminCredentials\(\)/);
 });
 
 test('SMTP relay success is bound to the exact fulfilment message identity', () => {
