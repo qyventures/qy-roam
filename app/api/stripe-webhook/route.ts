@@ -19,6 +19,7 @@ import { safeHttpsDeliveryEndpoint } from '@/lib/deliveryEndpoint';
 import { metaPurchaseEventSourceUrl } from '@/lib/siteOrigin';
 import { fulfilmentRelayAcknowledged } from '@/lib/deliveryAcknowledgement';
 import { safeProviderDeliveryFailure, safeWebhookProcessingFailure } from '@/lib/deliveryFailure';
+import { nextRetryAttempt } from '@/lib/retryAttempt';
 
 export const runtime = 'nodejs';
 
@@ -443,7 +444,7 @@ async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string
     // A process can die after inserting the event but before completing it. Reclaim
     // only the exact stale version so concurrent Stripe retries cannot both proceed.
     const reclaimed=await supabase.from('stripe_events')
-      .update({event_type:type,stripe_session_id:sessionId,processing_started_at:processingStartedAt,last_error:null,attempts:Number(existing.data?.attempts||1)+1})
+      .update({event_type:type,stripe_session_id:sessionId,processing_started_at:processingStartedAt,last_error:null,attempts:nextRetryAttempt(existing.data?.attempts,1)})
       .eq('event_id',id)
       .is('processed_at',null)
       // PostgREST equality does not match SQL NULL. Legacy/migrated rows can
@@ -550,7 +551,7 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
   // row with no timestamp is deliberately considered stale above. Preserve
   // that recovery path by using the matching null predicate in the CAS itself;
   // otherwise such a paid-order delivery would remain permanently unclaimable.
-  const attempt=await supabase.from('fulfilment_notifications').update({status:'sending',attempts:Number(notification.attempts||0)+1,last_attempt_at:now,last_error:null,updated_at:now}).eq('stripe_session_id',session.id).eq('status',notification.status)[notification.updated_at?'eq':'is']('updated_at',notification.updated_at||null).select('stripe_session_id');
+  const attempt=await supabase.from('fulfilment_notifications').update({status:'sending',attempts:nextRetryAttempt(notification.attempts,0),last_attempt_at:now,last_error:null,updated_at:now}).eq('stripe_session_id',session.id).eq('status',notification.status)[notification.updated_at?'eq':'is']('updated_at',notification.updated_at||null).select('stripe_session_id');
   if(attempt.error) throw attempt.error;
   if(attempt.data?.length!==1) throw new Error('Fulfilment notification was claimed by another delivery attempt');
   try{
@@ -605,7 +606,7 @@ export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof
   // As with the fulfilment ledger, reclaiming a stale legacy NULL lease must
   // use `IS NULL`, not PostgREST equality with null. The predicate remains a
   // compare-and-swap, so this recovery does not allow concurrent senders.
-  const attempt=await supabase.from('meta_purchase_deliveries').update({status:'sending',event_time:metaEventTime,attempts:Number(delivery.attempts||0)+1,last_attempt_at:now,last_error:null,updated_at:now}).eq('stripe_session_id',session.id).eq('status',delivery.status)[delivery.updated_at?'eq':'is']('updated_at',delivery.updated_at||null).select('stripe_session_id,event_time');
+  const attempt=await supabase.from('meta_purchase_deliveries').update({status:'sending',event_time:metaEventTime,attempts:nextRetryAttempt(delivery.attempts,0),last_attempt_at:now,last_error:null,updated_at:now}).eq('stripe_session_id',session.id).eq('status',delivery.status)[delivery.updated_at?'eq':'is']('updated_at',delivery.updated_at||null).select('stripe_session_id,event_time');
   if(attempt.error) throw attempt.error;
   if(attempt.data?.length!==1) throw new Error('Meta purchase delivery was claimed by another attempt');
   try{

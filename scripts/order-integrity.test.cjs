@@ -45,6 +45,7 @@ const { checkoutAttempt, clearCheckoutAttempt, CHECKOUT_ATTEMPT_MAX_AGE_MS } = r
 const { safeHttpsDeliveryEndpoint } = require('../lib/deliveryEndpoint.ts');
 const { fulfilmentRelayAcknowledged } = require('../lib/deliveryAcknowledgement.ts');
 const { safeProviderDeliveryFailure, safeWebhookProcessingFailure } = require('../lib/deliveryFailure.ts');
+const { nextRetryAttempt } = require('../lib/retryAttempt.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -120,6 +121,20 @@ test('checkout attempt identity survives reloads without becoming permanently st
     if (previousCrypto === undefined) delete global.crypto;
     else global.crypto = previousCrypto;
   }
+});
+
+test('durable retry counters recover malformed inherited values without exceeding PostgreSQL integer storage', () => {
+  assert.equal(nextRetryAttempt(1, 1), 2);
+  assert.equal(nextRetryAttempt('2', 1), 3);
+  assert.equal(nextRetryAttempt(null, 1), 1);
+  assert.equal(nextRetryAttempt(-1, 0), 0);
+  assert.equal(nextRetryAttempt(Number.NaN, 0), 0);
+  assert.equal(nextRetryAttempt(2_147_483_646, 0), 2_147_483_647);
+  assert.equal(nextRetryAttempt(2_147_483_647, 0), 2_147_483_647);
+  assert.throws(() => nextRetryAttempt(0, -1), /Invalid retry attempt baseline/);
+  assert.match(webhookRoute, /attempts:nextRetryAttempt\(existing\.data\?\.attempts,1\)/);
+  assert.match(webhookRoute, /attempts:nextRetryAttempt\(notification\.attempts,0\)/);
+  assert.match(webhookRoute, /attempts:nextRetryAttempt\(delivery\.attempts,0\)/);
 });
 
 test('optional Meta consent storage cannot block checkout in privacy-restricted browsers', () => {
