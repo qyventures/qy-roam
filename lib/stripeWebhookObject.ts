@@ -10,6 +10,23 @@ function plainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+// `constructEvent` authenticates the JSON bytes, but Stripe's SDK types do
+// not validate an event deserialised from those bytes at runtime. Check the
+// envelope before routing on its mode/type or reading its payload. This keeps
+// an unexpected API-version shape out of the idempotency ledger and prevents
+// an untyped `livemode` value from becoming a payment-environment authority.
+export function stripeWebhookEventEnvelope(value: unknown): Stripe.Event | null {
+  if (!plainRecord(value) ||
+    typeof value.id !== 'string' ||
+    typeof value.type !== 'string' ||
+    typeof value.livemode !== 'boolean' ||
+    !Number.isSafeInteger(value.created) ||
+    !plainRecord(value.data)) {
+    return null;
+  }
+  return value as unknown as Stripe.Event;
+}
+
 export function stripeWebhookCheckoutSession(value: unknown): Stripe.Checkout.Session | null {
   if (!plainRecord(value) || value.object !== 'checkout.session' || typeof value.id !== 'string' || typeof value.livemode !== 'boolean') {
     return null;

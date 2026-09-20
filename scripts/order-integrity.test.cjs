@@ -31,7 +31,7 @@ const { allowedFulfilmentStatuses, fulfilmentNotificationActionable, validFulfil
 const { operationalConfig } = require('../lib/operationalConfig.ts');
 const { validStripeCheckoutSessionId } = require('../lib/stripeSessionId.ts');
 const { validStripeEventCreated, validStripePaymentEventCreated, STRIPE_EVENT_CREATED_MIN_SECONDS, STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS } = require('../lib/stripeEventCreated.ts');
-const { hasQyRoamWebhookSource, stripeWebhookCheckoutSession } = require('../lib/stripeWebhookObject.ts');
+const { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookEventEnvelope } = require('../lib/stripeWebhookObject.ts');
 const { isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError, InvalidRequestBodyLimitError } = require('../lib/requestBody.ts');
 const { checkoutClientKey, createCheckoutAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = require('../lib/stripeCheckoutConfig.ts');
@@ -235,6 +235,23 @@ test('webhook Checkout Session objects are structurally bounded before source me
   assert.match(webhookRoute, /const eventSession=stripeWebhookCheckoutSession\(event\.data\?\.object\);/);
   assert.match(webhookRoute, /if\(!hasQyRoamWebhookSource\(eventSession\.metadata\)\)/);
   assert.match(webhookRoute, /stripe_webhook_invalid_checkout_session_object/);
+});
+
+test('webhook event envelopes are structurally validated before payment routing', () => {
+  const event = {
+    id: 'evt_test_webhook_envelope',
+    type: 'checkout.session.completed',
+    livemode: false,
+    created: 1_700_000_000,
+    data: { object: { object: 'checkout.session' } },
+  };
+  assert.equal(stripeWebhookEventEnvelope(event), event);
+  assert.equal(stripeWebhookEventEnvelope({ ...event, livemode: 'false' }), null);
+  assert.equal(stripeWebhookEventEnvelope({ ...event, created: 1.5 }), null);
+  assert.equal(stripeWebhookEventEnvelope({ ...event, data: null }), null);
+  assert.equal(stripeWebhookEventEnvelope(null), null);
+  assert.match(webhookRoute, /const webhookEvent=stripeWebhookEventEnvelope\(event\);/);
+  assert.match(webhookRoute, /stripe_webhook_invalid_event_envelope/);
 });
 
 test('Stripe webhook failure logging does not print raw dependency errors', () => {

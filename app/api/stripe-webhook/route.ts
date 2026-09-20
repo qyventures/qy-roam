@@ -20,7 +20,7 @@ import { metaPurchaseEventSourceUrl } from '@/lib/siteOrigin';
 import { fulfilmentRelayAcknowledged } from '@/lib/deliveryAcknowledgement';
 import { safeProviderDeliveryFailure, safeWebhookProcessingFailure } from '@/lib/deliveryFailure';
 import { nextRetryAttempt } from '@/lib/retryAttempt';
-import { hasQyRoamWebhookSource, stripeWebhookCheckoutSession } from '@/lib/stripeWebhookObject';
+import { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookEventEnvelope } from '@/lib/stripeWebhookObject';
 
 export const runtime = 'nodejs';
 
@@ -668,6 +668,12 @@ export async function POST(req:Request){
   const stripeSignature=validStripeSignatureHeader(req.headers.get('stripe-signature'));
   if(!stripeSignature) return NextResponse.json({error:'Invalid signature'},{status:400});
   try{event=stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret);}catch{return NextResponse.json({error:'Invalid signature'},{status:400});}
+  const webhookEvent=stripeWebhookEventEnvelope(event);
+  if(!webhookEvent) {
+    console.error('stripe_webhook_invalid_event_envelope');
+    return NextResponse.json({error:'Invalid Stripe event payload'},{status:400});
+  }
+  event=webhookEvent;
   // A valid signature authenticates bytes, not the runtime shape supplied by
   // an SDK/API-version edge case. Validate the event identity before using it
   // in logs or as the primary key of the durable retry ledger. This mirrors
