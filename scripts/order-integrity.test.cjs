@@ -2872,6 +2872,8 @@ test('admin and authenticated health checks bound credential inputs before compa
   assert.match(middleware, /auth\.length <= MAX_BASIC_AUTH_HEADER_LENGTH/);
   assert.match(middleware, /decoded\.length <= MAX_BASIC_AUTH_DECODED_LENGTH/);
   assert.match(healthRoute, /MAX_HEALTH_AUTHORIZATION_HEADER_LENGTH = 1_024/);
+  assert.match(healthRoute, /MAX_HEALTH_CHECK_TOKEN_LENGTH = 1_024/);
+  assert.match(healthRoute, /expected\.length > MAX_HEALTH_CHECK_TOKEN_LENGTH/);
   assert.match(healthRoute, /supplied\.length <= MAX_HEALTH_AUTHORIZATION_HEADER_LENGTH/);
 });
 
