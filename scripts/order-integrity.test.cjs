@@ -2928,6 +2928,25 @@ test('paid orders reconcile into CRM records idempotently without overwriting op
   assert.doesNotMatch(customerUpdate, /source\s*=/);
 });
 
+test('paid contact corrections reconcile both the current and previous CRM identities', () => {
+  // Customer contact details are operationally editable. When both details
+  // change, recalculate the old profile after the order ledger update so it
+  // cannot retain revenue or order counts that have moved to the correction.
+  assert.match(schema, /create or replace function public\.qy_reconcile_customer_paid_totals\(p_customer_id bigint\)/);
+  assert.match(schema, /to_regprocedure\('public\.qy_reconcile_customer_paid_totals\(bigint\)'\) is not null/);
+  assert.match(schema, /v_old_email text := case when tg_op = 'UPDATE'/);
+  assert.match(schema, /v_old_phone text := case when tg_op = 'UPDATE'/);
+  assert.match(schema, /v_previous_customer_ids bigint\[\] := array\[\]::bigint\[\]/);
+  assert.match(schema, /v_old_identity := coalesce\('email:' \|\| v_old_email, 'phone:' \|\| v_old_phone\)/);
+  assert.match(schema, /pg_advisory_xact_lock\(hashtext\('qy_roam_customer:' \|\| v_old_identity\)\)/);
+  assert.match(schema, /foreach v_previous_customer_id in array v_previous_customer_ids loop/);
+  assert.match(schema, /perform public\.qy_reconcile_customer_paid_totals\(v_customer_id\)/);
+  assert.match(schema, /perform public\.qy_reconcile_customer_paid_totals\(v_previous_customer_id\)/);
+  // A profile with both identifiers aggregates the same customer's paid
+  // history by either durable Checkout/courier contact, not email alone.
+  assert.match(schema, /v_customer\.email is not null[\s\S]*or \(v_customer\.phone is not null/);
+});
+
 test('Stripe Checkout redirects fail closed unless production uses a canonical QY Roam origin', () => {
   const priorEnvironment = process.env.NODE_ENV;
   const priorSiteUrl = process.env.NEXT_PUBLIC_SITE_URL;

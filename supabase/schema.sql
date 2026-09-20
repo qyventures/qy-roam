@@ -756,6 +756,11 @@ as $$
     to_regclass('public.stripe_events') is not null and
     to_regclass('public.fulfilment_notifications') is not null and
     to_regclass('public.meta_purchase_deliveries') is not null and
+    -- The CRM trigger delegates its ledger-derived totals to this helper.
+    -- Check that dependency explicitly: a partial/manual migration must not
+    -- pass payment readiness and then fail every paid-order insert when the
+    -- after-trigger attempts to refresh customer reporting.
+    to_regprocedure('public.qy_reconcile_customer_paid_totals(bigint)') is not null and
     (select count(*) from pg_constraint where conrelid = 'public.orders'::regclass and conname in (
       'orders_measurement_consent_check',
       'orders_esim_plan_identity_required_check',
@@ -1635,9 +1640,53 @@ alter table public.customers enable row level security;
 -- operator having to re-enter a customer after every payment. Keep this
 -- reconciliation in the database rather than the webhook worker: Stripe can
 -- retry or deliver more than one terminal event, while the orders ledger is
--- the authoritative, idempotent record of a sale. The function deliberately
--- preserves operator-managed status, source and notes; it only refreshes the
--- customer facts derived from paid orders.
+-- the authoritative, idempotent record of a sale. A paid order's contact
+-- details remain correctable, so the trigger below also refreshes every CRM
+-- record matched by the *previous* contact details. Without that second
+-- reconciliation, changing both email and phone could leave the old customer
+-- showing revenue and order counts that now belong to the corrected customer.
+-- Operator-managed status, source and notes are deliberately preserved.
+create or replace function public.qy_reconcile_customer_paid_totals(p_customer_id bigint)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_customer public.customers%rowtype;
+  v_orders integer;
+  v_lifetime_value numeric(10,2);
+  v_last_order_at timestamptz;
+begin
+  select * into v_customer
+  from public.customers
+  where id = p_customer_id
+  for update;
+  if not found then return; end if;
+
+  -- A customer can have both a Checkout email and a courier/manual-sale
+  -- phone. Use either recorded identity when deriving the profile so an
+  -- email correction that keeps the same phone does not discard that
+  -- customer's earlier paid history.
+  select count(*)::integer, coalesce(sum(amount_sgd), 0)::numeric(10,2), max(created_at)
+    into v_orders, v_lifetime_value, v_last_order_at
+  from public.orders
+  where payment_status = 'paid'
+    and (
+      (v_customer.email is not null and lower(trim(coalesce(email, ''))) = lower(trim(v_customer.email)))
+      or (v_customer.phone is not null and trim(coalesce(phone, '')) = trim(v_customer.phone))
+    );
+
+  update public.customers set
+    total_orders = v_orders,
+    lifetime_value_sgd = v_lifetime_value,
+    last_order_at = v_last_order_at,
+    updated_at = now()
+  where id = v_customer.id;
+end;
+$$;
+revoke all on function public.qy_reconcile_customer_paid_totals(bigint) from public;
+
 create or replace function public.qy_reconcile_customer_from_paid_order()
 returns trigger
 language plpgsql
@@ -1647,11 +1696,13 @@ as $$
 declare
   v_email text := nullif(lower(trim(coalesce(new.email, ''))), '');
   v_phone text := nullif(trim(coalesce(new.phone, '')), '');
+  v_old_email text := case when tg_op = 'UPDATE' then nullif(lower(trim(coalesce(old.email, ''))), '') end;
+  v_old_phone text := case when tg_op = 'UPDATE' then nullif(trim(coalesce(old.phone, '')), '') end;
   v_identity text;
+  v_old_identity text;
   v_customer_id bigint;
-  v_orders integer;
-  v_lifetime_value numeric(10,2);
-  v_last_order_at timestamptz;
+  v_previous_customer_ids bigint[] := array[]::bigint[];
+  v_previous_customer_id bigint;
 begin
   -- Awaiting-payment, failed and cancelled records are useful operational
   -- evidence but are not customer purchases. A later paid update invokes the
@@ -1665,7 +1716,29 @@ begin
   -- best available identity so two concurrent Stripe events cannot create two
   -- new CRM customers for the same buyer.
   v_identity := coalesce('email:' || v_email, 'phone:' || v_phone);
-  perform pg_advisory_xact_lock(hashtext('qy_roam_customer:' || v_identity));
+  v_old_identity := coalesce('email:' || v_old_email, 'phone:' || v_old_phone);
+  -- Contact corrections can touch two customer profiles. Lock their stable
+  -- identities in lexical order so concurrent checkout/admin updates cannot
+  -- deadlock while each recalculates the other's historical totals.
+  if v_old_identity is not null and v_old_identity <> v_identity and v_old_identity < v_identity then
+    perform pg_advisory_xact_lock(hashtext('qy_roam_customer:' || v_old_identity));
+    perform pg_advisory_xact_lock(hashtext('qy_roam_customer:' || v_identity));
+  else
+    perform pg_advisory_xact_lock(hashtext('qy_roam_customer:' || v_identity));
+    if v_old_identity is not null and v_old_identity <> v_identity then
+      perform pg_advisory_xact_lock(hashtext('qy_roam_customer:' || v_old_identity));
+    end if;
+  end if;
+
+  -- Capture any old profile before an email/phone fallback below can update
+  -- it to the corrected contact details. Each is refreshed after the order
+  -- ledger write, removing this order if it no longer matches that profile.
+  if v_old_email is not null or v_old_phone is not null then
+    select coalesce(array_agg(id), array[]::bigint[]) into v_previous_customer_ids
+    from public.customers
+    where (v_old_email is not null and lower(trim(coalesce(email, ''))) = v_old_email)
+       or (v_old_phone is not null and trim(coalesce(phone, '')) = v_old_phone);
+  end if;
 
   if v_email is not null then
     select id into v_customer_id
@@ -1684,25 +1757,14 @@ begin
     for update;
   end if;
 
-  -- Email is the stable Checkout identity whenever it exists. Phone-only
-  -- manual sales are reconciled by their recorded phone number instead.
-  select count(*)::integer, coalesce(sum(amount_sgd), 0)::numeric(10,2), max(created_at)
-    into v_orders, v_lifetime_value, v_last_order_at
-  from public.orders
-  where payment_status = 'paid'
-    and (
-      (v_email is not null and lower(trim(coalesce(email, ''))) = v_email)
-      or (v_email is null and v_phone is not null and trim(coalesce(phone, '')) = v_phone)
-    );
-
   if v_customer_id is null then
     insert into public.customers (
       email, phone, name, status, source, total_orders, lifetime_value_sgd,
       last_order_at, updated_at
     ) values (
       v_email, v_phone, nullif(trim(coalesce(new.customer_name, '')), ''),
-      'customer', 'checkout', v_orders, v_lifetime_value, v_last_order_at, now()
-    );
+      'customer', 'checkout', 0, 0, null, now()
+    ) returning id into v_customer_id;
   else
     update public.customers set
       email = coalesce(v_email, email),
@@ -1714,6 +1776,13 @@ begin
       updated_at = now()
     where id = v_customer_id;
   end if;
+  perform public.qy_reconcile_customer_paid_totals(v_customer_id);
+
+  foreach v_previous_customer_id in array v_previous_customer_ids loop
+    if v_previous_customer_id <> v_customer_id then
+      perform public.qy_reconcile_customer_paid_totals(v_previous_customer_id);
+    end if;
+  end loop;
   return new;
 end;
 $$;
