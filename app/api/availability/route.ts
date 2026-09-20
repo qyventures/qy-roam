@@ -15,6 +15,7 @@ import {
 } from '@/lib/productionReadiness';
 import { CHECKOUT_HOLD_WINDOW_SECONDS, CHECKOUT_WEBHOOK_HANDOFF_GRACE_MS, MAX_STRIPE_HOLD_SCAN_PAGES } from '@/lib/checkoutExpiry';
 import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
+import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 
 export const dynamic = 'force-dynamic';
 
@@ -44,7 +45,7 @@ function unavailableAvailability() {
   });
 }
 
-async function activeStripeHolds(stripe: Stripe, start: string, end: string) {
+async function activeStripeHolds(stripe: Stripe, stripeKey: string, start: string, end: string) {
   const nowSeconds = Math.floor(Date.now() / 1000);
   const cutoff = nowSeconds - CHECKOUT_HOLD_WINDOW_SECONDS;
   let startingAfter: string | undefined;
@@ -71,7 +72,12 @@ async function activeStripeHolds(stripe: Stripe, start: string, end: string) {
       // Inventory holds must be as trustworthy as fulfilment. A source marker
       // alone is writable on manually-created Checkout Sessions in a shared
       // Stripe account and must not be able to make routers appear sold out.
+      // The configured API credential normally scopes list results to one
+      // Stripe mode, but availability is a customer-facing stock promise.
+      // Apply the same live/test boundary as Checkout before an upstream
+      // response can consume inventory capacity.
       if (session.mode !== 'payment' || session.created < cutoff || !session.expires_at || session.expires_at <= nowSeconds || session.metadata?.source !== 'qyroam.com' || !validQyRoamProvenance(session.id, session.metadata)) continue;
+      if (!stripeEventMatchesConfiguredMode(stripeKey, session.livemode)) continue;
       // Only explicitly identified router sessions can consume router stock.
       // Never infer Pocket WiFi from the absence of a product marker: a valid
       // signed session for another QY Roam flow must not make availability
@@ -213,7 +219,7 @@ export async function GET(req: NextRequest) {
   const from = start.toISOString().slice(0, 10);
   const to = end.toISOString().slice(0, 10);
   try {
-    const stripeHolds = await activeStripeHolds(createStripeClient(stripeKey), from, to);
+    const stripeHolds = await activeStripeHolds(createStripeClient(stripeKey), stripeKey, from, to);
     const inventoryState = await committedInventory(from, to, stripeHolds.requestIds);
     const committed = inventoryState.committed + stripeHolds.holds;
     // This must mirror qy_reserve_pocket_wifi: the lower of the configured

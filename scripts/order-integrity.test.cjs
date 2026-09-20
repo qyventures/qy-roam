@@ -1334,6 +1334,7 @@ test('Checkout Session creation and recovery enforce the configured Stripe crede
   assert.match(wifiCheckoutRoute, /stripeEventMatchesConfiguredMode\(key,existing\.livemode\)/);
   assert.match(wifiCheckoutRoute, /stripeEventMatchesConfiguredMode\(key,session\.livemode\)/);
   assert.match(wifiCheckoutRoute, /stripeEventMatchesConfiguredMode\(key,currentSession\.livemode\)/);
+  assert.match(availabilityRoute, /if \(!stripeEventMatchesConfiguredMode\(stripeKey, session\.livemode\)\) continue;/);
 });
 
 test('signed Stripe webhooks cannot cross the configured test/live boundary', () => {
