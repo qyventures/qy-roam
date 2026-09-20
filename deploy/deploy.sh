@@ -108,6 +108,20 @@ if [[ "$smoke_ready" -ne 1 ]] || ! kill -0 "$smoke_pid" 2>/dev/null; then
   tail -n 50 "$smoke_log" >&2 || true
   exit 1
 fi
+# Readiness exercises the server path, but a standalone Next artifact can boot
+# without the separately packaged browser chunks. Fetch the home page, select
+# one emitted same-origin chunk, and require that exact asset to be available
+# before the live service is restarted. This also catches a future packaging
+# change that drops `.next/static` while leaving API health green.
+static_asset="$(
+  curl --fail --silent --show-error --max-time 10 "http://127.0.0.1:${smoke_port}/" |
+    node -e "let body='';process.stdin.on('data',chunk=>body+=chunk).on('end',()=>{const match=body.match(/(?:src|href)=\"(\/_next\/static\/[^\"]+)\"/);if(!match)process.exit(1);process.stdout.write(match[1])})"
+)"
+if [[ "$static_asset" != /_next/static/* ]] ||
+   ! curl --fail --silent --show-error --output /dev/null --max-time 10 "http://127.0.0.1:${smoke_port}${static_asset}"; then
+  echo "Built QY Roam artifact is missing its browser assets" >&2
+  exit 1
+fi
 cleanup_smoke
 smoke_pid=""
 trap - EXIT

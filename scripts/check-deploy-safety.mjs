@@ -4,10 +4,16 @@ import { readFileSync, existsSync } from 'node:fs';
 const deploy = readFileSync(new URL('../deploy/deploy.sh', import.meta.url), 'utf8');
 const service = readFileSync(new URL('../deploy/qy-roam.service', import.meta.url), 'utf8');
 const nginx = readFileSync(new URL('../deploy/nginx-qyroam.conf', import.meta.url), 'utf8');
+const standalonePackager = readFileSync(new URL('./package-standalone.mjs', import.meta.url), 'utf8');
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 assert.ok(existsSync(new URL('../package-lock.json', import.meta.url)), 'package-lock.json is required for reproducible production installs');
 assert.equal(packageJson.engines?.node, '>=22.0.0 <23', 'production Node release line must be explicit');
+assert.equal(
+  packageJson.scripts.build,
+  'NEXT_IGNORE_INCORRECT_LOCKFILE=1 next build && node scripts/package-standalone.mjs',
+  'production build must package browser and public assets into the standalone artifact',
+);
 assert.match(deploy, /process\.versions\.node\.split/);
 assert.match(deploy, /Node\.js 22\.x is required/);
 assert.ok(
@@ -34,6 +40,16 @@ assert.match(deploy, /chmod 600 "\$smoke_log" "\$smoke_curl_config"/);
 assert.match(deploy, /curl --config "\$smoke_curl_config" --fail --silent --show-error --max-time 10/);
 assert.match(deploy, /result\.launchReady!==true\|\|result\.service!=='qy-roam'/);
 assert.match(deploy, /Built QY Roam artifact failed its isolated startup smoke test/);
+assert.match(standalonePackager, /resolve\(root, 'public'\)/);
+assert.match(standalonePackager, /resolve\(root, '\.next\/static'\)/);
+assert.match(standalonePackager, /resolve\(standalone, 'public'\)/);
+assert.match(standalonePackager, /resolve\(standalone, '\.next\/static'\)/);
+assert.match(deploy, /static_asset=/);
+assert.match(deploy, /Built QY Roam artifact is missing its browser assets/);
+assert.ok(
+  deploy.indexOf('static_asset=') < deploy.indexOf('systemctl restart "$SERVICE_NAME"'),
+  'a browser chunk must be fetched from the isolated artifact before restart',
+);
 assert.ok(
   deploy.indexOf('Smoke-testing the production artifact') < deploy.indexOf('systemctl restart "$SERVICE_NAME"'),
   'the built artifact must boot successfully before the live service is restarted',
@@ -93,7 +109,10 @@ assert.match(nginx, /proxy_read_timeout 120s;/);
 // platform binary during a build, which makes an otherwise locked production
 // build depend on a live registry request. The installed native binary remains
 // lockfile-pinned by npm ci; this narrowly prevents that unrelated mutation.
-assert.equal(packageJson.scripts.build, 'NEXT_IGNORE_INCORRECT_LOCKFILE=1 next build');
+// The standalone server changes its working directory to `.next/standalone`.
+// Next does not copy these browser assets automatically, so the packaging
+// step is part of the release boundary rather than an optional deploy detail.
+assert.match(packageJson.scripts.build, /node scripts\/package-standalone\.mjs/);
 
 for (const command of [
   'npm run check:esim-pricing',
