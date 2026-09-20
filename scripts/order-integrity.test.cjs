@@ -43,6 +43,7 @@ const { digitalDeliveryReferenceIssue, isSafeDigitalDeliveryReference } = requir
 const { SUPABASE_REQUEST_TIMEOUT_MS, fetchSupabaseWithTimeout } = require('../lib/supabaseAdmin.ts');
 const { checkoutAttempt, clearCheckoutAttempt, CHECKOUT_ATTEMPT_MAX_AGE_MS } = require('../lib/checkoutAttempt.ts');
 const { safeHttpsDeliveryEndpoint } = require('../lib/deliveryEndpoint.ts');
+const { fulfilmentRelayAcknowledged } = require('../lib/deliveryAcknowledgement.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -138,6 +139,23 @@ test('optional Meta consent storage cannot block checkout in privacy-restricted 
     if (previousWindow === undefined) delete global.window;
     else global.window = previousWindow;
   }
+});
+
+test('SMTP relay success is bound to the exact fulfilment message identity', () => {
+  const messageId = '<qyroam-order@example.com>';
+  assert.equal(fulfilmentRelayAcknowledged(JSON.stringify({ delivered: true, message_id: messageId }), messageId), true);
+  assert.equal(fulfilmentRelayAcknowledged(JSON.stringify({ delivered: false, message_id: messageId }), messageId), false);
+  assert.equal(fulfilmentRelayAcknowledged(JSON.stringify({ delivered: true, message_id: '<another-order@example.com>' }), messageId), false);
+  assert.equal(fulfilmentRelayAcknowledged(JSON.stringify({ ok: true }), messageId), false);
+  assert.equal(fulfilmentRelayAcknowledged('<html>gateway ok</html>', messageId), false);
+
+  assert.match(webhookRoute, /if\(!response\.ok\) throw new Error\(`SMTP relay failed \(\$\{response\.status\}\)`\)/);
+  assert.match(webhookRoute, /if\(!fulfilmentRelayAcknowledged\(response\.responseBody,messageId\)\)/);
+  assert.ok(
+    webhookRoute.indexOf('if(!fulfilmentRelayAcknowledged(response.responseBody,messageId))') >
+      webhookRoute.indexOf('if(!response.ok) throw new Error(`SMTP relay failed (${response.status})`)'),
+    'relay acknowledgement must be checked after transport success and before delivery returns',
+  );
 });
 
 function esimSession(plan = ESIM_PLANS[0]) {

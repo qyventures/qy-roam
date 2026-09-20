@@ -17,6 +17,7 @@ import { validStripeEventId } from '@/lib/stripeEventId';
 import { validStripeEventCreated } from '@/lib/stripeEventCreated';
 import { safeHttpsDeliveryEndpoint } from '@/lib/deliveryEndpoint';
 import { metaPurchaseEventSourceUrl } from '@/lib/siteOrigin';
+import { fulfilmentRelayAcknowledged } from '@/lib/deliveryAcknowledgement';
 
 export const runtime = 'nodejs';
 
@@ -299,6 +300,15 @@ async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
     // this credential-bearing request, while the status code is sufficient
     // for a retrying webhook and for staff to identify the failing transport.
     if(!response.ok) throw new Error(`SMTP relay failed (${response.status})`);
+    // A transport-level 2xx is not proof that the relay accepted this
+    // particular fulfilment email: an auth gateway, proxy fallback, or broken
+    // handler can return a generic success page. Settle the irreversible
+    // notification ledger only when the bounded response explicitly confirms
+    // the deterministic message identity supplied above. A malformed or
+    // mismatched acknowledgement remains safely retryable.
+    if(!fulfilmentRelayAcknowledged(response.responseBody,messageId)) {
+      throw new Error('SMTP relay did not acknowledge the fulfilment message');
+    }
     return;
   }
   await sendSmtpMail({host,port,secure,user,pass,from,to,subject,text,messageId,timeoutMs:DELIVERY_TIMEOUT_MS});
