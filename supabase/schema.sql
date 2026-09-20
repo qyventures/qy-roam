@@ -728,11 +728,35 @@ security invoker
 set search_path = public
 as $$
 begin
+  -- A newly-created row is only a durable intention to deliver. Requiring
+  -- every sender (including service-role repair jobs) to claim it in a later
+  -- update prevents a direct `sent` insert from permanently suppressing an
+  -- email that was never handed to the provider.
+  if tg_op = 'INSERT' then
+    if new.status <> 'pending' or new.attempts <> 0 or new.last_attempt_at is not null
+      or new.sent_at is not null then
+      raise exception 'new delivery ledger record must begin pending and unattempted';
+    end if;
+    return new;
+  end if;
   if new.stripe_session_id is distinct from old.stripe_session_id then
     raise exception 'delivery ledger Checkout Session identity is immutable';
   end if;
   if old.status = 'sent' and new is distinct from old then
     raise exception 'sent delivery ledger record is immutable';
+  end if;
+  if not (
+    new.status = old.status or
+    (old.status = 'pending' and new.status = 'sending') or
+    (old.status = 'sending' and new.status in ('pending', 'sent'))
+  ) then
+    raise exception 'invalid delivery ledger status transition';
+  end if;
+  if new.status = 'sending' and (new.attempts <= old.attempts or new.last_attempt_at is null) then
+    raise exception 'sending delivery requires a recorded attempt';
+  end if;
+  if new.status <> 'sent' and new.sent_at is not null then
+    raise exception 'unfinished delivery cannot have a sent timestamp';
   end if;
   return new;
 end;
@@ -740,7 +764,7 @@ $$;
 
 drop trigger if exists qy_enforce_fulfilment_notification_immutability on public.fulfilment_notifications;
 create trigger qy_enforce_fulfilment_notification_immutability
-before update on public.fulfilment_notifications
+before insert or update on public.fulfilment_notifications
 for each row execute function public.qy_enforce_delivery_ledger_immutability();
 
 create or replace function public.qy_enforce_meta_purchase_delivery_immutability()
@@ -750,11 +774,31 @@ security invoker
 set search_path = public
 as $$
 begin
+  if tg_op = 'INSERT' then
+    if new.status <> 'pending' or new.attempts <> 0 or new.last_attempt_at is not null
+      or new.sent_at is not null then
+      raise exception 'new delivery ledger record must begin pending and unattempted';
+    end if;
+    return new;
+  end if;
   if new.stripe_session_id is distinct from old.stripe_session_id then
     raise exception 'delivery ledger Checkout Session identity is immutable';
   end if;
   if old.status = 'sent' and new is distinct from old then
     raise exception 'sent delivery ledger record is immutable';
+  end if;
+  if not (
+    new.status = old.status or
+    (old.status = 'pending' and new.status = 'sending') or
+    (old.status = 'sending' and new.status in ('pending', 'sent'))
+  ) then
+    raise exception 'invalid delivery ledger status transition';
+  end if;
+  if new.status = 'sending' and (new.attempts <= old.attempts or new.last_attempt_at is null) then
+    raise exception 'sending delivery requires a recorded attempt';
+  end if;
+  if new.status <> 'sent' and new.sent_at is not null then
+    raise exception 'unfinished delivery cannot have a sent timestamp';
   end if;
   if old.event_time is not null and new.event_time is distinct from old.event_time then
     raise exception 'Meta Purchase event time is immutable after assignment';
@@ -765,7 +809,7 @@ $$;
 
 drop trigger if exists qy_enforce_meta_purchase_delivery_immutability on public.meta_purchase_deliveries;
 create trigger qy_enforce_meta_purchase_delivery_immutability
-before update on public.meta_purchase_deliveries
+before insert or update on public.meta_purchase_deliveries
 for each row execute function public.qy_enforce_meta_purchase_delivery_immutability();
 
 -- Table and column probes catch an incomplete migration, but they cannot tell

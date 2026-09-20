@@ -2431,11 +2431,25 @@ test('upgraded Stripe delivery ledgers retain database-enforced retry state mach
 });
 
 test('settled delivery ledgers cannot be reopened or rebound for duplicate delivery', () => {
-  assert.match(schema, /create trigger qy_enforce_fulfilment_notification_immutability\s+before update on public\.fulfilment_notifications/);
-  assert.match(schema, /create trigger qy_enforce_meta_purchase_delivery_immutability\s+before update on public\.meta_purchase_deliveries/);
+  assert.match(schema, /create trigger qy_enforce_fulfilment_notification_immutability\s+before insert or update on public\.fulfilment_notifications/);
+  assert.match(schema, /create trigger qy_enforce_meta_purchase_delivery_immutability\s+before insert or update on public\.meta_purchase_deliveries/);
   assert.match(schema, /if new\.stripe_session_id is distinct from old\.stripe_session_id then\s+raise exception 'delivery ledger Checkout Session identity is immutable'/);
   assert.match(schema, /if old\.status = 'sent' and new is distinct from old then\s+raise exception 'sent delivery ledger record is immutable'/);
   assert.match(schema, /if old\.event_time is not null and new\.event_time is distinct from old\.event_time then\s+raise exception 'Meta Purchase event time is immutable after assignment'/);
+});
+
+test('delivery ledgers cannot claim provider success without an audited send attempt', () => {
+  // A false `sent` row is worse than a retryable provider failure: every
+  // webhook and admin retry will trust it and permanently skip the customer
+  // email or Meta Purchase. Keep service-role writers on the same durable
+  // pending -> sending -> sent state machine as the application workers.
+  assert.match(schema, /if tg_op = 'INSERT' then[\s\S]{0,350}new\.status <> 'pending'[\s\S]{0,350}new delivery ledger record must begin pending and unattempted/g);
+  assert.match(schema, /old\.status = 'pending' and new\.status = 'sending'/);
+  assert.match(schema, /old\.status = 'sending' and new\.status in \('pending', 'sent'\)/);
+  assert.match(schema, /new\.status = 'sending' and \(new\.attempts <= old\.attempts or new\.last_attempt_at is null\)/);
+  assert.match(schema, /new\.status <> 'sent' and new\.sent_at is not null/);
+  assert.match(schema, /before insert or update on public\.fulfilment_notifications/);
+  assert.match(schema, /before insert or update on public\.meta_purchase_deliveries/);
 });
 
 test('admin visibility detects abandoned Stripe claims using the webhook recovery lease', () => {
