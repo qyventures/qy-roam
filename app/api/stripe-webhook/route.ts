@@ -607,7 +607,10 @@ export async function deliverPaidOrderSideEffects(supabase:NonNullable<ReturnTyp
 }
 
 export async function POST(req:Request){
-  const key=process.env.STRIPE_SECRET_KEY,webhookSecret=process.env.STRIPE_WEBHOOK_SECRET; if(!hasRequiredStripeCheckoutConfig()||!key||!webhookSecret) return NextResponse.json({error:'Webhook configuration incomplete'},{status:503});
+  // hasRequiredStripeCheckoutConfig canonicalises ordinary deployment
+  // whitespace. Use the same value for signature verification and API reads
+  // so a health-ready service cannot reject every signed payment event.
+  const key=process.env.STRIPE_SECRET_KEY?.trim(),webhookSecret=process.env.STRIPE_WEBHOOK_SECRET; if(!hasRequiredStripeCheckoutConfig()||!key||!webhookSecret) return NextResponse.json({error:'Webhook configuration incomplete'},{status:503});
   const stripe=createStripeClient(key); let event:Stripe.Event;
   let payload:Buffer;
   try { payload=await readStripeWebhookBody(req); }

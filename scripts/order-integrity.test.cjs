@@ -940,6 +940,17 @@ test('production checkout and recovery reject test-mode Stripe server credential
   assert.match(stripeCheckoutConfig, /key\.startsWith\('sk_live_'\).*key\.startsWith\('rk_live_'\)/);
 });
 
+test('Stripe API consumers canonicalize the same formatted credential accepted by readiness', () => {
+  // hasRequiredStripeCheckoutConfig intentionally tolerates surrounding
+  // deployment whitespace. Every code path that gives the credential to the
+  // Stripe SDK must use the same canonical value, or a green health check can
+  // mask checkout, webhook, customer-status, or recovery failures.
+  for (const source of [esimCheckoutRoute, wifiCheckoutRoute, availabilityRoute, webhookRoute, adminOrderRoute, bookingPage, successPage]) {
+    assert.match(source, /process\.env\.STRIPE_SECRET_KEY\?\.trim\(\)/);
+  }
+  assert.match(launchPage, /const key=value\?\.trim\(\)/);
+});
+
 test('Checkout Session creation and recovery enforce the configured Stripe credential mode before exposing payment', () => {
   assert.match(esimCheckoutRoute, /stripeEventMatchesConfiguredMode\(key, session\.livemode\)/);
   assert.match(esimCheckoutRoute, /stripeEventMatchesConfiguredMode\(key, currentSession\.livemode\)/);

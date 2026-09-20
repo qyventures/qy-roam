@@ -35,7 +35,7 @@ const statusLabels: Record<string, string> = {
 
 export default async function BookingPage({ searchParams }: Props) {
   const sessionId = validStripeCheckoutSessionId(searchParams?.session_id);
-  const key = process.env.STRIPE_SECRET_KEY;
+  const key = process.env.STRIPE_SECRET_KEY?.trim();
 
   // A customer-facing status page must not become a test-mode Stripe session
   // viewer after a production credential mistake. Match checkout's strict

@@ -55,7 +55,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Expected JSON request.' }, { status: 415 });
     }
 
-    const key = process.env.STRIPE_SECRET_KEY;
+    // Keep the outbound credential identical to the canonical form accepted
+    // by readiness, so formatted environment values cannot make eSIM
+    // checkout appear configured but fail at Stripe.
+    const key = process.env.STRIPE_SECRET_KEY?.trim();
     if (!hasRequiredStripeCheckoutConfig() || !key) return NextResponse.json({ error: 'Payment configuration incomplete.' }, { status: 503 });
     if (!process.env.ORDER_INTEGRITY_SECRET || process.env.ORDER_INTEGRITY_SECRET.length < 32) return NextResponse.json({ error: 'Order configuration incomplete.' }, { status: 503 });
     if (!hasRequiredStripeWebhookConfig()) {

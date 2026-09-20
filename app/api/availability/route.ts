@@ -185,7 +185,10 @@ export async function GET(req: NextRequest) {
   // every non-request-specific checkout prerequisite before calculating stock:
   // missing webhook, fulfilment, or signing configuration used to leave the
   // product shown as available even though checkout had to refuse the order.
-  const stripeKey = process.env.STRIPE_SECRET_KEY;
+  // Availability calls Stripe too. Canonicalise exactly as checkout and the
+  // readiness guard do, otherwise a harmless formatted secret can make stock
+  // appear unavailable even though the release health check is green.
+  const stripeKey = process.env.STRIPE_SECRET_KEY?.trim();
   const orderIntegritySecret = process.env.ORDER_INTEGRITY_SECRET;
   if (!stripeKey || !hasRequiredStripeCheckoutConfig() || !orderIntegritySecret || orderIntegritySecret.length < 32 ||
     !hasRequiredStripeWebhookConfig() || !hasRequiredFulfilmentEmailConfig() || !getSupabaseAdmin()) {

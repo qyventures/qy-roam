@@ -10,7 +10,9 @@ function Row({label,ok,note}:{label:string,ok:boolean,note:string}){return <div 
 function isProductionSiteUrl(value?:string){
  try{const url=new URL(value||'');return url.protocol==='https:'&&['qyroam.com','www.qyroam.com'].includes(url.hostname);}catch{return false;}
 }
-function hasLiveStripeSecret(value?:string){return Boolean(value?.startsWith('sk_live_')||value?.startsWith('rk_live_'));}
+// Match checkout readiness: surrounding deployment whitespace is harmless,
+// but must not make this operator signal disagree with the runnable routes.
+function hasLiveStripeSecret(value?:string){const key=value?.trim();return Boolean(key?.startsWith('sk_live_')||key?.startsWith('rk_live_'));}
 function hasOrderIntegritySecret(value?:string){return Boolean(value&&value.length>=32);}
 
 export default async function LaunchPage(){

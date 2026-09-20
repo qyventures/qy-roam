@@ -184,7 +184,10 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 export async function POST(_req: Request, { params }: { params: { id: string } }) {
   const supabase = getSupabaseAdmin();
   if (!supabase) return NextResponse.json({ error: 'Order database not configured' }, { status: 503 });
-  const stripeKey = process.env.STRIPE_SECRET_KEY;
+  // Recovery must use the same canonical credential that checkout readiness
+  // validates; an accidental trailing newline must not strand a paid-order
+  // delivery retry after health has reported Stripe as configured.
+  const stripeKey = process.env.STRIPE_SECRET_KEY?.trim();
   if (!stripeKey || !hasRequiredStripeCheckoutConfig()) return NextResponse.json({ error: 'Stripe is not configured' }, { status: 503 });
 
   const id = Number(params.id);

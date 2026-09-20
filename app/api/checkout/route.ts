@@ -127,7 +127,10 @@ export async function POST(req: Request) {
  try {
   if(limited(req)) return NextResponse.json({error:'Too many checkout attempts. Please try again shortly.'},{status:429,headers:{'Retry-After':'60'}});
   if(!isJsonRequestContentType(req.headers.get('content-type'))) return NextResponse.json({error:'Expected JSON request.'},{status:415});
-  const key=process.env.STRIPE_SECRET_KEY; if(!hasRequiredStripeCheckoutConfig()||!key) return NextResponse.json({error:'Payment configuration incomplete.'},{status:503});
+  // Match the readiness guard, which permits harmless deployment whitespace.
+  // Passing the untrimmed secret to Stripe would otherwise make health look
+  // ready while every checkout creation fails authentication.
+  const key=process.env.STRIPE_SECRET_KEY?.trim(); if(!hasRequiredStripeCheckoutConfig()||!key) return NextResponse.json({error:'Payment configuration incomplete.'},{status:503});
   if(!process.env.ORDER_INTEGRITY_SECRET||process.env.ORDER_INTEGRITY_SECRET.length<32) return NextResponse.json({error:'Order configuration incomplete.'},{status:503});
   if(!hasRequiredStripeWebhookConfig()) return NextResponse.json({error:'Pocket WiFi ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
   if(!hasRequiredFulfilmentEmailConfig()) return NextResponse.json({error:'Pocket WiFi ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});

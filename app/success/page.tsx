@@ -17,7 +17,7 @@ type Props = {
 
 export default async function SuccessPage({ searchParams }: Props) {
   const sessionId = validStripeCheckoutSessionId(searchParams?.session_id);
-  const key = process.env.STRIPE_SECRET_KEY;
+  const key = process.env.STRIPE_SECRET_KEY?.trim();
 
   let paid = false;
   let destination = '';
