@@ -1313,7 +1313,13 @@ begin
   -- An out-of-order failed event must never downgrade an already-paid order.
   if found and v_order.payment_status = 'paid' and not v_paid then
     delete from public.checkout_reservations
-    where checkout_request_id = p_checkout_request_id and stripe_session_id = p_stripe_session_id;
+    -- Stripe can deliver a terminal event after the Session was created but
+    -- before the application linked this durable hold. The signed,
+    -- provenance-validated webhook still owns this request id, so clean up
+    -- its unlinked hold too. A row linked to a different Session is a newer
+    -- recovery attempt and must continue protecting capacity.
+    where checkout_request_id = p_checkout_request_id
+      and (stripe_session_id is null or stripe_session_id = p_stripe_session_id);
     return v_order;
   end if;
 
@@ -1365,8 +1371,11 @@ begin
 
   -- The durable order now represents the commitment, including while an
   -- asynchronous payment is pending, so retaining the hold would double-count.
+  -- Clear the safe unlinked crash-recovery state as well, but never a hold
+  -- that has since been linked to a different Checkout Session.
   delete from public.checkout_reservations
-  where checkout_request_id = p_checkout_request_id and stripe_session_id = p_stripe_session_id;
+  where checkout_request_id = p_checkout_request_id
+    and (stripe_session_id is null or stripe_session_id = p_stripe_session_id);
   return v_order;
 end;
 $$;
