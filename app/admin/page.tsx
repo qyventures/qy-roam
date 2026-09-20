@@ -1,6 +1,6 @@
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import AdminOrderActions from '@/components/AdminOrderActions';
-import { fulfilmentNotificationActionable, STRIPE_EVENT_CLAIM_STALE_MS } from '@/lib/orderLifecycle';
+import { fulfilmentNotificationActionable, stripeEventClaimInProgress } from '@/lib/orderLifecycle';
 import { hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
 import { isSafeDigitalDeliveryReference } from '@/lib/digitalDeliveryReference';
 import { operationalDaysFromToday } from '@/lib/operationalDate';
@@ -80,7 +80,6 @@ const metricStyle = {fontSize:30,fontWeight:800,lineHeight:1.1,marginTop:6} as c
 
 export default async function AdminPage() {
   const supabase = getSupabaseAdmin();
-  const webhookExceptionCutoff = new Date(Date.now() - STRIPE_EVENT_CLAIM_STALE_MS).toISOString();
   // An admin dashboard that quietly turns a failed query into an empty table
   // is dangerous: staff can conclude there are no orders to fulfil. Fetch the
   // independent panels together, but preserve each failure so the UI fails
@@ -92,10 +91,11 @@ export default async function AdminPage() {
         supabase.from('inventory_items').select('id,sku,name,quantity_on_hand,status').eq('product_type', 'pocket_wifi').order('name'),
         loadPages((from, to) => supabase.from('fulfilment_notifications').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('updated_at', { ascending: false }).order('stripe_session_id').range(from, to)),
         loadPages((from, to) => supabase.from('meta_purchase_deliveries').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('updated_at', { ascending: false }).order('stripe_session_id').range(from, to)),
-        // Include claims with no recorded error: a worker can exit after the
-        // durable claim is inserted and before its catch handler runs. Recent
-        // claims are filtered below, while abandoned leases must be visible to
-        // operations even before Stripe's next scheduled retry arrives.
+        // Load every unfinished claim, then classify it with the exact same
+        // lease rule as the webhook worker. Filtering only in PostgREST by an
+        // old timestamp misses NULL and implausibly future processing leases:
+        // both are reclaimable by the worker and therefore must also be
+        // visible to operations if Stripe stops retrying.
         // Webhook exceptions are paid-order recovery work, not a diagnostic
         // sample. Apply the same bounded pagination policy as the other
         // operational ledgers so a busy incident cannot silently hide older
@@ -103,7 +103,6 @@ export default async function AdminPage() {
         loadPages((from, to) => supabase.from('stripe_events')
           .select('event_id,event_type,stripe_session_id,attempts,processing_started_at,last_failed_at,last_error')
           .is('processed_at', null)
-          .or(`last_error.not.is.null,processing_started_at.lt.${webhookExceptionCutoff}`)
           .order('processing_started_at', { ascending: false })
           .order('event_id', { ascending: false })
           .range(from, to)),
@@ -138,9 +137,7 @@ export default async function AdminPage() {
     metaDeliveryBySession.get(order.stripe_session_id)?.status !== 'sent',
   );
   const webhookFailures: any[] = (stripeEventResult.data ?? []).filter((event:any) => {
-    if (event.last_error) return true;
-    const processingStartedMs = new Date(event.processing_started_at).getTime();
-    return Number.isFinite(processingStartedMs) && Date.now() - processingStartedMs > STRIPE_EVENT_CLAIM_STALE_MS;
+    return !stripeEventClaimInProgress(event.processing_started_at, event.last_error);
   });
   const failedPanels = [
     result.error && 'orders',

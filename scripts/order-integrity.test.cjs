@@ -1867,11 +1867,25 @@ test('admin visibility detects abandoned Stripe claims using the webhook recover
   assert.equal(STRIPE_EVENT_CLAIM_STALE_MS, 30 * 60_000);
   assert.match(webhookRoute, /stripeEventClaimInProgress\(previousStartedAt,existing\.data\?\.last_error\)/);
   assert.match(adminPage, /select\('event_id,event_type,stripe_session_id,attempts,processing_started_at,last_failed_at,last_error'\)/);
-  assert.match(adminPage, /last_error\.not\.is\.null,processing_started_at\.lt\.\$\{webhookExceptionCutoff\}/);
-  assert.match(adminPage, /if \(event\.last_error\) return true/);
-  assert.match(adminPage, /Date\.now\(\) - processingStartedMs > STRIPE_EVENT_CLAIM_STALE_MS/);
+  assert.match(adminPage, /\.is\('processed_at', null\)/);
+  assert.doesNotMatch(adminPage, /last_error\.not\.is\.null,processing_started_at\.lt/);
+  assert.match(adminPage, /!stripeEventClaimInProgress\(event\.processing_started_at, event\.last_error\)/);
   assert.match(adminPage, /failed or abandoned events awaiting a signed retry/);
   assert.match(adminPage, /Processing worker stopped before completion/);
+});
+
+test('admin webhook visibility includes malformed and future-dated leases', () => {
+  // SQL-side age filters exclude NULL/future timestamps before JavaScript can
+  // apply the worker's recovery rule. The dashboard must load every bounded
+  // unfinished claim and use the shared classifier so recoverable anomalies
+  // cannot disappear from operations after Stripe stops retrying.
+  const webhookQuery = adminPage.slice(
+    adminPage.indexOf("supabase.from('stripe_events')"),
+    adminPage.indexOf("const orders: any[]"),
+  );
+  assert.match(webhookQuery, /\.is\('processed_at', null\)/);
+  assert.doesNotMatch(webhookQuery, /\.or\(/);
+  assert.match(adminPage, /stripeEventClaimInProgress/);
 });
 
 test('Stripe event idempotency records stay bound to one event type and Checkout Session', () => {
