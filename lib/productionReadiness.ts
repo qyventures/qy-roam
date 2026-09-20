@@ -20,9 +20,11 @@ const READINESS_PROBE_TIMEOUT_MS = 8_000;
 let paymentSchemaReadyUntil = 0;
 let esimOrderSchemaReadyUntil = 0;
 let operationsSchemaReadyUntil = 0;
+let pocketWifiFulfilmentSchemaReadyUntil = 0;
 let paymentSchemaCheckInFlight: Promise<boolean> | null = null;
 let esimOrderSchemaCheckInFlight: Promise<boolean> | null = null;
 let operationsSchemaCheckInFlight: Promise<boolean> | null = null;
+let pocketWifiFulfilmentSchemaCheckInFlight: Promise<boolean> | null = null;
 
 class ReadinessProbeTimeoutError extends Error {}
 
@@ -125,6 +127,19 @@ const REQUIRED_OPERATIONS_SCHEMA = [
   { table: 'forecasts', columns: 'id,forecast_month,product_type,forecast_revenue_sgd' },
   { table: 'closing_periods', columns: 'id,period_start,period_end,status,net_sales_sgd' },
   { table: 'sales_daily_summary', columns: 'sales_date,product_type,paid_orders,revenue_sgd' },
+] as const;
+
+// A Pocket WiFi sale is not safe merely because checkout can reserve stock
+// and persist a paid order. Before taking payment, the deployment must also
+// be able to record the irreversible dispatch and receipt transaction that
+// reconciles that order with the exact physical inventory item. Keep this
+// narrower than the full admin/reporting readiness contract: CRM, forecasts,
+// and accounting reports must not determine whether a traveller can buy a
+// router, while a missing custody workflow absolutely must.
+const REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA = [
+  { table: 'orders', columns: 'id,product_type,payment_status,fulfilment_status,inventory_item_id,courier_tracking,return_tracking,return_disposition,dispatched_at,returned_at' },
+  { table: 'inventory_items', columns: 'id,product_type,status,quantity_on_hand' },
+  { table: 'inventory_movements', columns: 'id,inventory_item_id,movement_type,quantity,reference' },
 ] as const;
 
 /**
@@ -362,6 +377,74 @@ export async function hasRequiredEsimOrderSchema() {
       .finally(() => { esimOrderSchemaCheckInFlight = null; });
   }
   return esimOrderSchemaCheckInFlight;
+}
+
+/**
+ * Verify the smallest deployed contract required to dispatch and receive a
+ * paid Pocket WiFi order. This is intentionally a checkout prerequisite:
+ * accepting a router payment while its atomic custody RPC is missing would
+ * leave operations with no safe way to fulfil or return that order.
+ */
+async function checkRequiredPocketWifiFulfilmentSchema() {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) return false;
+  const database: any = supabase;
+
+  try {
+    return await runReadinessProbe(async (signal) => {
+      const results = await Promise.all(
+        REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA.map(({ table, columns }) =>
+          database.from(table).select(columns).limit(1).abortSignal(signal),
+        ),
+      );
+      const failures = results
+        .map((result, index) => result.error ? REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA[index].table : null)
+        .filter(Boolean);
+      if (failures.length > 0) {
+        console.error('production_pocket_wifi_fulfilment_schema_check_failed', { tables: failures });
+        return false;
+      }
+
+      // The zero id is rejected before the function can mutate either ledger.
+      // Its deliberate domain error proves the currently deployed RPC accepts
+      // every required custody argument and is executable by the service role.
+      const transitionProbe = await database.rpc('qy_transition_pocket_wifi_order', {
+        p_order_id: 0,
+        p_expected_status: 'paid',
+        p_next_status: 'paid',
+        p_courier_tracking: null,
+        p_return_tracking: null,
+        p_notes: null,
+        p_inventory_item_id: null,
+        p_return_disposition: 'restock',
+      }).abortSignal(signal);
+      if (!transitionProbe.error || !/order not found/i.test(transitionProbe.error.message || '')) {
+        console.error('production_pocket_wifi_fulfilment_transition_rpc_check_failed');
+        return false;
+      }
+      return true;
+    });
+  } catch {
+    console.error('production_pocket_wifi_fulfilment_schema_check_unavailable');
+    return false;
+  }
+}
+
+export async function hasRequiredPocketWifiFulfilmentSchema() {
+  if (Date.now() < pocketWifiFulfilmentSchemaReadyUntil) return true;
+  if (!pocketWifiFulfilmentSchemaCheckInFlight) {
+    pocketWifiFulfilmentSchemaCheckInFlight = checkRequiredPocketWifiFulfilmentSchema()
+      .then((ready) => {
+        if (ready) pocketWifiFulfilmentSchemaReadyUntil = Date.now() + READINESS_CACHE_MS;
+        return ready;
+      })
+      .catch(() => {
+        console.error('production_pocket_wifi_fulfilment_schema_check_unexpected_error');
+        return false;
+      })
+      .finally(() => { pocketWifiFulfilmentSchemaCheckInFlight = null; });
+  }
+  return pocketWifiFulfilmentSchemaCheckInFlight;
 }
 
 /**

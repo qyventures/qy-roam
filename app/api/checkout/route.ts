@@ -8,7 +8,7 @@ import { parseExactIsoDate, validCheckoutRequestId } from '../../../lib/checkout
 import { QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance, validQyRoamProvenance } from '../../../lib/orderProvenance';
 import { operationalConfig } from '../../../lib/operationalConfig';
 import { operationalIsoDate, operationalIsoDateAfter } from '../../../lib/operationalDate';
-import { hasRequiredFulfilmentEmailConfig, hasRequiredPaymentSchema, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '../../../lib/productionReadiness';
+import { hasRequiredFulfilmentEmailConfig, hasRequiredPaymentSchema, hasRequiredPocketWifiFulfilmentSchema, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '../../../lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
 import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
@@ -160,6 +160,10 @@ export async function POST(req: Request) {
   // creating a payable Stripe Session so an incomplete migration cannot leave
   // a paid router booking unrecorded or unfulfillable.
   if(!await hasRequiredPaymentSchema()) return NextResponse.json({error:'Pocket WiFi ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
+  // A router sale creates a physical-custody obligation. Do not expose a
+  // payment page against a partial deployment that can reserve stock but
+  // cannot safely dispatch or receive the assigned device afterwards.
+  if(!await hasRequiredPocketWifiFulfilmentSchema()) return NextResponse.json({error:'Pocket WiFi ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
   // Delivery is operated in Singapore. UTC midnight can still be the previous
   // calendar day in Singapore, which would incorrectly accept a past date or
   // shorten the advertised lead time during the local early morning.

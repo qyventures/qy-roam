@@ -9,6 +9,7 @@ import { validQyRoamProvenance } from '@/lib/orderProvenance';
 import {
   hasRequiredFulfilmentEmailConfig,
   hasRequiredPaymentSchema,
+  hasRequiredPocketWifiFulfilmentSchema,
   hasRequiredStripeCheckoutConfig,
   hasRequiredStripeWebhookConfig,
 } from '@/lib/productionReadiness';
@@ -199,6 +200,12 @@ export async function GET(req: NextRequest) {
   // incomplete migration from showing a purchasable router only for checkout
   // to reject it moments later.
   if (!await hasRequiredPaymentSchema()) {
+    return unavailableAvailability();
+  }
+  // Availability is a purchase promise. Match checkout's physical-custody
+  // gate so a partial deployment cannot advertise a router that it refuses
+  // before payment because the dispatch/return transaction is unavailable.
+  if (!await hasRequiredPocketWifiFulfilmentSchema()) {
     return unavailableAvailability();
   }
 

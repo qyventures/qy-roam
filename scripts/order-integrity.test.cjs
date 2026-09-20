@@ -1233,11 +1233,21 @@ test('payment-readiness checks coalesce healthy checkout probes without caching 
   assert.match(productionReadiness, /if \(!operationsSchemaCheckInFlight\)/);
   assert.match(productionReadiness, /if \(ready\) operationsSchemaReadyUntil = Date\.now\(\) \+ READINESS_CACHE_MS/);
   assert.match(productionReadiness, /async function checkRequiredOperationsSchema\(\)/);
+  // Router checkout has a smaller, sale-critical custody probe. It must use
+  // the same success-only cache pattern without making checkout depend on
+  // non-essential CRM, forecast, or accounting relations.
+  assert.match(productionReadiness, /let pocketWifiFulfilmentSchemaCheckInFlight: Promise<boolean> \| null = null/);
+  assert.match(productionReadiness, /if \(Date\.now\(\) < pocketWifiFulfilmentSchemaReadyUntil\) return true/);
+  assert.match(productionReadiness, /if \(!pocketWifiFulfilmentSchemaCheckInFlight\)/);
+  assert.match(productionReadiness, /if \(ready\) pocketWifiFulfilmentSchemaReadyUntil = Date\.now\(\) \+ READINESS_CACHE_MS/);
+  assert.match(productionReadiness, /async function checkRequiredPocketWifiFulfilmentSchema\(\)/);
 });
 
 test('Pocket WiFi checkout fails closed when its paid-order schema is unavailable', () => {
   assert.match(wifiCheckoutRoute, /hasRequiredPaymentSchema/);
   assert.match(wifiCheckoutRoute, /if\(!await hasRequiredPaymentSchema\(\)\)/);
+  assert.match(wifiCheckoutRoute, /hasRequiredPocketWifiFulfilmentSchema/);
+  assert.match(wifiCheckoutRoute, /if\(!await hasRequiredPocketWifiFulfilmentSchema\(\)\)/);
   assert.match(wifiCheckoutRoute, /Pocket WiFi ordering is temporarily unavailable/);
   assert.match(wifiCheckoutRoute, /'Retry-After':'30'/);
 });
@@ -1300,6 +1310,8 @@ test('Pocket WiFi capacity does not double-count dispatched routers', () => {
 test('Pocket WiFi availability does not promise stock when checkout cannot safely accept payment', () => {
   assert.match(availabilityRoute, /hasRequiredPaymentSchema/);
   assert.match(availabilityRoute, /if \(!await hasRequiredPaymentSchema\(\)\)/);
+  assert.match(availabilityRoute, /hasRequiredPocketWifiFulfilmentSchema/);
+  assert.match(availabilityRoute, /if \(!await hasRequiredPocketWifiFulfilmentSchema\(\)\)/);
   assert.match(availabilityRoute, /hasRequiredStripeWebhookConfig/);
   assert.match(availabilityRoute, /hasRequiredFulfilmentEmailConfig/);
   assert.match(availabilityRoute, /ORDER_INTEGRITY_SECRET/);
@@ -1871,6 +1883,12 @@ test('production readiness verifies the deployed Pocket WiFi dispatch and return
   assert.match(productionReadiness, /production_operations_inventory_rpc_check_failed/);
   assert.match(productionReadiness, /manual order reference is required/);
   assert.match(productionReadiness, /production_operations_manual_order_rpc_check_failed/);
+  // Checkout has a narrow fulfilment gate independent of the broader admin
+  // reporting contract. A missing custody RPC must stop public sales before
+  // a traveller can pay for a router that cannot be dispatched safely.
+  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA/);
+  assert.match(productionReadiness, /table: 'inventory_movements', columns: 'id,inventory_item_id,movement_type,quantity,reference'/);
+  assert.match(productionReadiness, /production_pocket_wifi_fulfilment_transition_rpc_check_failed/);
 });
 
 test('Pocket WiFi receipt cannot create stock unless the outbound hand-off was recorded', () => {
