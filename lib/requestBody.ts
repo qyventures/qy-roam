@@ -49,7 +49,13 @@ export async function readLimitedRequestText(req: Request, maxBytes: number, tim
   if (!req.body) return '';
 
   const reader = req.body.getReader();
-  const chunks: Uint8Array[] = [];
+  // A byte limit alone does not bound memory when a peer sends an allowed
+  // payload as millions of tiny chunks: the array bookkeeping can outweigh
+  // the body itself. Allocate exactly the already-validated maximum and copy
+  // each chunk into it so both payload bytes and per-chunk overhead remain
+  // bounded. Callers of this helper use small JSON limits; larger uploads
+  // should use a protocol that streams directly to durable storage.
+  const body = Buffer.allocUnsafe(maxBytes);
   let total = 0;
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const bodyTimeout = new Promise<never>((_, reject) => {
@@ -79,7 +85,7 @@ export async function readLimitedRequestText(req: Request, maxBytes: number, tim
         void reader.cancel().catch(() => undefined);
         throw new RequestBodyTooLargeError('Request body is too large');
       }
-      chunks.push(value);
+      body.set(value, total - value.byteLength);
     }
   } finally {
     if (timeout) clearTimeout(timeout);
@@ -90,5 +96,5 @@ export async function readLimitedRequestText(req: Request, maxBytes: number, tim
     // or 413 into the route's generic invalid-request response).
     try { reader.releaseLock(); } catch {}
   }
-  return Buffer.concat(chunks, total).toString('utf8');
+  return body.subarray(0, total).toString('utf8');
 }

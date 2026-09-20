@@ -675,6 +675,26 @@ test('checkout request bodies are bounded for chunked, malformed, and slow uploa
   await assert.rejects(() => readLimitedRequestText(stalled, 4096, 20), RequestBodyTimeoutError);
 });
 
+test('bounded request readers do not retain one allocation per fragmented chunk', async () => {
+  // A byte ceiling alone is insufficient when a peer uses one-byte chunks:
+  // the chunk-array metadata can exceed the accepted body. The shared reader
+  // copies into one bounded buffer and still preserves the exact payload.
+  const fragments = {
+    headers: new Headers(),
+    body: new ReadableStream({
+      start(controller) {
+        for (const byte of Buffer.from('{"ok":true}')) controller.enqueue(new Uint8Array([byte]));
+        controller.close();
+      },
+    }),
+  };
+  assert.equal(await readLimitedRequestText(fragments, 1024, 100), '{"ok":true}');
+  assert.match(fs.readFileSync(require.resolve('../lib/requestBody.ts'), 'utf8'), /const body = Buffer\.allocUnsafe\(maxBytes\)/);
+  assert.match(webhookRoute, /const body = Buffer\.allocUnsafe\(MAX_STRIPE_WEBHOOK_BODY_BYTES\)/);
+  assert.match(webhookRoute, /const body=Buffer\.allocUnsafe\(MAX_DELIVERY_RESPONSE_BODY_BYTES\)/);
+  assert.doesNotMatch(webhookRoute, /const chunks: Uint8Array\[\] = \[\]/);
+});
+
 test('shared request-body reader rejects invalid resource limits before reading a stream', async () => {
   // `NaN` would otherwise make the streamed size comparison always false;
   // Infinity/zero would disable the deadline that protects a Node worker.

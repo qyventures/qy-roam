@@ -58,7 +58,12 @@ async function readStripeWebhookBody(req: Request): Promise<Buffer> {
 
   if (!req.body) return Buffer.alloc(0);
   const reader = req.body.getReader();
-  const chunks: Uint8Array[] = [];
+  // A byte limit by itself still permits a hostile peer to make the chunks
+  // array consume much more than the signed payload by fragmenting it into
+  // tiny writes. Reserve the known maximum once and copy chunks into it so
+  // this public pre-signature boundary remains memory-bounded in both bytes
+  // and object count.
+  const body = Buffer.allocUnsafe(MAX_STRIPE_WEBHOOK_BODY_BYTES);
   let total = 0;
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const bodyTimeout = new Promise<never>((_, reject) => {
@@ -85,7 +90,7 @@ async function readStripeWebhookBody(req: Request): Promise<Buffer> {
         void reader.cancel().catch(() => undefined);
         throw new RangeError('Stripe webhook payload is too large');
       }
-      chunks.push(value);
+      body.set(value, total - value.byteLength);
     }
   } finally {
     if (timeout) clearTimeout(timeout);
@@ -95,7 +100,7 @@ async function readStripeWebhookBody(req: Request): Promise<Buffer> {
     // the correct retryable response instead of an unrelated cleanup error.
     try { reader.releaseLock(); } catch {}
   }
-  return Buffer.concat(chunks, total);
+  return body.subarray(0, total);
 }
 
 function sha256(value?: string | null) { return value ? crypto.createHash('sha256').update(value).digest('hex') : undefined; }
@@ -191,7 +196,11 @@ async function readDeliveryResponseBody(response: Response) {
   }
   if(!response.body) return '';
   const reader=response.body.getReader();
-  const chunks:Uint8Array[]=[];
+  // Provider bodies are bounded for the same reason as public request bodies:
+  // without a fixed buffer, a peer can make chunk-array metadata dominate the
+  // 64 KiB payload ceiling. This endpoint only retains a diagnostic-sized
+  // response, so a single capped buffer is appropriate.
+  const body=Buffer.allocUnsafe(MAX_DELIVERY_RESPONSE_BODY_BYTES);
   let total=0;
   try {
     for (;;) {
@@ -205,14 +214,14 @@ async function readDeliveryResponseBody(response: Response) {
         void reader.cancel().catch(()=>undefined);
         throw new RangeError('Delivery response body is too large');
       }
-      chunks.push(value);
+      body.set(value,total-value.byteLength);
     }
   } finally {
     // Response-body limits must retain their explicit failure even if a
     // broken upstream leaves a pending read while cancellation unwinds.
     try { reader.releaseLock(); } catch {}
   }
-  return Buffer.concat(chunks,total).toString('utf8');
+  return body.subarray(0,total).toString('utf8');
 }
 
 async function postJsonWithTimeout(url:string,body:unknown,timeoutMs=DELIVERY_TIMEOUT_MS,headers:Record<string,string>={}){
