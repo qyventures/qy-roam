@@ -31,6 +31,7 @@ const { allowedFulfilmentStatuses, fulfilmentNotificationActionable, validFulfil
 const { operationalConfig } = require('../lib/operationalConfig.ts');
 const { validStripeCheckoutSessionId } = require('../lib/stripeSessionId.ts');
 const { validStripeEventCreated, validStripePaymentEventCreated, STRIPE_EVENT_CREATED_MIN_SECONDS, STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS } = require('../lib/stripeEventCreated.ts');
+const { hasQyRoamWebhookSource, stripeWebhookCheckoutSession } = require('../lib/stripeWebhookObject.ts');
 const { isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError, InvalidRequestBodyLimitError } = require('../lib/requestBody.ts');
 const { checkoutClientKey, createCheckoutAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = require('../lib/stripeCheckoutConfig.ts');
@@ -219,6 +220,21 @@ test('Stripe webhook recovery records do not persist arbitrary upstream error te
   );
   assert.match(webhookRoute, /const message=safeWebhookProcessingFailure\(error\);/);
   assert.doesNotMatch(webhookRoute, /const message=error instanceof Error\?error\.message/);
+});
+
+test('webhook Checkout Session objects are structurally bounded before source metadata is trusted', () => {
+  const session = { object: 'checkout.session', id: 'cs_test_webhook_object', livemode: false, metadata: { source: 'qyroam.com' } };
+  assert.equal(stripeWebhookCheckoutSession(session), session);
+  assert.equal(stripeWebhookCheckoutSession(null), null);
+  assert.equal(stripeWebhookCheckoutSession([]), null);
+  assert.equal(stripeWebhookCheckoutSession({ object: 'checkout.session', id: 'cs_test_webhook_object', livemode: 'false' }), null);
+  assert.equal(stripeWebhookCheckoutSession({ object: 'payment_intent', id: 'cs_test_webhook_object', livemode: false }), null);
+  assert.equal(hasQyRoamWebhookSource(session.metadata), true);
+  assert.equal(hasQyRoamWebhookSource(null), false);
+  assert.equal(hasQyRoamWebhookSource({ source: 'another-store' }), false);
+  assert.match(webhookRoute, /const eventSession=stripeWebhookCheckoutSession\(event\.data\?\.object\);/);
+  assert.match(webhookRoute, /if\(!hasQyRoamWebhookSource\(eventSession\.metadata\)\)/);
+  assert.match(webhookRoute, /stripe_webhook_invalid_checkout_session_object/);
 });
 
 test('Stripe webhook failure logging does not print raw dependency errors', () => {
@@ -2428,7 +2444,7 @@ test('Stripe terminal events refresh the Checkout Session before persisting or d
     webhookRoute.indexOf("if(!['checkout.session.completed'"),
     webhookRoute.indexOf("if(event.type==='checkout.session.expired')"),
   );
-  const sourceBoundary = processing.indexOf("if(eventSession.metadata?.source!=='qyroam.com')");
+  const sourceBoundary = processing.indexOf('if(!hasQyRoamWebhookSource(eventSession.metadata))');
   const sessionIdBoundary = processing.indexOf('const eventSessionId=validStripeCheckoutSessionId(eventSession.id)');
   const refresh = processing.indexOf('session=await stripe.checkout.sessions.retrieve(eventSessionId)');
   const identityBoundary = processing.indexOf('if(session.id!==eventSessionId||session.livemode!==event.livemode)');

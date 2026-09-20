@@ -20,6 +20,7 @@ import { metaPurchaseEventSourceUrl } from '@/lib/siteOrigin';
 import { fulfilmentRelayAcknowledged } from '@/lib/deliveryAcknowledgement';
 import { safeProviderDeliveryFailure, safeWebhookProcessingFailure } from '@/lib/deliveryFailure';
 import { nextRetryAttempt } from '@/lib/retryAttempt';
+import { hasQyRoamWebhookSource, stripeWebhookCheckoutSession } from '@/lib/stripeWebhookObject';
 
 export const runtime = 'nodejs';
 
@@ -687,12 +688,21 @@ export async function POST(req:Request){
     return NextResponse.json({error:'Stripe event mode mismatch'},{status:400});
   }
   if(!['checkout.session.completed','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed','checkout.session.expired'].includes(event.type)) return NextResponse.json({received:true});
-  const eventSession=event.data.object as Stripe.Checkout.Session, supabase=getSupabaseAdmin(); if(!supabase) return NextResponse.json({error:'Persistence unavailable'},{status:503});
+  // The SDK type is not a runtime validator. Inspect the deserialised event
+  // object before reading its metadata or using its id in an outbound Stripe
+  // request / durable ledger key. This leaves malformed signed payloads as a
+  // clean client error instead of an unhandled property access and retry loop.
+  const eventSession=stripeWebhookCheckoutSession(event.data?.object);
+  if(!eventSession) {
+    console.error('stripe_webhook_invalid_checkout_session_object',{eventId:stripeEventId});
+    return NextResponse.json({error:'Invalid Checkout Session object'},{status:400});
+  }
   // QY Roam can share a Stripe account with other products. A broad Checkout
   // webhook subscription must acknowledge their sessions without creating an
   // order, sending fulfilment email, or filling this app's idempotency ledger.
   // Both QY Roam checkout routes set this server-controlled marker.
-  if(eventSession.metadata?.source!=='qyroam.com') return NextResponse.json({received:true,ignored:true});
+  if(!hasQyRoamWebhookSource(eventSession.metadata)) return NextResponse.json({received:true,ignored:true});
+  const supabase=getSupabaseAdmin(); if(!supabase) return NextResponse.json({error:'Persistence unavailable'},{status:503});
   // The event is Stripe-signed, but retain the same bounded identifier
   // boundary used by customer-facing recovery pages before an SDK call or a
   // durable ledger write. This protects the worker from an unexpected API
