@@ -31,7 +31,7 @@ const { allowedFulfilmentStatuses, fulfilmentNotificationActionable, validFulfil
 const { operationalConfig } = require('../lib/operationalConfig.ts');
 const { validStripeCheckoutSessionId } = require('../lib/stripeSessionId.ts');
 const { validStripeEventCreated, validStripePaymentEventCreated, STRIPE_EVENT_CREATED_MIN_SECONDS, STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS } = require('../lib/stripeEventCreated.ts');
-const { isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError } = require('../lib/requestBody.ts');
+const { isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError, InvalidRequestBodyLimitError } = require('../lib/requestBody.ts');
 const { checkoutClientKey, createCheckoutAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = require('../lib/stripeCheckoutConfig.ts');
 const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
@@ -673,6 +673,26 @@ test('checkout request bodies are bounded for chunked, malformed, and slow uploa
     body: new ReadableStream({ pull() { return new Promise(() => {}); } }),
   };
   await assert.rejects(() => readLimitedRequestText(stalled, 4096, 20), RequestBodyTimeoutError);
+});
+
+test('shared request-body reader rejects invalid resource limits before reading a stream', async () => {
+  // `NaN` would otherwise make the streamed size comparison always false;
+  // Infinity/zero would disable the deadline that protects a Node worker.
+  const neverRead = {
+    headers: new Headers(),
+    body: { getReader() { throw new Error('invalid limits must not read the body'); } },
+  };
+  for (const [maxBytes, timeoutMs] of [
+    [Number.NaN, 100],
+    [Number.POSITIVE_INFINITY, 100],
+    [-1, 100],
+    [4096, 0],
+    [4096, Number.POSITIVE_INFINITY],
+    [1_000_001, 100],
+    [4096, 60_001],
+  ]) {
+    await assert.rejects(() => readLimitedRequestText(neverRead, maxBytes, timeoutMs), InvalidRequestBodyLimitError);
+  }
 });
 
 test('oversized streamed request bodies do not wait for cancellation cleanup', async () => {

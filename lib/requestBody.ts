@@ -4,6 +4,21 @@
 export class RequestBodyTooLargeError extends Error {}
 export class RequestBodyTimeoutError extends Error {}
 export class InvalidRequestBodyLengthError extends Error {}
+export class InvalidRequestBodyLimitError extends Error {}
+
+// Route handlers currently need only a few KiB of JSON. Keep the shared
+// streaming helper safe if a future endpoint accidentally passes a value from
+// configuration (or an unvalidated calculation): `NaN` makes a `total >
+// maxBytes` comparison permanently false, while an infinite deadline defeats
+// the slow-upload protection entirely. Larger uploads should use a dedicated
+// streaming protocol rather than this text-buffering helper.
+export const MAX_REQUEST_BODY_LIMIT_BYTES = 1_000_000;
+export const MAX_REQUEST_BODY_TIMEOUT_MS = 60_000;
+
+function validRequestBodyLimit(maxBytes: number, timeoutMs: number) {
+  return Number.isSafeInteger(maxBytes) && maxBytes >= 0 && maxBytes <= MAX_REQUEST_BODY_LIMIT_BYTES &&
+    Number.isSafeInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= MAX_REQUEST_BODY_TIMEOUT_MS;
+}
 
 /**
  * Accept JSON media types with optional parameters (for example a charset),
@@ -17,6 +32,13 @@ export function isJsonRequestContentType(value: string | null) {
 }
 
 export async function readLimitedRequestText(req: Request, maxBytes: number, timeoutMs: number) {
+  // Validate the bounds before consulting Content-Length or obtaining a
+  // reader. This keeps a programming/configuration error fail-closed instead
+  // of reading an unbounded request body, and makes it impossible to create a
+  // timer that never provides the promised deadline.
+  if (!validRequestBodyLimit(maxBytes, timeoutMs)) {
+    throw new InvalidRequestBodyLimitError('Invalid request body limits');
+  }
   const contentLength = req.headers.get('content-length');
   if (contentLength !== null && !/^\d+$/.test(contentLength)) {
     throw new InvalidRequestBodyLengthError('Invalid request body length');
