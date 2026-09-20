@@ -268,6 +268,13 @@ export async function POST(req: Request) {
     // arbitrary response text to logs; the stable event name is sufficient
     // for alerting and avoids retaining a provider-echoed secret or PII.
     console.error('esim_checkout_error');
-    return NextResponse.json({ error: 'Unable to start eSIM checkout.' }, { status: 500 });
+    // Stripe and database failures at this boundary are temporary dependency
+    // failures, not a malformed customer request. The checkout request id is
+    // an idempotency key, so a browser can safely retry it; make that contract
+    // explicit and prevent an intermediary from caching a transient outage.
+    return NextResponse.json({ error: 'eSIM checkout is temporarily unavailable. Please try again shortly.' }, {
+      status: 503,
+      headers: { 'Cache-Control': 'no-store', 'Retry-After': '10' },
+    });
   }
 }

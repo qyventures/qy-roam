@@ -414,5 +414,15 @@ export async function POST(req: Request) {
     return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
   }
   return NextResponse.json({url:currentSession.url},{headers:{'Cache-Control':'no-store'}});
- } catch { console.error('checkout_error'); return NextResponse.json({error:'Unable to start checkout.'},{status:500}); }
+ } catch {
+  // This can catch a temporary Stripe or database dependency failure after a
+  // request id was accepted. The id is a durable idempotency boundary, so
+  // customers can retry safely; expose a retryable, non-cacheable outage
+  // instead of a generic server error that may be retained by an intermediary.
+  console.error('checkout_error');
+  return NextResponse.json(
+    {error:'Pocket WiFi checkout is temporarily unavailable. Please try again shortly.'},
+    {status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}},
+  );
+ }
 }

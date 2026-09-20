@@ -314,6 +314,22 @@ test('public sales and confirmation paths do not log raw provider failures', () 
   }
 });
 
+test('unexpected checkout dependency failures remain retryable and non-cacheable', () => {
+  // Checkout request ids are durable Stripe idempotency keys. A transient
+  // Stripe/Supabase failure therefore needs a short retryable response, never
+  // a cacheable generic 500 that can strand a customer after payment setup.
+  for (const [source, error] of [
+    [wifiCheckoutRoute, 'Pocket WiFi checkout is temporarily unavailable. Please try again shortly.'],
+    [esimCheckoutRoute, 'eSIM checkout is temporarily unavailable. Please try again shortly.'],
+  ]) {
+    const boundary = source.slice(source.indexOf("console.error('" + (source === wifiCheckoutRoute ? 'checkout_error' : 'esim_checkout_error') + "')"));
+    assert.match(boundary, /status:\s*503/);
+    assert.match(boundary, /'Cache-Control'\s*:\s*'no-store'/);
+    assert.match(boundary, /'Retry-After'\s*:\s*'10'/);
+    assert.match(boundary, new RegExp(error.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+});
+
 test('admin and readiness failure paths do not expose raw dependency errors', () => {
   // Administrative routes can still encounter provider-echoed customer or
   // configuration data. Expected conflicts retain their explicit responses;
