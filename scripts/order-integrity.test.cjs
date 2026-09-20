@@ -2149,6 +2149,14 @@ test('Stripe webhook claims recover malformed and implausibly future leases', ()
   assert.match(webhookRoute, /\[previousStartedAt\?'eq':'is'\]\('processing_started_at',previousStartedAt\|\|null\)/);
 });
 
+test('stale delivery ledgers with legacy NULL timestamps remain reclaimable', () => {
+  // deliveryLeaseIsStale deliberately treats a missing timestamp as abandoned.
+  // The optimistic claim must use PostgREST `is(..., null)` for that case:
+  // equality with NULL would never match and leave paid delivery stuck.
+  assert.match(webhookRoute, /notification\.updated_at\?'eq':'is'\]\('updated_at',notification\.updated_at\|\|null\)/);
+  assert.match(webhookRoute, /delivery\.updated_at\?'eq':'is'\]\('updated_at',delivery\.updated_at\|\|null\)/);
+});
+
 test('durable Stripe delivery ledgers upgrade every retry and ownership field additively', () => {
   // A live project can have one of these tables from an earlier release.
   // `create table if not exists` alone does not add later columns, so ensure
