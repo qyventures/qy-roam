@@ -868,6 +868,33 @@ begin
   perform pg_advisory_xact_lock(hashtext('qy_roam_pocket_wifi_checkout'));
   delete from public.checkout_reservations where expires_at <= now() - interval '4 days';
 
+  -- An offline sale has no Stripe idempotency key, so its deterministic
+  -- internal reference is the retry boundary. Check it while holding the
+  -- same capacity lock used for the first insert, and do so before counting
+  -- capacity: a browser retry after the last available unit was sold must
+  -- return that original sale rather than incorrectly reporting it sold out.
+  -- Conversely, one payment/sales reference must never be able to overwrite
+  -- a paid rental with altered traveller or booking details.
+  select * into v_order
+  from public.orders
+  where stripe_session_id = p_stripe_session_id
+  for update;
+  if found then
+    if v_order.product_type <> 'pocket_wifi'
+      or v_order.payment_status <> 'paid'
+      or v_order.customer_name is distinct from p_customer_name
+      or v_order.email is distinct from p_email
+      or v_order.phone is distinct from p_phone
+      or v_order.amount_sgd is distinct from p_amount_sgd
+      or v_order.plan_name is distinct from p_plan_name
+      or v_order.country is distinct from p_country
+      or v_order.travel_start is distinct from p_travel_start
+      or v_order.travel_end is distinct from p_travel_end then
+      raise exception 'manual order reference already belongs to different order details';
+    end if;
+    return v_order;
+  end if;
+
   -- Apply the same physical-stock ceiling used by public checkout. Manual
   -- paid orders are genuine rental commitments and cannot bypass a
   -- quarantined, maintenance, or empty router fleet.

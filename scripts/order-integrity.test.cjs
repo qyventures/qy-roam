@@ -1545,6 +1545,25 @@ test('manual paid Pocket WiFi orders use the same atomic capacity boundary as ch
   assert.match(schema, /Pocket WiFi is sold out or reserved for these travel dates/);
 });
 
+test('manual paid Pocket WiFi retries resolve before capacity is counted', () => {
+  // The manual-order endpoint, not the Stripe persistence RPC, is the
+  // authoritative retry boundary for offline sales. Its deterministic order
+  // reference must return the first sale before a later retry can be blocked
+  // by that same sale consuming the final available router.
+  const manualPocketWifiRpc = schema.slice(
+    schema.indexOf('create or replace function public.qy_create_manual_pocket_wifi_order'),
+    schema.indexOf('-- No client policies: all operational tables are server/service-role only.'),
+  );
+  assert.match(manualPocketWifiRpc, /select \* into v_order\s+from public\.orders\s+where stripe_session_id = p_stripe_session_id\s+for update;/);
+  assert.match(manualPocketWifiRpc, /v_order\.product_type <> 'pocket_wifi'/);
+  assert.match(manualPocketWifiRpc, /manual order reference already belongs to different order details/);
+  assert.match(manualPocketWifiRpc, /return v_order;/);
+  assert.ok(
+    manualPocketWifiRpc.indexOf('where stripe_session_id = p_stripe_session_id') < manualPocketWifiRpc.indexOf('select coalesce(sum(quantity_on_hand), 0)::integer into v_saleable_inventory'),
+    'manual retry lookup must precede the capacity calculation',
+  );
+});
+
 test('eSIM lifecycle cannot use router statuses or reopen closed orders', () => {
   assert.deepEqual(allowedFulfilmentStatuses('esim', 'awaiting_fulfilment'), ['awaiting_fulfilment', 'fulfilled', 'cancelled']);
   assert.equal(validFulfilmentTransition('esim', 'awaiting_fulfilment', 'dispatched'), false);
