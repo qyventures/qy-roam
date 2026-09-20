@@ -27,7 +27,7 @@ const { parseExactIsoDate, validCheckoutRequestId } = require('../lib/checkoutVa
 const { operationalIsoDate, operationalIsoDateAfter, operationalDaysFromToday } = require('../lib/operationalDate.ts');
 const { POCKET_WIFI_RETURN_GRACE_DAYS } = require('../lib/pocketWifiReturns.ts');
 const { WIFI_BENCHMARK, WIFI_PLANS } = require('../lib/wifiPlans.ts');
-const { allowedFulfilmentStatuses, fulfilmentNotificationActionable, validFulfilmentTransition, STRIPE_EVENT_CLAIM_STALE_MS } = require('../lib/orderLifecycle.ts');
+const { allowedFulfilmentStatuses, fulfilmentNotificationActionable, validFulfilmentTransition, STRIPE_EVENT_CLAIM_STALE_MS, STRIPE_EVENT_CLAIM_CLOCK_SKEW_MS, stripeEventClaimInProgress } = require('../lib/orderLifecycle.ts');
 const { operationalConfig } = require('../lib/operationalConfig.ts');
 const { validStripeCheckoutSessionId } = require('../lib/stripeSessionId.ts');
 const { validStripeEventCreated, STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS } = require('../lib/stripeEventCreated.ts');
@@ -1808,10 +1808,26 @@ test('failed Stripe webhook claims remain visible and immediately retryable', ()
   assert.match(productionReadiness, /processing_started_at,processed_at,attempts,last_failed_at,last_error/);
   assert.match(webhookRoute, /async function recordEventFailure/);
   assert.match(webhookRoute, /last_error:message\.slice\(0,500\)/);
-  assert.match(webhookRoute, /!existing\.data\?\.last_error/);
+  assert.match(webhookRoute, /stripeEventClaimInProgress\(previousStartedAt,existing\.data\?\.last_error\)/);
   assert.doesNotMatch(webhookRoute, /from\('stripe_events'\)\.delete\(\)/);
   assert.match(adminPage, /Stripe webhook failures/);
   assert.match(adminPage, /failed or abandoned events awaiting a signed retry/);
+});
+
+test('Stripe webhook claims recover malformed and implausibly future leases', () => {
+  const now = Date.parse('2026-09-20T12:00:00.000Z');
+  assert.equal(stripeEventClaimInProgress(new Date(now - 1_000).toISOString(), null, now), true);
+  assert.equal(stripeEventClaimInProgress(new Date(now - STRIPE_EVENT_CLAIM_STALE_MS).toISOString(), null, now), true);
+  assert.equal(stripeEventClaimInProgress(new Date(now - STRIPE_EVENT_CLAIM_STALE_MS - 1).toISOString(), null, now), false);
+  assert.equal(stripeEventClaimInProgress(new Date(now + STRIPE_EVENT_CLAIM_CLOCK_SKEW_MS).toISOString(), null, now), true);
+  assert.equal(stripeEventClaimInProgress(new Date(now + STRIPE_EVENT_CLAIM_CLOCK_SKEW_MS + 1).toISOString(), null, now), false);
+  assert.equal(stripeEventClaimInProgress(null, null, now), false);
+  assert.equal(stripeEventClaimInProgress('not-a-timestamp', null, now), false);
+  assert.equal(stripeEventClaimInProgress(new Date(now - 1_000).toISOString(), 'previous attempt failed', now), false);
+
+  // A legacy NULL needs PostgREST's `is` filter; `eq NULL` would never win
+  // the compare-and-swap and would leave the event permanently unclaimed.
+  assert.match(webhookRoute, /\[previousStartedAt\?'eq':'is'\]\('processing_started_at',previousStartedAt\|\|null\)/);
 });
 
 test('durable Stripe delivery ledgers upgrade every retry and ownership field additively', () => {
@@ -1849,7 +1865,7 @@ test('admin visibility detects abandoned Stripe claims using the webhook recover
   // A process can terminate before recordEventFailure runs. Such a claim has
   // no last_error, but it is just as actionable once the webhook lease expires.
   assert.equal(STRIPE_EVENT_CLAIM_STALE_MS, 30 * 60_000);
-  assert.match(webhookRoute, /Date\.now\(\)-previousStartedMs<=STRIPE_EVENT_CLAIM_STALE_MS/);
+  assert.match(webhookRoute, /stripeEventClaimInProgress\(previousStartedAt,existing\.data\?\.last_error\)/);
   assert.match(adminPage, /select\('event_id,event_type,stripe_session_id,attempts,processing_started_at,last_failed_at,last_error'\)/);
   assert.match(adminPage, /last_error\.not\.is\.null,processing_started_at\.lt\.\$\{webhookExceptionCutoff\}/);
   assert.match(adminPage, /if \(event\.last_error\) return true/);

@@ -11,7 +11,7 @@ import { validQyRoamProvenance } from '@/lib/orderProvenance';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { getEsimPlan } from '@/lib/esimPlans';
-import { fulfilmentNotificationActionable, STRIPE_EVENT_CLAIM_STALE_MS } from '@/lib/orderLifecycle';
+import { fulfilmentNotificationActionable, stripeEventClaimInProgress } from '@/lib/orderLifecycle';
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
 import { validStripeEventId } from '@/lib/stripeEventId';
 import { validStripeEventCreated } from '@/lib/stripeEventCreated';
@@ -393,10 +393,11 @@ async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string
     }
     if(existing.data?.processed_at) return {status:'processed'};
     const previousStartedAt=existing.data?.processing_started_at;
-    const previousStartedMs=previousStartedAt ? new Date(previousStartedAt).getTime() : Number.NaN;
     // A settled failure is no longer in flight and can be retried immediately.
-    // Otherwise retain the stale lease for a worker that may still complete.
-    if(!existing.data?.last_error&&(!previousStartedAt||!Number.isFinite(previousStartedMs)||Date.now()-previousStartedMs<=STRIPE_EVENT_CLAIM_STALE_MS)) return {status:'in_progress'};
+    // Otherwise retain only a recent, well-formed lease for a worker that may
+    // still complete. Invalid or implausibly future timestamps are abandoned
+    // so migration drift cannot strand a paid order forever.
+    if(stripeEventClaimInProgress(previousStartedAt,existing.data?.last_error)) return {status:'in_progress'};
 
     // A process can die after inserting the event but before completing it. Reclaim
     // only the exact stale version so concurrent Stripe retries cannot both proceed.
@@ -404,7 +405,9 @@ async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string
       .update({event_type:type,stripe_session_id:sessionId,processing_started_at:processingStartedAt,last_error:null,attempts:Number(existing.data?.attempts||1)+1})
       .eq('event_id',id)
       .is('processed_at',null)
-      .eq('processing_started_at',previousStartedAt)
+      // PostgREST equality does not match SQL NULL. Legacy/migrated rows can
+      // lack this timestamp, so use the null predicate for that recovery path.
+      [previousStartedAt?'eq':'is']('processing_started_at',previousStartedAt||null)
       .select('event_id');
     if(reclaimed.error) throw reclaimed.error;
     return reclaimed.data?.length===1 ? {status:'claimed',processingStartedAt} : {status:'in_progress'};

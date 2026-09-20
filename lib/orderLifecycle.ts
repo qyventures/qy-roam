@@ -24,6 +24,25 @@ export const ESIM_FULFILMENT_STATUSES = [
 // one dependency-free module so recovery and the operations dashboard agree
 // about when an unfinished claim is abandoned rather than still in flight.
 export const STRIPE_EVENT_CLAIM_STALE_MS = 30 * 60_000;
+export const STRIPE_EVENT_CLAIM_CLOCK_SKEW_MS = 60_000;
+
+/**
+ * Only a recent, well-formed lease with no recorded failure is still owned by
+ * another webhook worker. Missing/invalid timestamps must be recoverable, and
+ * a timestamp too far in the future must not block an order indefinitely when
+ * a host clock or manually repaired row is wrong.
+ */
+export function stripeEventClaimInProgress(
+  processingStartedAt: string | null | undefined,
+  lastError: string | null | undefined,
+  nowMs = Date.now(),
+) {
+  if (lastError) return false;
+  const startedAtMs = processingStartedAt ? new Date(processingStartedAt).getTime() : Number.NaN;
+  if (!Number.isFinite(startedAtMs)) return false;
+  const ageMs = nowMs - startedAtMs;
+  return ageMs >= -STRIPE_EVENT_CLAIM_CLOCK_SKEW_MS && ageMs <= STRIPE_EVENT_CLAIM_STALE_MS;
+}
 
 export function isEsimProduct(productType?: string | null) {
   return productType === 'esim';
