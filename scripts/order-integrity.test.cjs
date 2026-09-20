@@ -1861,6 +1861,14 @@ test('upgraded Stripe delivery ledgers retain database-enforced retry state mach
   ]) assert.match(schema, contract);
 });
 
+test('settled delivery ledgers cannot be reopened or rebound for duplicate delivery', () => {
+  assert.match(schema, /create trigger qy_enforce_fulfilment_notification_immutability\s+before update on public\.fulfilment_notifications/);
+  assert.match(schema, /create trigger qy_enforce_meta_purchase_delivery_immutability\s+before update on public\.meta_purchase_deliveries/);
+  assert.match(schema, /if new\.stripe_session_id is distinct from old\.stripe_session_id then\s+raise exception 'delivery ledger Checkout Session identity is immutable'/);
+  assert.match(schema, /if old\.status = 'sent' and new is distinct from old then\s+raise exception 'sent delivery ledger record is immutable'/);
+  assert.match(schema, /if old\.event_time is not null and new\.event_time is distinct from old\.event_time then\s+raise exception 'Meta Purchase event time is immutable after assignment'/);
+});
+
 test('admin visibility detects abandoned Stripe claims using the webhook recovery lease', () => {
   // A process can terminate before recordEventFailure runs. Such a claim has
   // no last_error, but it is just as actionable once the webhook lease expires.

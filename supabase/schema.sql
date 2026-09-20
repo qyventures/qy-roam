@@ -438,6 +438,59 @@ alter table public.meta_purchase_deliveries add constraint meta_purchase_deliver
   check (status <> 'sent' or sent_at is not null) not valid;
 alter table public.meta_purchase_deliveries enable row level security;
 
+-- A successful provider hand-off is an irreversible idempotency boundary.
+-- RLS does not protect against service-role workers or operational SQL, so a
+-- future repair path must not be able to reopen a sent row and accidentally
+-- deliver the same customer email or Purchase again. Keep each row bound to
+-- its Checkout Session as well. Meta's first persisted event time is part of
+-- the provider deduplication identity and must remain stable across retries.
+create or replace function public.qy_enforce_delivery_ledger_immutability()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public
+as $$
+begin
+  if new.stripe_session_id is distinct from old.stripe_session_id then
+    raise exception 'delivery ledger Checkout Session identity is immutable';
+  end if;
+  if old.status = 'sent' and new is distinct from old then
+    raise exception 'sent delivery ledger record is immutable';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists qy_enforce_fulfilment_notification_immutability on public.fulfilment_notifications;
+create trigger qy_enforce_fulfilment_notification_immutability
+before update on public.fulfilment_notifications
+for each row execute function public.qy_enforce_delivery_ledger_immutability();
+
+create or replace function public.qy_enforce_meta_purchase_delivery_immutability()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public
+as $$
+begin
+  if new.stripe_session_id is distinct from old.stripe_session_id then
+    raise exception 'delivery ledger Checkout Session identity is immutable';
+  end if;
+  if old.status = 'sent' and new is distinct from old then
+    raise exception 'sent delivery ledger record is immutable';
+  end if;
+  if old.event_time is not null and new.event_time is distinct from old.event_time then
+    raise exception 'Meta Purchase event time is immutable after assignment';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists qy_enforce_meta_purchase_delivery_immutability on public.meta_purchase_deliveries;
+create trigger qy_enforce_meta_purchase_delivery_immutability
+before update on public.meta_purchase_deliveries
+for each row execute function public.qy_enforce_meta_purchase_delivery_immutability();
+
 -- Short-lived inventory reservations close the gap between an availability
 -- check and Stripe Checkout Session creation. The reservation RPC serializes
 -- competing checkouts, so two customers cannot both claim the final router.
