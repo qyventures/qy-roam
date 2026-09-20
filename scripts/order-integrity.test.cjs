@@ -48,6 +48,7 @@ const { safeHttpsDeliveryEndpoint } = require('../lib/deliveryEndpoint.ts');
 const { fulfilmentRelayAcknowledged } = require('../lib/deliveryAcknowledgement.ts');
 const { safeProviderDeliveryFailure, safeWebhookProcessingFailure } = require('../lib/deliveryFailure.ts');
 const { nextRetryAttempt } = require('../lib/retryAttempt.ts');
+const { isSafeSmtpHost } = require('../lib/smtp.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -1292,10 +1293,20 @@ test('SMTP transport independently validates the envelope and message header bou
 
 test('checkout readiness rejects an SMTP host the fulfilment transport would reject', () => {
   assert.match(smtpClient, /export function isSafeSmtpHost\(value: string \| undefined\)/);
-  assert.match(smtpClient, /host\.length <= 253/);
-  assert.match(smtpClient, /!\/\[\\s\\r\\n\]\//);
+  assert.match(smtpClient, /host\.length > 253/);
+  assert.match(smtpClient, /isIP\(host\) !== 0/);
   assert.match(productionReadiness, /import \{ isSafeSmtpHost, isSafeSmtpMailbox \} from '@\/lib\/smtp';/);
   assert.match(productionReadiness, /isSafeSmtpHost\(host\)/);
+});
+
+test('SMTP readiness accepts only connectable host forms', () => {
+  assert.equal(isSafeSmtpHost('smtp.example.com'), true);
+  assert.equal(isSafeSmtpHost('smtp.example.com.'), true);
+  assert.equal(isSafeSmtpHost('2001:db8::25'), true);
+  assert.equal(isSafeSmtpHost('smtp.example.com:587'), false);
+  assert.equal(isSafeSmtpHost('https://smtp.example.com'), false);
+  assert.equal(isSafeSmtpHost('999.999.999.999'), false);
+  assert.equal(isSafeSmtpHost('smtp_example.example.com'), false);
 });
 
 test('SMTP fulfilment delivery upgrades every non-implicit-TLS transport before authentication', () => {

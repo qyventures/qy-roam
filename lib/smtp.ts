@@ -1,5 +1,6 @@
 import net from 'net';
 import tls from 'tls';
+import { isIP } from 'node:net';
 
 type SmtpOptions = {
   host: string;
@@ -47,7 +48,16 @@ function normalizedMailbox(value: string, field: 'from' | 'to') {
 export function isSafeSmtpHost(value: string | undefined) {
   if (!value) return false;
   const host = value.trim();
-  return Boolean(host && host.length <= 253 && !/[\s\r\n]/.test(host));
+  if (!host || host.length > 253 || /[\s\r\n]/.test(host)) return false;
+  // `net.connect` takes a hostname, not an SMTP URL or host:port pair. The
+  // former permissive check let those common configuration mistakes pass the
+  // checkout readiness gate, leaving a paid order to discover the error only
+  // when its fulfilment notification was sent. Accept normal DNS hostnames
+  // (including a trailing dot) and literal IPs, but reject URI punctuation,
+  // an embedded port, and numeric strings that are not valid IPv4 addresses.
+  if (isIP(host) !== 0) return true;
+  if (/^[\d.]+$/.test(host)) return false;
+  return /^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.?$/.test(host);
 }
 
 function safeSmtpHost(value: string) {
