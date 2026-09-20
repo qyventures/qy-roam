@@ -18,7 +18,7 @@ import { validStripePaymentEventCreated } from '@/lib/stripeEventCreated';
 import { safeHttpsDeliveryEndpoint } from '@/lib/deliveryEndpoint';
 import { metaPurchaseEventSourceUrl } from '@/lib/siteOrigin';
 import { fulfilmentRelayAcknowledged } from '@/lib/deliveryAcknowledgement';
-import { safeProviderDeliveryFailure } from '@/lib/deliveryFailure';
+import { safeProviderDeliveryFailure, safeWebhookProcessingFailure } from '@/lib/deliveryFailure';
 
 export const runtime = 'nodejs';
 
@@ -438,7 +438,12 @@ async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string
 }
 
 async function recordEventFailure(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>,eventId:string,processingStartedAt:string,error:unknown){
-  const message=error instanceof Error?error.message:'Stripe webhook processing failed';
+  // `last_error` is an operator-visible durable ledger, not a raw exception
+  // sink. The webhook can catch Stripe SDK, PostgREST, proxy, and provider
+  // errors here; any of them can contain echoed request/customer/configuration
+  // data. Keep the affected event identity in its dedicated columns and store
+  // only an application-authored recovery instruction in this field.
+  const message=safeWebhookProcessingFailure(error);
   // Keep the claim as an operational audit record, but mark it settled so the
   // next signed Stripe retry can reclaim it immediately rather than waiting
   // for the abandoned-worker timeout. The ownership predicate prevents an old

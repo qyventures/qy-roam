@@ -44,7 +44,7 @@ const { SUPABASE_REQUEST_TIMEOUT_MS, fetchSupabaseWithTimeout } = require('../li
 const { checkoutAttempt, clearCheckoutAttempt, CHECKOUT_ATTEMPT_MAX_AGE_MS } = require('../lib/checkoutAttempt.ts');
 const { safeHttpsDeliveryEndpoint } = require('../lib/deliveryEndpoint.ts');
 const { fulfilmentRelayAcknowledged } = require('../lib/deliveryAcknowledgement.ts');
-const { safeProviderDeliveryFailure } = require('../lib/deliveryFailure.ts');
+const { safeProviderDeliveryFailure, safeWebhookProcessingFailure } = require('../lib/deliveryFailure.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -157,6 +157,16 @@ test('SMTP relay success is bound to the exact fulfilment message identity', () 
       webhookRoute.indexOf('if(!response.ok) throw new Error(`SMTP relay failed (${response.status})`)'),
     'relay acknowledgement must be checked after transport success and before delivery returns',
   );
+});
+
+test('Stripe webhook recovery records do not persist arbitrary upstream error text', () => {
+  const upstreamError = new Error('provider rejected bearer secret_token for customer@example.com');
+  assert.equal(
+    safeWebhookProcessingFailure(upstreamError),
+    'Stripe webhook processing failed; retry or inspect the affected event.',
+  );
+  assert.match(webhookRoute, /const message=safeWebhookProcessingFailure\(error\);/);
+  assert.doesNotMatch(webhookRoute, /const message=error instanceof Error\?error\.message/);
 });
 
 function esimSession(plan = ESIM_PLANS[0]) {

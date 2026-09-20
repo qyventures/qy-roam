@@ -9,3 +9,14 @@ export function safeProviderDeliveryFailure(error: unknown, fallback: string) {
   const message = error instanceof Error ? error.message : '';
   return SAFE_PROVIDER_FAILURE.test(message) ? message : fallback;
 }
+
+// Stripe-event failures are also surfaced in the protected operations UI.
+// Unlike the two delivery ledgers above, this path can catch errors from the
+// Stripe SDK, PostgREST, or a future dependency before a more specific
+// delivery record exists. Do not persist their arbitrary messages: SDK and
+// proxy errors can echo request details, endpoint configuration, or customer
+// data. The event id, event type, and Checkout Session id are already stored
+// separately for an operator to reconcile the failed event safely.
+export function safeWebhookProcessingFailure(_error: unknown) {
+  return 'Stripe webhook processing failed; retry or inspect the affected event.';
+}
