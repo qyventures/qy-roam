@@ -1949,6 +1949,12 @@ test('authenticated health readiness fails when any order-critical dependency is
   assert.match(healthRoute, /ok: launchReady/);
   assert.match(healthRoute, /status: launchReady \? 200 : 503/);
   assert.doesNotMatch(healthRoute, /const coreReady/);
+  // Checkout redirects customers to the server-created Stripe-hosted Session
+  // URL and never uses Stripe.js. A stale or absent browser publishable key
+  // must therefore not turn the machine readiness probe red while both public
+  // checkout routes can safely accept and fulfil an order.
+  assert.doesNotMatch(healthRoute, /publishableKey:/);
+  assert.doesNotMatch(healthRoute, /NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY/);
 });
 
 test('inventory visibility distinguishes unavailable data from zero stock and exposes saleable router stock', () => {

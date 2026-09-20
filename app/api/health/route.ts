@@ -12,10 +12,6 @@ export const runtime = 'nodejs';
 // for deployments that do not enforce a proxy header limit.
 const MAX_HEALTH_AUTHORIZATION_HEADER_LENGTH = 1_024;
 
-function hasPrefix(value: string | undefined, prefixes: string[]) {
-  return Boolean(value && prefixes.some((prefix) => value.startsWith(prefix)));
-}
-
 function isStrongAdminPassword(value?: string) {
   if (!value || value.length < 16) return false;
   return /[a-z]/.test(value) && /[A-Z]/.test(value) && /\d/.test(value) && /[^A-Za-z0-9]/.test(value);
@@ -73,7 +69,6 @@ export async function GET(req: Request) {
   ]);
   const checks = {
     stripe: hasRequiredStripeCheckoutConfig(),
-    publishableKey: hasPrefix(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY, ['pk_live_']),
     siteUrl: isProductionQyRoamOrigin(process.env.NEXT_PUBLIC_SITE_URL),
     webhook: hasRequiredStripeWebhookConfig(),
     orderIntegrity: isOrderIntegrityConfigured(),
