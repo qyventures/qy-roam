@@ -22,12 +22,17 @@ assert.doesNotMatch(deploy, /git checkout\s/);
 assert.match(deploy, /npm ci --no-audit --no-fund/);
 assert.doesNotMatch(deploy, /npm install --no-audit --no-fund/);
 // Compile success alone is not a safe restart boundary. Boot the exact
-// standalone artifact on loopback and require its public, dependency-free
-// liveness response before replacing the live process.
+// standalone artifact on loopback and require its authenticated order
+// readiness response before replacing the live process. This catches a
+// partial production migration/configuration before customer traffic moves
+// to the freshly built process.
 assert.match(deploy, /node \.next\/standalone\/server\.js/);
 assert.match(deploy, /HOSTNAME=127\.0\.0\.1 PORT="\$smoke_port"/);
 assert.match(deploy, /http:\/\/127\.0\.0\.1:\$\{smoke_port\}\/api\/health/);
-assert.match(deploy, /result\.ok!==true\|\|result\.service!=='qy-roam'/);
+assert.match(deploy, /smoke_curl_config=/);
+assert.match(deploy, /chmod 600 "\$smoke_log" "\$smoke_curl_config"/);
+assert.match(deploy, /curl --config "\$smoke_curl_config" --fail --silent --show-error --max-time 10/);
+assert.match(deploy, /result\.launchReady!==true\|\|result\.service!=='qy-roam'/);
 assert.match(deploy, /Built QY Roam artifact failed its isolated startup smoke test/);
 assert.ok(
   deploy.indexOf('Smoke-testing the production artifact') < deploy.indexOf('systemctl restart "$SERVICE_NAME"'),

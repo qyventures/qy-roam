@@ -66,23 +66,27 @@ npm run build
 
 echo "[6/11] Smoke-testing the production artifact"
 # A successful compilation does not prove that the standalone server can boot
-# with the deployed runtime configuration. Test the exact production entrypoint
-# on an isolated loopback port before replacing the currently healthy service.
-# This catches missing standalone files and startup-time configuration/runtime
-# failures while production is still untouched.
+# or accept an order with the deployed runtime configuration. Test the exact
+# production entrypoint on an isolated loopback port before replacing the
+# currently healthy service. The authenticated health boundary includes the
+# deployed database/order contracts, so a partial migration or missing
+# order-critical configuration fails before—not after—the live restart.
 smoke_port="${SMOKE_PORT:-3199}"
 if [[ ! "$smoke_port" =~ ^[0-9]+$ ]] || (( smoke_port < 1024 || smoke_port > 65535 )); then
   echo "SMOKE_PORT must be an integer between 1024 and 65535" >&2
   exit 1
 fi
 smoke_log="$(mktemp /tmp/qyroam-smoke.XXXXXX.log)"
+smoke_curl_config="$(mktemp /tmp/qyroam-smoke-curl.XXXXXX.conf)"
+chmod 600 "$smoke_log" "$smoke_curl_config"
+printf 'header = "Authorization: Bearer %s"\n' "$health_check_token" > "$smoke_curl_config"
 smoke_pid=""
 cleanup_smoke() {
   if [[ -n "$smoke_pid" ]] && kill -0 "$smoke_pid" 2>/dev/null; then
     kill "$smoke_pid" 2>/dev/null || true
     wait "$smoke_pid" 2>/dev/null || true
   fi
-  rm -f "$smoke_log"
+  rm -f "$smoke_log" "$smoke_curl_config"
 }
 trap cleanup_smoke EXIT
 HOSTNAME=127.0.0.1 PORT="$smoke_port" node .next/standalone/server.js >"$smoke_log" 2>&1 &
@@ -92,8 +96,8 @@ for attempt in {1..15}; do
   if ! kill -0 "$smoke_pid" 2>/dev/null; then
     break
   fi
-  if curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${smoke_port}/api/health" |
-     node -e "let body='';process.stdin.on('data',chunk=>body+=chunk).on('end',()=>{const result=JSON.parse(body);if(result.ok!==true||result.service!=='qy-roam')process.exit(1)})"; then
+  if curl --config "$smoke_curl_config" --fail --silent --show-error --max-time 10 "http://127.0.0.1:${smoke_port}/api/health" |
+     node -e "let body='';process.stdin.on('data',chunk=>body+=chunk).on('end',()=>{const result=JSON.parse(body);if(result.launchReady!==true||result.service!=='qy-roam')process.exit(1)})"; then
     smoke_ready=1
     break
   fi
