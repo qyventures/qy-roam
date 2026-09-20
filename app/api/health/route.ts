@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { hasRequiredAdminCredentials, hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
-import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig, hasRequiredOperationsSchema, hasRequiredPaymentSchema, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '@/lib/productionReadiness';
+import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig, hasRequiredOperationsSchema, hasRequiredPaymentSchema, hasRequiredPocketWifiFulfilmentSchema, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '@/lib/productionReadiness';
 import { operationalConfig } from '@/lib/operationalConfig';
 import { isProductionQyRoamOrigin } from '@/lib/siteOrigin';
 
@@ -61,9 +61,10 @@ export async function GET(req: Request) {
   // Pocket WiFi requirement. Keep the authenticated release signal aligned
   // with both routes so it cannot declare the store ready while eSIM checkout
   // correctly fails closed against a partial migration.
-  const [esimOrderSchema, paymentSchema, operationsSchema] = await Promise.all([
+  const [esimOrderSchema, paymentSchema, pocketWifiFulfilmentSchema, operationsSchema] = await Promise.all([
     hasRequiredEsimOrderSchema(),
     hasRequiredPaymentSchema(),
+    hasRequiredPocketWifiFulfilmentSchema(),
     hasRequiredOperationsSchema(),
   ]);
   const checks = {
@@ -74,6 +75,7 @@ export async function GET(req: Request) {
     supabase: Boolean(process.env.SUPABASE_URL?.startsWith('https://') && process.env.SUPABASE_SERVICE_ROLE_KEY && process.env.SUPABASE_SERVICE_ROLE_KEY.length >= 32),
     esimOrderSchema,
     paymentSchema,
+    pocketWifiFulfilmentSchema,
     operationsSchema,
     admin: hasRequiredAdminCredentials(),
     inventory: Boolean(config && config.pocketWifiInventory > 0),

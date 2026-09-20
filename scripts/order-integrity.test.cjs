@@ -2110,9 +2110,11 @@ test('launch control reports the same checkout prerequisites that protect real o
   assert.match(launchPage, /hasRequiredStripeWebhookConfig\(\)/);
   assert.match(launchPage, /function hasOrderIntegritySecret/);
   assert.match(launchPage, /hasRequiredEsimOrderSchema\(\)/);
+  assert.match(launchPage, /hasRequiredPocketWifiFulfilmentSchema\(\)/);
   assert.match(launchPage, /const commonCheckoutReady=stripe&&webhook&&site&&orderIntegrity&&smtp/);
   assert.match(launchPage, /const esimReady=commonCheckoutReady&&esimOrderDbOk/);
-  assert.match(launchPage, /const wifiReady=commonCheckoutReady&&paymentDbOk&&wifiInventory/);
+  assert.match(launchPage, /const wifiReady=commonCheckoutReady&&paymentDbOk&&pocketWifiFulfilmentDbOk&&wifiInventory/);
+  assert.match(launchPage, /Pocket WiFi dispatch and return custody schema/);
   assert.doesNotMatch(launchPage, /const esimReady=.*paymentDbOk/);
   assert.match(launchPage, /const paidReady=esimReady&&wifiReady&&metaCapi/);
   assert.match(launchPage, /eSIM checkout blockers/);
@@ -2128,8 +2130,10 @@ test('authenticated health readiness fails when any order-critical dependency is
   // the token-authenticated response is used as the production readiness
   // boundary and must not return 200 for a service unable to take orders.
   assert.match(healthRoute, /hasRequiredEsimOrderSchema/);
-  assert.match(healthRoute, /const \[esimOrderSchema, paymentSchema, operationsSchema\] = await Promise\.all\(\[/);
+  assert.match(healthRoute, /hasRequiredPocketWifiFulfilmentSchema/);
+  assert.match(healthRoute, /const \[esimOrderSchema, paymentSchema, pocketWifiFulfilmentSchema, operationsSchema\] = await Promise\.all\(\[/);
   assert.match(healthRoute, /esimOrderSchema,/);
+  assert.match(healthRoute, /pocketWifiFulfilmentSchema,/);
   assert.match(healthRoute, /const launchReady = Object\.values\(checks\)\.every\(Boolean\)/);
   assert.match(healthRoute, /ok: launchReady/);
   assert.match(healthRoute, /status: launchReady \? 200 : 503/);
