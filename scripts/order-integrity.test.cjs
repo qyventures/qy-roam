@@ -1689,7 +1689,7 @@ test('authenticated health readiness fails when any order-critical dependency is
 
 test('inventory visibility distinguishes unavailable data from zero stock and exposes saleable router stock', () => {
   assert.match(inventoryPage, /await Promise\.all\(\[/);
-  assert.match(inventoryPage, /const failedPanels=\[itemsResult\.error&&'inventory register',movesResult\.error&&'movement audit trail'\]/);
+  assert.match(inventoryPage, /const failedPanels=\[itemsResult\.error&&'inventory register',movesResult\.error&&'movement audit trail',reservationsResult\.error&&'checkout reservation register'\]/);
   assert.match(inventoryPage, /Operational inventory data is currently unavailable/);
   assert.match(inventoryPage, /Do not treat empty lists or totals as current stock/);
   assert.match(inventoryPage, /x\.product_type==='pocket_wifi'&&x\.status==='available'/);
@@ -1711,6 +1711,17 @@ test('inventory register and movement audit visibility page beyond one Supabase 
   assert.match(inventoryPage, /\.range\(INVENTORY_MOVEMENT_MAX_ROWS,INVENTORY_MOVEMENT_MAX_ROWS\)/);
   assert.match(inventoryPage, /movesResult\.truncated&&/);
   assert.match(inventoryPage, /Inventory movement history needs archiving or a dedicated audit view/);
+});
+
+test('admin inventory exposes every capacity-protecting Pocket WiFi checkout reservation within a bounded view', () => {
+  assert.match(inventoryPage, /RESERVATION_HANDOFF_GRACE_MS=4\*24\*60\*60\*1000/);
+  assert.match(inventoryPage, /from\('checkout_reservations'\)/);
+  assert.match(inventoryPage, /\.gt\('expires_at',cutoff\)/);
+  assert.match(inventoryPage, /Checkout capacity holds/);
+  assert.match(inventoryPage, /Webhook handoff/);
+  assert.match(inventoryPage, /Unconfirmed handoff/);
+  assert.match(inventoryPage, /Checkout reservation view is incomplete/);
+  assert.doesNotMatch(inventoryPage, /delete\(\).*checkout_reservations/);
 });
 
 test('admin order visibility identifies the specific Meta CAPI delivery needing recovery', () => {
