@@ -455,7 +455,10 @@ async function recordEventFailure(supabase:NonNullable<ReturnType<typeof getSupa
     .eq('processing_started_at',processingStartedAt)
     .is('processed_at',null)
     .select('event_id');
-  if(failed.error||failed.data?.length!==1) console.error('stripe_webhook_failure_record_error',failed.error||'event claim ownership was lost');
+  // This is a recovery-path write, so PostgREST can surface a proxy or
+  // database error here. Do not turn the application log into a second raw
+  // exception sink after deliberately sanitising the durable event ledger.
+  if(failed.error||failed.data?.length!==1) console.error('stripe_webhook_failure_record_error');
 }
 
 // An expired Checkout Session can otherwise occupy the durable reservation
@@ -543,7 +546,7 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
     // Keep a newer worker's lease intact if this worker was reclaimed while
     // its provider call was still in flight.
     const failed=await supabase.from('fulfilment_notifications').update({status:'pending',last_error:message.slice(0,500),updated_at:new Date().toISOString()}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',now).select('stripe_session_id');
-    if(failed.error) console.error('fulfilment_notification_failure_record_error',failed.error);
+    if(failed.error) console.error('fulfilment_notification_failure_record_error');
     throw error;
   }
 }
@@ -592,7 +595,7 @@ export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof
     // a recovery instruction rather than an arbitrary upstream error string.
     const message=safeProviderDeliveryFailure(error,'Meta CAPI delivery failed; retry or inspect provider configuration');
     const failed=await supabase.from('meta_purchase_deliveries').update({status:'pending',last_error:message.slice(0,500),updated_at:new Date().toISOString()}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',now).select('stripe_session_id');
-    if(failed.error) console.error('meta_purchase_failure_record_error',failed.error);
+    if(failed.error) console.error('meta_purchase_failure_record_error');
     throw error;
   }
 }
@@ -753,7 +756,10 @@ export async function POST(req:Request){
       if(completed.error) throw completed.error;
       if(completed.data?.length!==1) throw new Error('Stripe event claim ownership was lost');
     }catch(error){
-      console.error('stripe_webhook_expiry_processing_error',error);
+      // The signed event id and Checkout Session id are durable on the
+      // claimed ledger row. Avoid logging raw dependency errors here: they
+      // may include provider response text, configuration, or order data.
+      console.error('stripe_webhook_expiry_processing_error');
       if(expiryClaimStartedAt) await recordEventFailure(supabase,expiryEventClaimId,expiryClaimStartedAt,error);
       return NextResponse.json({error:'Processing failed'},{status:500});
     }
@@ -811,7 +817,9 @@ export async function POST(req:Request){
     if(completed.error)throw completed.error;
     if(completed.data?.length!==1) throw new Error('Stripe event claim ownership was lost');
   }catch(error){
-    console.error('stripe_webhook_processing_error',error);
+    // Recovery uses the claimed Stripe event row, whose failure field is
+    // intentionally application-authored. Keep logs on the same boundary.
+    console.error('stripe_webhook_processing_error');
     if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error);
     return NextResponse.json({error:'Processing failed'},{status:500});
   }

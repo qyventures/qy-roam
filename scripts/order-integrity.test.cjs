@@ -169,6 +169,22 @@ test('Stripe webhook recovery records do not persist arbitrary upstream error te
   assert.doesNotMatch(webhookRoute, /const message=error instanceof Error\?error\.message/);
 });
 
+test('Stripe webhook failure logging does not print raw dependency errors', () => {
+  // These paths can catch SMTP relay, Meta, Stripe, and PostgREST failures.
+  // Their exception text is not a safe logging channel because providers and
+  // proxies may echo request/customer/configuration data.
+  assert.doesNotMatch(webhookRoute, /console\.error\('stripe_webhook_failure_record_error',failed\.error/);
+  assert.doesNotMatch(webhookRoute, /console\.error\('fulfilment_notification_failure_record_error',failed\.error/);
+  assert.doesNotMatch(webhookRoute, /console\.error\('meta_purchase_failure_record_error',failed\.error/);
+  assert.doesNotMatch(webhookRoute, /console\.error\('stripe_webhook_expiry_processing_error',error\)/);
+  assert.doesNotMatch(webhookRoute, /console\.error\('stripe_webhook_processing_error',error\)/);
+  assert.match(webhookRoute, /console\.error\('stripe_webhook_failure_record_error'\)/);
+  assert.match(webhookRoute, /console\.error\('fulfilment_notification_failure_record_error'\)/);
+  assert.match(webhookRoute, /console\.error\('meta_purchase_failure_record_error'\)/);
+  assert.match(webhookRoute, /console\.error\('stripe_webhook_expiry_processing_error'\)/);
+  assert.match(webhookRoute, /console\.error\('stripe_webhook_processing_error'\)/);
+});
+
 function esimSession(plan = ESIM_PLANS[0]) {
   const session = {
     id: 'cs_test_esim',
