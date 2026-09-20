@@ -83,7 +83,12 @@ export async function readLimitedRequestText(req: Request, maxBytes: number, tim
     }
   } finally {
     if (timeout) clearTimeout(timeout);
-    reader.releaseLock();
+    // A timeout or size rejection can leave a read settling while the
+    // best-effort cancellation above is still in progress. Web Streams are
+    // allowed to reject releaseLock in that narrow state. Cleanup must never
+    // mask the intentional bounded-body error (and accidentally turn a 408
+    // or 413 into the route's generic invalid-request response).
+    try { reader.releaseLock(); } catch {}
   }
   return Buffer.concat(chunks, total).toString('utf8');
 }

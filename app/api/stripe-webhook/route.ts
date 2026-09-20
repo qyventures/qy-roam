@@ -89,7 +89,11 @@ async function readStripeWebhookBody(req: Request): Promise<Buffer> {
     }
   } finally {
     if (timeout) clearTimeout(timeout);
-    reader.releaseLock();
+    // A deadline/size failure may race the stream's cancellation cleanup.
+    // In that state Web Streams can reject releaseLock while a read is still
+    // settling. Preserve the deliberate timeout/size failure so Stripe sees
+    // the correct retryable response instead of an unrelated cleanup error.
+    try { reader.releaseLock(); } catch {}
   }
   return Buffer.concat(chunks, total);
 }
@@ -204,7 +208,9 @@ async function readDeliveryResponseBody(response: Response) {
       chunks.push(value);
     }
   } finally {
-    reader.releaseLock();
+    // Response-body limits must retain their explicit failure even if a
+    // broken upstream leaves a pending read while cancellation unwinds.
+    try { reader.releaseLock(); } catch {}
   }
   return Buffer.concat(chunks,total).toString('utf8');
 }

@@ -827,6 +827,42 @@ test('checkout rate limiting uses only bounded valid proxy client identities', (
   assert.equal(limited(request({ 'cf-connecting-ip': 'forged-b' }), 1), true);
 });
 
+test('bounded request readers retain timeout and size failures when stream cleanup races', async () => {
+  // Web Streams can reject releaseLock while a pending read is being cancelled.
+  // The public checkout/admin boundary must still return its deliberate
+  // timeout/size response rather than letting cleanup turn it into a generic
+  // invalid request.
+  const pendingReader = {
+    read() { return new Promise(() => {}); },
+    cancel() { return Promise.resolve(); },
+    releaseLock() { throw new Error('read is still pending'); },
+  };
+  const timedOutRequest = {
+    headers: new Headers({ 'content-type': 'application/json' }),
+    body: { getReader() { return pendingReader; } },
+  };
+  await assert.rejects(
+    () => readLimitedRequestText(timedOutRequest, 100, 10),
+    RequestBodyTimeoutError,
+  );
+
+  const oversizedReader = {
+    read() { return Promise.resolve({ done: false, value: new Uint8Array(101) }); },
+    cancel() { return Promise.resolve(); },
+    releaseLock() { throw new Error('read is still pending'); },
+  };
+  const oversizedRequest = {
+    headers: new Headers({ 'content-type': 'application/json' }),
+    body: { getReader() { return oversizedReader; } },
+  };
+  await assert.rejects(
+    () => readLimitedRequestText(oversizedRequest, 100, 1_000),
+    RequestBodyTooLargeError,
+  );
+
+  assert.match(webhookRoute, /try \{ reader\.releaseLock\(\); \} catch \{\}/);
+});
+
 test('customer-facing Stripe session lookups accept only one bounded Checkout Session id', () => {
   assert.equal(validStripeCheckoutSessionId('cs_test_abc123'), 'cs_test_abc123');
   assert.equal(validStripeCheckoutSessionId(' cs_live_ABC123 '), 'cs_live_ABC123');
