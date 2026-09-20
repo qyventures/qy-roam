@@ -30,7 +30,7 @@ const { WIFI_BENCHMARK, WIFI_PLANS } = require('../lib/wifiPlans.ts');
 const { allowedFulfilmentStatuses, fulfilmentNotificationActionable, validFulfilmentTransition, STRIPE_EVENT_CLAIM_STALE_MS, STRIPE_EVENT_CLAIM_CLOCK_SKEW_MS, stripeEventClaimInProgress } = require('../lib/orderLifecycle.ts');
 const { operationalConfig } = require('../lib/operationalConfig.ts');
 const { validStripeCheckoutSessionId } = require('../lib/stripeSessionId.ts');
-const { validStripeEventCreated, STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS } = require('../lib/stripeEventCreated.ts');
+const { validStripeEventCreated, STRIPE_EVENT_CREATED_MIN_SECONDS, STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS } = require('../lib/stripeEventCreated.ts');
 const { isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError } = require('../lib/requestBody.ts');
 const { checkoutClientKey, createCheckoutAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = require('../lib/stripeCheckoutConfig.ts');
@@ -2075,6 +2075,8 @@ test('Stripe payment event timestamps are bounded before order persistence or CA
   assert.equal(validStripeEventCreated(now, now), now);
   assert.equal(validStripeEventCreated(now - 86_400, now), now - 86_400, 'historical Stripe retries remain valid');
   assert.equal(validStripeEventCreated(0, now), null);
+  assert.equal(validStripeEventCreated(STRIPE_EVENT_CREATED_MIN_SECONDS - 1, now), null, 'pre-Stripe timestamps cannot create ancient paid orders');
+  assert.equal(validStripeEventCreated(STRIPE_EVENT_CREATED_MIN_SECONDS, now), STRIPE_EVENT_CREATED_MIN_SECONDS);
   assert.equal(validStripeEventCreated(1.5, now), null);
   assert.equal(validStripeEventCreated(now + STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS + 1, now), null);
 
