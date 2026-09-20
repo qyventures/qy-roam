@@ -79,7 +79,10 @@ async function readStripeWebhookBody(req: Request): Promise<Buffer> {
       if (!value) continue;
       total += value.byteLength;
       if (total > MAX_STRIPE_WEBHOOK_BODY_BYTES) {
-        await reader.cancel();
+        // Cancellation is best-effort only. A hostile or broken upstream can
+        // leave its cancellation promise pending, and waiting for that would
+        // defeat this public endpoint's body-size resource bound.
+        void reader.cancel().catch(() => undefined);
         throw new RangeError('Stripe webhook payload is too large');
       }
       chunks.push(value);

@@ -49,7 +49,12 @@ export async function readLimitedRequestText(req: Request, maxBytes: number, tim
       if (!value) continue;
       total += value.byteLength;
       if (total > maxBytes) {
-        await reader.cancel();
+        // A peer can ignore (or indefinitely delay) stream cancellation.
+        // The size boundary has already been crossed, so return the bounded
+        // error immediately instead of letting cleanup pin this route worker.
+        // This mirrors the timeout path above; the stream is still asked to
+        // stop, but cancellation is never part of the request's latency.
+        void reader.cancel().catch(() => undefined);
         throw new RequestBodyTooLargeError('Request body is too large');
       }
       chunks.push(value);

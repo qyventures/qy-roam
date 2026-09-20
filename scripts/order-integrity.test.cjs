@@ -602,6 +602,30 @@ test('checkout request bodies are bounded for chunked, malformed, and slow uploa
   await assert.rejects(() => readLimitedRequestText(stalled, 4096, 20), RequestBodyTimeoutError);
 });
 
+test('oversized streamed request bodies do not wait for cancellation cleanup', async () => {
+  let cancelCalled = false;
+  const neverSettles = new Promise(() => {});
+  const oversized = {
+    headers: new Headers(),
+    body: {
+      getReader() {
+        return {
+          async read() { return { done: false, value: new Uint8Array(5) }; },
+          cancel() { cancelCalled = true; return neverSettles; },
+          releaseLock() {},
+        };
+      },
+    },
+  };
+  await assert.rejects(
+    () => readLimitedRequestText(oversized, 4, 100),
+    RequestBodyTooLargeError,
+  );
+  assert.equal(cancelCalled, true);
+  assert.doesNotMatch(webhookRoute, /await reader\.cancel\(\)/);
+  assert.match(webhookRoute, /void reader\.cancel\(\)\.catch\(\(\) => undefined\)/);
+});
+
 test('both checkout endpoints use the bounded streaming body reader', () => {
   for (const source of [wifiCheckoutRoute, esimCheckoutRoute]) {
     assert.match(source, /readLimitedRequestText\(req,\s*MAX_BODY_BYTES,\s*CHECKOUT_BODY_TIMEOUT_MS\)/);
