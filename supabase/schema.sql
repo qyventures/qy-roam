@@ -54,6 +54,22 @@ alter table public.orders add column if not exists dispatched_at timestamptz;
 alter table public.orders add column if not exists returned_at timestamptz;
 alter table public.orders add column if not exists notes text;
 
+-- A digital entitlement is not operationally complete without the exact
+-- package identity staff must provision. Checkout and the protected manual
+-- sales flow both persist these fields from the server catalogue. Keep the
+-- same requirement at the database boundary so a direct service-role insert
+-- cannot create a newly ambiguous eSIM order. NOT VALID preserves access to
+-- legacy rows while enforcing the contract for every new or changed record.
+alter table public.orders drop constraint if exists orders_esim_plan_identity_required_check;
+alter table public.orders add constraint orders_esim_plan_identity_required_check check (
+  product_type <> 'esim' or (
+    coalesce(btrim(plan_id), '') <> '' and
+    coalesce(btrim(plan_name), '') <> '' and
+    coalesce(btrim(data_allowance), '') <> '' and
+    coalesce(btrim(country), '') <> ''
+  )
+) not valid;
+
 -- eSIM credentials must never be stored as a delivery "reference". Keep a
 -- database backstop for direct operational writes as well as the stricter
 -- application validation; NOT VALID preserves review access to any legacy

@@ -5,6 +5,7 @@ import { parseExactIsoDate } from '@/lib/checkoutValidation';
 import { operationalConfig } from '@/lib/operationalConfig';
 import { InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '@/lib/requestBody';
 import { isSafeSmtpMailbox } from '@/lib/smtp';
+import { getEsimPlan } from '@/lib/esimPlans';
 import crypto from 'crypto';
 
 export const dynamic = 'force-dynamic';
@@ -142,7 +143,17 @@ export async function POST(req: NextRequest) {
       if (!travel) return NextResponse.json({ error: 'Travel dates must be valid ISO dates with the end date on or after the start date' }, { status: 400 });
       const amountCents = money(body.amount_sgd);
       if (amountCents === null) return NextResponse.json({ error: 'Order amount must be a positive amount with no more than two decimal places' }, { status: 400 });
-      const country = text(body.country, 120) || null;
+      // A manual digital sale creates the same entitlement as Checkout. Bind
+      // it to the server catalogue instead of trusting free-text plan fields,
+      // which can otherwise leave fulfilment guessing which data package was
+      // actually sold. The paid amount remains an operator-entered accounting
+      // value because offline/corporate sales can have separately approved
+      // pricing, but product identity is never negotiable free text.
+      const esimPlan = product === 'esim' ? getEsimPlan(body.plan_id) : undefined;
+      if (product === 'esim' && !esimPlan) {
+        return NextResponse.json({ error: 'Select a valid eSIM catalogue plan' }, { status: 400 });
+      }
+      const country = esimPlan?.destination || text(body.country, 120) || null;
       if (product === 'pocket_wifi' && (!country || !travel.start || !travel.end)) {
         return NextResponse.json({ error: 'Pocket WiFi orders require a destination and valid travel start and end dates' }, { status: 400 });
       }
@@ -151,7 +162,10 @@ export async function POST(req: NextRequest) {
         stripe_session_id: manualOrderSessionId(reference),
         payment_status: paymentStatus, customer_name: text(body.customer_name, 120) || null,
         email: text(body.email, 200).toLowerCase() || null, phone: text(body.phone, 60) || null,
-        amount_sgd: amountCents / 100, product_type: product, plan_name: text(body.plan_name, 160) || null,
+        amount_sgd: amountCents / 100, product_type: product,
+        plan_id: esimPlan?.id || null,
+        plan_name: esimPlan ? `${esimPlan.destination} · ${esimPlan.days} days` : text(body.plan_name, 160) || null,
+        data_allowance: esimPlan?.data || null,
         country, travel_start: travel.start, travel_end: travel.end,
         fulfilment_status: initialStatus,
         // Manual sales do not have a signed Stripe event timestamp. Record
@@ -206,7 +220,7 @@ export async function POST(req: NextRequest) {
           // let a reused payment reference overwrite or silently create a
           // second eSIM entitlement with changed order details.
           const existing = await db.from('orders')
-            .select('payment_status,customer_name,email,phone,amount_sgd,product_type,plan_name,country,travel_start,travel_end')
+            .select('payment_status,customer_name,email,phone,amount_sgd,product_type,plan_id,plan_name,data_allowance,country,travel_start,travel_end')
             .eq('stripe_session_id', row.stripe_session_id)
             .maybeSingle();
           if (existing.error) throw existing.error;
@@ -217,7 +231,9 @@ export async function POST(req: NextRequest) {
             existing.data.phone === row.phone &&
             Number(existing.data.amount_sgd) === row.amount_sgd &&
             existing.data.product_type === row.product_type &&
+            existing.data.plan_id === row.plan_id &&
             existing.data.plan_name === row.plan_name &&
+            existing.data.data_allowance === row.data_allowance &&
             existing.data.country === row.country &&
             existing.data.travel_start === row.travel_start &&
             existing.data.travel_end === row.travel_end;

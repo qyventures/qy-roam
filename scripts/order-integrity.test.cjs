@@ -1322,7 +1322,19 @@ test('manual eSIM orders retain the same safe email delivery boundary as Checkou
   assert.match(adminOpsRoute, /import \{ isSafeSmtpMailbox \} from '@\/lib\/smtp';/);
   assert.match(adminOpsRoute, /product === 'esim' && !isSafeSmtpMailbox\(row\.email \|\| undefined\)/);
   assert.match(adminOpsRoute, /eSIM orders require a valid customer email for digital delivery/);
-  assert.match(manualOrderForm, /eSIM orders require a valid customer email for digital delivery/);
+  assert.match(manualOrderForm, /eSIM orders require a valid customer email and catalogue plan for digital delivery/);
+});
+
+test('manual eSIM sales bind the exact server catalogue entitlement', () => {
+  assert.match(manualOrderForm, /name="plan_id"/);
+  assert.match(manualOrderForm, /ESIM_PLANS\.map/);
+  assert.match(adminOpsRoute, /getEsimPlan\(body\.plan_id\)/);
+  assert.match(adminOpsRoute, /Select a valid eSIM catalogue plan/);
+  assert.match(adminOpsRoute, /plan_id: esimPlan\?\.id \|\| null/);
+  assert.match(adminOpsRoute, /data_allowance: esimPlan\?\.data \|\| null/);
+  assert.match(schema, /orders_esim_plan_identity_required_check/);
+  assert.match(schema, /coalesce\(btrim\(plan_id\), ''\) <> ''/);
+  assert.match(schema, /coalesce\(btrim\(data_allowance\), ''\) <> ''/);
 });
 
 test('opening Pocket WiFi stock is created through an audited database boundary', () => {
