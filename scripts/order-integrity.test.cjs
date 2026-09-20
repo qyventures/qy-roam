@@ -918,6 +918,17 @@ test('admin sales-period close totals every Supabase page instead of silently us
   assert.match(adminOpsRoute, /Period dates must be valid ISO dates with the end date on or after the start date/);
 });
 
+test('sales dashboards and CRM recency use payment confirmation rather than checkout creation', () => {
+  assert.match(adminPage, /withinDays\(o\.payment_confirmed_at,30\)/);
+  assert.doesNotMatch(adminPage, /withinDays\(o\.created_at,30\)/);
+  assert.match(adminPage, /last:o\.payment_confirmed_at/);
+  assert.match(adminPage, /current\.last = o\.payment_confirmed_at/);
+  assert.match(schema, /max\(payment_confirmed_at\)\s+into v_orders, v_lifetime_value, v_last_order_at/);
+  assert.match(schema, /with confirmed_customer_recency as \([\s\S]*max\(o\.payment_confirmed_at\) as last_order_at[\s\S]*c\.last_order_at is distinct from r\.last_order_at/);
+  assert.match(schema, /\(payment_confirmed_at at time zone 'Asia\/Singapore'\)::date as sales_date/);
+  assert.doesNotMatch(schema, /\(created_at at time zone 'Asia\/Singapore'\)::date as sales_date/);
+});
+
 test('admin forecast replacement and financial inputs preserve approved operations data', () => {
   assert.match(adminOpsRoute, /function nonNegativeMoney\(value: unknown\)/);
   assert.match(adminOpsRoute, /function nonNegativeInteger\(value: unknown\)/);

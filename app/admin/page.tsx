@@ -156,7 +156,11 @@ export default async function AdminPage() {
   const paid = orders.filter((o:any)=>o.payment_status === 'paid');
   const active = orders.filter((o:any)=>!['closed','cancelled','payment_failed'].includes(o.fulfilment_status));
   const revenue = paid.reduce((sum:number,o:any)=>sum + Number(o.amount_sgd || 0), 0);
-  const revenue30 = paid.filter((o:any)=>withinDays(o.created_at,30)).reduce((sum:number,o:any)=>sum + Number(o.amount_sgd || 0), 0);
+  // A Checkout Session can be created days before an asynchronous payment is
+  // confirmed. Sales recency must follow the immutable payment boundary used
+  // by period closing and Meta Purchase, otherwise a newly settled payment
+  // can be omitted from the rolling metric and customer purchase ordering.
+  const revenue30 = paid.filter((o:any)=>withinDays(o.payment_confirmed_at,30)).reduce((sum:number,o:any)=>sum + Number(o.amount_sgd || 0), 0);
   const esimRevenue = paid.filter(isEsim).reduce((sum:number,o:any)=>sum + Number(o.amount_sgd || 0), 0);
   const wifiRevenue = paid.filter((o:any)=>!isEsim(o)).reduce((sum:number,o:any)=>sum + Number(o.amount_sgd || 0), 0);
 
@@ -164,11 +168,11 @@ export default async function AdminPage() {
   for (const o of paid) {
     const key = customerKey(o);
     if (!key) continue;
-    const current = customerMap.get(key) || {name:o.customer_name,email:o.email,phone:o.phone,orders:0,revenue:0,last:o.created_at,products:new Set<string>()};
+    const current = customerMap.get(key) || {name:o.customer_name,email:o.email,phone:o.phone,orders:0,revenue:0,last:o.payment_confirmed_at,products:new Set<string>()};
     current.orders += 1;
     current.revenue += Number(o.amount_sgd || 0);
     current.products.add(isEsim(o) ? 'eSIM' : 'Pocket WiFi');
-    if (String(o.created_at || '') > String(current.last || '')) current.last = o.created_at;
+    if (String(o.payment_confirmed_at || '') > String(current.last || '')) current.last = o.payment_confirmed_at;
     customerMap.set(key,current);
   }
   const customers = Array.from(customerMap.values()).sort((a,b)=>String(b.last).localeCompare(String(a.last)));

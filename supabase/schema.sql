@@ -1744,7 +1744,10 @@ begin
   -- phone. Use either recorded identity when deriving the profile so an
   -- email correction that keeps the same phone does not discard that
   -- customer's earlier paid history.
-  select count(*)::integer, coalesce(sum(amount_sgd), 0)::numeric(10,2), max(created_at)
+  -- Customer recency is a purchase fact, so use the same immutable payment
+  -- confirmation boundary as accounting and Purchase analytics. In
+  -- particular, an asynchronous payment can settle well after order creation.
+  select count(*)::integer, coalesce(sum(amount_sgd), 0)::numeric(10,2), max(payment_confirmed_at)
     into v_orders, v_lifetime_value, v_last_order_at
   from public.orders
   where payment_status = 'paid'
@@ -1762,6 +1765,25 @@ begin
 end;
 $$;
 revoke all on function public.qy_reconcile_customer_paid_totals(bigint) from public;
+
+-- Correct profiles derived by earlier schema versions immediately on deploy;
+-- waiting for another order mutation would leave established customers sorted
+-- by Checkout creation time indefinitely. The distinct predicate makes this
+-- backfill idempotent and avoids rewriting already-correct CRM rows.
+with confirmed_customer_recency as (
+  select c.id, max(o.payment_confirmed_at) as last_order_at
+  from public.customers c
+  left join public.orders o on o.payment_status = 'paid' and (
+    (c.email is not null and lower(trim(coalesce(o.email, ''))) = lower(trim(c.email)))
+    or (c.phone is not null and trim(coalesce(o.phone, '')) = trim(c.phone))
+  )
+  group by c.id
+)
+update public.customers c
+set last_order_at = r.last_order_at, updated_at = now()
+from confirmed_customer_recency r
+where c.id = r.id
+  and c.last_order_at is distinct from r.last_order_at;
 
 create or replace function public.qy_reconcile_customer_from_paid_order()
 returns trigger
@@ -2037,7 +2059,10 @@ grant execute on function public.qy_record_closing_period(date,date,boolean,nume
 -- cannot drift from webhook-persisted paid revenue.
 create or replace view public.sales_daily_summary with (security_invoker = true) as
 select
-  (created_at at time zone 'Asia/Singapore')::date as sales_date,
+  -- Attribute sales to the Singapore calendar day when funds were confirmed,
+  -- not when the buyer first opened Checkout. This keeps reports and forecasts
+  -- aligned with the period-close ledger for asynchronous payment methods.
+  (payment_confirmed_at at time zone 'Asia/Singapore')::date as sales_date,
   product_type,
   count(*)::integer as paid_orders,
   coalesce(sum(amount_sgd), 0)::numeric(12,2) as revenue_sgd,
