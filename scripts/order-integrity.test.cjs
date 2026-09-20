@@ -2209,6 +2209,15 @@ test('Stripe event idempotency records stay bound to one event type and Checkout
   assert.match(schema, /create trigger qy_enforce_stripe_event_identity_immutability\s+before update of event_id, event_type, stripe_session_id on public\.stripe_events/);
 });
 
+test('processed Stripe webhook events remain final in the durable idempotency ledger', () => {
+  assert.match(schema, /create or replace function public\.qy_enforce_stripe_event_lifecycle\(\)/);
+  assert.match(schema, /processed Stripe event is immutable/);
+  assert.match(schema, /Stripe event attempts cannot decrease/);
+  assert.match(schema, /failed Stripe event requires a failure timestamp/);
+  assert.match(schema, /processed Stripe event cannot retain a failure/);
+  assert.match(schema, /create trigger qy_enforce_stripe_event_lifecycle\s+before update on public\.stripe_events/);
+});
+
 test('Stripe terminal events must agree with their Checkout Session payment state before any mutation', () => {
   const webhookRoute = fs.readFileSync(require.resolve('../app/api/stripe-webhook/route.ts'), 'utf8');
   assert.match(webhookRoute, /function stripeCheckoutEventStateIssue\(eventType:Stripe\.Event\.Type,session:Stripe\.Checkout\.Session\)/);

@@ -546,6 +546,42 @@ create trigger qy_enforce_stripe_event_identity_immutability
 before update of event_id, event_type, stripe_session_id on public.stripe_events
 for each row execute function public.qy_enforce_stripe_event_identity_immutability();
 
+-- A Stripe event is the durable idempotency boundary for paid-order
+-- persistence and delivery side effects. The webhook settles this row only
+-- after its order and delivery work has completed, but service-role recovery
+-- scripts bypass RLS and could otherwise reopen a processed event or make an
+-- earlier retry count appear to be the current one. Keep the retry ledger
+-- append-only in the directions that matter operationally. A failed event is
+-- still deliberately reclaimable: the webhook clears last_error, advances the
+-- attempt number, and takes a fresh processing lease before retrying it.
+create or replace function public.qy_enforce_stripe_event_lifecycle()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public
+as $$
+begin
+  if old.processed_at is not null and old.* is distinct from new.* then
+    raise exception 'processed Stripe event is immutable';
+  end if;
+  if new.attempts < old.attempts then
+    raise exception 'Stripe event attempts cannot decrease';
+  end if;
+  if new.last_error is not null and new.last_failed_at is null then
+    raise exception 'failed Stripe event requires a failure timestamp';
+  end if;
+  if new.processed_at is not null and new.last_error is not null then
+    raise exception 'processed Stripe event cannot retain a failure';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists qy_enforce_stripe_event_lifecycle on public.stripe_events;
+create trigger qy_enforce_stripe_event_lifecycle
+before update on public.stripe_events
+for each row execute function public.qy_enforce_stripe_event_lifecycle();
+
 -- Durable human-fulfilment notification ledger. One row per paid checkout.
 -- The webhook records pending before SMTP and sent after SMTP succeeds. Failed
 -- sends stay retryable without coupling the notification state to Stripe's
