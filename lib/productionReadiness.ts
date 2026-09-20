@@ -256,8 +256,11 @@ export async function hasRequiredPaymentSchema() {
         if (ready) paymentSchemaReadyUntil = Date.now() + READINESS_CACHE_MS;
         return ready;
       })
-      .catch((error) => {
-        console.error('production_payment_schema_check_unexpected_error', error);
+      .catch(() => {
+        // Dependency errors can contain connection or query details. The
+        // readiness response already reports this check as unavailable, so a
+        // stable event name is sufficient for alerting without leaking them.
+        console.error('production_payment_schema_check_unexpected_error');
         return false;
       })
       .finally(() => { paymentSchemaCheckInFlight = null; });
@@ -331,8 +334,8 @@ export async function hasRequiredEsimOrderSchema() {
         if (ready) esimOrderSchemaReadyUntil = Date.now() + READINESS_CACHE_MS;
         return ready;
       })
-      .catch((error) => {
-        console.error('production_esim_order_schema_check_unexpected_error', error);
+      .catch(() => {
+        console.error('production_esim_order_schema_check_unexpected_error');
         return false;
       })
       .finally(() => { esimOrderSchemaCheckInFlight = null; });
@@ -483,8 +486,8 @@ export async function hasRequiredOperationsSchema() {
         if (ready) operationsSchemaReadyUntil = Date.now() + READINESS_CACHE_MS;
         return ready;
       })
-      .catch((error) => {
-        console.error('production_operations_schema_check_unexpected_error', error);
+      .catch(() => {
+        console.error('production_operations_schema_check_unexpected_error');
         return false;
       })
       .finally(() => { operationsSchemaCheckInFlight = null; });

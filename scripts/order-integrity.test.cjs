@@ -202,6 +202,25 @@ test('public sales and confirmation paths do not log raw provider failures', () 
   }
 });
 
+test('admin and readiness failure paths do not expose raw dependency errors', () => {
+  // Administrative routes can still encounter provider-echoed customer or
+  // configuration data. Expected conflicts retain their explicit responses;
+  // unexpected failures must use a stable message and log event.
+  assert.match(adminOrderRoute, /console\.error\('admin_order_notification_retry_error'\);/);
+  assert.doesNotMatch(adminOrderRoute, /console\.error\('admin_order_notification_retry_error',/);
+  assert.match(adminOpsRoute, /console\.error\('admin_ops_action_failed', \{ action \}\);/);
+  assert.doesNotMatch(adminOpsRoute, /console\.error\('admin ops action failed'/);
+  assert.match(adminOpsRoute, /Operation failed\. Please try again or contact an administrator\./);
+  for (const event of [
+    'production_payment_schema_check_unexpected_error',
+    'production_esim_order_schema_check_unexpected_error',
+    'production_operations_schema_check_unexpected_error',
+  ]) {
+    assert.match(productionReadiness, new RegExp(`console\\.error\\('${event}'\\);`));
+    assert.doesNotMatch(productionReadiness, new RegExp(`console\\.error\\('${event}',`));
+  }
+});
+
 function esimSession(plan = ESIM_PLANS[0]) {
   const session = {
     id: 'cs_test_esim',

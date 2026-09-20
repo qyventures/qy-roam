@@ -362,8 +362,12 @@ export async function POST(req: NextRequest) {
     } else return NextResponse.json({ error: 'Unsupported action' }, { status: 400 });
 
     return NextResponse.json({ ok: true });
-  } catch (error: any) {
-    console.error('admin ops action failed', action, error?.message || error);
-    return NextResponse.json({ error: error?.message || 'Operation failed' }, { status: 500 });
+  } catch {
+    // A Supabase/PostgREST error can include SQL details or echoed operator
+    // input. Expected, actionable conflicts are returned above; unexpected
+    // failures should neither become an operator-facing raw error nor a log
+    // sink for customer and provider data.
+    console.error('admin_ops_action_failed', { action });
+    return NextResponse.json({ error: 'Operation failed. Please try again or contact an administrator.' }, { status: 500 });
   }
 }

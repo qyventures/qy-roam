@@ -287,7 +287,10 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     if (failures.length) throw new AggregateError(failures.map((failure) => failure.reason), 'One or more order deliveries failed');
     return NextResponse.json({ ok: true }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
-    console.error('admin_order_notification_retry_error', error);
+    // Stripe, SMTP, CAPI and PostgREST failures can echo request, customer,
+    // or configuration details. The delivery ledgers retain safe diagnostics
+    // for operators, so keep server logs to a stable event name here.
+    console.error('admin_order_notification_retry_error');
     return NextResponse.json({ error: 'Unable to retry order notifications. Please try again shortly.' }, { status: 500 });
   }
 }
