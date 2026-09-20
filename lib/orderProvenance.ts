@@ -2,10 +2,32 @@ import crypto from 'crypto';
 
 const VERSION = 'v2';
 const METADATA_KEY = 'qyroam_provenance';
+const MIN_SIGNING_SECRET_LENGTH = 32;
+const MAX_SIGNING_SECRET_LENGTH = 4_096;
+
+// These values are used as HMAC keys at the payment boundary. Keep the
+// configuration check shared by checkout, webhook verification and release
+// readiness: a malformed previous rotation key must stop new payment links
+// before it can make an in-flight order impossible to verify after payment.
+// Do not trim a key here; whitespace can be a deliberate part of an HMAC key
+// and changing it would invalidate still-payable Checkout Sessions.
+export function hasOrderIntegritySecret(value: unknown): value is string {
+  return typeof value === 'string' &&
+    value.length >= MIN_SIGNING_SECRET_LENGTH &&
+    value.length <= MAX_SIGNING_SECRET_LENGTH &&
+    !/[\x00-\x1f\x7f]/.test(value);
+}
+
+export function hasOrderIntegritySigningConfig() {
+  const current = process.env.ORDER_INTEGRITY_SECRET;
+  const previous = process.env.ORDER_INTEGRITY_SECRET_PREVIOUS;
+  return hasOrderIntegritySecret(current) &&
+    (!previous || hasOrderIntegritySecret(previous));
+}
 
 function activeSecret() {
   const value = process.env.ORDER_INTEGRITY_SECRET;
-  return value && value.length >= 32 ? value : null;
+  return hasOrderIntegritySecret(value) ? value : null;
 }
 
 // Checkout Sessions can remain payable for a short period and Stripe can retry
@@ -17,7 +39,7 @@ function verificationSecrets() {
   const current = activeSecret();
   if (!current) return [];
   const previous = process.env.ORDER_INTEGRITY_SECRET_PREVIOUS;
-  return previous && previous.length >= 32 && previous !== current
+  return hasOrderIntegritySecret(previous) && previous !== current
     ? [current, previous]
     : [current];
 }

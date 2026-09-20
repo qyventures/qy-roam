@@ -5,7 +5,7 @@ import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { parseExactIsoDate } from '@/lib/checkoutValidation';
 import { operationalConfig } from '@/lib/operationalConfig';
 import { operationalIsoDateAfter } from '@/lib/operationalDate';
-import { validQyRoamProvenance } from '@/lib/orderProvenance';
+import { hasOrderIntegritySigningConfig, validQyRoamProvenance } from '@/lib/orderProvenance';
 import {
   hasRequiredFulfilmentEmailConfig,
   hasRequiredPaymentSchema,
@@ -190,8 +190,7 @@ export async function GET(req: NextRequest) {
   // readiness guard do, otherwise a harmless formatted secret can make stock
   // appear unavailable even though the release health check is green.
   const stripeKey = process.env.STRIPE_SECRET_KEY?.trim();
-  const orderIntegritySecret = process.env.ORDER_INTEGRITY_SECRET;
-  if (!stripeKey || !hasRequiredStripeCheckoutConfig() || !orderIntegritySecret || orderIntegritySecret.length < 32 ||
+  if (!stripeKey || !hasRequiredStripeCheckoutConfig() || !hasOrderIntegritySigningConfig() ||
     !hasRequiredStripeWebhookConfig() || !hasRequiredFulfilmentEmailConfig() || !getSupabaseAdmin()) {
     return unavailableAvailability();
   }

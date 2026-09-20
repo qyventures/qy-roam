@@ -7,7 +7,7 @@ import { isSafeSmtpMailbox, sendSmtpMail } from '@/lib/smtp';
 import { getMetaCapiToken, hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
 import { validateQyRoamSession } from '@/lib/qyRoamSession';
 import { validCheckoutRequestId } from '@/lib/checkoutValidation';
-import { validQyRoamProvenance } from '@/lib/orderProvenance';
+import { hasOrderIntegritySigningConfig, validQyRoamProvenance } from '@/lib/orderProvenance';
 import { hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '@/lib/productionReadiness';
 import { stripeWebhookSigningSecret } from '@/lib/stripeWebhookSecret';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
@@ -655,7 +655,7 @@ export async function POST(req:Request){
   // makes every authentic Stripe delivery look like a bad signature (400),
   // which prevents a configuration outage from being surfaced and retried as
   // a service dependency failure.
-  if(!hasRequiredStripeCheckoutConfig()||!hasRequiredStripeWebhookConfig()||!key||!webhookSecret) {
+  if(!hasRequiredStripeCheckoutConfig()||!hasRequiredStripeWebhookConfig()||!hasOrderIntegritySigningConfig()||!key||!webhookSecret) {
     return NextResponse.json({error:'Webhook configuration incomplete'},{status:503});
   }
   const stripe=createStripeClient(key); let event:Stripe.Event;

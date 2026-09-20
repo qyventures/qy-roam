@@ -3,6 +3,7 @@ import { hasRequiredAdminCredentials, hasRequiredMetaCapiPurchaseConfig } from '
 import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig, hasRequiredOperationsSchema, hasRequiredPaymentSchema, hasRequiredPocketWifiFulfilmentSchema, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '@/lib/productionReadiness';
 import { operationalConfig } from '@/lib/operationalConfig';
 import { isProductionQyRoamOrigin } from '@/lib/siteOrigin';
+import { hasOrderIntegritySigningConfig } from '@/lib/orderProvenance';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -16,15 +17,6 @@ const MAX_HEALTH_AUTHORIZATION_HEADER_LENGTH = 1_024;
 // turn every authenticated readiness probe into work proportional to an
 // arbitrarily large secret.
 const MAX_HEALTH_CHECK_TOKEN_LENGTH = 1_024;
-
-function isOrderIntegrityConfigured() {
-  const current = process.env.ORDER_INTEGRITY_SECRET;
-  const previous = process.env.ORDER_INTEGRITY_SECRET_PREVIOUS;
-  // A previous key is optional, but if an operator sets it for a rotation it
-  // must be a real signing secret rather than silently disabling recovery for
-  // in-flight Checkout Sessions.
-  return Boolean(current && current.length >= 32 && (!previous || previous.length >= 32));
-}
 
 function constantTimeEqual(a: string, b: string) {
   const encoder = new TextEncoder();
@@ -71,7 +63,7 @@ export async function GET(req: Request) {
     stripe: hasRequiredStripeCheckoutConfig(),
     siteUrl: isProductionQyRoamOrigin(process.env.NEXT_PUBLIC_SITE_URL),
     webhook: hasRequiredStripeWebhookConfig(),
-    orderIntegrity: isOrderIntegrityConfigured(),
+    orderIntegrity: hasOrderIntegritySigningConfig(),
     supabase: Boolean(process.env.SUPABASE_URL?.startsWith('https://') && process.env.SUPABASE_SERVICE_ROLE_KEY && process.env.SUPABASE_SERVICE_ROLE_KEY.length >= 32),
     esimOrderSchema,
     paymentSchema,

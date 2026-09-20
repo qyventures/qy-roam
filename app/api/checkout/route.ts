@@ -5,7 +5,7 @@ import { applyPromoCents, normalisePromoCode } from '../../../lib/promotions';
 import { getWifiPlan, WIFI_BENCHMARK } from '../../../lib/wifiPlans';
 import { getSupabaseAdmin } from '../../../lib/supabaseAdmin';
 import { parseExactIsoDate, validCheckoutRequestId } from '../../../lib/checkoutValidation';
-import { QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance, validQyRoamProvenance } from '../../../lib/orderProvenance';
+import { hasOrderIntegritySigningConfig, QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance, validQyRoamProvenance } from '../../../lib/orderProvenance';
 import { operationalConfig } from '../../../lib/operationalConfig';
 import { operationalIsoDate, operationalIsoDateAfter } from '../../../lib/operationalDate';
 import { hasRequiredFulfilmentEmailConfig, hasRequiredPaymentSchema, hasRequiredPocketWifiFulfilmentSchema, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '../../../lib/productionReadiness';
@@ -131,7 +131,7 @@ export async function POST(req: Request) {
   // Passing the untrimmed secret to Stripe would otherwise make health look
   // ready while every checkout creation fails authentication.
   const key=process.env.STRIPE_SECRET_KEY?.trim(); if(!hasRequiredStripeCheckoutConfig()||!key) return NextResponse.json({error:'Payment configuration incomplete.'},{status:503});
-  if(!process.env.ORDER_INTEGRITY_SECRET||process.env.ORDER_INTEGRITY_SECRET.length<32) return NextResponse.json({error:'Order configuration incomplete.'},{status:503});
+  if(!hasOrderIntegritySigningConfig()) return NextResponse.json({error:'Order configuration incomplete.'},{status:503});
   if(!hasRequiredStripeWebhookConfig()) return NextResponse.json({error:'Pocket WiFi ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
   if(!hasRequiredFulfilmentEmailConfig()) return NextResponse.json({error:'Pocket WiFi ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
   const config=operationalConfig(); if(!config) return NextResponse.json({error:'Order configuration incomplete.'},{status:503});

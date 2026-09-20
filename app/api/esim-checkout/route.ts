@@ -3,7 +3,7 @@ import type Stripe from 'stripe';
 import { createStripeClient } from '../../../lib/stripeClient';
 import { ESIM_PROMO, getEsimPlan } from '../../../lib/esimPlans';
 import { validCheckoutRequestId } from '../../../lib/checkoutValidation';
-import { QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance, validQyRoamProvenance } from '../../../lib/orderProvenance';
+import { hasOrderIntegritySigningConfig, QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance, validQyRoamProvenance } from '../../../lib/orderProvenance';
 import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '../../../lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
@@ -60,7 +60,7 @@ export async function POST(req: Request) {
     // checkout appear configured but fail at Stripe.
     const key = process.env.STRIPE_SECRET_KEY?.trim();
     if (!hasRequiredStripeCheckoutConfig() || !key) return NextResponse.json({ error: 'Payment configuration incomplete.' }, { status: 503 });
-    if (!process.env.ORDER_INTEGRITY_SECRET || process.env.ORDER_INTEGRITY_SECRET.length < 32) return NextResponse.json({ error: 'Order configuration incomplete.' }, { status: 503 });
+    if (!hasOrderIntegritySigningConfig()) return NextResponse.json({ error: 'Order configuration incomplete.' }, { status: 503 });
     if (!hasRequiredStripeWebhookConfig()) {
       return NextResponse.json({ error: 'eSIM ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.' }, {
         status: 503,

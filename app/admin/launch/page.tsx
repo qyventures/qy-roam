@@ -1,6 +1,7 @@
 import { hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
 import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig, hasRequiredOperationsSchema, hasRequiredPaymentSchema, hasRequiredPocketWifiFulfilmentSchema, hasRequiredStripeWebhookConfig } from '@/lib/productionReadiness';
 import { operationalConfig } from '@/lib/operationalConfig';
+import { hasOrderIntegritySigningConfig } from '@/lib/orderProvenance';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,7 +14,6 @@ function isProductionSiteUrl(value?:string){
 // Match checkout readiness: surrounding deployment whitespace is harmless,
 // but must not make this operator signal disagree with the runnable routes.
 function hasLiveStripeSecret(value?:string){const key=value?.trim();return Boolean(key?.startsWith('sk_live_')||key?.startsWith('rk_live_'));}
-function hasOrderIntegritySecret(value?:string){return Boolean(value&&value.length>=32);}
 
 export default async function LaunchPage(){
  const [esimOrderDbOk, paymentDbOk, pocketWifiFulfilmentDbOk, operationsDbOk]=await Promise.all([hasRequiredEsimOrderSchema(),hasRequiredPaymentSchema(),hasRequiredPocketWifiFulfilmentSchema(),hasRequiredOperationsSchema()]);
@@ -27,7 +27,7 @@ export default async function LaunchPage(){
  // Purchases are silently skipped or cannot be recovered.
  const metaCapi=hasRequiredMetaCapiPurchaseConfig();
  const site=isProductionSiteUrl(process.env.NEXT_PUBLIC_SITE_URL);
- const orderIntegrity=hasOrderIntegritySecret(process.env.ORDER_INTEGRITY_SECRET);
+ const orderIntegrity=hasOrderIntegritySigningConfig();
  // Mirror each public checkout route independently. eSIM intentionally remains
  // sellable when only the router reservation/inventory contract is unavailable;
  // coupling it to paymentDbOk here would show a false launch blocker.

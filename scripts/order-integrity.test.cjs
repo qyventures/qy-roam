@@ -51,7 +51,7 @@ const { nextRetryAttempt } = require('../lib/retryAttempt.ts');
 const { isSafeSmtpHost } = require('../lib/smtp.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
-const { signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
+const { hasOrderIntegritySecret, hasOrderIntegritySigningConfig, signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
 
 // The success page, booking-status page, and Stripe webhook must all use this
 // same validator rather than trusting the QY Roam source marker by itself.
@@ -491,6 +491,26 @@ test('accepts only the immediately previous checkout-integrity key during a cont
     assert.equal(validateQyRoamSession(forged).valid, false);
   } finally {
     delete process.env.ORDER_INTEGRITY_SECRET_PREVIOUS;
+    process.env.ORDER_INTEGRITY_SECRET = current;
+  }
+});
+
+test('checkout provenance configuration rejects malformed rotation keys before payment can begin', () => {
+  const current = process.env.ORDER_INTEGRITY_SECRET;
+  const previous = process.env.ORDER_INTEGRITY_SECRET_PREVIOUS;
+  try {
+    assert.equal(hasOrderIntegritySecret(current), true);
+    assert.equal(hasOrderIntegritySecret('short'), false);
+    assert.equal(hasOrderIntegritySecret('x'.repeat(31)), false);
+    assert.equal(hasOrderIntegritySecret(`x${'y'.repeat(31)}\n`), false);
+    assert.equal(hasOrderIntegritySecret('x'.repeat(4_097)), false);
+    process.env.ORDER_INTEGRITY_SECRET_PREVIOUS = 'not-a-valid-rotation-key';
+    assert.equal(hasOrderIntegritySigningConfig(), false);
+    process.env.ORDER_INTEGRITY_SECRET_PREVIOUS = 'previous-order-integrity-secret-that-is-at-least-32-characters';
+    assert.equal(hasOrderIntegritySigningConfig(), true);
+  } finally {
+    if (previous === undefined) delete process.env.ORDER_INTEGRITY_SECRET_PREVIOUS;
+    else process.env.ORDER_INTEGRITY_SECRET_PREVIOUS = previous;
     process.env.ORDER_INTEGRITY_SECRET = current;
   }
 });
@@ -1419,8 +1439,7 @@ test('Pocket WiFi availability does not promise stock when checkout cannot safel
   assert.match(availabilityRoute, /if \(!await hasRequiredPocketWifiFulfilmentSchema\(\)\)/);
   assert.match(availabilityRoute, /hasRequiredStripeWebhookConfig/);
   assert.match(availabilityRoute, /hasRequiredFulfilmentEmailConfig/);
-  assert.match(availabilityRoute, /ORDER_INTEGRITY_SECRET/);
-  assert.match(availabilityRoute, /orderIntegritySecret\.length < 32/);
+  assert.match(availabilityRoute, /hasOrderIntegritySigningConfig/);
   assert.match(availabilityRoute, /Live availability is temporarily unavailable/);
   assert.match(availabilityRoute, /'Retry-After': '30'/);
 });
@@ -2119,7 +2138,7 @@ test('launch control reports the same checkout prerequisites that protect real o
   assert.match(launchPage, /function isProductionSiteUrl/);
   assert.match(launchPage, /function hasLiveStripeSecret/);
   assert.match(launchPage, /hasRequiredStripeWebhookConfig\(\)/);
-  assert.match(launchPage, /function hasOrderIntegritySecret/);
+  assert.match(launchPage, /hasOrderIntegritySigningConfig/);
   assert.match(launchPage, /hasRequiredEsimOrderSchema\(\)/);
   assert.match(launchPage, /hasRequiredPocketWifiFulfilmentSchema\(\)/);
   assert.match(launchPage, /const commonCheckoutReady=stripe&&webhook&&site&&orderIntegrity&&smtp/);
