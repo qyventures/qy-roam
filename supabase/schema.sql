@@ -59,9 +59,12 @@ alter table public.orders add column if not exists notes text;
 -- scripts and future workers can bypass those paths. Once payment has been
 -- confirmed, do not let an update silently change the Stripe reference,
 -- product/plan, amount, destination or rental period, and never permit the
--- payment itself to be downgraded. Customer contact and shipping details stay
--- editable because Stripe or operations may legitimately correct them; the
--- operational fulfilment fields have their own transition/audit boundaries.
+-- payment itself to be downgraded. The checkout-time measurement choice is
+-- immutable as well: changing an essential-only paid order to accepted would
+-- let a later admin recovery send a Meta Purchase without the customer's
+-- consent. Customer contact and shipping details stay editable because Stripe
+-- or operations may legitimately correct them; the operational fulfilment
+-- fields have their own transition/audit boundaries.
 create or replace function public.qy_enforce_paid_order_identity_immutability()
 returns trigger
 language plpgsql
@@ -75,6 +78,7 @@ begin
     new.payment_confirmed_at is distinct from old.payment_confirmed_at or
     new.amount_sgd is distinct from old.amount_sgd or
     new.product_type is distinct from old.product_type or
+    new.measurement_consent is distinct from old.measurement_consent or
     new.plan_id is distinct from old.plan_id or
     new.plan_name is distinct from old.plan_name or
     new.data_allowance is distinct from old.data_allowance or
@@ -91,9 +95,21 @@ $$;
 drop trigger if exists qy_enforce_paid_order_identity_immutability on public.orders;
 create trigger qy_enforce_paid_order_identity_immutability
 before update of stripe_session_id, payment_status, payment_confirmed_at,
-  amount_sgd, product_type, plan_id, plan_name, data_allowance, country,
+  amount_sgd, product_type, measurement_consent, plan_id, plan_name, data_allowance, country,
   travel_start, travel_end on public.orders
 for each row execute function public.qy_enforce_paid_order_identity_immutability();
+
+-- This field is an authorization boundary, not free-form reporting metadata.
+-- Application writes normalize every checkout and manual order to one of
+-- these two values. Reassert that contract in Postgres so a future import or
+-- service-role repair cannot create an ambiguous value that is interpreted
+-- differently by reporting and CAPI recovery code. NOT VALID keeps legacy
+-- rows available for reconciliation while protecting every new or updated
+-- record immediately.
+alter table public.orders drop constraint if exists orders_measurement_consent_check;
+alter table public.orders add constraint orders_measurement_consent_check check (
+  measurement_consent in ('essential', 'accepted')
+) not valid;
 
 -- A digital entitlement is not operationally complete without the exact
 -- package identity staff must provision. Checkout and the protected manual
