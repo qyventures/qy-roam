@@ -16,15 +16,14 @@ function validClientIp(value?: string | null) {
 }
 
 export function checkoutClientKey(req: Request) {
-  // Production Nginx overwrites X-Real-IP with the socket peer, while
-  // X-Forwarded-For appends to any caller-supplied chain and arbitrary request
-  // headers can otherwise create unlimited apparent identities. Prefer that
-  // trusted single-IP boundary and accept only real, bounded IP literals from
-  // every fallback. Invalid or absent provenance shares one conservative key.
-  return validClientIp(req.headers.get('x-real-ip'))
-    || validClientIp(req.headers.get('cf-connecting-ip'))
-    || validClientIp(req.headers.get('x-forwarded-for')?.split(',')[0])
-    || 'unknown';
+  // Production Nginx overwrites X-Real-IP with the socket peer. Do not use
+  // forwarding-chain headers as fallbacks: a caller can create an arbitrary
+  // number of apparent client identities with X-Forwarded-For or a CDN-style
+  // header if the application is ever reached through a misconfigured proxy.
+  // Missing or malformed trusted provenance intentionally shares one
+  // conservative bucket, which is preferable to making the rate limiter
+  // bypassable at this public Stripe/Supabase work boundary.
+  return validClientIp(req.headers.get('x-real-ip')) || 'unknown';
 }
 
 export function createCheckoutAttemptLimiter(

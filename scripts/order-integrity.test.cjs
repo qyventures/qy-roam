@@ -811,7 +811,7 @@ test('admin order transitions bound and validate their JSON request bodies', () 
 
 test('checkout attempt rate limiting keeps per-client limits while bounding unique client state', () => {
   const limit = createCheckoutAttemptLimiter(1_000, 2, 3);
-  const requestFor = (ip) => new Request('https://qyroam.test/api/checkout', { headers: { 'cf-connecting-ip': ip } });
+  const requestFor = (ip) => new Request('https://qyroam.test/api/checkout', { headers: { 'x-real-ip': ip } });
   assert.equal(limit(requestFor('198.51.100.1'), 100), false);
   assert.equal(limit(requestFor('198.51.100.1'), 101), false);
   assert.equal(limit(requestFor('198.51.100.1'), 102), true);
@@ -825,7 +825,7 @@ test('checkout attempt rate limiting keeps per-client limits while bounding uniq
   assert.equal(limit(requestFor('198.51.100.1'), 1_200), false);
 });
 
-test('checkout rate limiting uses only bounded valid proxy client identities', () => {
+test('checkout rate limiting uses only the bounded trusted proxy client identity', () => {
   const request = (headers) => new Request('https://qyroam.com/api/checkout', { headers });
 
   // Nginx overwrites X-Real-IP in production. Spoofable forwarding headers
@@ -837,7 +837,7 @@ test('checkout rate limiting uses only bounded valid proxy client identities', (
   })), '203.0.113.8');
 
   assert.equal(checkoutClientKey(request({ 'x-real-ip': '2001:db8::17' })), '2001:db8::17');
-  assert.equal(checkoutClientKey(request({ 'x-real-ip': 'not-an-ip', 'cf-connecting-ip': '198.51.100.7' })), '198.51.100.7');
+  assert.equal(checkoutClientKey(request({ 'x-real-ip': 'not-an-ip', 'cf-connecting-ip': '198.51.100.7' })), 'unknown');
   assert.equal(checkoutClientKey(request({ 'x-real-ip': 'not-an-ip', 'cf-connecting-ip': 'x'.repeat(4_000), 'x-forwarded-for': 'also-invalid' })), 'unknown');
 
   // Invalid caller-controlled identities collapse into one rate-limit bucket
