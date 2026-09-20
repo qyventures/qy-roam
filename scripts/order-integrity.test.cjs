@@ -35,6 +35,7 @@ const { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookEvent
 const { isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError, InvalidRequestBodyLimitError } = require('../lib/requestBody.ts');
 const { checkoutClientKey, createCheckoutAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = require('../lib/stripeCheckoutConfig.ts');
+const { stripeWebhookSigningSecret } = require('../lib/stripeWebhookSecret.ts');
 const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
 const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_EXPIRY_CREATION_MARGIN_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, checkoutAttemptExpiresAt, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
 const { checkoutSiteOrigin, isProductionQyRoamOrigin, metaPurchaseEventSourceUrl } = require('../lib/siteOrigin.ts');
@@ -68,6 +69,7 @@ const adminOpsRoute = fs.readFileSync(require.resolve('../app/api/admin/ops/rout
 const productionReadiness = fs.readFileSync(require.resolve('../lib/productionReadiness.ts'), 'utf8');
 const runtimeConfig = fs.readFileSync(require.resolve('../lib/runtimeConfig.ts'), 'utf8');
 const stripeCheckoutConfig = fs.readFileSync(require.resolve('../lib/stripeCheckoutConfig.ts'), 'utf8');
+const stripeWebhookSecret = fs.readFileSync(require.resolve('../lib/stripeWebhookSecret.ts'), 'utf8');
 const operationalDate = fs.readFileSync(require.resolve('../lib/operationalDate.ts'), 'utf8');
 const smtpClient = fs.readFileSync(require.resolve('../lib/smtp.ts'), 'utf8');
 const webhookRoute = fs.readFileSync(require.resolve('../app/api/stripe-webhook/route.ts'), 'utf8');
@@ -1154,7 +1156,7 @@ test('checkout never exposes payment when signed Stripe webhook processing is no
     assert.match(route, /if\s*\(!hasRequiredStripeWebhookConfig\(\)\)/);
   }
   assert.match(productionReadiness, /export function hasRequiredStripeWebhookConfig\(\)/);
-  assert.match(productionReadiness, /\^whsec_\[A-Za-z0-9\]\+\$/);
+  assert.match(stripeWebhookSecret, /\^whsec_\[A-Za-z0-9\]\+\$/);
 });
 
 test('Stripe webhook rejects malformed signing-secret configuration as unavailable before signature parsing', () => {
@@ -1168,6 +1170,13 @@ test('Stripe webhook rejects malformed signing-secret configuration as unavailab
     webhookRoute.indexOf('!hasRequiredStripeWebhookConfig()') < webhookRoute.indexOf('stripe.webhooks.constructEvent'),
     'webhook configuration must be checked before signature parsing',
   );
+});
+
+test('Stripe webhook readiness and verification share a canonical signing secret', () => {
+  assert.equal(stripeWebhookSigningSecret('  whsec_abcdefghijklmnopqrstuvwxyz123456  \n'), 'whsec_abcdefghijklmnopqrstuvwxyz123456');
+  assert.equal(stripeWebhookSigningSecret('whsec_abc\ndefghijklmnopqrstuvwxyz123456'), null);
+  assert.match(productionReadiness, /return Boolean\(stripeWebhookSigningSecret\(\)\)/);
+  assert.match(webhookRoute, /webhookSecret=stripeWebhookSigningSecret\(\)/);
 });
 
 test('production checkout and recovery reject test-mode Stripe server credentials', () => {

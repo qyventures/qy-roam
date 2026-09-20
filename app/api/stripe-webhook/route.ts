@@ -9,6 +9,7 @@ import { validateQyRoamSession } from '@/lib/qyRoamSession';
 import { validCheckoutRequestId } from '@/lib/checkoutValidation';
 import { validQyRoamProvenance } from '@/lib/orderProvenance';
 import { hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '@/lib/productionReadiness';
+import { stripeWebhookSigningSecret } from '@/lib/stripeWebhookSecret';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { getEsimPlan } from '@/lib/esimPlans';
 import { fulfilmentNotificationActionable, stripeEventClaimInProgress } from '@/lib/orderLifecycle';
@@ -648,7 +649,7 @@ export async function POST(req:Request){
   // hasRequiredStripeCheckoutConfig canonicalises ordinary deployment
   // whitespace. Use the same value for signature verification and API reads
   // so a health-ready service cannot reject every signed payment event.
-  const key=process.env.STRIPE_SECRET_KEY?.trim(),webhookSecret=process.env.STRIPE_WEBHOOK_SECRET;
+  const key=process.env.STRIPE_SECRET_KEY?.trim(),webhookSecret=stripeWebhookSigningSecret();
   // This must use the same strict signing-secret boundary as checkout and
   // authenticated readiness. A merely non-empty malformed secret otherwise
   // makes every authentic Stripe delivery look like a bad signature (400),

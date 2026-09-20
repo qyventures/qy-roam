@@ -2,6 +2,7 @@ import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import crypto from 'crypto';
 import { isSafeSmtpHost, isSafeSmtpMailbox } from '@/lib/smtp';
 import { safeHttpsDeliveryEndpoint } from '@/lib/deliveryEndpoint';
+import { stripeWebhookSigningSecret } from '@/lib/stripeWebhookSecret';
 export { hasRequiredStripeCheckoutConfig } from '@/lib/stripeCheckoutConfig';
 
 // Checkout invokes these guards immediately before creating a payable Stripe
@@ -181,8 +182,7 @@ export function hasRequiredFulfilmentEmailConfig() {
 // to the other pre-payment guards so the public checkout routes fail closed
 // instead of creating an order that requires dashboard recovery.
 export function hasRequiredStripeWebhookConfig() {
-  const secret = process.env.STRIPE_WEBHOOK_SECRET;
-  return Boolean(secret && /^whsec_[A-Za-z0-9]+$/.test(secret) && secret.length >= 20);
+  return Boolean(stripeWebhookSigningSecret());
 }
 
 /**
