@@ -34,6 +34,19 @@ export function stripeWebhookCheckoutSession(value: unknown): Stripe.Checkout.Se
   return value as unknown as Stripe.Checkout.Session;
 }
 
+// Stripe's Event envelope and its embedded object both carry `livemode`.
+// Credential-mode validation on the envelope is not enough by itself: an
+// unexpected API shape or malformed signed fixture must not let an embedded
+// test Session enter a live event's durable retry ledger (or vice versa).
+// Require the two authenticated snapshots to agree before the Session id is
+// used for an API lookup, idempotency claim, or any order side effect.
+export function stripeWebhookCheckoutSessionMatchesEvent(
+  event: Stripe.Event,
+  session: Stripe.Checkout.Session,
+) {
+  return session.livemode === event.livemode;
+}
+
 // The Checkout metadata is an untyped value at the webhook boundary. Require
 // its normal object form before treating the QY Roam source marker as an
 // application authority; this also keeps shared-account lookalikes outside

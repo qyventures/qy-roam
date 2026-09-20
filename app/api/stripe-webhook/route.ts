@@ -21,7 +21,7 @@ import { metaPurchaseEventSourceUrl } from '@/lib/siteOrigin';
 import { fulfilmentRelayAcknowledged } from '@/lib/deliveryAcknowledgement';
 import { safeProviderDeliveryFailure, safeWebhookProcessingFailure } from '@/lib/deliveryFailure';
 import { nextRetryAttempt } from '@/lib/retryAttempt';
-import { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookEventEnvelope } from '@/lib/stripeWebhookObject';
+import { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesEvent, stripeWebhookEventEnvelope } from '@/lib/stripeWebhookObject';
 
 export const runtime = 'nodejs';
 
@@ -703,6 +703,15 @@ export async function POST(req:Request){
   if(!eventSession) {
     console.error('stripe_webhook_invalid_checkout_session_object',{eventId:stripeEventId});
     return NextResponse.json({error:'Invalid Checkout Session object'},{status:400});
+  }
+  // The envelope mode was checked against the configured Stripe credential
+  // above. Bind the embedded object to that same mode before trusting its
+  // source marker or writing its id to the durable event ledger. Genuine
+  // Stripe Checkout events carry matching values; disagreement is a malformed
+  // signed payload, not a retryable paid-order failure.
+  if(!stripeWebhookCheckoutSessionMatchesEvent(event,eventSession)) {
+    console.error('stripe_webhook_checkout_session_mode_mismatch',{eventId:stripeEventId});
+    return NextResponse.json({error:'Checkout Session mode does not match Stripe event'},{status:400});
   }
   // QY Roam can share a Stripe account with other products. A broad Checkout
   // webhook subscription must acknowledge their sessions without creating an

@@ -31,7 +31,7 @@ const { allowedFulfilmentStatuses, fulfilmentNotificationActionable, validFulfil
 const { operationalConfig } = require('../lib/operationalConfig.ts');
 const { validStripeCheckoutSessionId } = require('../lib/stripeSessionId.ts');
 const { validStripeEventCreated, validStripePaymentEventCreated, STRIPE_EVENT_CREATED_MIN_SECONDS, STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS } = require('../lib/stripeEventCreated.ts');
-const { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookEventEnvelope } = require('../lib/stripeWebhookObject.ts');
+const { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesEvent, stripeWebhookEventEnvelope } = require('../lib/stripeWebhookObject.ts');
 const { isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError, InvalidRequestBodyLimitError } = require('../lib/requestBody.ts');
 const { checkoutClientKey, createCheckoutAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = require('../lib/stripeCheckoutConfig.ts');
@@ -257,6 +257,27 @@ test('webhook event envelopes are structurally validated before payment routing'
   assert.equal(stripeWebhookEventEnvelope(null), null);
   assert.match(webhookRoute, /const webhookEvent=stripeWebhookEventEnvelope\(event\);/);
   assert.match(webhookRoute, /stripe_webhook_invalid_event_envelope/);
+});
+
+test('webhook event and embedded Checkout Session must agree on Stripe mode before claiming', () => {
+  const event = {
+    id: 'evt_live_mode_binding',
+    type: 'checkout.session.completed',
+    livemode: true,
+    created: 1_700_000_000,
+    data: { object: {} },
+  };
+  const liveSession = { object: 'checkout.session', id: 'cs_live_mode_binding', livemode: true };
+  const testSession = { ...liveSession, id: 'cs_test_mode_binding', livemode: false };
+  assert.equal(stripeWebhookCheckoutSessionMatchesEvent(event, liveSession), true);
+  assert.equal(stripeWebhookCheckoutSessionMatchesEvent(event, testSession), false);
+
+  const modeCheck = webhookRoute.indexOf('stripeWebhookCheckoutSessionMatchesEvent(event,eventSession)');
+  const sourceCheck = webhookRoute.indexOf('hasQyRoamWebhookSource(eventSession.metadata)');
+  const claim = webhookRoute.indexOf('claimOnce(supabase,eventClaimId,event.type,eventSessionId)');
+  assert.ok(modeCheck >= 0 && modeCheck < sourceCheck, 'embedded mode must be bound before the source marker is trusted');
+  assert.ok(modeCheck < claim, 'embedded mode mismatch must be rejected before the durable event claim');
+  assert.match(webhookRoute, /stripe_webhook_checkout_session_mode_mismatch/);
 });
 
 test('Stripe webhook failure logging does not print raw dependency errors', () => {
