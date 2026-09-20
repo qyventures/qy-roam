@@ -190,7 +190,7 @@ export async function POST(req: Request) {
     // Retrieve it again because payment or expiry can race the preceding list
     // call. The fresh state, not the URL snapshot from that list, determines
     // whether the browser may return to Checkout.
-    const existing=await stripe.checkout.sessions.retrieve(holdState.existingSessionId);
+    let existing=await stripe.checkout.sessions.retrieve(holdState.existingSessionId);
     // This object can release a reservation, confirm a paid order, or expose a
     // payment URL. Require it to remain bound to the exact hold selected above.
     if(existing.id!==holdState.existingSessionId){
@@ -210,7 +210,26 @@ export async function POST(req: Request) {
     const metadata={...existing.metadata} as Record<string,string>;
     const provenance=signedQyRoamProvenance(existing.id,metadata);
     if(metadata[QY_ROAM_PROVENANCE_METADATA_KEY]!==provenance){
-      await stripe.checkout.sessions.update(existing.id,{metadata:{[QY_ROAM_PROVENANCE_METADATA_KEY]:provenance}});
+      // The previous request may have stopped after Session creation but
+      // before this write completed. Use Stripe's update response as the new
+      // authority instead of continuing with the unsigned object retrieved
+      // above: that stale object must never release stock, confirm payment,
+      // or expose a payable URL.
+      const updated=await stripe.checkout.sessions.update(existing.id,{metadata:{[QY_ROAM_PROVENANCE_METADATA_KEY]:provenance}});
+      if(updated.id!==existing.id||
+        !stripeEventMatchesConfiguredMode(key,updated.livemode)||
+        !matchesRequestedPocketWifi(updated,requestId,requested)){
+        console.error('checkout_recovered_session_mismatch',{expectedSessionId:existing.id});
+        return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
+      }
+      existing=updated;
+    }
+    // A successful metadata update is not sufficient by itself. Confirm the
+    // exact id-bound signature on the object that controls all subsequent
+    // reservation and customer redirect decisions.
+    if(!validQyRoamProvenance(existing.id,existing.metadata)){
+      console.error('checkout_provenance_confirmation_error',{sessionId:existing.id});
+      return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
     }
     if(existing.status==='complete'&&existing.payment_status==='paid'){
       // The signed terminal webhook normally removes this hold. Keep it linked

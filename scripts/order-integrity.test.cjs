@@ -1116,7 +1116,7 @@ test('checkout recovery binds every fresh Stripe response to the requested Sessi
 
   assert.match(wifiCheckoutRoute, /existing\.id!==holdState\.existingSessionId/);
   assert.match(wifiCheckoutRoute, /currentSession\.id!==session\.id/);
-  const existingRead = wifiCheckoutRoute.indexOf('const existing=await stripe.checkout.sessions.retrieve(holdState.existingSessionId)');
+  const existingRead = wifiCheckoutRoute.indexOf('let existing=await stripe.checkout.sessions.retrieve(holdState.existingSessionId)');
   const existingIdentity = wifiCheckoutRoute.indexOf('existing.id!==holdState.existingSessionId', existingRead);
   const existingUrl = wifiCheckoutRoute.indexOf('{url:existing.url}', existingRead);
   assert.ok(existingRead >= 0 && existingIdentity > existingRead && existingIdentity < existingUrl);
@@ -1549,12 +1549,21 @@ test('Pocket WiFi open-session retries honor the freshly retrieved Stripe state'
   // Listing and retrieving are separate Stripe calls. A traveller can pay or
   // the session can expire between them, so the stale listed URL must never be
   // returned without checking the retrieved session status.
-  assert.match(wifiCheckoutRoute, /const existing=await stripe\.checkout\.sessions\.retrieve\(holdState\.existingSessionId\)/);
+  assert.match(wifiCheckoutRoute, /let existing=await stripe\.checkout\.sessions\.retrieve\(holdState\.existingSessionId\)/);
   const replayBranch = wifiCheckoutRoute.slice(
     wifiCheckoutRoute.indexOf('if(holdState.existingUrl&&holdState.existingSessionId)'),
     wifiCheckoutRoute.indexOf('const expiresAt=', wifiCheckoutRoute.indexOf('if(holdState.existingUrl&&holdState.existingSessionId)')),
   );
   assert.match(replayBranch, /matchesRequestedPocketWifi\(existing,requestId,requested\)/);
+  const provenanceUpdate = replayBranch.indexOf('const updated=await stripe.checkout.sessions.update');
+  const provenanceGuard = replayBranch.indexOf('if(!validQyRoamProvenance(existing.id,existing.metadata))');
+  const firstStateDecision = replayBranch.indexOf("if(existing.status==='complete'&&existing.payment_status==='paid')");
+  assert.ok(provenanceUpdate > -1 && provenanceGuard > provenanceUpdate, 'recovered Stripe metadata must be validated');
+  assert.ok(firstStateDecision > provenanceGuard, 'provenance must be confirmed before payment, inventory, or redirect decisions');
+  assert.match(replayBranch, /updated\.id!==existing\.id/);
+  assert.match(replayBranch, /stripeEventMatchesConfiguredMode\(key,updated\.livemode\)/);
+  assert.match(replayBranch, /matchesRequestedPocketWifi\(updated,requestId,requested\)/);
+  assert.match(replayBranch, /existing=updated/);
   assert.match(replayBranch, /existing\.status==='complete'&&existing\.payment_status==='paid'/);
   assert.match(replayBranch, /existing\.status==='expired'/);
   assert.match(replayBranch, /existing\.status!=='open'\|\|!existing\.url/);
