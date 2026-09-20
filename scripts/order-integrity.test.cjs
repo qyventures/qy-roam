@@ -706,6 +706,14 @@ test('customer confirmation views distinguish expired Checkout Sessions from del
   assert.match(bookingPage, /checkoutExpired \? \(/);
 });
 
+test('customer booking status does not present terminal orders as awaiting fulfilment', () => {
+  assert.match(bookingPage, /fulfilment === 'cancelled'/);
+  assert.match(bookingPage, /This order has been cancelled in our fulfilment system/);
+  assert.match(bookingPage, /fulfilment === 'fulfilled' \|\| fulfilment === 'closed'/);
+  assert.match(bookingPage, /fulfilment === 'returned' \|\| fulfilment === 'closed'/);
+  assert.match(bookingPage, /This rental no longer requires delivery or return action/);
+});
+
 test('checkout validation rejects normalized and malformed calendar dates', () => {
   assert.equal(parseExactIsoDate('2026-09-10')?.toISOString().slice(0, 10), '2026-09-10');
   for (const value of ['2026-02-29', '2026-04-31', '2026-13-01', '2026-9-10', '', null]) {

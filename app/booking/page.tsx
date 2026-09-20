@@ -125,14 +125,23 @@ export default async function BookingPage({ searchParams }: Props) {
             <p>Please do not place a second order. Refresh this page shortly; if this message remains, contact us at <a href="tel:+6580327183"><strong>+65 8032 7183</strong></a> and quote your checkout confirmation.</p>
           </div>
         ) : paid ? (
-          isEsim ? (
+          fulfilment === 'cancelled' ? (
             <>
-              <p>{fulfilment === 'fulfilled' ? 'Your eSIM order has been marked fulfilled.' : 'Your payment is confirmed. Your eSIM order is queued for digital fulfilment to the email address used at checkout.'}</p>
-              {fulfilment !== 'fulfilled' && <p>If you have not received your eSIM details within the stated fulfilment window, contact +65 8032 7183.</p>}
+              <p>This order has been cancelled in our fulfilment system. Your payment record is retained for reconciliation.</p>
+              <p>For the latest refund or replacement status, contact +65 8032 7183 and quote your checkout confirmation.</p>
+            </>
+          ) : isEsim ? (
+            <>
+              <p>{fulfilment === 'fulfilled' || fulfilment === 'closed' ? 'Your eSIM order has been marked fulfilled.' : 'Your payment is confirmed. Your eSIM order is queued for digital fulfilment to the email address used at checkout.'}</p>
+              {fulfilment !== 'fulfilled' && fulfilment !== 'closed' && <p>If you have not received your eSIM details within the stated fulfilment window, contact +65 8032 7183.</p>}
             </>
           ) : (
             <>
-              <p>Your payment is confirmed. We’ll use the Singapore delivery details from checkout to fulfil your order.</p>
+              {fulfilment === 'returned' || fulfilment === 'closed' ? (
+                <p>QY Roam has recorded the Pocket WiFi kit as returned. This rental no longer requires delivery or return action.</p>
+              ) : (
+                <p>Your payment is confirmed. We’ll use the Singapore delivery details from checkout to fulfil your order.</p>
+              )}
               {order?.courier_tracking && <p><strong>Delivery tracking:</strong> {order.courier_tracking}</p>}
               {order?.return_tracking && <p><strong>Return tracking:</strong> {order.return_tracking}</p>}
               {fulfilment === 'return_due' && <p>Please hand the complete device kit to the return courier within {POCKET_WIFI_RETURN_GRACE_DAYS} calendar days after your rental ends and keep the tracking receipt until QY Roam confirms receipt.</p>}
