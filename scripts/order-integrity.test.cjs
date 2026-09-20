@@ -221,6 +221,17 @@ test('admin and readiness failure paths do not expose raw dependency errors', ()
   }
 });
 
+test('Pocket WiFi admin transitions expose only approved operational conflicts', () => {
+  // The transition RPC can surface PostgREST/database details. Its browser
+  // response must be constrained to reviewed conflicts, with every unknown
+  // provider failure reduced to a stable recovery instruction.
+  assert.match(adminOrderRoute, /function pocketWifiTransitionError\(message: string\)/);
+  assert.match(adminOrderRoute, /console\.error\('admin_pocket_wifi_transition_error'\);/);
+  assert.match(adminOrderRoute, /Unable to update order\. Please try again or contact an administrator\./);
+  assert.doesNotMatch(adminOrderRoute, /error: conflict \? 'Order changed since it was loaded\. Refresh before updating it\.' : message/);
+  assert.doesNotMatch(adminOrderRoute, /error: message \}, \{ status: transitionErrorStatus\(message\) \}/);
+});
+
 function esimSession(plan = ESIM_PLANS[0]) {
   const session = {
     id: 'cs_test_esim',

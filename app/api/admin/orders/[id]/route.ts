@@ -39,11 +39,31 @@ function digitalDeliveryReference(value: unknown, existing: string | null) {
   return normalizeDigitalDeliveryReference(value);
 }
 
-function transitionErrorStatus(message: string) {
-  // Expected operational conflicts are actionable by staff and should not be
-  // reported as a server failure. The database remains the authority because
-  // another operator can change stock after this request has loaded the order.
-  return /changed since it was loaded|out of stock|not available for dispatch|inventory item not found|required before dispatch|required before receipt|cannot be returned without a recorded dispatch|has no inventory item|evidence exists before the (dispatch|return) transition|invalid Pocket WiFi fulfilment transition/i.test(message) ? 409 : 500;
+function pocketWifiTransitionError(message: string) {
+  // PostgREST can attach SQL, proxy, or connection context to an RPC error.
+  // This route is a browser-facing operations boundary, so expose only the
+  // small set of deliberate, actionable conflicts from the database function.
+  // Everything else is a server failure with a stable response; the database
+  // remains the authority when two operators update the same order.
+  if (/changed since it was loaded/i.test(message)) {
+    return { status: 409, error: 'Order changed since it was loaded. Refresh before updating it.' };
+  }
+  if (/out of stock|not available for dispatch/i.test(message)) {
+    return { status: 409, error: 'The selected Pocket WiFi inventory item is not available for dispatch.' };
+  }
+  if (/inventory item not found|has no inventory item/i.test(message)) {
+    return { status: 409, error: 'The assigned Pocket WiFi inventory item is unavailable. Refresh the order before updating it.' };
+  }
+  if (/required before dispatch|required before receipt|cannot be returned without a recorded dispatch/i.test(message)) {
+    return { status: 409, error: 'Required Pocket WiFi dispatch or return evidence is missing. Refresh the order and record the operational reference.' };
+  }
+  if (/evidence exists before the (dispatch|return) transition/i.test(message)) {
+    return { status: 409, error: 'Existing Pocket WiFi custody evidence needs reconciliation before this transition can be recorded.' };
+  }
+  if (/invalid Pocket WiFi fulfilment transition|only paid Pocket WiFi orders can be transitioned here|order not found/i.test(message)) {
+    return { status: 409, error: 'This Pocket WiFi order can no longer make the requested transition. Refresh before updating it.' };
+  }
+  return null;
 }
 
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
@@ -137,9 +157,13 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       p_return_disposition: returnDisposition,
     });
     if (error) {
-      const message = error.message || 'Unable to update order';
-      const conflict = /changed since it was loaded/i.test(message);
-      return NextResponse.json({ error: conflict ? 'Order changed since it was loaded. Refresh before updating it.' : message }, { status: transitionErrorStatus(message) });
+      const transitionError = pocketWifiTransitionError(error.message || '');
+      if (transitionError) return NextResponse.json({ error: transitionError.error }, { status: transitionError.status });
+      // Do not expose a raw PostgREST/RPC message. Provider and database
+      // errors can contain query details or values supplied by another admin
+      // client, neither of which is an actionable browser response.
+      console.error('admin_pocket_wifi_transition_error');
+      return NextResponse.json({ error: 'Unable to update order. Please try again or contact an administrator.' }, { status: 500 });
     }
     const order = Array.isArray(data) ? data[0] : data;
     if (!order?.id) return NextResponse.json({ error: 'Unable to update order' }, { status: 500 });
