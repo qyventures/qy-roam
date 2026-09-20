@@ -10,7 +10,7 @@ NGINX_CONFIG_PATH="${NGINX_CONFIG_PATH:-/etc/nginx/sites-available/qyroam}"
 
 cd "$APP_DIR"
 
-echo "[1/10] Checking production runtime"
+echo "[1/11] Checking production runtime"
 # Keep the build and systemd runtime on the same supported Node release line.
 # npm's engines field is advisory by default, so enforce it before touching
 # source or dependencies; otherwise an obsolete VPS runtime can appear to
@@ -21,7 +21,7 @@ if [[ "$node_major" -ne 22 ]]; then
   exit 1
 fi
 
-echo "[2/10] Updating source"
+echo "[2/11] Updating source"
 if [[ "$(git branch --show-current)" != "main" ]]; then
   echo "Refusing to deploy: production checkout must already be on main" >&2
   exit 1
@@ -33,21 +33,21 @@ fi
 git fetch --prune origin
 git pull --ff-only origin main
 
-echo "[3/10] Checking environment file"
+echo "[3/11] Checking environment file"
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "Missing $ENV_FILE" >&2
   exit 1
 fi
 chmod 600 "$ENV_FILE"
 
-echo "[4/10] Installing locked dependencies"
+echo "[4/11] Installing locked dependencies"
 if [[ ! -f package-lock.json ]]; then
   echo "package-lock.json is required for a reproducible production deploy" >&2
   exit 1
 fi
 npm ci --no-audit --no-fund
 
-echo "[5/10] Building"
+echo "[5/11] Building"
 set -a
 # shellcheck disable=SC1090
 source "$ENV_FILE"
@@ -64,7 +64,51 @@ npm run check:deploy-safety
 npm run test:order-integrity
 npm run build
 
-echo "[6/10] Verifying service definition"
+echo "[6/11] Smoke-testing the production artifact"
+# A successful compilation does not prove that the standalone server can boot
+# with the deployed runtime configuration. Test the exact production entrypoint
+# on an isolated loopback port before replacing the currently healthy service.
+# This catches missing standalone files and startup-time configuration/runtime
+# failures while production is still untouched.
+smoke_port="${SMOKE_PORT:-3199}"
+if [[ ! "$smoke_port" =~ ^[0-9]+$ ]] || (( smoke_port < 1024 || smoke_port > 65535 )); then
+  echo "SMOKE_PORT must be an integer between 1024 and 65535" >&2
+  exit 1
+fi
+smoke_log="$(mktemp /tmp/qyroam-smoke.XXXXXX.log)"
+smoke_pid=""
+cleanup_smoke() {
+  if [[ -n "$smoke_pid" ]] && kill -0 "$smoke_pid" 2>/dev/null; then
+    kill "$smoke_pid" 2>/dev/null || true
+    wait "$smoke_pid" 2>/dev/null || true
+  fi
+  rm -f "$smoke_log"
+}
+trap cleanup_smoke EXIT
+HOSTNAME=127.0.0.1 PORT="$smoke_port" node .next/standalone/server.js >"$smoke_log" 2>&1 &
+smoke_pid=$!
+smoke_ready=0
+for attempt in {1..15}; do
+  if ! kill -0 "$smoke_pid" 2>/dev/null; then
+    break
+  fi
+  if curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${smoke_port}/api/health" |
+     node -e "let body='';process.stdin.on('data',chunk=>body+=chunk).on('end',()=>{const result=JSON.parse(body);if(result.ok!==true||result.service!=='qy-roam')process.exit(1)})"; then
+    smoke_ready=1
+    break
+  fi
+  sleep 1
+done
+if [[ "$smoke_ready" -ne 1 ]] || ! kill -0 "$smoke_pid" 2>/dev/null; then
+  echo "Built QY Roam artifact failed its isolated startup smoke test" >&2
+  tail -n 50 "$smoke_log" >&2 || true
+  exit 1
+fi
+cleanup_smoke
+smoke_pid=""
+trap - EXIT
+
+echo "[7/11] Verifying service definition"
 # `daemon-reload` only rereads the installed unit; it does not copy the
 # checked-in definition into /etc. Refuse a release if the installed unit has
 # drifted, so loopback binding, restart policy, and sandboxing changes cannot
@@ -77,7 +121,7 @@ if [[ ! -f "$SYSTEMD_UNIT_PATH" ]] || ! cmp -s deploy/qy-roam.service "$SYSTEMD_
   exit 1
 fi
 
-echo "[7/10] Verifying Nginx ingress definition"
+echo "[8/11] Verifying Nginx ingress definition"
 # The app trusts X-Real-IP only because the checked-in Nginx configuration
 # overwrites it while proxying to a loopback-only listener.  A drifted proxy
 # can therefore weaken checkout rate limiting/CAPI attribution or expose the
@@ -94,14 +138,14 @@ if ! nginx -t; then
   exit 1
 fi
 
-echo "[8/10] Reloading service definition"
+echo "[9/11] Reloading service definition"
 if ! systemctl daemon-reload; then
   echo "Unable to reload the systemd service definition" >&2
   systemctl --no-pager --full status "$SERVICE_NAME" >&2 || true
   exit 1
 fi
 
-echo "[9/10] Restarting service"
+echo "[10/11] Restarting service"
 if ! systemctl restart "$SERVICE_NAME"; then
   echo "QY Roam service restart failed" >&2
   systemctl --no-pager --full status "$SERVICE_NAME" >&2 || true
@@ -110,7 +154,7 @@ if ! systemctl restart "$SERVICE_NAME"; then
 fi
 systemctl --no-pager --full status "$SERVICE_NAME" | sed -n '1,15p'
 
-echo "[10/10] Waiting for application readiness"
+echo "[11/11] Waiting for application readiness"
 health_output="$(mktemp /tmp/qyroam-health.XXXXXX.json)"
 health_config="$(mktemp /tmp/qyroam-curl.XXXXXX.conf)"
 trap 'rm -f "$health_output" "$health_config"' EXIT
