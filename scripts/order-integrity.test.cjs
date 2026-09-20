@@ -1007,6 +1007,16 @@ test('post-payment readiness checks every webhook-persisted delivery field and p
   assert.match(productionReadiness, /last_attempt_at,sent_at,last_error/);
   assert.match(productionReadiness, /status,event_time,attempts,last_attempt_at,sent_at,last_error,updated_at/);
   assert.match(productionReadiness, /id,email,phone,name,status,source,total_orders,lifetime_value_sgd,last_order_at,updated_at/);
+  // Columns alone do not prove the direct-write and retry boundaries are
+  // installed. Both product-specific checkout gates must ask Postgres to
+  // verify the named constraints and enabled triggers before payment starts.
+  assert.match(productionReadiness, /database\.rpc\('qy_order_integrity_schema_ready', \{\}\)\.abortSignal\(signal\)/);
+  assert.match(productionReadiness, /production_payment_integrity_schema_check_failed/);
+  assert.match(productionReadiness, /production_esim_order_integrity_schema_check_failed/);
+  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_ready\(\)/);
+  assert.match(schema, /pg_constraint/);
+  assert.match(schema, /pg_trigger/);
+  assert.match(schema, /grant execute on function public\.qy_order_integrity_schema_ready\(\) to service_role/);
 });
 
 test('production readiness aborts stalled database probes instead of holding checkout workers', () => {

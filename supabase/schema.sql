@@ -737,6 +737,68 @@ create trigger qy_enforce_meta_purchase_delivery_immutability
 before update on public.meta_purchase_deliveries
 for each row execute function public.qy_enforce_meta_purchase_delivery_immutability();
 
+-- Table and column probes catch an incomplete migration, but they cannot tell
+-- checkout whether the integrity constraints and triggers behind those tables
+-- are actually installed and enabled. That distinction matters because a
+-- partially applied schema could otherwise accept a payment while allowing a
+-- later service-role recovery to bypass the paid-order, fulfilment, or
+-- delivery-idempotency boundaries. Expose one read-only, service-role-only
+-- readiness assertion so the application can fail closed before it creates a
+-- payable Checkout Session.
+create or replace function public.qy_order_integrity_schema_ready()
+returns boolean
+language sql
+security definer
+set search_path = pg_catalog, public
+as $$
+  select
+    to_regclass('public.orders') is not null and
+    to_regclass('public.stripe_events') is not null and
+    to_regclass('public.fulfilment_notifications') is not null and
+    to_regclass('public.meta_purchase_deliveries') is not null and
+    (select count(*) from pg_constraint where conrelid = 'public.orders'::regclass and conname in (
+      'orders_measurement_consent_check',
+      'orders_esim_plan_identity_required_check',
+      'orders_digital_delivery_reference_safe_check',
+      'orders_esim_fulfilled_delivery_reference_required_check',
+      'orders_product_fulfilment_status_check',
+      'orders_fulfilment_requires_paid_payment_check',
+      'orders_payment_confirmed_at_requires_paid_payment_check',
+      'orders_paid_amount_positive_check',
+      'orders_pocket_wifi_dispatch_evidence_check',
+      'orders_pocket_wifi_return_evidence_check'
+    )) = 10 and
+    (select count(*) from pg_constraint where conrelid = 'public.stripe_events'::regclass and conname = 'stripe_events_attempts_check') = 1 and
+    (select count(*) from pg_constraint where conrelid = 'public.fulfilment_notifications'::regclass and conname in (
+      'fulfilment_notifications_status_check',
+      'fulfilment_notifications_attempts_check',
+      'fulfilment_notifications_sent_at_check',
+      'fulfilment_notifications_order_fk'
+    )) = 4 and
+    (select count(*) from pg_constraint where conrelid = 'public.meta_purchase_deliveries'::regclass and conname in (
+      'meta_purchase_deliveries_status_check',
+      'meta_purchase_deliveries_attempts_check',
+      'meta_purchase_deliveries_event_time_check',
+      'meta_purchase_deliveries_sent_at_check',
+      'meta_purchase_deliveries_order_fk'
+    )) = 5 and
+    (select count(*) from pg_trigger where tgrelid = 'public.orders'::regclass and not tgisinternal and tgenabled <> 'D' and tgname in (
+      'qy_enforce_paid_order_identity_immutability',
+      'qy_enforce_esim_delivery_reference_immutability',
+      'qy_enforce_esim_fulfilment_transition',
+      'qy_enforce_pocket_wifi_fulfilment_transition',
+      'qy_reconcile_customer_from_paid_order'
+    )) = 5 and
+    (select count(*) from pg_trigger where tgrelid = 'public.stripe_events'::regclass and not tgisinternal and tgenabled <> 'D' and tgname in (
+      'qy_enforce_stripe_event_identity_immutability',
+      'qy_enforce_stripe_event_lifecycle'
+    )) = 2 and
+    (select count(*) from pg_trigger where tgrelid = 'public.fulfilment_notifications'::regclass and not tgisinternal and tgenabled <> 'D' and tgname = 'qy_enforce_fulfilment_notification_immutability') = 1 and
+    (select count(*) from pg_trigger where tgrelid = 'public.meta_purchase_deliveries'::regclass and not tgisinternal and tgenabled <> 'D' and tgname = 'qy_enforce_meta_purchase_delivery_immutability') = 1;
+$$;
+revoke all on function public.qy_order_integrity_schema_ready() from public;
+grant execute on function public.qy_order_integrity_schema_ready() to service_role;
+
 -- Short-lived inventory reservations close the gap between an availability
 -- check and Stripe Checkout Session creation. The reservation RPC serializes
 -- competing checkouts, so two customers cannot both claim the final router.

@@ -198,6 +198,16 @@ async function checkRequiredPaymentSchema() {
         return false;
       }
 
+      // A relation can exist while its database backstops are absent or have
+      // been disabled by a partial migration. Verify the named constraints
+      // and triggers that make paid-order persistence, fulfilment state, and
+      // provider-delivery idempotency safe before exposing a payment URL.
+      const integrityProbe = await database.rpc('qy_order_integrity_schema_ready', {}).abortSignal(signal);
+      if (integrityProbe.error || integrityProbe.data !== true) {
+        console.error('production_payment_integrity_schema_check_failed');
+        return false;
+      }
+
       // The table checks above are not enough for Pocket WiFi sales: checkout uses
       // this RPC as the atomic inventory boundary. Probe it with zero inventory so
       // it can never create a reservation while still verifying that the function,
@@ -293,6 +303,17 @@ async function checkRequiredEsimOrderSchema() {
         .filter(Boolean);
       if (failures.length > 0) {
         console.error('production_esim_order_schema_check_failed', { tables: failures });
+        return false;
+      }
+      // eSIM checkout uses its smaller product-specific probe instead of the
+      // Pocket WiFi payment probe, so it must independently verify the same
+      // shared order, Stripe-event, and delivery-ledger integrity backstops.
+      // Otherwise a digital Checkout Session could be exposed against a
+      // schema whose columns exist but whose irreversible fulfilment guards
+      // are missing or disabled.
+      const integrityProbe = await database.rpc('qy_order_integrity_schema_ready', {}).abortSignal(signal);
+      if (integrityProbe.error || integrityProbe.data !== true) {
+        console.error('production_esim_order_integrity_schema_check_failed');
         return false;
       }
       // Resolve the exact atomic eSIM persistence signature and service-role
