@@ -18,6 +18,7 @@ import { validStripeEventCreated } from '@/lib/stripeEventCreated';
 import { safeHttpsDeliveryEndpoint } from '@/lib/deliveryEndpoint';
 import { metaPurchaseEventSourceUrl } from '@/lib/siteOrigin';
 import { fulfilmentRelayAcknowledged } from '@/lib/deliveryAcknowledgement';
+import { safeProviderDeliveryFailure } from '@/lib/deliveryFailure';
 
 export const runtime = 'nodejs';
 
@@ -526,7 +527,11 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
     if(sent.error) throw sent.error;
     if(sent.data?.length!==1) throw new Error('Fulfilment notification delivery lease was lost');
   }catch(error){
-    const message=error instanceof Error?error.message:'SMTP delivery failed';
+    // This row is shown to operations staff. Do not persist arbitrary error
+    // text from an SMTP socket, relay, proxy, or runtime: any of those can
+    // echo paid-order data or credentials. The helper retains only our own
+    // bounded SMTP/HTTP status diagnostics.
+    const message=safeProviderDeliveryFailure(error,'SMTP fulfilment delivery failed; retry or inspect provider configuration');
     // Keep a newer worker's lease intact if this worker was reclaimed while
     // its provider call was still in flight.
     const failed=await supabase.from('fulfilment_notifications').update({status:'pending',last_error:message.slice(0,500),updated_at:new Date().toISOString()}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',now).select('stripe_session_id');
@@ -574,7 +579,10 @@ export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof
     if(sent.error) throw sent.error;
     if(sent.data?.length!==1) throw new Error('Meta purchase delivery lease was lost');
   }catch(error){
-    const message=error instanceof Error?error.message:'Meta CAPI delivery failed';
+    // Meta/provider errors are durable operator-visible data too. Preserve a
+    // safe status code when our own transport produced one, otherwise retain
+    // a recovery instruction rather than an arbitrary upstream error string.
+    const message=safeProviderDeliveryFailure(error,'Meta CAPI delivery failed; retry or inspect provider configuration');
     const failed=await supabase.from('meta_purchase_deliveries').update({status:'pending',last_error:message.slice(0,500),updated_at:new Date().toISOString()}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',now).select('stripe_session_id');
     if(failed.error) console.error('meta_purchase_failure_record_error',failed.error);
     throw error;

@@ -44,6 +44,7 @@ const { SUPABASE_REQUEST_TIMEOUT_MS, fetchSupabaseWithTimeout } = require('../li
 const { checkoutAttempt, clearCheckoutAttempt, CHECKOUT_ATTEMPT_MAX_AGE_MS } = require('../lib/checkoutAttempt.ts');
 const { safeHttpsDeliveryEndpoint } = require('../lib/deliveryEndpoint.ts');
 const { fulfilmentRelayAcknowledged } = require('../lib/deliveryAcknowledgement.ts');
+const { safeProviderDeliveryFailure } = require('../lib/deliveryFailure.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -2364,7 +2365,16 @@ test('SMTP delivery failures retain only a safe status code in fulfilment recove
   // source of echoed PII, credentials, or arbitrary operator-visible text.
   assert.match(smtpClient, /if \(!expected\.includes\(code\)\) reject\(new Error\(`SMTP error \$\{code\}`\)\);/);
   assert.doesNotMatch(smtpClient, /SMTP error \$\{code\}: \$\{buffer\.trim\(\)\}/);
-  assert.match(webhookRoute, /last_error:message\.slice\(0,500\)/);
+  assert.match(webhookRoute, /safeProviderDeliveryFailure\(error,'SMTP fulfilment delivery failed; retry or inspect provider configuration'\)/);
+  assert.match(webhookRoute, /safeProviderDeliveryFailure\(error,'Meta CAPI delivery failed; retry or inspect provider configuration'\)/);
+});
+
+test('delivery retry ledgers retain only application-authored provider diagnostics', () => {
+  assert.equal(safeProviderDeliveryFailure(new Error('SMTP error 550'), 'SMTP fulfilment delivery failed'), 'SMTP error 550');
+  assert.equal(safeProviderDeliveryFailure(new Error('SMTP relay failed (502)'), 'SMTP fulfilment delivery failed'), 'SMTP relay failed (502)');
+  assert.equal(safeProviderDeliveryFailure(new Error('Meta CAPI failed (503)'), 'Meta CAPI delivery failed'), 'Meta CAPI failed (503)');
+  assert.equal(safeProviderDeliveryFailure(new Error('getaddrinfo ENOTFOUND private-relay.example'), 'SMTP fulfilment delivery failed'), 'SMTP fulfilment delivery failed');
+  assert.equal(safeProviderDeliveryFailure(new Error('provider echoed smtp_pass=not-safe-to-store'), 'Meta CAPI delivery failed'), 'Meta CAPI delivery failed');
 });
 
 test('Stripe network calls use a bounded shared production client', () => {
