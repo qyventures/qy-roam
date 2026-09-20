@@ -1,7 +1,57 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const schema = readFileSync(new URL('../supabase/schema.sql', import.meta.url), 'utf8');
+
+// This guard runs without production database credentials, so it cannot ask
+// PostgreSQL to compile the migration. Still reject the two most damaging
+// classes of hand-edited PL/pgSQL breakage before deployment: an unterminated
+// dollar-quoted function body and an unbalanced IF/END IF block. Presence-only
+// checks below would otherwise pass both and leave a clean Supabase install
+// failing partway through schema application.
+export function validatePlpgsqlStructure(sql) {
+  const dollarDelimiter = /\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$/g;
+  const blocks = [];
+  let match;
+
+  while ((match = dollarDelimiter.exec(sql)) !== null) {
+    const opening = { delimiter: match[0], start: match.index, bodyStart: dollarDelimiter.lastIndex };
+    // A function body can itself contain a differently tagged dollar-quoted
+    // string (usually dynamic SQL). Only the exact opening tag closes it.
+    const closingAt = sql.indexOf(opening.delimiter, opening.bodyStart);
+    assert.ok(closingAt >= 0, `Unterminated SQL dollar-quoted block beginning at byte ${opening.start}`);
+    blocks.push({
+      prefix: sql.slice(Math.max(0, opening.start - 300), opening.start),
+      body: sql.slice(opening.bodyStart, closingAt),
+    });
+    dollarDelimiter.lastIndex = closingAt + opening.delimiter.length;
+  }
+
+  for (const { prefix, body } of blocks) {
+    if (!/language\s+plpgsql/i.test(prefix)) continue;
+    // Remove text that cannot contain control-flow tokens. PostgreSQL strings
+    // escape a quote by doubling it; comments can contain arbitrary examples.
+    const code = body
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/--[^\r\n]*/g, ' ')
+      .replace(/'(?:''|[^'])*'/g, ' ')
+      .replace(/"(?:""|[^"])*"/g, ' ');
+    const tokens = code.match(/\bend\s+if\b|\bif\b/gi) || [];
+    let depth = 0;
+    for (const token of tokens) {
+      if (/^end/i.test(token)) {
+        depth -= 1;
+        assert.ok(depth >= 0, 'PL/pgSQL function contains END IF without a matching IF');
+      } else {
+        depth += 1;
+      }
+    }
+    assert.equal(depth, 0, 'PL/pgSQL function contains an IF without a matching END IF');
+  }
+}
+
+validatePlpgsqlStructure(schema);
 
 const requiredContracts = [
   'create table if not exists public.inventory_items',
@@ -77,4 +127,6 @@ assert.ok(inventoryTable >= 0 && inventoryTable < reservationFunction, 'inventor
 assert.ok(orderInventoryColumn > inventoryTable && orderInventoryColumn < reservationFunction, 'orders.inventory_item_id must exist before the reservation function');
 assert.ok(inventoryTable < manualOrderFunction, 'inventory_items must exist before the manual-order function');
 
-console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts and clean-install dependency order.`);
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure, and clean-install dependency order.`);
+}

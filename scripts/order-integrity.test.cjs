@@ -3140,3 +3140,26 @@ test('Stripe webhook bounds event identities before logs or durable idempotency 
   assert.doesNotMatch(webhookRoute, /eventId:event\.id/);
   assert.doesNotMatch(webhookRoute, /`stripe:\$\{event\.id\}`/);
 });
+
+test('deployment rejects structurally broken PL/pgSQL before schema application', async () => {
+  const { validatePlpgsqlStructure } = await import('./check-operations-schema.mjs');
+  assert.doesNotThrow(() => validatePlpgsqlStructure(`
+    create function public.example() returns trigger language plpgsql as $$
+    begin
+      -- IF and END IF in comments are not control flow.
+      if new.value = 'an END IF string' then
+        return new;
+      end if;
+    end;
+    $$;
+  `));
+  assert.throws(() => validatePlpgsqlStructure(`
+    create function public.example() returns trigger language plpgsql as $$
+    begin
+      if new.value is null then return new;
+    end;
+    $$;
+  `), /IF without a matching END IF/);
+  assert.throws(() => validatePlpgsqlStructure('create function public.example() returns void language plpgsql as $$ begin return; end;'), /Unterminated SQL dollar-quoted block/);
+  assert.throws(() => validatePlpgsqlStructure('create function public.example() returns void language plpgsql as $body$ begin return; end; $$;'), /Unterminated SQL dollar-quoted block/);
+});
