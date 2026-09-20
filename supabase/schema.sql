@@ -1234,7 +1234,17 @@ begin
     (p_expected_status = 'returned' and p_next_status = 'closed')
   ) then raise exception 'invalid Pocket WiFi fulfilment transition'; end if;
 
-  if p_next_status = 'dispatched' and v_order.dispatched_at is null then
+  -- Crossing a physical custody boundary must always create its matching
+  -- inventory movement in this transaction. A legacy/imported row may have a
+  -- timestamp populated before its status was advanced; silently treating
+  -- that timestamp as proof of an earlier stock movement would let the RPC
+  -- mark the router dispatched or returned without reconciling inventory.
+  -- Same-status saves remain harmless operational edits and do not create a
+  -- second movement.
+  if p_next_status = 'dispatched' and p_expected_status <> 'dispatched' then
+    if v_order.dispatched_at is not null then
+      raise exception 'Pocket WiFi dispatch evidence exists before the dispatch transition; reconcile the order first';
+    end if;
     if nullif(trim(coalesce(p_courier_tracking, '')), '') is null then raise exception 'courier tracking is required before dispatch'; end if;
     v_item_id := coalesce(p_inventory_item_id, v_order.inventory_item_id);
     if v_item_id is null then raise exception 'a Pocket WiFi inventory item is required before dispatch'; end if;
@@ -1258,7 +1268,10 @@ begin
     update public.inventory_items set quantity_on_hand = quantity_on_hand - 1, updated_at = v_now where id = v_item_id;
     insert into public.inventory_movements (inventory_item_id, movement_type, quantity, reference, notes)
     values (v_item_id, 'dispatch', -1, left(v_order.stripe_session_id, 120), nullif(left(trim(coalesce(p_courier_tracking, '')), 1000), ''));
-  elsif p_next_status = 'returned' and v_order.returned_at is null then
+  elsif p_next_status = 'returned' and p_expected_status <> 'returned' then
+    if v_order.returned_at is not null then
+      raise exception 'Pocket WiFi return evidence exists before the return transition; reconcile the order first';
+    end if;
     if nullif(trim(coalesce(p_return_tracking, '')), '') is null then raise exception 'return tracking is required before receipt'; end if;
     v_return_disposition := lower(trim(coalesce(p_return_disposition, '')));
     if v_return_disposition not in ('restock', 'quarantine', 'damaged') then raise exception 'invalid Pocket WiFi return disposition'; end if;
@@ -1303,11 +1316,11 @@ begin
     fulfilment_status = p_next_status,
     courier_tracking = case when p_courier_tracking is null then courier_tracking else nullif(left(trim(p_courier_tracking), 200), '') end,
     return_tracking = case when p_return_tracking is null then return_tracking else nullif(left(trim(p_return_tracking), 200), '') end,
-    return_disposition = case when p_next_status = 'returned' and returned_at is null then v_return_disposition else return_disposition end,
+    return_disposition = case when p_next_status = 'returned' and p_expected_status <> 'returned' then v_return_disposition else return_disposition end,
     notes = case when p_notes is null then notes else left(p_notes, 1000) end,
     inventory_item_id = coalesce(v_order.inventory_item_id, case when p_next_status = 'dispatched' then p_inventory_item_id end),
-    dispatched_at = case when p_next_status = 'dispatched' and dispatched_at is null then v_now else dispatched_at end,
-    returned_at = case when p_next_status = 'returned' and returned_at is null then v_now else returned_at end,
+    dispatched_at = case when p_next_status = 'dispatched' and p_expected_status <> 'dispatched' then v_now else dispatched_at end,
+    returned_at = case when p_next_status = 'returned' and p_expected_status <> 'returned' then v_now else returned_at end,
     updated_at = v_now
   where id = p_order_id
   returning * into v_order;

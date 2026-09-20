@@ -1610,6 +1610,20 @@ test('Pocket WiFi receipt cannot create stock unless the outbound hand-off was r
   assert.match(adminOrderRoute, /cannot be returned without a recorded dispatch/);
 });
 
+test('Pocket WiFi custody transitions cannot skip stock movements because evidence was pre-populated', () => {
+  // A damaged/imported row can contain a boundary timestamp even though its
+  // current lifecycle state proves the atomic transition has not run. The RPC
+  // must fail for reconciliation instead of using that timestamp to skip the
+  // corresponding dispatch/return inventory movement.
+  assert.match(schema, /p_next_status = 'dispatched' and p_expected_status <> 'dispatched'/);
+  assert.match(schema, /if v_order\.dispatched_at is not null then\s*raise exception 'Pocket WiFi dispatch evidence exists before the dispatch transition; reconcile the order first'/);
+  assert.match(schema, /p_next_status = 'returned' and p_expected_status <> 'returned'/);
+  assert.match(schema, /if v_order\.returned_at is not null then\s*raise exception 'Pocket WiFi return evidence exists before the return transition; reconcile the order first'/);
+  assert.doesNotMatch(schema, /p_next_status = 'dispatched' and v_order\.dispatched_at is null then/);
+  assert.doesNotMatch(schema, /p_next_status = 'returned' and v_order\.returned_at is null then/);
+  assert.match(adminOrderRoute, /evidence exists before the \(dispatch\|return\) transition/);
+});
+
 test('admin actions advance their transition baseline after each save', () => {
   assert.match(adminOrderActions, /allowedFulfilmentStatuses\(productType, currentStatus\)/);
   assert.match(adminOrderActions, /setCurrentStatus\(result\.fulfilment_status\)/);
