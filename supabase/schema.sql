@@ -314,6 +314,12 @@ alter table public.orders add constraint orders_paid_stripe_fulfilment_details_c
   stripe_session_id !~ '^cs_(test|live)_[A-Za-z0-9]+$' or
   (
     email is not null and
+    -- Match the SMTP transport boundary, which rejects rather than silently
+    -- trimming customer contact data.  Without this, a direct service-role
+    -- repair could create a paid order with a whitespace-padded address that
+    -- passes this check but cannot receive the fulfilment notification the
+    -- webhook is required to send.
+    email = btrim(email) and
     length(email) <= 254 and
     email ~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$' and
     (

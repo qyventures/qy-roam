@@ -1495,6 +1495,10 @@ test('database rejects paid Stripe orders without their product delivery destina
   // recovery writers, while preserving the separate manual/offline workflow.
   assert.match(schema, /orders_paid_stripe_fulfilment_details_check/);
   assert.match(schema, /stripe_session_id !~ '\^cs_\(test\|live\)_\[A-Za-z0-9\]\+\$'/);
+  // The application refuses whitespace-padded mailboxes before SMTP. Keep
+  // privileged SQL repairs on the same contactability boundary rather than
+  // silently allowing an order that looks fulfilable but cannot be emailed.
+  assert.match(schema, /email = btrim\(email\) and/);
   assert.match(schema, /email ~ '\^\[\^\[:space:\]@\]\+@\[\^\[:space:\]@\]\+\\\.\[\^\[:space:\]@\]\+\$'/);
   assert.match(schema, /length\(regexp_replace\(coalesce\(phone, ''\), '\[\^0-9\]', '', 'g'\)\) between 7 and 15/);
   assert.match(schema, /jsonb_typeof\(shipping_address\) = 'object'/);
