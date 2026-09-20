@@ -5,6 +5,7 @@ import { getWifiPlan, WIFI_BENCHMARK } from './wifiPlans';
 import { parseExactIsoDate, validCheckoutRequestId } from './checkoutValidation';
 import { validQyRoamProvenance } from './orderProvenance';
 import { operationalConfig } from './operationalConfig';
+import { pocketWifiRentalCents } from './pocketWifiPricing';
 
 export type QyRoamProductType = 'esim' | 'pocket_wifi';
 
@@ -50,7 +51,7 @@ function historicalPocketWifiSnapshotIsConsistent(session: Stripe.Checkout.Sessi
     moneyMetadataCents(metadata?.benchmark_rate_sgd) === null || !/^\d{4}-\d{2}-\d{2}$/.test(metadata?.benchmark_verified_on || '')) {
     return false;
   }
-  const expectedRental = Math.max(1000, daily * days);
+  const expectedRental = pocketWifiRentalCents(daily / 100, days);
   const expectedDiscount = metadata?.promo_code === LAUNCH_PROMO.code
     ? Math.floor((expectedRental * LAUNCH_PROMO.percent) / 100)
     : metadata?.promo_code === '' ? 0 : null;
@@ -135,7 +136,7 @@ export function validateQyRoamSession(session: Stripe.Checkout.Session): QyRoamS
         : { valid: false, reason: 'unknown Pocket WiFi destination or invalid historical snapshot' };
     }
 
-    const rentalBeforePromo = Math.max(1000, Math.round(plan.daily * days * 100));
+    const rentalBeforePromo = pocketWifiRentalCents(plan.daily, days);
     const promoCode = session.metadata?.promo_code || '';
     if (promoCode !== '' && promoCode !== LAUNCH_PROMO.code) {
       return { valid: false, reason: 'unknown Pocket WiFi promo code' };

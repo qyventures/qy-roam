@@ -15,6 +15,7 @@ import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { metaAttributionFromRequest } from '@/lib/metaAttribution';
 import { CHECKOUT_HOLD_WINDOW_SECONDS, checkoutAttemptExpiresAt, MAX_STRIPE_HOLD_SCAN_PAGES } from '@/lib/checkoutExpiry';
 import { checkoutSiteOrigin } from '@/lib/siteOrigin';
+import { pocketWifiRentalCents } from '@/lib/pocketWifiPricing';
 
 export const runtime = 'nodejs';
 
@@ -176,7 +177,7 @@ export async function POST(req: Request) {
   const stripe=createStripeClient(key);
   const inventory=config.pocketWifiInventory;
   if(inventory<1) return NextResponse.json({error:'Pocket WiFi is sold out for these dates. Please choose different dates or contact +65 8032 7183.'},{status:409,headers:{'Cache-Control':'no-store'}});
-  const rentalBeforePromo=Math.max(1000,Math.round(daily*days*100));
+  const rentalBeforePromo=pocketWifiRentalCents(daily,days);
   const promo=applyPromoCents(rentalBeforePromo, body.promoCode);
   const rentalAmount=promo.amountCents;
   const courierFee=config.courierFeeCents;

@@ -21,12 +21,13 @@ require.extensions['.ts'] = (module, filename) => {
 };
 
 const { ESIM_PLANS, ESIM_PROMO } = require('../lib/esimPlans.ts');
-const { LAUNCH_PROMO } = require('../lib/promotions.ts');
+const { LAUNCH_PROMO, applyPromoCents } = require('../lib/promotions.ts');
 const { validateQyRoamSession } = require('../lib/qyRoamSession.ts');
 const { parseExactIsoDate, validCheckoutRequestId } = require('../lib/checkoutValidation.ts');
 const { operationalIsoDate, operationalIsoDateAfter, operationalDaysFromToday } = require('../lib/operationalDate.ts');
 const { POCKET_WIFI_RETURN_GRACE_DAYS } = require('../lib/pocketWifiReturns.ts');
 const { WIFI_BENCHMARK, WIFI_PLANS } = require('../lib/wifiPlans.ts');
+const { pocketWifiRentalCents, sgdFromCents } = require('../lib/pocketWifiPricing.ts');
 const { allowedFulfilmentStatuses, fulfilmentNotificationActionable, validFulfilmentTransition, STRIPE_EVENT_CLAIM_STALE_MS, STRIPE_EVENT_CLAIM_CLOCK_SKEW_MS, stripeEventClaimInProgress } = require('../lib/orderLifecycle.ts');
 const { operationalConfig } = require('../lib/operationalConfig.ts');
 const { validStripeCheckoutSessionId } = require('../lib/stripeSessionId.ts');
@@ -370,7 +371,7 @@ function esimSession(plan = ESIM_PLANS[0]) {
 
 function wifiSession(plan = WIFI_PLANS[0]) {
   const days = 4;
-  const rental = Math.max(1000, Math.round(plan.daily * days * 100));
+  const rental = pocketWifiRentalCents(plan.daily, days);
   const discount = Math.floor((rental * LAUNCH_PROMO.percent) / 100);
   const session = {
     id: 'cs_test_wifi',
@@ -401,6 +402,22 @@ function wifiSession(plan = WIFI_PLANS[0]) {
   session.metadata.qyroam_provenance = signedQyRoamProvenance(session.id, session.metadata);
   return session;
 }
+
+test('Pocket WiFi public pricing uses the same integer-cent totals as checkout', () => {
+  for (const plan of WIFI_PLANS) {
+    for (let days = 1; days <= 90; days += 1) {
+      const rentalCents = pocketWifiRentalCents(plan.daily, days);
+      const promo = applyPromoCents(rentalCents, LAUNCH_PROMO.code, new Date('2026-09-20T12:00:00+08:00'));
+      assert.equal(Math.round(sgdFromCents(rentalCents) * 100), rentalCents);
+      assert.equal(Math.round(sgdFromCents(promo.discountCents) * 100), promo.discountCents);
+      assert.equal(Math.round(sgdFromCents(promo.amountCents) * 100), promo.amountCents);
+    }
+  }
+  // These real catalogue cases previously exposed binary floating-point
+  // rounding: the browser showed a one-cent lower discount than checkout.
+  assert.equal(applyPromoCents(pocketWifiRentalCents(1.84, 45), LAUNCH_PROMO.code, new Date('2026-09-20T12:00:00+08:00')).discountCents, 828);
+  assert.equal(applyPromoCents(pocketWifiRentalCents(3.78, 35), LAUNCH_PROMO.code, new Date('2026-09-20T12:00:00+08:00')).discountCents, 1323);
+});
 
 test('accepts every server-authored eSIM catalogue session', () => {
   for (const plan of ESIM_PLANS) assert.deepEqual(validateQyRoamSession(esimSession(plan)), { valid: true, productType: 'esim' });
@@ -756,7 +773,7 @@ test('Pocket WiFi availability publishes only validated public booking terms for
   assert.match(availabilityRoute, /available: remaining > 0, remaining, inventoryMode: 'live', temporaryHolds: stripeHolds\.holds, \.\.\.bookingTerms/);
   assert.match(homePage, /function validLeadDays\(value: unknown\)/);
   assert.match(homePage, /function validCourierFee\(value: unknown\)/);
-  assert.match(homePage, /const payableTotal = subtotal \+ courierFeeSgd;/);
+  assert.match(homePage, /const payableTotal = sgdFromCents\(promo\.amountCents \+ courierFeeCents\);/);
   assert.match(homePage, /Total due today: S\$\{payableTotal\.toFixed\(2\)\}/);
 });
 

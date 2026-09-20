@@ -1,8 +1,9 @@
 'use client';
 
 import { FormEvent, useMemo, useRef, useState } from 'react';
-import { LAUNCH_PROMO, validLaunchPromo } from '../lib/promotions';
+import { applyPromoCents, LAUNCH_PROMO, validLaunchPromo } from '../lib/promotions';
 import { WIFI_PLANS } from '../lib/wifiPlans';
+import { pocketWifiRentalCents, sgdFromCents } from '../lib/pocketWifiPricing';
 import { metaAttribution, metaMeasurementAllowed, trackMeta } from '../lib/metaClient';
 import { operationalIsoDateAfter } from '../lib/operationalDate';
 import { checkoutAttempt, clearCheckoutAttempt, type CheckoutAttempt } from '../lib/checkoutAttempt';
@@ -52,13 +53,18 @@ export default function Home() {
   const plan = useMemo(() => plans.find(p => p.country === country) || plans[0], [country]);
   const datesValid = Boolean(start && end && start >= earliestStart && end >= start);
   const days = daysBetween(start, end);
-  const rental = plan.daily * days;
-  const baseSubtotal = Math.max(10, rental);
+  // Mirror the server's integer-cent calculation. This displayed amount is a
+  // customer promise, so it must not be a floating-point approximation of
+  // the Stripe amount calculated in /api/checkout.
+  const rentalCents = pocketWifiRentalCents(plan.daily, days);
+  const baseSubtotal = sgdFromCents(rentalCents);
   const promoActive = validLaunchPromo(promoCode);
-  const promoDiscount = promoActive ? Math.floor(baseSubtotal * LAUNCH_PROMO.percent * 100) / 10000 : 0;
-  const subtotal = Math.max(0, baseSubtotal - promoDiscount);
-  const payableTotal = subtotal + courierFeeSgd;
-  const minimumApplied = rental < 10;
+  const promo = applyPromoCents(rentalCents, promoCode);
+  const promoDiscount = sgdFromCents(promo.discountCents);
+  const subtotal = sgdFromCents(promo.amountCents);
+  const courierFeeCents = Math.round(courierFeeSgd * 100);
+  const payableTotal = sgdFromCents(promo.amountCents + courierFeeCents);
+  const minimumApplied = rentalCents === 1_000 && plan.daily * days * 100 < 1_000;
 
   function validateDates() {
     if (!start || !end) return 'Choose both travel dates.';
