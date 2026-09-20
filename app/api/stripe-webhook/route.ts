@@ -14,7 +14,7 @@ import { getEsimPlan } from '@/lib/esimPlans';
 import { fulfilmentNotificationActionable, stripeEventClaimInProgress } from '@/lib/orderLifecycle';
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
 import { validStripeEventId } from '@/lib/stripeEventId';
-import { validStripeEventCreated } from '@/lib/stripeEventCreated';
+import { validStripePaymentEventCreated } from '@/lib/stripeEventCreated';
 import { safeHttpsDeliveryEndpoint } from '@/lib/deliveryEndpoint';
 import { metaPurchaseEventSourceUrl } from '@/lib/siteOrigin';
 import { fulfilmentRelayAcknowledged } from '@/lib/deliveryAcknowledgement';
@@ -766,10 +766,11 @@ export async function POST(req:Request){
       throw new Error(`Stripe event state validation failed: ${eventStateIssue}`);
     }
     // `event.created` is carried into both the durable payment-confirmation
-    // record and Meta's Purchase event. Validate it after claiming the event
-    // so a signed but malformed timestamp is retained as an actionable
-    // webhook exception instead of producing an invalid/future order time.
-    const eventCreated=validStripeEventCreated(event.created);
+    // record and Meta's Purchase event. Validate its range and chronology
+    // against the refreshed Checkout Session after claiming the event, so a
+    // signed but malformed timestamp remains an actionable webhook exception
+    // instead of producing an impossible historical/future order time.
+    const eventCreated=validStripePaymentEventCreated(event.created,session.created);
     if(!eventCreated) {
       console.error('stripe_webhook_invalid_event_created',{eventId:stripeEventId,sessionId:session.id});
       throw new Error('Invalid Stripe event timestamp');

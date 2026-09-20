@@ -30,7 +30,7 @@ const { WIFI_BENCHMARK, WIFI_PLANS } = require('../lib/wifiPlans.ts');
 const { allowedFulfilmentStatuses, fulfilmentNotificationActionable, validFulfilmentTransition, STRIPE_EVENT_CLAIM_STALE_MS, STRIPE_EVENT_CLAIM_CLOCK_SKEW_MS, stripeEventClaimInProgress } = require('../lib/orderLifecycle.ts');
 const { operationalConfig } = require('../lib/operationalConfig.ts');
 const { validStripeCheckoutSessionId } = require('../lib/stripeSessionId.ts');
-const { validStripeEventCreated, STRIPE_EVENT_CREATED_MIN_SECONDS, STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS } = require('../lib/stripeEventCreated.ts');
+const { validStripeEventCreated, validStripePaymentEventCreated, STRIPE_EVENT_CREATED_MIN_SECONDS, STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS } = require('../lib/stripeEventCreated.ts');
 const { isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError } = require('../lib/requestBody.ts');
 const { checkoutClientKey, createCheckoutAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = require('../lib/stripeCheckoutConfig.ts');
@@ -2084,9 +2084,12 @@ test('Stripe payment event timestamps are bounded before order persistence or CA
   assert.equal(validStripeEventCreated(STRIPE_EVENT_CREATED_MIN_SECONDS, now), STRIPE_EVENT_CREATED_MIN_SECONDS);
   assert.equal(validStripeEventCreated(1.5, now), null);
   assert.equal(validStripeEventCreated(now + STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS + 1, now), null);
+  assert.equal(validStripePaymentEventCreated(now, now - 60, now), now);
+  assert.equal(validStripePaymentEventCreated(now - 61, now - 60, now), null, 'a payment event cannot predate its Checkout Session');
+  assert.equal(validStripePaymentEventCreated(now, 'not-a-timestamp', now), null, 'the Checkout Session creation time must be a valid Stripe timestamp');
 
   const paidClaim = webhookRoute.lastIndexOf("const eventClaimId=`stripe:${stripeEventId}`");
-  const timestampValidation = webhookRoute.indexOf('const eventCreated=validStripeEventCreated(event.created)', paidClaim);
+  const timestampValidation = webhookRoute.indexOf('const eventCreated=validStripePaymentEventCreated(event.created,session.created)', paidClaim);
   const persistence = webhookRoute.indexOf('await persistSession(sessionForEvent,event.type,eventCreated)', timestampValidation);
   const capiDelivery = webhookRoute.indexOf('await deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated)', timestampValidation);
   assert.ok(timestampValidation > paidClaim, 'invalid timestamp must be retained in the claimed webhook ledger');

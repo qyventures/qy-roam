@@ -12,3 +12,22 @@ export function validStripeEventCreated(value: unknown, nowSeconds = Math.floor(
   if (!Number.isSafeInteger(nowSeconds) || nowSeconds <= 0) return null;
   return value <= nowSeconds + STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS ? value : null;
 }
+
+/**
+ * A signed Stripe Event cannot predate the Checkout Session it names. The
+ * generic timestamp guard above deliberately permits historical retries, but
+ * this payment boundary also has the freshly retrieved Session available.
+ * Rejecting an impossible ordering prevents a malformed event from becoming
+ * an apparently valid historical payment time in the order ledger or CAPI.
+ */
+export function validStripePaymentEventCreated(
+  eventCreated: unknown,
+  sessionCreated: unknown,
+  nowSeconds = Math.floor(Date.now() / 1000),
+) {
+  const validEventCreated = validStripeEventCreated(eventCreated, nowSeconds);
+  const validSessionCreated = validStripeEventCreated(sessionCreated, nowSeconds);
+  return validEventCreated !== null && validSessionCreated !== null && validEventCreated >= validSessionCreated
+    ? validEventCreated
+    : null;
+}
