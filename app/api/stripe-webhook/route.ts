@@ -179,11 +179,22 @@ function deliveryLeaseIsStale(updatedAt: string | null | undefined) {
 const MAX_DELIVERY_RESPONSE_BODY_BYTES=64 * 1024;
 
 async function readDeliveryResponseBody(response: Response) {
-  const contentLength=response.headers.get('content-length');
-  if(contentLength!==null&&(!/^\d+$/.test(contentLength)||Number(contentLength)>MAX_DELIVERY_RESPONSE_BODY_BYTES)) {
+  let contentLength:number|null;
+  try {
+    contentLength=declaredContentLength(response.headers.get('content-length'),MAX_DELIVERY_RESPONSE_BODY_BYTES);
+  } catch {
     throw new RangeError('Delivery response body is too large');
   }
-  if(!response.body) return '';
+  // Fetch implementations normally decode compressed response bodies while
+  // retaining the Content-Length of the encoded representation. Only compare
+  // the declared length with bytes read when no content coding is present;
+  // the fixed buffer below still caps a decoded/compressed response.
+  const contentEncoding=response.headers.get('content-encoding')?.trim().toLowerCase();
+  const exactLengthExpected=!contentEncoding||contentEncoding==='identity';
+  if(!response.body) {
+    if(exactLengthExpected&&!contentLengthMatches(contentLength,0)) throw new Error('Delivery response body is incomplete');
+    return '';
+  }
   const reader=response.body.getReader();
   // Provider bodies are bounded for the same reason as public request bodies:
   // without a fixed buffer, a peer can make chunk-array metadata dominate the
@@ -209,6 +220,12 @@ async function readDeliveryResponseBody(response: Response) {
     // Response-body limits must retain their explicit failure even if a
     // broken upstream leaves a pending read while cancellation unwinds.
     try { reader.releaseLock(); } catch {}
+  }
+  // A provider acknowledgement is authority to settle a paid-order delivery
+  // ledger. Never accept a parseable prefix from an uncompressed response
+  // whose declared body was truncated in transit.
+  if(exactLengthExpected&&!contentLengthMatches(contentLength,total)) {
+    throw new Error('Delivery response body is incomplete');
   }
   return body.subarray(0,total).toString('utf8');
 }

@@ -3187,6 +3187,10 @@ test('Stripe webhook bounds raw payload memory before signature verification', (
 test('Stripe webhook bounds third-party delivery responses as well as request time', () => {
   assert.match(webhookRoute, /const MAX_DELIVERY_RESPONSE_BODY_BYTES=64 \* 1024/);
   assert.match(webhookRoute, /async function readDeliveryResponseBody\(response: Response\)/);
+  assert.match(webhookRoute, /declaredContentLength\(response\.headers\.get\('content-length'\),MAX_DELIVERY_RESPONSE_BODY_BYTES\)/);
+  assert.match(webhookRoute, /const exactLengthExpected=!contentEncoding\|\|contentEncoding==='identity'/);
+  assert.match(webhookRoute, /exactLengthExpected&&!contentLengthMatches\(contentLength,total\)/);
+  assert.match(webhookRoute, /throw new Error\('Delivery response body is incomplete'\)/);
   assert.match(webhookRoute, /total>MAX_DELIVERY_RESPONSE_BODY_BYTES/);
   assert.match(webhookRoute, /await readDeliveryResponseBody\(response\)/);
   assert.doesNotMatch(webhookRoute, /const responseBody=await response\.text\(\)/);
