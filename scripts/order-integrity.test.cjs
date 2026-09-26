@@ -43,7 +43,7 @@ const { checkoutSiteOrigin, isProductionQyRoamOrigin, metaPurchaseEventSourceUrl
 const { hasRequiredAdminCredentials, hasRequiredMetaCapiPurchaseConfig, metaPixelId } = require('../lib/runtimeConfig.ts');
 const { metaMeasurementAllowed, setMetaMeasurementConsent } = require('../lib/metaClient.ts');
 const { digitalDeliveryReferenceIssue, isSafeDigitalDeliveryReference } = require('../lib/digitalDeliveryReference.ts');
-const { SUPABASE_REQUEST_TIMEOUT_MS, fetchSupabaseWithTimeout } = require('../lib/supabaseAdmin.ts');
+const { SUPABASE_REQUEST_TIMEOUT_MS, canonicalSupabaseProjectUrl, fetchSupabaseWithTimeout, hasRequiredSupabaseAdminConfig, supabaseServiceRoleKey } = require('../lib/supabaseAdmin.ts');
 const { checkoutAttempt, clearCheckoutAttempt, CHECKOUT_ATTEMPT_MAX_AGE_MS } = require('../lib/checkoutAttempt.ts');
 const { safeHttpsDeliveryEndpoint } = require('../lib/deliveryEndpoint.ts');
 const { fulfilmentRelayAcknowledged } = require('../lib/deliveryAcknowledgement.ts');
@@ -107,6 +107,41 @@ const privacyPage = fs.readFileSync(require.resolve('../app/privacy/page.tsx'), 
 const termsPage = fs.readFileSync(require.resolve('../app/terms/page.tsx'), 'utf8');
 
 const requestId = 'checkout_request_123456';
+
+test('privileged Supabase requests use one canonical hosted-project configuration boundary', () => {
+  assert.equal(canonicalSupabaseProjectUrl(' https://project-ref.supabase.co/ '), 'https://project-ref.supabase.co');
+  assert.equal(canonicalSupabaseProjectUrl('http://project-ref.supabase.co'), null);
+  assert.equal(canonicalSupabaseProjectUrl('https://project-ref.supabase.co.evil.example'), null);
+  assert.equal(canonicalSupabaseProjectUrl('https://user:pass@project-ref.supabase.co'), null);
+  assert.equal(canonicalSupabaseProjectUrl('https://project-ref.supabase.co:444'), null);
+  assert.equal(canonicalSupabaseProjectUrl('https://project-ref.supabase.co/rest/v1'), null);
+  assert.equal(canonicalSupabaseProjectUrl('https://project-ref.supabase.co/?redirect=evil'), null);
+  assert.equal(canonicalSupabaseProjectUrl('https://custom.example.com'), null);
+
+  const key = `sb_secret_${'a'.repeat(40)}`;
+  assert.equal(supabaseServiceRoleKey(` ${key} `), key);
+  assert.equal(supabaseServiceRoleKey('short'), null);
+  assert.equal(supabaseServiceRoleKey(`${key}\nsecond-line`), null);
+
+  const previousUrl = process.env.SUPABASE_URL;
+  const previousKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  try {
+    process.env.SUPABASE_URL = ' https://project-ref.supabase.co/ ';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = ` ${key} `;
+    assert.equal(hasRequiredSupabaseAdminConfig(), true);
+    process.env.SUPABASE_URL = 'https://project-ref.supabase.co.evil.example';
+    assert.equal(hasRequiredSupabaseAdminConfig(), false);
+  } finally {
+    if (previousUrl === undefined) delete process.env.SUPABASE_URL;
+    else process.env.SUPABASE_URL = previousUrl;
+    if (previousKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    else process.env.SUPABASE_SERVICE_ROLE_KEY = previousKey;
+  }
+
+  assert.match(healthRoute, /supabase: hasRequiredSupabaseAdminConfig\(\)/);
+  assert.match(supabaseAdmin, /const url = canonicalSupabaseProjectUrl\(process\.env\.SUPABASE_URL\)/);
+  assert.match(supabaseAdmin, /const key = supabaseServiceRoleKey\(process\.env\.SUPABASE_SERVICE_ROLE_KEY\)/);
+});
 
 test('customer checkout redirects accept only Stripe-hosted payment capabilities', () => {
   assert.equal(

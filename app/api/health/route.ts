@@ -5,6 +5,7 @@ import { operationalConfig } from '@/lib/operationalConfig';
 import { isProductionQyRoamOrigin } from '@/lib/siteOrigin';
 import { hasOrderIntegritySigningConfig } from '@/lib/orderProvenance';
 import { healthCheckToken } from '@/lib/healthCheckToken';
+import { hasRequiredSupabaseAdminConfig } from '@/lib/supabaseAdmin';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -59,7 +60,7 @@ export async function GET(req: Request) {
     siteUrl: isProductionQyRoamOrigin(process.env.NEXT_PUBLIC_SITE_URL),
     webhook: hasRequiredStripeWebhookConfig(),
     orderIntegrity: hasOrderIntegritySigningConfig(),
-    supabase: Boolean(process.env.SUPABASE_URL?.startsWith('https://') && process.env.SUPABASE_SERVICE_ROLE_KEY && process.env.SUPABASE_SERVICE_ROLE_KEY.length >= 32),
+    supabase: hasRequiredSupabaseAdminConfig(),
     esimOrderSchema,
     paymentSchema,
     pocketWifiFulfilmentSchema,
