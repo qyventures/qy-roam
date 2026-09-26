@@ -23,6 +23,7 @@ import { safeProviderDeliveryFailure, safeWebhookProcessingFailure } from '@/lib
 import { nextRetryAttempt } from '@/lib/retryAttempt';
 import { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesEvent, stripeWebhookEventEnvelope } from '@/lib/stripeWebhookObject';
 import { metaCapiPurchaseAcknowledged } from '@/lib/metaCapiAcknowledgement';
+import { stripeCheckoutEventStateIssue, type QyRoamCheckoutEventType } from '@/lib/stripeCheckoutEventState';
 
 export const runtime = 'nodejs';
 
@@ -139,29 +140,6 @@ function paidFulfilmentDetailsIssue(session:Stripe.Checkout.Session,productType:
   return null;
 }
 
-// A valid Stripe signature authenticates the event payload, but order state
-// still has to agree with the event that carries it. In particular, never
-// acknowledge an asynchronous success with an unpaid snapshot: doing so would
-// mark that event processed without creating a paid fulfilment obligation.
-// Failing closed also keeps malformed or unexpectedly-versioned terminal
-// events in Stripe's retry/alert flow instead of silently weakening the order
-// ledger. `checkout.session.completed` may legitimately be unpaid while a
-// delayed payment method is still settling.
-function stripeCheckoutEventStateIssue(eventType:Stripe.Event.Type,session:Stripe.Checkout.Session) {
-  if(eventType==='checkout.session.expired') {
-    return session.status==='expired'&&session.payment_status!=='paid'
-      ? null
-      : 'Expired event does not contain an expired unpaid Checkout Session';
-  }
-  if(session.status!=='complete') return 'Terminal checkout event does not contain a complete Checkout Session';
-  if(eventType==='checkout.session.async_payment_succeeded'&&session.payment_status!=='paid') {
-    return 'Asynchronous payment success does not contain a paid Checkout Session';
-  }
-  if(eventType==='checkout.session.async_payment_failed'&&session.payment_status==='paid') {
-    return 'Asynchronous payment failure contains a paid Checkout Session';
-  }
-  return null;
-}
 const DELIVERY_TIMEOUT_MS=20_000;
 // Meta retires Graph API versions on a rolling schedule. Keep this explicit
 // (rather than burying it in the delivery URL) so the production-boundary
@@ -771,7 +749,7 @@ export async function POST(req:Request){
   // deliberately checked against the refreshed Session as well, because an
   // out-of-order expiry must never release a reservation that is now paid.
   const eventStateSession=event.type==='checkout.session.expired'?session:eventSession;
-  const eventStateIssue=stripeCheckoutEventStateIssue(event.type,eventStateSession);
+  const eventStateIssue=stripeCheckoutEventStateIssue(event.type as QyRoamCheckoutEventType,eventStateSession);
   if(event.type==='checkout.session.expired'){
     // Expiry does not persist a paid order, but it still writes to the event
     // ledger and can release inventory or close a provisional order. The

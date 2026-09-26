@@ -52,6 +52,7 @@ const { nextRetryAttempt } = require('../lib/retryAttempt.ts');
 const { completeSmtpResponseCode, isSafeSmtpHost } = require('../lib/smtp.ts');
 const { safeStripeCheckoutUrl } = require('../lib/stripeCheckoutUrl.ts');
 const { metaCapiPurchaseAcknowledged } = require('../lib/metaCapiAcknowledgement.ts');
+const { stripeCheckoutEventStateIssue } = require('../lib/stripeCheckoutEventState.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { hasOrderIntegritySecret, hasOrderIntegritySigningConfig, signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -2815,12 +2816,18 @@ test('processed Stripe webhook events remain final in the durable idempotency le
 
 test('Stripe terminal events must agree with their Checkout Session payment state before any mutation', () => {
   const webhookRoute = fs.readFileSync(require.resolve('../app/api/stripe-webhook/route.ts'), 'utf8');
-  assert.match(webhookRoute, /function stripeCheckoutEventStateIssue\(eventType:Stripe\.Event\.Type,session:Stripe\.Checkout\.Session\)/);
-  assert.match(webhookRoute, /eventType==='checkout\.session\.expired'[\s\S]{0,220}session\.status==='expired'&&session\.payment_status!=='paid'/);
-  assert.match(webhookRoute, /session\.status!=='complete'/);
-  assert.match(webhookRoute, /eventType==='checkout\.session\.async_payment_succeeded'&&session\.payment_status!=='paid'/);
-  assert.match(webhookRoute, /eventType==='checkout\.session\.async_payment_failed'&&session\.payment_status==='paid'/);
-  const stateCheck = webhookRoute.indexOf('const eventStateIssue=stripeCheckoutEventStateIssue(event.type,eventStateSession)');
+  assert.equal(stripeCheckoutEventStateIssue('checkout.session.completed', { status: 'complete', payment_status: 'paid' }), null);
+  assert.equal(stripeCheckoutEventStateIssue('checkout.session.completed', { status: 'complete', payment_status: 'unpaid' }), null, 'completed can await a delayed payment method');
+  assert.match(stripeCheckoutEventStateIssue('checkout.session.completed', { status: 'open', payment_status: 'unpaid' }), /complete Checkout Session/);
+  assert.equal(stripeCheckoutEventStateIssue('checkout.session.async_payment_succeeded', { status: 'complete', payment_status: 'paid' }), null);
+  assert.match(stripeCheckoutEventStateIssue('checkout.session.async_payment_succeeded', { status: 'complete', payment_status: 'unpaid' }), /paid Checkout Session/);
+  assert.equal(stripeCheckoutEventStateIssue('checkout.session.async_payment_failed', { status: 'complete', payment_status: 'unpaid' }), null);
+  assert.match(stripeCheckoutEventStateIssue('checkout.session.async_payment_failed', { status: 'complete', payment_status: 'paid' }), /unpaid Checkout Session/);
+  assert.match(stripeCheckoutEventStateIssue('checkout.session.async_payment_failed', { status: 'complete', payment_status: 'no_payment_required' }), /unpaid Checkout Session/, 'unsupported payment states fail at this event boundary');
+  assert.equal(stripeCheckoutEventStateIssue('checkout.session.expired', { status: 'expired', payment_status: 'unpaid' }), null);
+  assert.match(stripeCheckoutEventStateIssue('checkout.session.expired', { status: 'expired', payment_status: 'paid' }), /expired unpaid Checkout Session/);
+  assert.match(stripeCheckoutEventStateIssue('checkout.session.expired', { status: 'complete', payment_status: 'unpaid' }), /expired unpaid Checkout Session/);
+  const stateCheck = webhookRoute.indexOf('const eventStateIssue=stripeCheckoutEventStateIssue(event.type as QyRoamCheckoutEventType,eventStateSession)');
   const expiryMutation = webhookRoute.indexOf("if(event.type==='checkout.session.expired')");
   const paidValidation = webhookRoute.indexOf('const validation=validateQyRoamSession(sessionForEvent)');
   const paidClaim = webhookRoute.lastIndexOf("const eventClaimId=`stripe:${stripeEventId}`", paidValidation);
@@ -2871,7 +2878,7 @@ test('Stripe terminal events refresh the Checkout Session before persisting or d
   const refresh = processing.indexOf('refreshedSession=await stripe.checkout.sessions.retrieve(eventSessionId)');
   const refreshedObjectBoundary = processing.indexOf('const session=stripeWebhookCheckoutSession(refreshedSession)');
   const identityBoundary = processing.indexOf('if(session.id!==eventSessionId||session.livemode!==event.livemode)');
-  const eventState = processing.indexOf('const eventStateIssue=stripeCheckoutEventStateIssue(event.type,eventStateSession)');
+  const eventState = processing.indexOf('const eventStateIssue=stripeCheckoutEventStateIssue(event.type as QyRoamCheckoutEventType,eventStateSession)');
   assert.ok(sourceBoundary >= 0 && sessionIdBoundary > sourceBoundary && refresh > sessionIdBoundary, 'only QY Roam events with a valid bounded Session id should cause a Stripe Session refresh');
   assert.ok(refreshedObjectBoundary > refresh, 'the refreshed Stripe response must be validated before its fields are read');
   assert.ok(identityBoundary > refreshedObjectBoundary, 'the refreshed Session must match the signed event identity and mode');
