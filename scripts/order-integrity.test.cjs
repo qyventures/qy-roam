@@ -2826,6 +2826,7 @@ test('Stripe terminal events must agree with their Checkout Session payment stat
   assert.match(stripeCheckoutEventStateIssue('checkout.session.async_payment_failed', { status: 'complete', payment_status: 'no_payment_required' }), /unpaid Checkout Session/, 'unsupported payment states fail at this event boundary');
   assert.equal(stripeCheckoutEventStateIssue('checkout.session.expired', { status: 'expired', payment_status: 'unpaid' }), null);
   assert.match(stripeCheckoutEventStateIssue('checkout.session.expired', { status: 'expired', payment_status: 'paid' }), /expired unpaid Checkout Session/);
+  assert.match(stripeCheckoutEventStateIssue('checkout.session.expired', { status: 'expired', payment_status: 'no_payment_required' }), /expired unpaid Checkout Session/, 'unsupported payment states cannot release inventory');
   assert.match(stripeCheckoutEventStateIssue('checkout.session.expired', { status: 'complete', payment_status: 'unpaid' }), /expired unpaid Checkout Session/);
   const stateCheck = webhookRoute.indexOf('const eventStateIssue=stripeCheckoutEventStateIssue(event.type as QyRoamCheckoutEventType,eventStateSession)');
   const expiryMutation = webhookRoute.indexOf("if(event.type==='checkout.session.expired')");

@@ -17,7 +17,12 @@ export function stripeCheckoutEventStateIssue(
   session: Pick<Stripe.Checkout.Session, 'status' | 'payment_status'>,
 ) {
   if (eventType === 'checkout.session.expired') {
-    return session.status === 'expired' && session.payment_status !== 'paid'
+    // QY Roam Checkout Sessions always have a positive amount and therefore
+    // can expire only while unpaid. Do not use a broad `!== paid` check here:
+    // this expiry path intentionally runs before full order validation, and
+    // accepting `no_payment_required` (or a future Stripe state) could release
+    // a scarce Pocket WiFi reservation without a valid payment lifecycle.
+    return session.status === 'expired' && session.payment_status === 'unpaid'
       ? null
       : 'Expired event does not contain an expired unpaid Checkout Session';
   }
