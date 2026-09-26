@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import type Stripe from 'stripe';
 import { createStripeClient } from '../../../lib/stripeClient';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
-import { parseExactIsoDate } from '@/lib/checkoutValidation';
+import { parseExactIsoDate, validCheckoutRequestId } from '@/lib/checkoutValidation';
 import { operationalConfig } from '@/lib/operationalConfig';
 import { operationalIsoDateAfter } from '@/lib/operationalDate';
 import { hasOrderIntegritySigningConfig, validQyRoamProvenance } from '@/lib/orderProvenance';
@@ -112,17 +112,31 @@ async function activeReservations(
   reservationCutoff: string,
 ) {
   const reservations: { checkout_request_id: string }[] = [];
+  let afterRequestId: string | null = null;
   for (let page = 0; page < MAX_RESERVATION_SCAN_PAGES; page += 1) {
-    const from = page * RESERVATION_SCAN_PAGE_SIZE;
-    const response = await supabase.from('checkout_reservations').select('checkout_request_id')
+    // Offset pagination can skip a reservation when an expired row is deleted
+    // while this public scan is moving between pages. Use the immutable
+    // primary checkout identity as a keyset cursor so concurrent cleanup
+    // cannot shift later rows into an already-read offset and overstate stock.
+    let query = supabase.from('checkout_reservations').select('checkout_request_id')
       .gt('expires_at', reservationCutoff)
       .lte('travel_start', end)
       .gte('travel_end', start)
-      .range(from, from + RESERVATION_SCAN_PAGE_SIZE - 1);
+      .order('checkout_request_id')
+      .limit(RESERVATION_SCAN_PAGE_SIZE);
+    if (afterRequestId) query = query.gt('checkout_request_id', afterRequestId);
+    const response = await query;
     if (response.error) throw response.error;
     const rows = response.data || [];
+    for (const row of rows) {
+      if (!validCheckoutRequestId(row.checkout_request_id)) {
+        throw new Error('Pocket WiFi reservation has an invalid checkout request identity');
+      }
+    }
     reservations.push(...rows);
     if (rows.length < RESERVATION_SCAN_PAGE_SIZE) return reservations;
+    afterRequestId = validCheckoutRequestId(rows[rows.length - 1].checkout_request_id);
+    if (!afterRequestId) throw new Error('Pocket WiFi reservation scan returned an invalid cursor');
   }
   throw new Error('Pocket WiFi reservation scan exceeded its safe page limit');
 }

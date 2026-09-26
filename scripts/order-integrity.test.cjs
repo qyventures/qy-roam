@@ -1713,7 +1713,13 @@ test('Pocket WiFi availability bounds public Stripe and database capacity scans'
   assert.match(availabilityRoute, /const RESERVATION_SCAN_PAGE_SIZE = 1_000/);
   assert.match(availabilityRoute, /const MAX_RESERVATION_SCAN_PAGES = 5/);
   assert.match(availabilityRoute, /async function activeReservations\(/);
-  assert.match(availabilityRoute, /\.range\(from, from \+ RESERVATION_SCAN_PAGE_SIZE - 1\)/);
+  // Offset pages can skip rows when expiry cleanup deletes a reservation
+  // between reads. The immutable request identity keeps the bounded scan
+  // monotonic while checkout's RPC remains the final atomic stock authority.
+  assert.match(availabilityRoute, /\.order\('checkout_request_id'\)\s*\.limit\(RESERVATION_SCAN_PAGE_SIZE\)/);
+  assert.match(availabilityRoute, /query = query\.gt\('checkout_request_id', afterRequestId\)/);
+  assert.match(availabilityRoute, /validCheckoutRequestId\(row\.checkout_request_id\)/);
+  assert.doesNotMatch(availabilityRoute, /\.range\(from, from \+ RESERVATION_SCAN_PAGE_SIZE - 1\)/);
   assert.match(availabilityRoute, /Pocket WiFi reservation scan exceeded its safe page limit/);
   assert.match(availabilityRoute, /activeReservations\(supabase, start, end, reservationCutoff\)/);
   assert.match(availabilityRoute, /if \(limited\(req\)\)/);
