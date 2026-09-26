@@ -16,6 +16,7 @@ import { metaAttributionFromRequest } from '@/lib/metaAttribution';
 import { CHECKOUT_HOLD_WINDOW_SECONDS, checkoutAttemptExpiresAt, MAX_STRIPE_HOLD_SCAN_PAGES } from '@/lib/checkoutExpiry';
 import { checkoutSiteOrigin } from '@/lib/siteOrigin';
 import { pocketWifiRentalCents } from '@/lib/pocketWifiPricing';
+import { safeStripeCheckoutUrl } from '@/lib/stripeCheckoutUrl';
 
 export const runtime = 'nodejs';
 
@@ -272,10 +273,15 @@ export async function POST(req: Request) {
       // Session unexposed preserves capacity until an operator can investigate.
       return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
     }
-    if(existing.status!=='open'||!existing.url){
+    const existingCheckoutUrl=safeStripeCheckoutUrl(existing.url);
+    if(existing.status!=='open'||!existingCheckoutUrl){
+      if(existing.status==='open'&&existing.url){
+        console.error('checkout_url_invalid',{sessionId:existing.id});
+        return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
+      }
       return NextResponse.json({error:'Your payment is still being confirmed. Please wait for confirmation before trying again.',paymentPending:true},{status:409,headers:{'Cache-Control':'no-store'}});
     }
-    return NextResponse.json({url:existing.url},{headers:{'Cache-Control':'no-store'}});
+    return NextResponse.json({url:existingCheckoutUrl},{headers:{'Cache-Control':'no-store'}});
   }
   const expiresAt=new Date(expiresAtSeconds*1000).toISOString();
   const reservation=await supabase.rpc('qy_reserve_pocket_wifi',{
@@ -419,8 +425,13 @@ export async function POST(req: Request) {
   // reservation and let the signed terminal webhook decide when stock can be
   // released, rather than turning a payment-in-progress retry into an
   // uncounted router booking.
-  if(currentSession.status!=='open'||!currentSession.url){
+  const checkoutUrl=safeStripeCheckoutUrl(currentSession.url);
+  if(currentSession.status!=='open'||!checkoutUrl){
     if(!await linkReservationToSession(supabase,requestId,currentSession.id)) return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
+    if(currentSession.status==='open'&&currentSession.url){
+      console.error('checkout_url_invalid',{sessionId:currentSession.id});
+      return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
+    }
     return NextResponse.json({error:'Your payment is still being confirmed. Please wait for confirmation before trying again.',paymentPending:true},{status:409,headers:{'Cache-Control':'no-store'}});
   }
   if(!await linkReservationToSession(supabase,requestId,currentSession.id)){
@@ -428,7 +439,7 @@ export async function POST(req: Request) {
     // relationship cannot safely be reconciled by fulfilment or inventory.
     return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
   }
-  return NextResponse.json({url:currentSession.url},{headers:{'Cache-Control':'no-store'}});
+  return NextResponse.json({url:checkoutUrl},{headers:{'Cache-Control':'no-store'}});
  } catch {
   // This can catch a temporary Stripe or database dependency failure after a
   // request id was accepted. The id is a durable idempotency boundary, so

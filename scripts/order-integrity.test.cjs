@@ -50,6 +50,7 @@ const { fulfilmentRelayAcknowledged } = require('../lib/deliveryAcknowledgement.
 const { safeProviderDeliveryFailure, safeWebhookProcessingFailure } = require('../lib/deliveryFailure.ts');
 const { nextRetryAttempt } = require('../lib/retryAttempt.ts');
 const { isSafeSmtpHost } = require('../lib/smtp.ts');
+const { safeStripeCheckoutUrl } = require('../lib/stripeCheckoutUrl.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { hasOrderIntegritySecret, hasOrderIntegritySigningConfig, signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -98,6 +99,27 @@ const robots = fs.readFileSync(require.resolve('../app/robots.ts'), 'utf8');
 const sitemap = fs.readFileSync(require.resolve('../app/sitemap.ts'), 'utf8');
 
 const requestId = 'checkout_request_123456';
+
+test('customer checkout redirects accept only Stripe-hosted payment capabilities', () => {
+  assert.equal(
+    safeStripeCheckoutUrl('https://checkout.stripe.com/c/pay/cs_test_safe#fidkdWxOYHwnPyd1blpxYHZxWjA0'),
+    'https://checkout.stripe.com/c/pay/cs_test_safe#fidkdWxOYHwnPyd1blpxYHZxWjA0',
+  );
+  assert.equal(safeStripeCheckoutUrl('javascript:alert(1)'), null);
+  assert.equal(safeStripeCheckoutUrl('http://checkout.stripe.com/c/pay/cs_test'), null);
+  assert.equal(safeStripeCheckoutUrl('https://checkout.stripe.com.evil.example/c/pay/cs_test'), null);
+  assert.equal(safeStripeCheckoutUrl('https://user:pass@checkout.stripe.com/c/pay/cs_test'), null);
+  assert.equal(safeStripeCheckoutUrl('https://checkout.stripe.com:444/c/pay/cs_test'), null);
+  assert.equal(safeStripeCheckoutUrl('https://checkout.stripe.com/not-checkout/cs_test'), null);
+  assert.equal(safeStripeCheckoutUrl(null), null);
+
+  assert.match(esimCheckoutRoute, /const checkoutUrl = safeStripeCheckoutUrl\(currentSession\.url\)/);
+  assert.match(esimCheckoutRoute, /\{ url: checkoutUrl \}/);
+  assert.doesNotMatch(esimCheckoutRoute, /\{ url: currentSession\.url \}/);
+  assert.match(wifiCheckoutRoute, /const existingCheckoutUrl=safeStripeCheckoutUrl\(existing\.url\)/);
+  assert.match(wifiCheckoutRoute, /const checkoutUrl=safeStripeCheckoutUrl\(currentSession\.url\)/);
+  assert.doesNotMatch(wifiCheckoutRoute, /\{url:(?:existing|currentSession)\.url\}/);
+});
 
 test('checkout attempt identity survives reloads without becoming permanently stale', () => {
   const previousWindow = global.window;
@@ -1166,7 +1188,7 @@ test('eSIM idempotent recovery uses a fresh Stripe session state before returnin
   assert.match(esimCheckoutRoute, /const currentSession = await stripe\.checkout\.sessions\.retrieve\(session\.id\)/);
   assert.match(esimCheckoutRoute, /if \(!validQyRoamProvenance\(currentSession\.id, currentSession\.metadata\)\)/);
   assert.match(esimCheckoutRoute, /currentSession\.status === 'complete' && currentSession\.payment_status === 'paid'/);
-  assert.match(esimCheckoutRoute, /url: currentSession\.url/);
+  assert.match(esimCheckoutRoute, /url: checkoutUrl/);
   assert.doesNotMatch(esimCheckoutRoute, /if \(session\.status === 'complete' && session\.payment_status === 'paid'\)/);
 });
 
@@ -1196,11 +1218,11 @@ test('checkout recovery binds every fresh Stripe response to the requested Sessi
   assert.match(wifiCheckoutRoute, /currentSession\.id!==session\.id/);
   const existingRead = wifiCheckoutRoute.indexOf('let existing=await stripe.checkout.sessions.retrieve(holdState.existingSessionId)');
   const existingIdentity = wifiCheckoutRoute.indexOf('existing.id!==holdState.existingSessionId', existingRead);
-  const existingUrl = wifiCheckoutRoute.indexOf('{url:existing.url}', existingRead);
+  const existingUrl = wifiCheckoutRoute.indexOf('{url:existingCheckoutUrl}', existingRead);
   assert.ok(existingRead >= 0 && existingIdentity > existingRead && existingIdentity < existingUrl);
   const currentRead = wifiCheckoutRoute.indexOf('const currentSession=await stripe.checkout.sessions.retrieve(session.id)');
   const currentIdentity = wifiCheckoutRoute.indexOf('currentSession.id!==session.id', currentRead);
-  const currentUrl = wifiCheckoutRoute.indexOf('{url:currentSession.url}', currentRead);
+  const currentUrl = wifiCheckoutRoute.indexOf('{url:checkoutUrl}', currentRead);
   assert.ok(currentRead >= 0 && currentIdentity > currentRead && currentIdentity < currentUrl);
 });
 
@@ -1631,7 +1653,7 @@ test('Pocket WiFi create recovery uses fresh Stripe state and confirms provenanc
   const currentRead = wifiCheckoutRoute.indexOf("const currentSession=await stripe.checkout.sessions.retrieve(session.id)", createCall);
   const paidBranch = wifiCheckoutRoute.indexOf("if(currentSession.status==='complete'&&currentSession.payment_status==='paid')", currentRead);
   const expiredBranch = wifiCheckoutRoute.indexOf("if(currentSession.status==='expired')", currentRead);
-  const urlResponse = wifiCheckoutRoute.indexOf("{url:currentSession.url}", currentRead);
+  const urlResponse = wifiCheckoutRoute.indexOf("{url:checkoutUrl}", currentRead);
   assert.ok(createCall > -1 && currentRead > createCall, 'the idempotent create response must be refreshed');
   assert.ok(paidBranch > currentRead && expiredBranch > paidBranch && urlResponse > expiredBranch, 'fresh state must control paid, expired, and redirect outcomes');
   assert.match(wifiCheckoutRoute.slice(currentRead, paidBranch), /validQyRoamProvenance\(currentSession\.id,currentSession\.metadata\)/);
@@ -1682,8 +1704,8 @@ test('Pocket WiFi open-session retries honor the freshly retrieved Stripe state'
   assert.match(replayBranch, /existing=updated/);
   assert.match(replayBranch, /existing\.status==='complete'&&existing\.payment_status==='paid'/);
   assert.match(replayBranch, /existing\.status==='expired'/);
-  assert.match(replayBranch, /existing\.status!=='open'\|\|!existing\.url/);
-  assert.match(replayBranch, /\{url:existing\.url\}/);
+  assert.match(replayBranch, /existing\.status!=='open'\|\|!existingCheckoutUrl/);
+  assert.match(replayBranch, /\{url:existingCheckoutUrl\}/);
   assert.doesNotMatch(replayBranch, /\{url:holdState\.existingUrl\}/);
 });
 

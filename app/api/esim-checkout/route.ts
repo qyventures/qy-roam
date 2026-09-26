@@ -12,6 +12,7 @@ import { metaAttributionFromRequest } from '@/lib/metaAttribution';
 import { checkoutAttemptExpiresAt } from '@/lib/checkoutExpiry';
 import { checkoutSiteOrigin } from '@/lib/siteOrigin';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
+import { safeStripeCheckoutUrl } from '@/lib/stripeCheckoutUrl';
 
 export const runtime = 'nodejs';
 
@@ -274,13 +275,21 @@ export async function POST(req: Request) {
         headers: { 'Cache-Control': 'no-store' }
       });
     }
-    if (currentSession.status !== 'open' || !currentSession.url) {
+    const checkoutUrl = safeStripeCheckoutUrl(currentSession.url);
+    if (currentSession.status !== 'open' || !checkoutUrl) {
+      if (currentSession.status === 'open' && currentSession.url) {
+        console.error('esim_checkout_url_invalid', { sessionId: currentSession.id });
+        return NextResponse.json({ error: 'Secure checkout confirmation is temporarily unavailable. Please try again shortly.' }, {
+          status: 503,
+          headers: { 'Cache-Control': 'no-store', 'Retry-After': '10' }
+        });
+      }
       return NextResponse.json({ error: 'Your payment is still being confirmed. Please wait for confirmation before trying again.', paymentPending: true }, {
         status: 409,
         headers: { 'Cache-Control': 'no-store' }
       });
     }
-    return NextResponse.json({ url: currentSession.url }, { headers: { 'Cache-Control': 'no-store' } });
+    return NextResponse.json({ url: checkoutUrl }, { headers: { 'Cache-Control': 'no-store' } });
   } catch {
     // This boundary can catch Stripe or database failures. Do not write their
     // arbitrary response text to logs; the stable event name is sufficient
