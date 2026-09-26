@@ -619,6 +619,78 @@ create trigger qy_enforce_stripe_event_lifecycle
 before update on public.stripe_events
 for each row execute function public.qy_enforce_stripe_event_lifecycle();
 
+-- Claim one Stripe event and issue its ownership lease in the same database
+-- transaction.  The previous application-level insert/read/CAS sequence was
+-- safe under ordinary concurrency, but every extra round trip widened the
+-- window for a worker or proxy failure and used the application clock as the
+-- ownership token.  Serialising only this event id keeps unrelated payments
+-- concurrent while making claim, identity validation and stale recovery one
+-- indivisible operation using the database clock.
+create or replace function public.qy_claim_stripe_event(
+  p_event_id text,
+  p_event_type text,
+  p_stripe_session_id text
+)
+returns table(claim_status text, claim_started_at timestamptz)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_event public.stripe_events%rowtype;
+  v_now timestamptz := clock_timestamp();
+begin
+  if coalesce(length(btrim(p_event_id)), 0) = 0
+    or coalesce(length(btrim(p_event_type)), 0) = 0
+    or coalesce(length(btrim(p_stripe_session_id)), 0) = 0 then
+    raise exception 'Stripe event claim identity is required';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtext('qy_roam_stripe_event:' || p_event_id));
+  select * into v_event from public.stripe_events where event_id = p_event_id for update;
+
+  if not found then
+    insert into public.stripe_events (
+      event_id, event_type, stripe_session_id, processing_started_at
+    ) values (
+      p_event_id, p_event_type, p_stripe_session_id, v_now
+    );
+    return query select 'claimed'::text, v_now;
+    return;
+  end if;
+
+  if v_event.event_type is distinct from p_event_type
+    or v_event.stripe_session_id is distinct from p_stripe_session_id then
+    raise exception 'Stripe event idempotency identity mismatch';
+  end if;
+
+  if v_event.processed_at is not null then
+    return query select 'processed'::text, null::timestamptz;
+    return;
+  end if;
+
+  if v_event.last_error is null
+    and v_event.processing_started_at is not null
+    and v_event.processing_started_at >= v_now - interval '30 minutes'
+    and v_event.processing_started_at <= v_now + interval '1 minute' then
+    return query select 'in_progress'::text, null::timestamptz;
+    return;
+  end if;
+
+  update public.stripe_events set
+    processing_started_at = v_now,
+    last_error = null,
+    attempts = least(
+      2147483647::bigint,
+      greatest(coalesce(attempts, 0), 0)::bigint + 1
+    )::integer
+  where event_id = p_event_id;
+  return query select 'claimed'::text, v_now;
+end;
+$$;
+revoke all on function public.qy_claim_stripe_event(text,text,text) from public;
+grant execute on function public.qy_claim_stripe_event(text,text,text) to service_role;
+
 -- Durable human-fulfilment notification ledger. One row per paid checkout.
 -- The webhook records pending before SMTP and sent after SMTP succeeds. Failed
 -- sends stay retryable without coupling the notification state to Stripe's
@@ -837,6 +909,7 @@ as $$
     to_regclass('public.stripe_events') is not null and
     to_regclass('public.fulfilment_notifications') is not null and
     to_regclass('public.meta_purchase_deliveries') is not null and
+    to_regprocedure('public.qy_claim_stripe_event(text,text,text)') is not null and
     -- The CRM trigger delegates its ledger-derived totals to this helper.
     -- Check that dependency explicitly: a partial/manual migration must not
     -- pass payment readiness and then fail every paid-order insert when the

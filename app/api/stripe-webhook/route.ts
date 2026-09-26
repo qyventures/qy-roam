@@ -12,7 +12,7 @@ import { hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from 
 import { stripeWebhookSigningSecret } from '@/lib/stripeWebhookSecret';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { getEsimPlan } from '@/lib/esimPlans';
-import { fulfilmentNotificationActionable, stripeEventClaimInProgress } from '@/lib/orderLifecycle';
+import { fulfilmentNotificationActionable } from '@/lib/orderLifecycle';
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
 import { validStripeEventId } from '@/lib/stripeEventId';
 import { validStripePaymentEventCreated } from '@/lib/stripeEventCreated';
@@ -411,43 +411,19 @@ type EventClaim =
 
 async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string, type:string, sessionId:string):Promise<EventClaim> {
   if(!supabase) throw new Error('Persistence unavailable');
-  const processingStartedAt=new Date().toISOString();
-  const claimed=await supabase.from('stripe_events').insert({event_id:id,event_type:type,stripe_session_id:sessionId,processing_started_at:processingStartedAt});
-  if(claimed.error?.code==='23505'){
-    const existing=await supabase.from('stripe_events').select('event_type,stripe_session_id,processed_at,processing_started_at,last_error,attempts').eq('event_id',id).maybeSingle();
-    if(existing.error) throw existing.error;
-    // An event id is Stripe's idempotency identity, so every observation of
-    // that id must describe the same event and Checkout Session. Never let a
-    // corrupt/imported ledger row turn a different signed paid event into an
-    // acknowledged duplicate, and never rewrite that row while reclaiming a
-    // stale lease. Failing closed keeps Stripe retrying and makes the mismatch
-    // visible to operations for reconciliation.
-    if(!existing.data||existing.data.event_type!==type||existing.data.stripe_session_id!==sessionId){
-      throw new Error('Stripe event idempotency identity mismatch');
-    }
-    if(existing.data?.processed_at) return {status:'processed'};
-    const previousStartedAt=existing.data?.processing_started_at;
-    // A settled failure is no longer in flight and can be retried immediately.
-    // Otherwise retain only a recent, well-formed lease for a worker that may
-    // still complete. Invalid or implausibly future timestamps are abandoned
-    // so migration drift cannot strand a paid order forever.
-    if(stripeEventClaimInProgress(previousStartedAt,existing.data?.last_error)) return {status:'in_progress'};
-
-    // A process can die after inserting the event but before completing it. Reclaim
-    // only the exact stale version so concurrent Stripe retries cannot both proceed.
-    const reclaimed=await supabase.from('stripe_events')
-      .update({event_type:type,stripe_session_id:sessionId,processing_started_at:processingStartedAt,last_error:null,attempts:nextRetryAttempt(existing.data?.attempts,1)})
-      .eq('event_id',id)
-      .is('processed_at',null)
-      // PostgREST equality does not match SQL NULL. Legacy/migrated rows can
-      // lack this timestamp, so use the null predicate for that recovery path.
-      [previousStartedAt?'eq':'is']('processing_started_at',previousStartedAt||null)
-      .select('event_id');
-    if(reclaimed.error) throw reclaimed.error;
-    return reclaimed.data?.length===1 ? {status:'claimed',processingStartedAt} : {status:'in_progress'};
-  }
+  const claimed=await supabase.rpc('qy_claim_stripe_event',{
+    p_event_id:id,
+    p_event_type:type,
+    p_stripe_session_id:sessionId,
+  });
   if(claimed.error) throw claimed.error;
-  return {status:'claimed',processingStartedAt};
+  const result=Array.isArray(claimed.data)?claimed.data[0]:claimed.data;
+  if(result?.claim_status==='processed') return {status:'processed'};
+  if(result?.claim_status==='in_progress') return {status:'in_progress'};
+  if(result?.claim_status==='claimed'&&result.claim_started_at){
+    return {status:'claimed',processingStartedAt:new Date(result.claim_started_at).toISOString()};
+  }
+  throw new Error('Stripe event claim returned an invalid result');
 }
 
 async function recordEventFailure(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>,eventId:string,processingStartedAt:string,error:unknown){

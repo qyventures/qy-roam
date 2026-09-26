@@ -165,7 +165,8 @@ test('durable retry counters recover malformed inherited values without exceedin
   assert.equal(nextRetryAttempt(2_147_483_646, 0), 2_147_483_647);
   assert.equal(nextRetryAttempt(2_147_483_647, 0), 2_147_483_647);
   assert.throws(() => nextRetryAttempt(0, -1), /Invalid retry attempt baseline/);
-  assert.match(webhookRoute, /attempts:nextRetryAttempt\(existing\.data\?\.attempts,1\)/);
+  assert.match(schema, /greatest\(coalesce\(attempts, 0\), 0\)::bigint \+ 1/);
+  assert.match(schema, /2147483647::bigint/);
   assert.match(webhookRoute, /attempts:nextRetryAttempt\(notification\.attempts,0\)/);
   assert.match(webhookRoute, /attempts:nextRetryAttempt\(delivery\.attempts,0\)/);
 });
@@ -2654,7 +2655,7 @@ test('failed Stripe webhook claims remain visible and immediately retryable', ()
   assert.match(productionReadiness, /processing_started_at,processed_at,attempts,last_failed_at,last_error/);
   assert.match(webhookRoute, /async function recordEventFailure/);
   assert.match(webhookRoute, /last_error:message\.slice\(0,500\)/);
-  assert.match(webhookRoute, /stripeEventClaimInProgress\(previousStartedAt,existing\.data\?\.last_error\)/);
+  assert.match(schema, /v_event\.last_error is null[\s\S]{0,300}v_event\.processing_started_at >= v_now - interval '30 minutes'/);
   assert.doesNotMatch(webhookRoute, /from\('stripe_events'\)\.delete\(\)/);
   assert.match(adminPage, /Stripe webhook failures/);
   assert.match(adminPage, /failed or abandoned events awaiting a signed retry/);
@@ -2671,9 +2672,10 @@ test('Stripe webhook claims recover malformed and implausibly future leases', ()
   assert.equal(stripeEventClaimInProgress('not-a-timestamp', null, now), false);
   assert.equal(stripeEventClaimInProgress(new Date(now - 1_000).toISOString(), 'previous attempt failed', now), false);
 
-  // A legacy NULL needs PostgREST's `is` filter; `eq NULL` would never win
-  // the compare-and-swap and would leave the event permanently unclaimed.
-  assert.match(webhookRoute, /\[previousStartedAt\?'eq':'is'\]\('processing_started_at',previousStartedAt\|\|null\)/);
+  // The atomic database claim treats a legacy NULL timestamp as abandoned and
+  // replaces it while holding the event lock.
+  assert.match(schema, /v_event\.processing_started_at is not null/);
+  assert.match(schema, /processing_started_at = v_now/);
 });
 
 test('stale delivery ledgers with legacy NULL timestamps remain reclaimable', () => {
@@ -2754,7 +2756,7 @@ test('admin visibility detects abandoned Stripe claims using the webhook recover
   // A process can terminate before recordEventFailure runs. Such a claim has
   // no last_error, but it is just as actionable once the webhook lease expires.
   assert.equal(STRIPE_EVENT_CLAIM_STALE_MS, 30 * 60_000);
-  assert.match(webhookRoute, /stripeEventClaimInProgress\(previousStartedAt,existing\.data\?\.last_error\)/);
+  assert.match(schema, /v_event\.processing_started_at >= v_now - interval '30 minutes'/);
   assert.match(adminPage, /select\('event_id,event_type,stripe_session_id,attempts,processing_started_at,last_failed_at,last_error'\)/);
   assert.match(adminPage, /\.is\('processed_at', null\)/);
   assert.doesNotMatch(adminPage, /last_error\.not\.is\.null,processing_started_at\.lt/);
@@ -2781,18 +2783,20 @@ test('Stripe event idempotency records stay bound to one event type and Checkout
   // A corrupt or imported row must never make a different signed event look
   // processed, in-flight, or eligible for stale-lease takeover solely because
   // its event_id collides with the ledger primary key.
-  assert.match(webhookRoute, /select\('event_type,stripe_session_id,processed_at,processing_started_at,last_error,attempts'\)/);
-  const duplicateClaim = webhookRoute.slice(
-    webhookRoute.indexOf("if(claimed.error?.code==='23505')"),
-    webhookRoute.indexOf('async function recordEventFailure'),
+  assert.match(webhookRoute, /supabase\.rpc\('qy_claim_stripe_event'/);
+  assert.match(schema, /perform pg_advisory_xact_lock\(hashtext\('qy_roam_stripe_event:' \|\| p_event_id\)\)/);
+  const atomicClaim = schema.slice(
+    schema.indexOf('create or replace function public.qy_claim_stripe_event'),
+    schema.indexOf('-- Durable human-fulfilment notification ledger'),
   );
-  const identityGuard = duplicateClaim.indexOf("existing.data.event_type!==type||existing.data.stripe_session_id!==sessionId");
-  const processedAck = duplicateClaim.indexOf("if(existing.data?.processed_at) return {status:'processed'}");
-  const staleReclaim = duplicateClaim.indexOf("const reclaimed=await supabase.from('stripe_events')");
+  const identityGuard = atomicClaim.indexOf('v_event.event_type is distinct from p_event_type');
+  const processedAck = atomicClaim.indexOf('if v_event.processed_at is not null');
+  const staleReclaim = atomicClaim.indexOf('update public.stripe_events set');
   assert.notEqual(identityGuard, -1);
   assert.ok(identityGuard < processedAck);
   assert.ok(identityGuard < staleReclaim);
-  assert.match(duplicateClaim, /Stripe event idempotency identity mismatch/);
+  assert.match(atomicClaim, /Stripe event idempotency identity mismatch/);
+  assert.match(atomicClaim, /v_now timestamptz := clock_timestamp\(\)/);
   // Application checks keep retries safe, and the database enforces the same
   // immutable identity for direct service-role repairs or future workers.
   assert.match(schema, /create or replace function public\.qy_enforce_stripe_event_identity_immutability\(\)/);
@@ -2911,7 +2915,7 @@ test('failed Stripe webhook records identify the affected Checkout Session for r
   assert.match(schema, /stripe_session_id text/);
   assert.match(productionReadiness, /event_id,event_type,stripe_session_id,processing_started_at/);
   assert.match(webhookRoute, /claimOnce\(supabase:ReturnType<[^>]+>, id:string, type:string, sessionId:string\)/);
-  assert.match(webhookRoute, /stripe_session_id:sessionId/);
+  assert.match(webhookRoute, /p_stripe_session_id:sessionId/);
   assert.match(webhookRoute, /claimOnce\(supabase,eventClaimId,event\.type,eventSessionId\)/);
   assert.match(adminPage, /event_id,event_type,stripe_session_id,attempts/);
   assert.match(adminPage, /failure\.stripe_session_id/);

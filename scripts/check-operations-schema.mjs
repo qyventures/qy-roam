@@ -68,6 +68,8 @@ const requiredContracts = [
   'create trigger qy_reconcile_customer_from_paid_order',
   'create or replace function public.qy_order_integrity_schema_ready',
   'grant execute on function public.qy_order_integrity_schema_ready() to service_role',
+  'create or replace function public.qy_claim_stripe_event',
+  'grant execute on function public.qy_claim_stripe_event(text,text,text) to service_role',
   "after insert or update of payment_status, customer_name, email, phone, amount_sgd on public.orders",
   "new.payment_status <> 'paid'",
   "pg_advisory_xact_lock(hashtext('qy_roam_customer:' || v_identity))",
