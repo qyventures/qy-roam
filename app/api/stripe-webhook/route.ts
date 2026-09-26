@@ -776,6 +776,17 @@ export async function POST(req:Request){
       if(claim.status==='in_progress') return NextResponse.json({error:'Event is still processing'},{status:500});
       expiryClaimStartedAt=claim.processingStartedAt;
       if(eventStateIssue) throw new Error(`Stripe event state validation failed: ${eventStateIssue}`);
+      // Expiry releases scarce inventory and can close a provisional order,
+      // so it needs the same signed-event chronology boundary as payment
+      // transitions. The refreshed Session proves current expiry state; the
+      // event timestamp must still be plausible and cannot predate the
+      // Checkout Session it names. Claim first so an unexpected signed Stripe
+      // snapshot remains visible and immediately retryable in operations.
+      const expiryEventCreated=validStripePaymentEventCreated(event.created,session.created);
+      if(!expiryEventCreated){
+        console.error('stripe_webhook_invalid_expiry_event_created',{eventId:stripeEventId,sessionId:session.id});
+        throw new Error('Invalid Stripe expiry event timestamp');
+      }
       await releaseExpiredPocketWifiReservation(supabase,session);
       await closeExpiredAwaitingPaymentOrder(supabase,session);
       const completed=await supabase.from('stripe_events').update({processed_at:new Date().toISOString()}).eq('event_id',expiryEventClaimId).eq('processing_started_at',expiryClaimStartedAt).is('processed_at',null).select('event_id');

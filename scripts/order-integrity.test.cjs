@@ -2870,6 +2870,25 @@ test('Stripe terminal events must agree with their Checkout Session payment stat
   assert.ok(paidClaim < webhookRoute.indexOf('if(eventStateIssue) {', paidClaim), 'invalid paid-event state must be retained in the durable event ledger');
 });
 
+test('Stripe expiry events validate signed chronology before releasing inventory', () => {
+  const expiryBranch = webhookRoute.slice(
+    webhookRoute.indexOf("if(event.type==='checkout.session.expired')"),
+    webhookRoute.indexOf("if(event.type==='checkout.session.expired')") + 5000,
+  );
+  assert.match(expiryBranch, /validStripePaymentEventCreated\(event\.created,session\.created\)/);
+  assert.match(expiryBranch, /throw new Error\('Invalid Stripe expiry event timestamp'\)/);
+  assert.ok(
+    expiryBranch.indexOf('validStripePaymentEventCreated(event.created,session.created)') <
+      expiryBranch.indexOf('await releaseExpiredPocketWifiReservation(supabase,session)'),
+    'expiry chronology must be validated before inventory is released',
+  );
+  assert.ok(
+    expiryBranch.indexOf('expiryClaimStartedAt=claim.processingStartedAt') <
+      expiryBranch.indexOf('validStripePaymentEventCreated(event.created,session.created)'),
+    'malformed signed expiry events must remain visible in the durable recovery ledger',
+  );
+});
+
 test('Stripe payment event timestamps are bounded before order persistence or CAPI delivery', () => {
   const now = 1_800_000_000;
   assert.equal(validStripeEventCreated(now, now), now);
