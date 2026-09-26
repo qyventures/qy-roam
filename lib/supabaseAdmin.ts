@@ -50,17 +50,64 @@ export async function fetchSupabaseWithTimeout(input: RequestInfo | URL, init?: 
   const requestSignal = init?.signal || (input instanceof Request ? input.signal : undefined);
   const timeoutError = new Error('Supabase request timed out');
   const abortFromRequest = () => controller.abort(requestSignal?.reason);
+  let cleanedUp = false;
+
+  const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    clearTimeout(timeout);
+    requestSignal?.removeEventListener('abort', abortFromRequest);
+  };
 
   if (requestSignal?.aborted) abortFromRequest();
   else requestSignal?.addEventListener('abort', abortFromRequest, { once: true });
 
   const timeout = setTimeout(() => controller.abort(timeoutError), timeoutMs);
+  let response: Response;
   try {
-    return await fetch(input, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timeout);
-    requestSignal?.removeEventListener('abort', abortFromRequest);
+    response = await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    cleanup();
+    throw error;
   }
+
+  // `fetch` resolves as soon as response headers arrive. Supabase then reads
+  // the PostgREST body (usually with `response.json()`), so clearing the
+  // deadline here would let a proxy that stalls after its headers pin an
+  // order-critical worker indefinitely. Wrap the body and retain the same
+  // abort signal until it is fully consumed or cancelled.
+  if (!response.body) {
+    cleanup();
+    return response;
+  }
+
+  const reader = response.body.getReader();
+  const body = new ReadableStream<Uint8Array>({
+    async pull(streamController) {
+      try {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          cleanup();
+          streamController.close();
+          return;
+        }
+        streamController.enqueue(chunk.value);
+      } catch (error) {
+        cleanup();
+        streamController.error(controller.signal.reason === timeoutError ? timeoutError : error);
+      }
+    },
+    async cancel(reason) {
+      cleanup();
+      await reader.cancel(reason);
+    },
+  });
+
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
 }
 
 export function getSupabaseAdmin() {

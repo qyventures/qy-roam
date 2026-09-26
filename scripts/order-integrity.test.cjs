@@ -3361,6 +3361,31 @@ test('Supabase order-critical requests use a bounded shared transport', async ()
   } finally {
     global.fetch = originalFetch;
   }
+
+  // Fetch resolves once headers arrive. Keep the same deadline active while
+  // Supabase consumes PostgREST JSON so a truncated/stalled response cannot
+  // hold checkout or webhook workers forever.
+  global.fetch = async (_input, init) => new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('{"partial":'));
+      init.signal.addEventListener('abort', () => controller.error(init.signal.reason), { once: true });
+    },
+  }), { status: 200, headers: { 'content-type': 'application/json' } });
+  try {
+    const response = await fetchSupabaseWithTimeout('https://supabase.example/rest/v1/orders', undefined, 5);
+    await assert.rejects(() => response.text(), /Supabase request timed out/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+
+  // A completed body remains readable and clears its deadline normally.
+  global.fetch = async () => new Response('{"ok":true}', { status: 200 });
+  try {
+    const response = await fetchSupabaseWithTimeout('https://supabase.example/rest/v1/orders', undefined, 100);
+    assert.deepEqual(await response.json(), { ok: true });
+  } finally {
+    global.fetch = originalFetch;
+  }
 });
 
 test('expired authenticated Pocket WiFi sessions promptly release only their matching reservation', () => {
