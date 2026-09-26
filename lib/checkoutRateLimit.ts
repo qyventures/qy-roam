@@ -10,6 +10,13 @@ export const CHECKOUT_RATE_LIMIT_MAX_CLIENTS = 5_000;
 
 type Attempt = { count: number; reset: number };
 
+// This value cannot collide with a client key because accepted client keys are
+// IP address literals. Once the individual-client registry is full, new
+// identities share this bucket instead of evicting established entries. An
+// eviction policy lets a rotating-IP caller continuously arrive as a "new"
+// client and reset both its own limit and the limits of legitimate shoppers.
+const CHECKOUT_RATE_LIMIT_OVERFLOW_KEY = 'overflow';
+
 function validClientIp(value?: string | null) {
   const candidate = value?.trim();
   return candidate && candidate.length <= 45 && isIP(candidate) !== 0 ? candidate : null;
@@ -34,22 +41,23 @@ export function createCheckoutAttemptLimiter(
   const attempts = new Map<string, Attempt>();
 
   return (req: Request, now = Date.now()) => {
-    const key = checkoutClientKey(req);
+    const clientKey = checkoutClientKey(req);
+    // Reserve one of the bounded entries for excess identities. Existing
+    // individually tracked clients retain their own windows, while every new
+    // identity after capacity is reached consumes the shared overflow limit.
+    // maxClients is an internal configuration value; clamp it so a mistaken
+    // zero/non-integer value cannot make the registry unbounded or unusable.
+    const boundedMaxClients = Number.isSafeInteger(maxClients) && maxClients > 0 ? maxClients : 1;
+    const individualCapacity = Math.max(0, boundedMaxClients - 1);
+    const key = attempts.has(clientKey) || attempts.size < individualCapacity
+      ? clientKey
+      : CHECKOUT_RATE_LIMIT_OVERFLOW_KEY;
     const current = attempts.get(key);
     if (current && current.reset <= now) {
       attempts.set(key, { count: 1, reset: now + windowMs });
       return false;
     }
     if (!current) {
-      // Map preserves insertion order, so evicting its oldest entry is a
-      // constant-space fallback even during an attack of entirely new keys.
-      // An evicted client merely starts a fresh local window; this is safer
-      // than allowing unbounded process memory growth.
-      while (attempts.size >= maxClients) {
-        const oldest = attempts.keys().next().value;
-        if (oldest === undefined) break;
-        attempts.delete(oldest);
-      }
       attempts.set(key, { count: 1, reset: now + windowMs });
       return false;
     }

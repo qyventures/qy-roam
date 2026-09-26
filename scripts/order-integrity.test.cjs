@@ -1009,14 +1009,26 @@ test('checkout attempt rate limiting keeps per-client limits while bounding uniq
   assert.equal(limit(requestFor('198.51.100.1'), 100), false);
   assert.equal(limit(requestFor('198.51.100.1'), 101), false);
   assert.equal(limit(requestFor('198.51.100.1'), 102), true);
-  // Filling the bounded registry evicts its oldest key rather than growing
-  // process memory for every new, attacker-controlled client identifier.
+  // Once the bounded registry is full, new identities share an overflow
+  // bucket. Rotating addresses therefore cannot continuously reset the limit
+  // or evict the established shopper's active window.
   assert.equal(limit(requestFor('198.51.100.2'), 103), false);
   assert.equal(limit(requestFor('198.51.100.3'), 104), false);
   assert.equal(limit(requestFor('198.51.100.4'), 105), false);
-  assert.equal(limit(requestFor('198.51.100.1'), 106), false);
+  assert.equal(limit(requestFor('198.51.100.5'), 106), true);
+  assert.equal(limit(requestFor('198.51.100.1'), 107), true);
   // A retained client still receives a fresh window after expiry.
   assert.equal(limit(requestFor('198.51.100.1'), 1_200), false);
+  // The shared overflow bucket also resets normally after its own window.
+  assert.equal(limit(requestFor('198.51.100.6'), 1_200), false);
+});
+
+test('checkout attempt rate limiting remains bounded with a one-entry registry', () => {
+  const limit = createCheckoutAttemptLimiter(1_000, 1, 1);
+  const requestFor = (ip) => new Request('https://qyroam.test/api/checkout', { headers: { 'x-real-ip': ip } });
+  assert.equal(limit(requestFor('198.51.100.10'), 100), false);
+  assert.equal(limit(requestFor('198.51.100.11'), 101), true);
+  assert.equal(limit(requestFor('198.51.100.12'), 1_101), false);
 });
 
 test('checkout rate limiting uses only the bounded trusted proxy client identity', () => {
