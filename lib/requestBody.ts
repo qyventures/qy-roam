@@ -1,3 +1,5 @@
+import { contentLengthMatches, declaredContentLength } from './contentLength';
+
 // Route handlers receive a streaming Request body.  Do not rely on a proxy's
 // Content-Length/body timeout for a public endpoint: chunked requests can omit
 // that header and a client can otherwise occupy a Node worker indefinitely.
@@ -39,14 +41,17 @@ export async function readLimitedRequestText(req: Request, maxBytes: number, tim
   if (!validRequestBodyLimit(maxBytes, timeoutMs)) {
     throw new InvalidRequestBodyLimitError('Invalid request body limits');
   }
-  const contentLength = req.headers.get('content-length');
-  if (contentLength !== null && !/^\d+$/.test(contentLength)) {
+  let contentLength: number | null;
+  try {
+    contentLength = declaredContentLength(req.headers.get('content-length'), maxBytes);
+  } catch (error) {
+    if (error instanceof RangeError) throw new RequestBodyTooLargeError('Request body is too large');
     throw new InvalidRequestBodyLengthError('Invalid request body length');
   }
-  if (contentLength !== null && Number(contentLength) > maxBytes) {
-    throw new RequestBodyTooLargeError('Request body is too large');
+  if (!req.body) {
+    if (!contentLengthMatches(contentLength, 0)) throw new InvalidRequestBodyLengthError('Request body length does not match Content-Length');
+    return '';
   }
-  if (!req.body) return '';
 
   const reader = req.body.getReader();
   // A byte limit alone does not bound memory when a peer sends an allowed
@@ -95,6 +100,9 @@ export async function readLimitedRequestText(req: Request, maxBytes: number, tim
     // mask the intentional bounded-body error (and accidentally turn a 408
     // or 413 into the route's generic invalid-request response).
     try { reader.releaseLock(); } catch {}
+  }
+  if (!contentLengthMatches(contentLength, total)) {
+    throw new InvalidRequestBodyLengthError('Request body length does not match Content-Length');
   }
   return body.subarray(0, total).toString('utf8');
 }

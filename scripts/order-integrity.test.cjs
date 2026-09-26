@@ -53,6 +53,7 @@ const { completeSmtpResponseCode, isSafeSmtpHost } = require('../lib/smtp.ts');
 const { safeStripeCheckoutUrl } = require('../lib/stripeCheckoutUrl.ts');
 const { metaCapiPurchaseAcknowledged } = require('../lib/metaCapiAcknowledgement.ts');
 const { stripeCheckoutEventStateIssue } = require('../lib/stripeCheckoutEventState.ts');
+const { contentLengthMatches, declaredContentLength } = require('../lib/contentLength.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { hasOrderIntegritySecret, hasOrderIntegritySigningConfig, signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -911,6 +912,10 @@ test('checkout request bodies are bounded for chunked, malformed, and slow uploa
     InvalidRequestBodyLengthError,
   );
   await assert.rejects(
+    () => readLimitedRequestText(new Request('https://qyroam.test', { method: 'POST', headers: { 'content-length': '2' }, body: 'x' }), 4096, 100),
+    InvalidRequestBodyLengthError,
+  );
+  await assert.rejects(
     () => readLimitedRequestText(new Request('https://qyroam.test', { method: 'POST', body: '12345' }), 4, 100),
     RequestBodyTooLargeError,
   );
@@ -919,6 +924,19 @@ test('checkout request bodies are bounded for chunked, malformed, and slow uploa
     body: new ReadableStream({ pull() { return new Promise(() => {}); } }),
   };
   await assert.rejects(() => readLimitedRequestText(stalled, 4096, 20), RequestBodyTimeoutError);
+});
+
+test('declared Content-Length values are canonical, safely bounded, and exact', () => {
+  assert.equal(declaredContentLength(null, 4096), null);
+  assert.equal(declaredContentLength('0', 4096), 0);
+  assert.equal(declaredContentLength('4096', 4096), 4096);
+  for (const value of ['', '+1', '-1', '1.0', ' 1', '9007199254740992']) {
+    assert.throws(() => declaredContentLength(value, 4096), TypeError);
+  }
+  assert.throws(() => declaredContentLength('4097', 4096), RangeError);
+  assert.equal(contentLengthMatches(null, 9), true);
+  assert.equal(contentLengthMatches(9, 9), true);
+  assert.equal(contentLengthMatches(9, 8), false);
 });
 
 test('bounded request readers do not retain one allocation per fragmented chunk', async () => {
@@ -3116,7 +3134,9 @@ test('Stripe webhook bounds raw payload memory before signature verification', (
   assert.match(webhookRoute, /const STRIPE_WEBHOOK_BODY_TIMEOUT_MS = 15_000/);
   assert.match(webhookRoute, /class StripeWebhookBodyTimeoutError extends Error/);
   assert.match(webhookRoute, /async function readStripeWebhookBody\(req: Request\): Promise<Buffer>/);
-  assert.match(webhookRoute, /Number\(contentLength\) > MAX_STRIPE_WEBHOOK_BODY_BYTES/);
+  assert.match(webhookRoute, /declaredContentLength\(req\.headers\.get\('content-length'\),MAX_STRIPE_WEBHOOK_BODY_BYTES\)/);
+  assert.match(webhookRoute, /contentLengthMatches\(contentLength,total\)/);
+  assert.match(webhookRoute, /InvalidStripeWebhookBodyLengthError/);
   assert.match(webhookRoute, /total > MAX_STRIPE_WEBHOOK_BODY_BYTES/);
   assert.match(webhookRoute, /await Promise\.race\(\[reader\.read\(\), bodyTimeout\]\)/);
   assert.match(webhookRoute, /reject\(new StripeWebhookBodyTimeoutError\('Stripe webhook body timed out'\)\);[\s\S]{0,500}void reader\.cancel\(\)/);

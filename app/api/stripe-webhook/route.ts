@@ -24,6 +24,7 @@ import { nextRetryAttempt } from '@/lib/retryAttempt';
 import { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesEvent, stripeWebhookEventEnvelope } from '@/lib/stripeWebhookObject';
 import { metaCapiPurchaseAcknowledged } from '@/lib/metaCapiAcknowledgement';
 import { stripeCheckoutEventStateIssue, type QyRoamCheckoutEventType } from '@/lib/stripeCheckoutEventState';
+import { contentLengthMatches, declaredContentLength } from '@/lib/contentLength';
 
 export const runtime = 'nodejs';
 
@@ -44,6 +45,7 @@ const MAX_STRIPE_SIGNATURE_HEADER_BYTES = 8_192;
 const STRIPE_WEBHOOK_BODY_TIMEOUT_MS = 15_000;
 
 class StripeWebhookBodyTimeoutError extends Error {}
+class InvalidStripeWebhookBodyLengthError extends Error {}
 
 function validStripeSignatureHeader(value: string | null) {
   return value && value.length <= MAX_STRIPE_SIGNATURE_HEADER_BYTES && /^[\x20-\x7e]+$/.test(value)
@@ -52,16 +54,18 @@ function validStripeSignatureHeader(value: string | null) {
 }
 
 async function readStripeWebhookBody(req: Request): Promise<Buffer> {
-  const contentLength = req.headers.get('content-length');
-  if (contentLength !== null) {
-    // Do not let a malformed header quietly bypass the early rejection. The
-    // stream limit below remains the authority when a proxy omits this header.
-    if (!/^\d+$/.test(contentLength) || Number(contentLength) > MAX_STRIPE_WEBHOOK_BODY_BYTES) {
-      throw new RangeError('Stripe webhook payload is too large');
-    }
+  let contentLength: number | null;
+  try {
+    contentLength=declaredContentLength(req.headers.get('content-length'),MAX_STRIPE_WEBHOOK_BODY_BYTES);
+  } catch(error) {
+    if(error instanceof RangeError) throw new RangeError('Stripe webhook payload is too large');
+    throw new InvalidStripeWebhookBodyLengthError('Invalid Stripe webhook body length');
   }
 
-  if (!req.body) return Buffer.alloc(0);
+  if (!req.body) {
+    if(!contentLengthMatches(contentLength,0)) throw new InvalidStripeWebhookBodyLengthError('Stripe webhook body length does not match Content-Length');
+    return Buffer.alloc(0);
+  }
   const reader = req.body.getReader();
   // A byte limit by itself still permits a hostile peer to make the chunks
   // array consume much more than the signed payload by fragmenting it into
@@ -104,6 +108,9 @@ async function readStripeWebhookBody(req: Request): Promise<Buffer> {
     // settling. Preserve the deliberate timeout/size failure so Stripe sees
     // the correct retryable response instead of an unrelated cleanup error.
     try { reader.releaseLock(); } catch {}
+  }
+  if(!contentLengthMatches(contentLength,total)) {
+    throw new InvalidStripeWebhookBodyLengthError('Stripe webhook body length does not match Content-Length');
   }
   return body.subarray(0, total);
 }
