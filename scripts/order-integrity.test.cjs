@@ -1088,6 +1088,27 @@ test('checkout attempt rate limiting remains bounded with a one-entry registry',
   assert.equal(limit(requestFor('198.51.100.12'), 1_101), false);
 });
 
+test('checkout rate limiting releases expired client identities without evicting active shoppers', () => {
+  const limit = createCheckoutAttemptLimiter(1_000, 1, 3);
+  const requestFor = (ip) => new Request('https://qyroam.test/api/checkout', { headers: { 'x-real-ip': ip } });
+
+  // Two active individual slots are retained; rotating identities then share
+  // the bounded overflow entry instead of evicting either active shopper.
+  assert.equal(limit(requestFor('198.51.100.20'), 100), false);
+  assert.equal(limit(requestFor('198.51.100.21'), 101), false);
+  assert.equal(limit(requestFor('198.51.100.22'), 102), false);
+  assert.equal(limit(requestFor('198.51.100.23'), 103), true);
+  assert.equal(limit(requestFor('198.51.100.20'), 104), true);
+
+  // Once those windows have expired, the periodic sweep must restore normal
+  // per-client capacity. Otherwise one transient address burst would degrade
+  // every new shopper to the shared bucket until the server restarted.
+  assert.equal(limit(requestFor('198.51.100.30'), 1_101), false);
+  assert.equal(limit(requestFor('198.51.100.31'), 1_102), false);
+  assert.equal(limit(requestFor('198.51.100.30'), 1_103), true);
+  assert.equal(limit(requestFor('198.51.100.32'), 1_104), false);
+});
+
 test('checkout rate limiting uses only the bounded trusted proxy client identity', () => {
   const request = (headers) => new Request('https://qyroam.com/api/checkout', { headers });
 

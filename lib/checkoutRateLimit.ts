@@ -39,6 +39,12 @@ export function createCheckoutAttemptLimiter(
   maxClients = CHECKOUT_RATE_LIMIT_MAX_CLIENTS,
 ) {
   const attempts = new Map<string, Attempt>();
+  // Retaining active identities prevents a rotating-IP caller from evicting
+  // shoppers mid-window, but retaining expired identities forever would let a
+  // short address burst permanently push every future shopper into the shared
+  // overflow bucket. Sweep at most once per window so recovery is automatic
+  // without turning every request into an O(maxClients) scan.
+  let nextCleanupAt = 0;
 
   return (req: Request, now = Date.now()) => {
     const clientKey = checkoutClientKey(req);
@@ -49,7 +55,18 @@ export function createCheckoutAttemptLimiter(
     // zero/non-integer value cannot make the registry unbounded or unusable.
     const boundedMaxClients = Number.isSafeInteger(maxClients) && maxClients > 0 ? maxClients : 1;
     const individualCapacity = Math.max(0, boundedMaxClients - 1);
-    const key = attempts.has(clientKey) || attempts.size < individualCapacity
+    if (now >= nextCleanupAt) {
+      for (const [key, attempt] of attempts) {
+        if (attempt.reset <= now) attempts.delete(key);
+      }
+      nextCleanupAt = now + windowMs;
+    }
+    // The overflow bucket consumes one Map entry but is not an individual
+    // client slot. Excluding it here lets expired shopper identities actually
+    // return their capacity while keeping the total registry bounded by
+    // `boundedMaxClients`.
+    const individualClients = attempts.size - (attempts.has(CHECKOUT_RATE_LIMIT_OVERFLOW_KEY) ? 1 : 0);
+    const key = attempts.has(clientKey) || individualClients < individualCapacity
       ? clientKey
       : CHECKOUT_RATE_LIMIT_OVERFLOW_KEY;
     const current = attempts.get(key);
