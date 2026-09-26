@@ -29,6 +29,25 @@ assert.doesNotMatch(deploy, /git diff --cached --quiet/);
 assert.doesNotMatch(deploy, /git checkout\s/);
 assert.match(deploy, /npm ci --no-audit --no-fund/);
 assert.doesNotMatch(deploy, /npm install --no-audit --no-fund/);
+// The isolated artifact test cannot reproduce a production-port conflict or
+// every systemd-only failure. Preserve the previously serving artifact until
+// live readiness succeeds, and restore it on either restart boundary instead
+// of leaving checkout on a release that failed after cutover.
+assert.match(deploy, /mktemp -d \/tmp\/qyroam-release-rollback/);
+assert.match(deploy, /cp -a \.next "\$rollback_dir\/previous-next"/);
+assert.match(deploy, /restore_previous_artifact\(\)/);
+assert.match(deploy, /cp -a "\$rollback_dir\/previous-next" \.next/);
+assert.match(deploy, /release_snapshot_cleanup_enabled=0/);
+assert.match(deploy, /retained recovery snapshot at \$rollback_dir\/previous-next/);
+assert.equal(
+  (deploy.match(/restore_previous_artifact \|\| true/g) || []).length,
+  2,
+  'restart and live-readiness failures must both attempt artifact rollback',
+);
+assert.ok(
+  deploy.lastIndexOf('cleanup_release_snapshot') > deploy.indexOf('if [[ "$ready" -ne 1 ]]'),
+  'the rollback snapshot must survive until live readiness succeeds',
+);
 // Compile success alone is not a safe restart boundary. Boot the exact
 // standalone artifact on loopback and require its authenticated order
 // readiness response before replacing the live process. This catches a
@@ -49,11 +68,11 @@ assert.match(standalonePackager, /resolve\(standalone, '\.next\/static'\)/);
 assert.match(deploy, /static_asset=/);
 assert.match(deploy, /Built QY Roam artifact is missing its browser assets/);
 assert.ok(
-  deploy.indexOf('static_asset=') < deploy.indexOf('systemctl restart "$SERVICE_NAME"'),
+  deploy.indexOf('static_asset=') < deploy.indexOf('echo "[10/11] Restarting service"'),
   'a browser chunk must be fetched from the isolated artifact before restart',
 );
 assert.ok(
-  deploy.indexOf('Smoke-testing the production artifact') < deploy.indexOf('systemctl restart "$SERVICE_NAME"'),
+  deploy.indexOf('Smoke-testing the production artifact') < deploy.indexOf('echo "[10/11] Restarting service"'),
   'the built artifact must boot successfully before the live service is restarted',
 );
 // The checked-in unit carries the loopback and restart hardening relied on by

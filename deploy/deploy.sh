@@ -53,6 +53,61 @@ if [[ ! -f package-lock.json ]]; then
 fi
 npm ci --no-audit --no-fund
 
+# Keep the last built standalone artifact recoverable until the replacement
+# has passed its live-port readiness check. The isolated smoke test below
+# catches application/configuration failures, but it cannot detect a conflict
+# or supervision problem that exists only on the production service port. A
+# failed restart must therefore restore the previously serving artifact rather
+# than leave checkout offline. The snapshot lives outside the repository and
+# is removed after a successful release.
+rollback_dir="$(mktemp -d /tmp/qyroam-release-rollback.XXXXXX)"
+previous_artifact_available=0
+release_snapshot_cleanup_enabled=1
+if [[ -f .next/standalone/server.js ]]; then
+  cp -a .next "$rollback_dir/previous-next"
+  previous_artifact_available=1
+fi
+
+cleanup_release_snapshot() {
+  if [[ "$release_snapshot_cleanup_enabled" -eq 1 ]]; then
+    rm -rf "$rollback_dir"
+  fi
+}
+
+trap cleanup_release_snapshot EXIT
+
+restore_previous_artifact() {
+  if [[ "$previous_artifact_available" -ne 1 ]]; then
+    echo "No previous production artifact is available for automatic rollback." >&2
+    return 1
+  fi
+
+  echo "Restoring the previous production artifact" >&2
+  if [[ -e .next ]]; then
+    mv .next "$rollback_dir/failed-next"
+  fi
+  if ! cp -a "$rollback_dir/previous-next" .next; then
+    # Keep the known-good snapshot outside the worktree when storage or
+    # permissions prevent restoration. If possible, put the failed artifact
+    # back so the service path is not left absent while an operator responds.
+    release_snapshot_cleanup_enabled=0
+    if [[ ! -e .next && -e "$rollback_dir/failed-next" ]]; then
+      mv "$rollback_dir/failed-next" .next || true
+    fi
+    echo "Automatic rollback copy failed; retained recovery snapshot at $rollback_dir/previous-next" >&2
+    return 1
+  fi
+  if systemctl restart "$SERVICE_NAME"; then
+    echo "Previous QY Roam artifact restored and restarted." >&2
+    return 0
+  fi
+  release_snapshot_cleanup_enabled=0
+  echo "Automatic rollback restart failed; operator intervention is required." >&2
+  echo "Recovery snapshot retained at $rollback_dir/previous-next" >&2
+  systemctl --no-pager --full status "$SERVICE_NAME" >&2 || true
+  return 1
+}
+
 echo "[5/11] Building"
 set -a
 # shellcheck disable=SC1090
@@ -94,7 +149,7 @@ cleanup_smoke() {
   fi
   rm -f "$smoke_log" "$smoke_curl_config"
 }
-trap cleanup_smoke EXIT
+trap 'cleanup_smoke; cleanup_release_snapshot' EXIT
 HOSTNAME=127.0.0.1 PORT="$smoke_port" node .next/standalone/server.js >"$smoke_log" 2>&1 &
 smoke_pid=$!
 smoke_ready=0
@@ -130,7 +185,7 @@ if [[ "$static_asset" != /_next/static/* ]] ||
 fi
 cleanup_smoke
 smoke_pid=""
-trap - EXIT
+trap cleanup_release_snapshot EXIT
 
 echo "[7/11] Verifying service definition"
 # `daemon-reload` only rereads the installed unit; it does not copy the
@@ -177,6 +232,8 @@ if ! systemctl restart "$SERVICE_NAME"; then
   echo "QY Roam service restart failed" >&2
   systemctl --no-pager --full status "$SERVICE_NAME" >&2 || true
   journalctl -u "$SERVICE_NAME" -n 50 --no-pager >&2 || true
+  restore_previous_artifact || true
+  cleanup_release_snapshot
   exit 1
 fi
 systemctl --no-pager --full status "$SERVICE_NAME" | sed -n '1,15p'
@@ -184,7 +241,7 @@ systemctl --no-pager --full status "$SERVICE_NAME" | sed -n '1,15p'
 echo "[11/11] Waiting for application readiness"
 health_output="$(mktemp /tmp/qyroam-health.XXXXXX.json)"
 health_config="$(mktemp /tmp/qyroam-curl.XXXXXX.conf)"
-trap 'rm -f "$health_output" "$health_config"' EXIT
+trap 'rm -f "$health_output" "$health_config"; cleanup_release_snapshot' EXIT
 chmod 600 "$health_output" "$health_config"
 printf 'header = "Authorization: Bearer %s"\n' "$health_check_token" > "$health_config"
 ready=0
@@ -205,10 +262,14 @@ if [[ "$ready" -ne 1 ]]; then
     printf '\n' >&2
   fi
   journalctl -u "$SERVICE_NAME" -n 50 --no-pager >&2 || true
+  restore_previous_artifact || true
+  cleanup_release_snapshot
   exit 1
 fi
 cat "$health_output"
 printf '\n'
+
+cleanup_release_snapshot
 
 echo "Deployment verification complete"
 printf 'Deploy completed successfully.\n'
