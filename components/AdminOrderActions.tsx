@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { allowedFulfilmentStatuses } from '@/lib/orderLifecycle';
 
-export default function AdminOrderActions({ id, initialStatus, productType = 'pocket_wifi', courierTracking = '', returnTracking = '', digitalDeliveryReference = '', inventoryItemId = null, inventoryItems = [], canRetryNotifications = false }: { id: number; initialStatus: string; productType?: string | null; courierTracking?: string | null; returnTracking?: string | null; digitalDeliveryReference?: string | null; inventoryItemId?: number | null; inventoryItems?: { id: number; name: string; sku: string; quantity_on_hand: number; status: string }[]; canRetryNotifications?: boolean }) {
+export default function AdminOrderActions({ id, initialStatus, paymentStatus, productType = 'pocket_wifi', courierTracking = '', returnTracking = '', digitalDeliveryReference = '', inventoryItemId = null, inventoryItems = [], canRetryNotifications = false }: { id: number; initialStatus: string; paymentStatus: string | null; productType?: string | null; courierTracking?: string | null; returnTracking?: string | null; digitalDeliveryReference?: string | null; inventoryItemId?: number | null; inventoryItems?: { id: number; name: string; sku: string; quantity_on_hand: number; status: string }[]; canRetryNotifications?: boolean }) {
   const isEsim = productType === 'esim';
   const [currentStatus, setCurrentStatus] = useState(initialStatus);
   const [status, setStatus] = useState(initialStatus);
@@ -70,6 +70,16 @@ export default function AdminOrderActions({ id, initialStatus, productType = 'po
       setMessage('Order delivery retry started');
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Could not retry notifications'); }
     finally { setRetrying(false); }
+  }
+
+  // The API also rejects unpaid transitions, but the operator UI should not
+  // present courier, inventory, or eSIM-delivery controls as available work
+  // while an asynchronous payment is still pending or has failed.
+  if (paymentStatus !== 'paid') {
+    return <div style={{display:'grid',gap:6,minWidth:190}}>
+      <strong>{initialStatus.replaceAll('_', ' ')}</strong>
+      <small>Payment is not confirmed. Do not fulfil this order; reconcile it through Stripe.</small>
+    </div>;
   }
 
   return <div style={{display:'grid',gap:6,minWidth:190}}>

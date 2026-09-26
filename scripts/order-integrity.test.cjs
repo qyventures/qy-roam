@@ -1784,6 +1784,18 @@ test('fulfilment notification recovery cannot revive completed or cancelled orde
   assert.equal(fulfilmentNotificationActionable('esim', 'cancelled'), false);
 });
 
+test('admin fulfilment attention and controls exclude orders without confirmed payment', () => {
+  // Delayed payment methods create a durable awaiting-payment row. It remains
+  // visible for reconciliation, but must not become a staff dispatch/eSIM
+  // instruction or contribute to active fulfilment exception totals.
+  assert.match(adminPage, /if \(order\.payment_status !== 'paid'\) return '';/);
+  assert.match(adminPage, /const active = paid\.filter/);
+  assert.match(adminPage, /<small>Active paid orders<\/small>/);
+  assert.match(adminPage, /paymentStatus=\{o\.payment_status\}/);
+  assert.match(adminOrderActions, /if \(paymentStatus !== 'paid'\)/);
+  assert.match(adminOrderActions, /Payment is not confirmed\. Do not fulfil this order; reconcile it through Stripe\./);
+});
+
 test('Pocket WiFi cannot leave the return workflow after physical dispatch', () => {
   assert.deepEqual(allowedFulfilmentStatuses('pocket_wifi', 'dispatched'), [
     'dispatched', 'with_customer', 'return_due', 'returned'
