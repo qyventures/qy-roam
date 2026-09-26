@@ -4,6 +4,7 @@ import { readFileSync, existsSync } from 'node:fs';
 const deploy = readFileSync(new URL('../deploy/deploy.sh', import.meta.url), 'utf8');
 const service = readFileSync(new URL('../deploy/qy-roam.service', import.meta.url), 'utf8');
 const nginx = readFileSync(new URL('../deploy/nginx-qyroam.conf', import.meta.url), 'utf8');
+const productionReadiness = readFileSync(new URL('../lib/productionReadiness.ts', import.meta.url), 'utf8');
 const standalonePackager = readFileSync(new URL('./package-standalone.mjs', import.meta.url), 'utf8');
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
@@ -63,7 +64,7 @@ assert.match(deploy, /HOSTNAME=127\.0\.0\.1 PORT="\$smoke_port"/);
 assert.match(deploy, /http:\/\/127\.0\.0\.1:\$\{smoke_port\}\/api\/health/);
 assert.match(deploy, /smoke_curl_config=/);
 assert.match(deploy, /chmod 600 "\$smoke_log" "\$smoke_curl_config"/);
-assert.match(deploy, /curl --config "\$smoke_curl_config" --fail --silent --show-error --max-time 10/);
+assert.match(deploy, /curl --config "\$smoke_curl_config" --fail --silent --show-error --max-time "\$READINESS_CURL_TIMEOUT_SECONDS"/);
 assert.match(deploy, /result\.launchReady!==true\|\|result\.service!=='qy-roam'/);
 assert.match(deploy, /Built QY Roam artifact failed its isolated startup smoke test/);
 assert.match(standalonePackager, /resolve\(root, 'public'\)/);
@@ -100,6 +101,20 @@ assert.match(deploy, /if ! nginx -t; then/);
 assert.match(deploy, /Nginx configuration validation failed/);
 assert.match(deploy, /if ! systemctl restart "\$SERVICE_NAME"; then/);
 assert.match(deploy, /QY Roam service restart failed/);
+
+// Both authenticated health calls execute the bounded schema probes in
+// productionReadiness. Their transport deadline must be strictly longer than
+// the probe deadline or a valid readiness response can be aborted by curl and
+// cause an unnecessary rollback after the new process is already healthy.
+const readinessProbeTimeout = Number(productionReadiness.match(/const READINESS_PROBE_TIMEOUT_MS = ([\d_]+);/)?.[1].replaceAll('_', ''));
+const readinessCurlTimeout = Number(deploy.match(/^READINESS_CURL_TIMEOUT_SECONDS=(\d+)$/m)?.[1]);
+assert.ok(Number.isFinite(readinessProbeTimeout), 'application readiness probe timeout must remain explicit');
+assert.ok(Number.isFinite(readinessCurlTimeout), 'deployment readiness curl timeout must remain explicit');
+assert.ok(
+  readinessCurlTimeout * 1_000 > readinessProbeTimeout,
+  'deployment readiness deadline must exceed the application probe deadline',
+);
+assert.match(deploy, /curl --config "\$health_config" --fail --silent --show-error --max-time "\$READINESS_CURL_TIMEOUT_SECONDS"/);
 
 // Checkout throttling and consented CAPI attribution use the single client IP
 // written by Nginx. The app must therefore never be reachable directly on a

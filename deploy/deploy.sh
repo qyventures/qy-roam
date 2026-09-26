@@ -7,6 +7,11 @@ SERVICE_NAME="${SERVICE_NAME:-qy-roam}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3100/api/health}"
 SYSTEMD_UNIT_PATH="${SYSTEMD_UNIT_PATH:-/etc/systemd/system/${SERVICE_NAME}.service}"
 NGINX_CONFIG_PATH="${NGINX_CONFIG_PATH:-/etc/nginx/sites-available/qyroam}"
+# Authenticated readiness can legitimately wait for the application's bounded
+# database probes. Keep curl's deadline above that application budget so a
+# slow-but-healthy probe can return its authoritative result instead of being
+# mistaken for a failed release and triggering rollback.
+READINESS_CURL_TIMEOUT_SECONDS=12
 
 cd "$APP_DIR"
 
@@ -181,7 +186,7 @@ for attempt in {1..15}; do
   if ! kill -0 "$smoke_pid" 2>/dev/null; then
     break
   fi
-  if curl --config "$smoke_curl_config" --fail --silent --show-error --max-time 10 "http://127.0.0.1:${smoke_port}/api/health" |
+  if curl --config "$smoke_curl_config" --fail --silent --show-error --max-time "$READINESS_CURL_TIMEOUT_SECONDS" "http://127.0.0.1:${smoke_port}/api/health" |
      node -e "let body='';process.stdin.on('data',chunk=>body+=chunk).on('end',()=>{const result=JSON.parse(body);if(result.launchReady!==true||result.service!=='qy-roam')process.exit(1)})"; then
     smoke_ready=1
     break
@@ -269,7 +274,7 @@ chmod 600 "$health_output" "$health_config"
 printf 'header = "Authorization: Bearer %s"\n' "$health_check_token" > "$health_config"
 ready=0
 for attempt in {1..15}; do
-  if curl --config "$health_config" --fail --silent --show-error --max-time 5 "$HEALTH_URL" > "$health_output" &&
+  if curl --config "$health_config" --fail --silent --show-error --max-time "$READINESS_CURL_TIMEOUT_SECONDS" "$HEALTH_URL" > "$health_output" &&
      node -e "const fs=require('fs');const result=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(result.launchReady!==true)process.exit(1)" "$health_output"; then
     ready=1
     break
