@@ -399,6 +399,15 @@ test('Stripe webhook failure logging does not print raw dependency errors', () =
   assert.match(webhookRoute, /console\.error\('stripe_webhook_processing_error'\)/);
 });
 
+test('Stripe webhook failure recording cannot replace the controlled retry response', () => {
+  const failureRecorder = webhookRoute.match(/async function recordEventFailure[\s\S]*?\n}\n\n\/\/ An expired Checkout Session/);
+  assert.ok(failureRecorder, 'webhook must retain a dedicated event-failure recorder');
+  assert.match(failureRecorder[0], /try\s*{[\s\S]*await supabase\.from\('stripe_events'\)/,
+    'the recovery-ledger transport must be guarded');
+  assert.match(failureRecorder[0], /catch\s*{[\s\S]*console\.error\('stripe_webhook_failure_record_error'\)/,
+    'a secondary recovery-write outage must emit only a stable diagnostic');
+});
+
 test('public sales and confirmation paths do not log raw provider failures', () => {
   // Checkout, availability, and customer capability pages can all catch
   // Stripe or PostgREST failures. Those errors may contain provider-echoed

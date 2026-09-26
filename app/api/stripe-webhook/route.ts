@@ -425,16 +425,25 @@ async function recordEventFailure(supabase:NonNullable<ReturnType<typeof getSupa
   // for the abandoned-worker timeout. The ownership predicate prevents an old
   // worker from overwriting a newer retry's claim.
   const failedAt=new Date().toISOString();
-  const failed=await supabase.from('stripe_events')
-    .update({last_failed_at:failedAt,last_error:message.slice(0,500)})
-    .eq('event_id',eventId)
-    .eq('processing_started_at',processingStartedAt)
-    .is('processed_at',null)
-    .select('event_id');
-  // This is a recovery-path write, so PostgREST can surface a proxy or
-  // database error here. Do not turn the application log into a second raw
-  // exception sink after deliberately sanitising the durable event ledger.
-  if(failed.error||failed.data?.length!==1) console.error('stripe_webhook_failure_record_error');
+  try {
+    const failed=await supabase.from('stripe_events')
+      .update({last_failed_at:failedAt,last_error:message.slice(0,500)})
+      .eq('event_id',eventId)
+      .eq('processing_started_at',processingStartedAt)
+      .is('processed_at',null)
+      .select('event_id');
+    // This is a recovery-path write, so PostgREST can surface a proxy or
+    // database error here. Do not turn the application log into a second raw
+    // exception sink after deliberately sanitising the durable event ledger.
+    if(failed.error||failed.data?.length!==1) console.error('stripe_webhook_failure_record_error');
+  } catch {
+    // The primary processing failure still needs Stripe to receive a clean
+    // retryable response when the database transport itself is unavailable.
+    // The original claim remains reclaimable after its bounded lease, while
+    // allowing this secondary write to escape would turn that controlled
+    // recovery contract into an unhandled route exception.
+    console.error('stripe_webhook_failure_record_error');
+  }
 }
 
 // An expired Checkout Session can otherwise occupy the durable reservation
