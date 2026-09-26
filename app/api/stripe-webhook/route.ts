@@ -33,6 +33,7 @@ export const runtime = 'nodejs';
 // the memory used by an invalid request bounded rather than relying on a proxy
 // body-size setting that may differ between production environments.
 const MAX_STRIPE_WEBHOOK_BODY_BYTES = 1_000_000;
+const MAX_STRIPE_WEBHOOK_BODY_CHUNKS = 4_096;
 // Headers are ordinarily capped by the reverse proxy, but this public route
 // must remain safe when it is reached through a different proxy or directly
 // in an application runtime. Stripe's signed header is compact ASCII; reject
@@ -67,13 +68,12 @@ async function readStripeWebhookBody(req: Request): Promise<Buffer> {
     return Buffer.alloc(0);
   }
   const reader = req.body.getReader();
-  // A byte limit by itself still permits a hostile peer to make the chunks
-  // array consume much more than the signed payload by fragmenting it into
-  // tiny writes. Reserve the known maximum once and copy chunks into it so
-  // this public pre-signature boundary remains memory-bounded in both bytes
-  // and object count.
+  // Reserve the known maximum once so stored payload memory cannot grow with
+  // fragmentation. The independent chunk ceiling below also bounds the
+  // amount of read/promise work before this public payload is authenticated.
   const body = Buffer.allocUnsafe(MAX_STRIPE_WEBHOOK_BODY_BYTES);
   let total = 0;
+  let chunks = 0;
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const bodyTimeout = new Promise<never>((_, reject) => {
     timeout = setTimeout(() => {
@@ -90,6 +90,11 @@ async function readStripeWebhookBody(req: Request): Promise<Buffer> {
     for (;;) {
       const { done, value } = await Promise.race([reader.read(), bodyTimeout]);
       if (done) break;
+      chunks += 1;
+      if (chunks > MAX_STRIPE_WEBHOOK_BODY_CHUNKS) {
+        void reader.cancel().catch(() => undefined);
+        throw new RangeError('Stripe webhook payload is too fragmented');
+      }
       if (!value) continue;
       total += value.byteLength;
       if (total > MAX_STRIPE_WEBHOOK_BODY_BYTES) {
@@ -177,6 +182,7 @@ function deliveryLeaseIsStale(updatedAt: string | null | undefined) {
 // able to consume an unbounded amount of webhook-worker memory while we only
 // need a short diagnostic snippet for the retry record.
 const MAX_DELIVERY_RESPONSE_BODY_BYTES=64 * 1024;
+const MAX_DELIVERY_RESPONSE_BODY_CHUNKS=1_024;
 
 async function readDeliveryResponseBody(response: Response) {
   let contentLength:number|null;
@@ -202,10 +208,16 @@ async function readDeliveryResponseBody(response: Response) {
   // response, so a single capped buffer is appropriate.
   const body=Buffer.allocUnsafe(MAX_DELIVERY_RESPONSE_BODY_BYTES);
   let total=0;
+  let chunks=0;
   try {
     for (;;) {
       const {done,value}=await reader.read();
       if(done) break;
+      chunks+=1;
+      if(chunks>MAX_DELIVERY_RESPONSE_BODY_CHUNKS) {
+        void reader.cancel().catch(()=>undefined);
+        throw new RangeError('Delivery response body is too fragmented');
+      }
       if(!value) continue;
       total+=value.byteLength;
       if(total>MAX_DELIVERY_RESPONSE_BODY_BYTES) {

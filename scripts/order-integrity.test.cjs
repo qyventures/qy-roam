@@ -33,7 +33,7 @@ const { operationalConfig } = require('../lib/operationalConfig.ts');
 const { validStripeCheckoutSessionId } = require('../lib/stripeSessionId.ts');
 const { validStripeEventCreated, validStripePaymentEventCreated, STRIPE_EVENT_CREATED_MIN_SECONDS, STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS } = require('../lib/stripeEventCreated.ts');
 const { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesEvent, stripeWebhookEventEnvelope } = require('../lib/stripeWebhookObject.ts');
-const { isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError, InvalidRequestBodyLimitError } = require('../lib/requestBody.ts');
+const { isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError, InvalidRequestBodyLimitError, MAX_REQUEST_BODY_CHUNKS } = require('../lib/requestBody.ts');
 const { checkoutClientKey, createCheckoutAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = require('../lib/stripeCheckoutConfig.ts');
 const { stripeWebhookSigningSecret } = require('../lib/stripeWebhookSecret.ts');
@@ -976,9 +976,8 @@ test('declared Content-Length values are canonical, safely bounded, and exact', 
 });
 
 test('bounded request readers do not retain one allocation per fragmented chunk', async () => {
-  // A byte ceiling alone is insufficient when a peer uses one-byte chunks:
-  // the chunk-array metadata can exceed the accepted body. The shared reader
-  // copies into one bounded buffer and still preserves the exact payload.
+  // The shared reader copies fragmented input into one bounded buffer and
+  // still preserves the exact payload.
   const fragments = {
     headers: new Headers(),
     body: new ReadableStream({
@@ -993,6 +992,40 @@ test('bounded request readers do not retain one allocation per fragmented chunk'
   assert.match(webhookRoute, /const body = Buffer\.allocUnsafe\(MAX_STRIPE_WEBHOOK_BODY_BYTES\)/);
   assert.match(webhookRoute, /const body=Buffer\.allocUnsafe\(MAX_DELIVERY_RESPONSE_BODY_BYTES\)/);
   assert.doesNotMatch(webhookRoute, /const chunks: Uint8Array\[\] = \[\]/);
+});
+
+test('stream readers bound chunk-processing work independently from payload bytes', async () => {
+  // Zero-byte chunks never cross a byte limit. Without a separate work
+  // ceiling, an attacker or broken upstream can keep a worker spinning on
+  // promise/read bookkeeping until the wall-clock timeout.
+  let reads = 0;
+  let cancelCalled = false;
+  const fragmented = {
+    headers: new Headers(),
+    body: {
+      getReader() {
+        return {
+          async read() {
+            reads += 1;
+            return { done: false, value: new Uint8Array(0) };
+          },
+          cancel() { cancelCalled = true; return Promise.resolve(); },
+          releaseLock() {},
+        };
+      },
+    },
+  };
+  await assert.rejects(
+    () => readLimitedRequestText(fragmented, 1024, 1_000),
+    RequestBodyTooLargeError,
+  );
+  assert.equal(reads, MAX_REQUEST_BODY_CHUNKS + 1);
+  assert.equal(cancelCalled, true);
+
+  assert.match(webhookRoute, /const MAX_STRIPE_WEBHOOK_BODY_CHUNKS = 4_096/);
+  assert.match(webhookRoute, /chunks > MAX_STRIPE_WEBHOOK_BODY_CHUNKS/);
+  assert.match(webhookRoute, /const MAX_DELIVERY_RESPONSE_BODY_CHUNKS=1_024/);
+  assert.match(webhookRoute, /chunks>MAX_DELIVERY_RESPONSE_BODY_CHUNKS/);
 });
 
 test('shared request-body reader rejects invalid resource limits before reading a stream', async () => {

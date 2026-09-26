@@ -16,6 +16,11 @@ export class InvalidRequestBodyLimitError extends Error {}
 // streaming protocol rather than this text-buffering helper.
 export const MAX_REQUEST_BODY_LIMIT_BYTES = 1_000_000;
 export const MAX_REQUEST_BODY_TIMEOUT_MS = 60_000;
+// Web Streams do not require chunks to contain any bytes. A hostile client
+// can therefore stay below the byte ceiling while forcing an unbounded number
+// of reads/promises (including zero-length chunks). Real HTTP bodies arrive
+// in far fewer chunks; cap the work independently from the payload size.
+export const MAX_REQUEST_BODY_CHUNKS = 4_096;
 
 function validRequestBodyLimit(maxBytes: number, timeoutMs: number) {
   return Number.isSafeInteger(maxBytes) && maxBytes >= 0 && maxBytes <= MAX_REQUEST_BODY_LIMIT_BYTES &&
@@ -54,14 +59,13 @@ export async function readLimitedRequestText(req: Request, maxBytes: number, tim
   }
 
   const reader = req.body.getReader();
-  // A byte limit alone does not bound memory when a peer sends an allowed
-  // payload as millions of tiny chunks: the array bookkeeping can outweigh
-  // the body itself. Allocate exactly the already-validated maximum and copy
-  // each chunk into it so both payload bytes and per-chunk overhead remain
-  // bounded. Callers of this helper use small JSON limits; larger uploads
-  // should use a protocol that streams directly to durable storage.
+  // Allocate exactly the already-validated maximum and copy each chunk into
+  // it so payload storage cannot grow with fragmentation. The independent
+  // chunk ceiling below bounds read/promise work as well. Callers use small
+  // JSON limits; larger uploads should stream directly to durable storage.
   const body = Buffer.allocUnsafe(maxBytes);
   let total = 0;
+  let chunks = 0;
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const bodyTimeout = new Promise<never>((_, reject) => {
     timeout = setTimeout(() => {
@@ -79,6 +83,11 @@ export async function readLimitedRequestText(req: Request, maxBytes: number, tim
     for (;;) {
       const { done, value } = await Promise.race([reader.read(), bodyTimeout]);
       if (done) break;
+      chunks += 1;
+      if (chunks > MAX_REQUEST_BODY_CHUNKS) {
+        void reader.cancel().catch(() => undefined);
+        throw new RequestBodyTooLargeError('Request body is too fragmented');
+      }
       if (!value) continue;
       total += value.byteLength;
       if (total > maxBytes) {
