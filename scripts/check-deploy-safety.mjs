@@ -31,19 +31,24 @@ assert.match(deploy, /npm ci --no-audit --no-fund/);
 assert.doesNotMatch(deploy, /npm install --no-audit --no-fund/);
 // The isolated artifact test cannot reproduce a production-port conflict or
 // every systemd-only failure. Preserve the previously serving artifact until
-// live readiness succeeds, and restore it on either restart boundary instead
-// of leaving checkout on a release that failed after cutover.
+// live readiness succeeds. Because `next build` replaces `.next`, every
+// failure after the snapshot (including build, smoke, and config checks before
+// cutover) must restore that restartable artifact.
 assert.match(deploy, /mktemp -d \/tmp\/qyroam-release-rollback/);
 assert.match(deploy, /cp -a \.next "\$rollback_dir\/previous-next"/);
 assert.match(deploy, /restore_previous_artifact\(\)/);
 assert.match(deploy, /cp -a "\$rollback_dir\/previous-next" \.next/);
 assert.match(deploy, /release_snapshot_cleanup_enabled=0/);
 assert.match(deploy, /retained recovery snapshot at \$rollback_dir\/previous-next/);
-assert.equal(
-  (deploy.match(/restore_previous_artifact \|\| true/g) || []).length,
-  2,
-  'restart and live-readiness failures must both attempt artifact rollback',
+assert.match(deploy, /handle_release_exit\(\)/);
+assert.match(deploy, /status.*-ne 0.*release_verified.*-ne 1.*previous_artifact_available.*-eq 1/);
+assert.ok(
+  deploy.indexOf("trap 'handle_release_exit") < deploy.indexOf('npm run check:esim-pricing'),
+  'automatic artifact restoration must be armed before any build preflight can fail',
 );
+assert.match(deploy, /cutover_attempted=1\nif ! systemctl restart/);
+assert.match(deploy, /if \[\[ "\$cutover_attempted" -eq 0 \]\]; then/);
+assert.match(deploy, /release_verified=1\ncleanup_release_snapshot/);
 assert.ok(
   deploy.lastIndexOf('cleanup_release_snapshot') > deploy.indexOf('if [[ "$ready" -ne 1 ]]'),
   'the rollback snapshot must survive until live readiness succeeds',

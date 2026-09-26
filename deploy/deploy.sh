@@ -63,6 +63,8 @@ npm ci --no-audit --no-fund
 rollback_dir="$(mktemp -d /tmp/qyroam-release-rollback.XXXXXX)"
 previous_artifact_available=0
 release_snapshot_cleanup_enabled=1
+release_verified=0
+cutover_attempted=0
 if [[ -f .next/standalone/server.js ]]; then
   cp -a .next "$rollback_dir/previous-next"
   previous_artifact_available=1
@@ -73,8 +75,6 @@ cleanup_release_snapshot() {
     rm -rf "$rollback_dir"
   fi
 }
-
-trap cleanup_release_snapshot EXIT
 
 restore_previous_artifact() {
   if [[ "$previous_artifact_available" -ne 1 ]]; then
@@ -97,6 +97,14 @@ restore_previous_artifact() {
     echo "Automatic rollback copy failed; retained recovery snapshot at $rollback_dir/previous-next" >&2
     return 1
   fi
+  # Before cutover the old process is still serving from memory. Restore its
+  # on-disk artifact without an unnecessary interruption. Once a restart has
+  # been attempted, restart the restored artifact so the live port cannot be
+  # left on the failed release.
+  if [[ "$cutover_attempted" -eq 0 ]]; then
+    echo "Previous QY Roam artifact restored; the serving process was not interrupted." >&2
+    return 0
+  fi
   if systemctl restart "$SERVICE_NAME"; then
     echo "Previous QY Roam artifact restored and restarted." >&2
     return 0
@@ -107,6 +115,22 @@ restore_previous_artifact() {
   systemctl --no-pager --full status "$SERVICE_NAME" >&2 || true
   return 1
 }
+
+handle_release_exit() {
+  local status="$1"
+  trap - EXIT
+  if [[ "$status" -ne 0 && "$release_verified" -ne 1 && "$previous_artifact_available" -eq 1 ]]; then
+    restore_previous_artifact || true
+  fi
+  cleanup_release_snapshot
+  exit "$status"
+}
+
+# From this point onward `next build` may replace the artifact used by the
+# currently serving process. Any failed preflight, build, smoke test, or
+# infrastructure verification must put the restartable previous artifact back
+# on disk, even when live cutover has not happened yet.
+trap 'handle_release_exit "$?"' EXIT
 
 echo "[5/11] Building"
 set -a
@@ -149,7 +173,7 @@ cleanup_smoke() {
   fi
   rm -f "$smoke_log" "$smoke_curl_config"
 }
-trap 'cleanup_smoke; cleanup_release_snapshot' EXIT
+trap 'status=$?; cleanup_smoke; handle_release_exit "$status"' EXIT
 HOSTNAME=127.0.0.1 PORT="$smoke_port" node .next/standalone/server.js >"$smoke_log" 2>&1 &
 smoke_pid=$!
 smoke_ready=0
@@ -185,7 +209,7 @@ if [[ "$static_asset" != /_next/static/* ]] ||
 fi
 cleanup_smoke
 smoke_pid=""
-trap cleanup_release_snapshot EXIT
+trap 'handle_release_exit "$?"' EXIT
 
 echo "[7/11] Verifying service definition"
 # `daemon-reload` only rereads the installed unit; it does not copy the
@@ -228,12 +252,11 @@ if ! systemctl daemon-reload; then
 fi
 
 echo "[10/11] Restarting service"
+cutover_attempted=1
 if ! systemctl restart "$SERVICE_NAME"; then
   echo "QY Roam service restart failed" >&2
   systemctl --no-pager --full status "$SERVICE_NAME" >&2 || true
   journalctl -u "$SERVICE_NAME" -n 50 --no-pager >&2 || true
-  restore_previous_artifact || true
-  cleanup_release_snapshot
   exit 1
 fi
 systemctl --no-pager --full status "$SERVICE_NAME" | sed -n '1,15p'
@@ -241,7 +264,7 @@ systemctl --no-pager --full status "$SERVICE_NAME" | sed -n '1,15p'
 echo "[11/11] Waiting for application readiness"
 health_output="$(mktemp /tmp/qyroam-health.XXXXXX.json)"
 health_config="$(mktemp /tmp/qyroam-curl.XXXXXX.conf)"
-trap 'rm -f "$health_output" "$health_config"; cleanup_release_snapshot' EXIT
+trap 'status=$?; rm -f "$health_output" "$health_config"; handle_release_exit "$status"' EXIT
 chmod 600 "$health_output" "$health_config"
 printf 'header = "Authorization: Bearer %s"\n' "$health_check_token" > "$health_config"
 ready=0
@@ -262,13 +285,12 @@ if [[ "$ready" -ne 1 ]]; then
     printf '\n' >&2
   fi
   journalctl -u "$SERVICE_NAME" -n 50 --no-pager >&2 || true
-  restore_previous_artifact || true
-  cleanup_release_snapshot
   exit 1
 fi
 cat "$health_output"
 printf '\n'
 
+release_verified=1
 cleanup_release_snapshot
 
 echo "Deployment verification complete"
