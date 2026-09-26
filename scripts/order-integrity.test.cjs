@@ -1389,6 +1389,20 @@ test('post-payment readiness checks every webhook-persisted delivery field and p
   assert.match(schema, /grant execute on function public\.qy_order_integrity_schema_ready\(\) to service_role/);
 });
 
+test('checkout readiness rejects an older order-integrity schema with matching object names', () => {
+  assert.match(productionReadiness, /const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 1/);
+  assert.match(productionReadiness, /database\.rpc\('qy_order_integrity_schema_version', \{\}\)\.abortSignal\(signal\)/);
+  assert.match(productionReadiness, /versionProbe\.data !== REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION/);
+  assert.match(productionReadiness, /if \(!await hasCurrentOrderIntegritySchema\(database, signal\)\) return false/);
+  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 1;/);
+  assert.match(schema, /grant execute on function public\.qy_order_integrity_schema_version\(\) to service_role/);
+  assert.ok(
+    schema.indexOf('create or replace function public.qy_order_integrity_schema_version') >
+      schema.indexOf('create or replace function public.qy_persist_stripe_pocket_wifi_order'),
+    'compatibility marker must be applied after the paid-order functions it certifies',
+  );
+});
+
 test('production readiness aborts stalled database probes instead of holding checkout workers', () => {
   // Readiness is evaluated on the public checkout path. A timeout must abort
   // the underlying PostgREST request, not merely race its promise and leave

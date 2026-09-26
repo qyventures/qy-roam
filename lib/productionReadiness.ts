@@ -18,6 +18,12 @@ const READINESS_CACHE_MS = 15_000;
 // probe itself (rather than only racing its result) so a failed dependency
 // produces the existing fail-closed response within a bounded time.
 const READINESS_PROBE_TIMEOUT_MS = 8_000;
+// Bump this whenever the order-integrity functions, triggers, constraints, or
+// delivery-ledger contract in supabase/schema.sql changes. Object-presence
+// probes cannot distinguish an old function body from the current one; this
+// explicit handshake prevents a rolling application deploy from accepting a
+// payment against stale database logic.
+const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 1;
 let paymentSchemaReadyUntil = 0;
 let esimOrderSchemaReadyUntil = 0;
 let operationsSchemaReadyUntil = 0;
@@ -28,6 +34,21 @@ let operationsSchemaCheckInFlight: Promise<boolean> | null = null;
 let pocketWifiFulfilmentSchemaCheckInFlight: Promise<boolean> | null = null;
 
 class ReadinessProbeTimeoutError extends Error {}
+
+async function hasCurrentOrderIntegritySchema(database: any, signal: AbortSignal) {
+  const [integrityProbe, versionProbe] = await Promise.all([
+    database.rpc('qy_order_integrity_schema_ready', {}).abortSignal(signal),
+    database.rpc('qy_order_integrity_schema_version', {}).abortSignal(signal),
+  ]);
+  if (
+    integrityProbe.error || integrityProbe.data !== true ||
+    versionProbe.error || versionProbe.data !== REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION
+  ) {
+    console.error('production_payment_integrity_schema_check_failed');
+    return false;
+  }
+  return true;
+}
 
 async function runReadinessProbe<T>(probe: (signal: AbortSignal) => Promise<T>) {
   const controller = new AbortController();
@@ -217,11 +238,7 @@ async function checkRequiredPaymentSchema() {
       // been disabled by a partial migration. Verify the named constraints
       // and triggers that make paid-order persistence, fulfilment state, and
       // provider-delivery idempotency safe before exposing a payment URL.
-      const integrityProbe = await database.rpc('qy_order_integrity_schema_ready', {}).abortSignal(signal);
-      if (integrityProbe.error || integrityProbe.data !== true) {
-        console.error('production_payment_integrity_schema_check_failed');
-        return false;
-      }
+      if (!await hasCurrentOrderIntegritySchema(database, signal)) return false;
 
       // The table checks above are not enough for Pocket WiFi sales: checkout uses
       // this RPC as the atomic inventory boundary. Probe it with zero inventory so
@@ -326,8 +343,7 @@ async function checkRequiredEsimOrderSchema() {
       // Otherwise a digital Checkout Session could be exposed against a
       // schema whose columns exist but whose irreversible fulfilment guards
       // are missing or disabled.
-      const integrityProbe = await database.rpc('qy_order_integrity_schema_ready', {}).abortSignal(signal);
-      if (integrityProbe.error || integrityProbe.data !== true) {
+      if (!await hasCurrentOrderIntegritySchema(database, signal)) {
         console.error('production_esim_order_integrity_schema_check_failed');
         return false;
       }

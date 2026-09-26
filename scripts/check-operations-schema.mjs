@@ -68,6 +68,8 @@ const requiredContracts = [
   'create trigger qy_reconcile_customer_from_paid_order',
   'create or replace function public.qy_order_integrity_schema_ready',
   'grant execute on function public.qy_order_integrity_schema_ready() to service_role',
+  'create or replace function public.qy_order_integrity_schema_version',
+  'grant execute on function public.qy_order_integrity_schema_version() to service_role',
   'create or replace function public.qy_claim_stripe_event',
   'grant execute on function public.qy_claim_stripe_event(text,text,text) to service_role',
   "after insert or update of payment_status, customer_name, email, phone, amount_sgd on public.orders",
@@ -125,9 +127,12 @@ const inventoryTable = schema.indexOf('create table if not exists public.invento
 const orderInventoryColumn = schema.indexOf('alter table public.orders add column if not exists inventory_item_id');
 const reservationFunction = schema.indexOf('create or replace function public.qy_reserve_pocket_wifi');
 const manualOrderFunction = schema.indexOf('create or replace function public.qy_create_manual_pocket_wifi_order');
+const pocketWifiPersistenceFunction = schema.indexOf('create or replace function public.qy_persist_stripe_pocket_wifi_order');
+const integritySchemaVersion = schema.indexOf('create or replace function public.qy_order_integrity_schema_version');
 assert.ok(inventoryTable >= 0 && inventoryTable < reservationFunction, 'inventory_items must exist before the reservation function');
 assert.ok(orderInventoryColumn > inventoryTable && orderInventoryColumn < reservationFunction, 'orders.inventory_item_id must exist before the reservation function');
 assert.ok(inventoryTable < manualOrderFunction, 'inventory_items must exist before the manual-order function');
+assert.ok(integritySchemaVersion > pocketWifiPersistenceFunction, 'order-integrity schema version must be written after every paid-order function it certifies');
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure, and clean-install dependency order.`);

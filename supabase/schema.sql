@@ -1455,6 +1455,25 @@ $$;
 revoke all on function public.qy_persist_stripe_pocket_wifi_order(text,text,text,text,text,numeric,text,text,date,date,text,jsonb,timestamptz,boolean,text) from public;
 grant execute on function public.qy_persist_stripe_pocket_wifi_order(text,text,text,text,text,numeric,text,text,date,date,text,jsonb,timestamptz,boolean,text) to service_role;
 
+-- Presence checks cannot tell whether a deployed function or trigger still
+-- has an older body with the same name. The application requires this exact
+-- compatibility version before exposing Stripe Checkout, so applying new app
+-- code without its matching schema fails closed before a customer can pay.
+-- Keep this marker after every paid-order function it certifies: a migration
+-- that fails partway through must not advertise the new contract. Increment
+-- it together with the application constant whenever that contract changes.
+create or replace function public.qy_order_integrity_schema_version()
+returns integer
+language sql
+immutable
+security definer
+set search_path = pg_catalog
+as $$
+  select 1;
+$$;
+revoke all on function public.qy_order_integrity_schema_version() from public;
+grant execute on function public.qy_order_integrity_schema_version() to service_role;
+
 -- Operations tables backing the protected admin area. Keep these in the same
 -- deployable schema as checkout: an otherwise healthy order database must not
 -- leave the fulfilment, inventory, reporting or CRM screens querying tables
