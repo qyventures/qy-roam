@@ -22,6 +22,7 @@ import { fulfilmentRelayAcknowledged } from '@/lib/deliveryAcknowledgement';
 import { safeProviderDeliveryFailure, safeWebhookProcessingFailure } from '@/lib/deliveryFailure';
 import { nextRetryAttempt } from '@/lib/retryAttempt';
 import { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesEvent, stripeWebhookEventEnvelope } from '@/lib/stripeWebhookObject';
+import { metaCapiPurchaseAcknowledged } from '@/lib/metaCapiAcknowledgement';
 
 export const runtime = 'nodejs';
 
@@ -282,20 +283,9 @@ async function sendMetaPurchase(session: Stripe.Checkout.Session, eventTime: num
   // HTTP request reached Meta; its CAPI acknowledgement identifies how many
   // submitted events were actually accepted. Do not settle the durable
   // delivery ledger on a malformed or partial success response, or a paid
-  // conversion can be silently lost with no recovery path. Parse the already
-  // bounded body locally and deliberately retain none of its provider text.
-  let eventsReceived: unknown;
-  try {
-    const acknowledgement: unknown = JSON.parse(response.responseBody);
-    if (acknowledgement && typeof acknowledgement === 'object' && !Array.isArray(acknowledgement)) {
-      eventsReceived = (acknowledgement as { events_received?: unknown }).events_received;
-    }
-  } catch {
-    // A successful CAPI acknowledgement is JSON. Treat an invalid body as
-    // retryable rather than assuming a proxy-generated 2xx accepted the
-    // conversion.
-  }
-  if(eventsReceived!==1) throw new Error('Meta CAPI did not acknowledge the Purchase event');
+  // conversion can be silently lost with no recovery path. The validator
+  // deliberately retains none of the bounded provider response text.
+  if(!metaCapiPurchaseAcknowledged(response.responseBody)) throw new Error('Meta CAPI did not acknowledge the Purchase event');
 }
 
 async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {

@@ -51,6 +51,7 @@ const { safeProviderDeliveryFailure, safeWebhookProcessingFailure } = require('.
 const { nextRetryAttempt } = require('../lib/retryAttempt.ts');
 const { isSafeSmtpHost } = require('../lib/smtp.ts');
 const { safeStripeCheckoutUrl } = require('../lib/stripeCheckoutUrl.ts');
+const { metaCapiPurchaseAcknowledged } = require('../lib/metaCapiAcknowledgement.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { hasOrderIntegritySecret, hasOrderIntegritySigningConfig, signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -239,6 +240,19 @@ test('SMTP relay success is bound to the exact fulfilment message identity', () 
       webhookRoute.indexOf('if(!response.ok) throw new Error(`SMTP relay failed (${response.status})`)'),
     'relay acknowledgement must be checked after transport success and before delivery returns',
   );
+});
+
+test('Meta CAPI success is bound to an exact single-Purchase acknowledgement', () => {
+  assert.equal(metaCapiPurchaseAcknowledged('{"events_received":1,"fbtrace_id":"trace"}'), true);
+  assert.equal(metaCapiPurchaseAcknowledged('{"events_received":0}'), false);
+  assert.equal(metaCapiPurchaseAcknowledged('{"events_received":2}'), false);
+  assert.equal(metaCapiPurchaseAcknowledged('{"events_received":"1"}'), false);
+  assert.equal(metaCapiPurchaseAcknowledged('{"events_received":true}'), false);
+  assert.equal(metaCapiPurchaseAcknowledged('[]'), false);
+  assert.equal(metaCapiPurchaseAcknowledged('<html>gateway ok</html>'), false);
+  assert.equal(metaCapiPurchaseAcknowledged(''), false);
+
+  assert.match(webhookRoute, /if\(!metaCapiPurchaseAcknowledged\(response\.responseBody\)\)/);
 });
 
 test('Stripe webhook recovery records do not persist arbitrary upstream error text', () => {
@@ -2893,12 +2907,10 @@ test('Meta CAPI settles a Purchase only after acknowledging the submitted event'
   // A successful HTTP response can still be malformed or report no accepted
   // events. This single-event delivery must remain retryable unless Meta
   // explicitly confirms that one Purchase was accepted.
-  assert.match(webhookRoute, /const acknowledgement: unknown = JSON\.parse\(response\.responseBody\)/);
-  assert.match(webhookRoute, /eventsReceived = \(acknowledgement as \{ events_received\?: unknown \}\)\.events_received/);
-  assert.match(webhookRoute, /if\(eventsReceived!==1\) throw new Error\('Meta CAPI did not acknowledge the Purchase event'\)/);
+  assert.match(webhookRoute, /if\(!metaCapiPurchaseAcknowledged\(response\.responseBody\)\) throw new Error\('Meta CAPI did not acknowledge the Purchase event'\)/);
   assert.ok(
     webhookRoute.indexOf("if(!response.ok) throw new Error(`Meta CAPI failed (${response.status})`)") <
-      webhookRoute.indexOf("if(eventsReceived!==1) throw new Error('Meta CAPI did not acknowledge the Purchase event')"),
+      webhookRoute.indexOf("if(!metaCapiPurchaseAcknowledged(response.responseBody)) throw new Error('Meta CAPI did not acknowledge the Purchase event')"),
     'HTTP failures must remain distinct from a malformed or partial CAPI acknowledgement',
   );
 });
