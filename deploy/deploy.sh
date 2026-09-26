@@ -199,19 +199,31 @@ if [[ "$smoke_ready" -ne 1 ]] || ! kill -0 "$smoke_pid" 2>/dev/null; then
   exit 1
 fi
 # Readiness exercises the server path, but a standalone Next artifact can boot
-# without the separately packaged browser chunks. Fetch the home page, select
-# one emitted same-origin chunk, and require that exact asset to be available
-# before the live service is restarted. This also catches a future packaging
-# change that drops `.next/static` while leaving API health green.
-static_asset="$(
-  curl --fail --silent --show-error --max-time 10 "http://127.0.0.1:${smoke_port}/" |
-    node -e "let body='';process.stdin.on('data',chunk=>body+=chunk).on('end',()=>{const match=body.match(/(?:src|href)=\"(\/_next\/static\/[^\"]+)\"/);if(!match)process.exit(1);process.stdout.write(match[1])})"
-)"
-if [[ "$static_asset" != /_next/static/* ]] ||
-   ! curl --fail --silent --show-error --output /dev/null --max-time 10 "http://127.0.0.1:${smoke_port}${static_asset}"; then
-  echo "Built QY Roam artifact is missing its browser assets" >&2
-  exit 1
-fi
+# without the separately packaged browser chunks. Exercise both public sales
+# entry points and fetch every static asset they advertise before replacing the
+# live process. Checking only one home-page chunk can miss a route-specific
+# eSIM bundle (or a later Pocket WiFi split chunk) that was omitted while the
+# health API and shared framework runtime remain healthy.
+verify_sales_page_assets() {
+  local page_path="$1"
+  local page_assets
+  page_assets="$(
+    curl --fail --silent --show-error --max-time 10 "http://127.0.0.1:${smoke_port}${page_path}" |
+      node -e "let body='';process.stdin.on('data',chunk=>body+=chunk).on('end',()=>{const assets=[...body.matchAll(/(?:src|href)=\"(\/_next\/static\/[^\"?#]+(?:[?#][^\"]*)?)\"/g)].map(match=>match[1]);const unique=[...new Set(assets)];if(!unique.length||!unique.some(asset=>asset.split(/[?#]/,1)[0].endsWith('.js')))process.exit(1);process.stdout.write(unique.join('\\n'))})"
+  )" || return 1
+  while IFS= read -r static_asset; do
+    [[ "$static_asset" == /_next/static/* ]] || return 1
+    curl --fail --silent --show-error --output /dev/null --max-time 10 \
+      "http://127.0.0.1:${smoke_port}${static_asset}" || return 1
+  done <<< "$page_assets"
+}
+
+for sales_page in / /esim; do
+  if ! verify_sales_page_assets "$sales_page"; then
+    echo "Built QY Roam artifact has an unavailable sales page or browser asset: $sales_page" >&2
+    exit 1
+  fi
+done
 cleanup_smoke
 smoke_pid=""
 trap 'handle_release_exit "$?"' EXIT

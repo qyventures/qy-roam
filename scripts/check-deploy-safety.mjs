@@ -71,11 +71,13 @@ assert.match(standalonePackager, /resolve\(root, 'public'\)/);
 assert.match(standalonePackager, /resolve\(root, '\.next\/static'\)/);
 assert.match(standalonePackager, /resolve\(standalone, 'public'\)/);
 assert.match(standalonePackager, /resolve\(standalone, '\.next\/static'\)/);
-assert.match(deploy, /static_asset=/);
-assert.match(deploy, /Built QY Roam artifact is missing its browser assets/);
+assert.match(deploy, /verify_sales_page_assets\(\)/);
+assert.match(deploy, /for sales_page in \/ \/esim/);
+assert.match(deploy, /unique\.some\(asset=>asset\.split/);
+assert.match(deploy, /Built QY Roam artifact has an unavailable sales page or browser asset/);
 assert.ok(
-  deploy.indexOf('static_asset=') < deploy.indexOf('echo "[10/11] Restarting service"'),
-  'a browser chunk must be fetched from the isolated artifact before restart',
+  deploy.indexOf('verify_sales_page_assets()') < deploy.indexOf('echo "[10/11] Restarting service"'),
+  'every sales-page browser asset must be fetched from the isolated artifact before restart',
 );
 assert.ok(
   deploy.indexOf('Smoke-testing the production artifact') < deploy.indexOf('echo "[10/11] Restarting service"'),
