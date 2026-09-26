@@ -38,7 +38,7 @@ const { checkoutClientKey, createCheckoutAttemptLimiter } = require('../lib/chec
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = require('../lib/stripeCheckoutConfig.ts');
 const { stripeWebhookSigningSecret } = require('../lib/stripeWebhookSecret.ts');
 const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
-const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_EXPIRY_CREATION_MARGIN_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, checkoutAttemptExpiresAt, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
+const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_EXPIRY_CREATION_MARGIN_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, CHECKOUT_ATTEMPT_MAX_FUTURE_MS, STRIPE_HOLD_SCAN_WINDOW_SECONDS, checkoutAttemptExpiresAt, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
 const { checkoutSiteOrigin, isProductionQyRoamOrigin, metaPurchaseEventSourceUrl } = require('../lib/siteOrigin.ts');
 const { hasRequiredAdminCredentials, hasRequiredMetaCapiPurchaseConfig, metaPixelId } = require('../lib/runtimeConfig.ts');
 const { metaMeasurementAllowed, setMetaMeasurementConsent } = require('../lib/metaClient.ts');
@@ -1441,8 +1441,20 @@ test('browser InitiateCheckout events share the durable Stripe attempt identity 
 test('Pocket WiFi expiry and inventory scans share the Stripe-safe hold window', () => {
   assert.match(wifiCheckoutRoute, /const expiresAtSeconds=checkoutAttemptExpiresAt\(body\.checkoutAttemptCreatedAt\)/);
   assert.match(wifiCheckoutRoute, /expires_at:expiresAtSeconds/);
-  assert.match(wifiCheckoutRoute, /const cutoff=nowSeconds-CHECKOUT_HOLD_WINDOW_SECONDS/);
-  assert.match(availabilityRoute, /const cutoff = nowSeconds - CHECKOUT_HOLD_WINDOW_SECONDS/);
+  assert.equal(
+    STRIPE_HOLD_SCAN_WINDOW_SECONDS,
+    CHECKOUT_HOLD_WINDOW_SECONDS + Math.ceil(CHECKOUT_ATTEMPT_MAX_FUTURE_MS / 1000),
+  );
+  // A timestamp at the accepted future-skew boundary produces the longest
+  // possible still-payable Session. Both stock authorities must scan at least
+  // that complete lifetime rather than dropping it in the final minute.
+  const serverNow = Date.UTC(2026, 8, 27, 12, 0, 0);
+  const futureAttempt = serverNow + CHECKOUT_ATTEMPT_MAX_FUTURE_MS;
+  const expiresAt = checkoutAttemptExpiresAt(futureAttempt, serverNow);
+  assert.ok(expiresAt);
+  assert.equal(expiresAt - Math.floor(serverNow / 1000), STRIPE_HOLD_SCAN_WINDOW_SECONDS);
+  assert.match(wifiCheckoutRoute, /const cutoff=nowSeconds-STRIPE_HOLD_SCAN_WINDOW_SECONDS/);
+  assert.match(availabilityRoute, /const cutoff = nowSeconds - STRIPE_HOLD_SCAN_WINDOW_SECONDS/);
 });
 
 test('Pocket WiFi checkout inventory holds enforce the configured Stripe mode boundary', () => {

@@ -13,7 +13,7 @@ import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
 import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { metaAttributionFromRequest } from '@/lib/metaAttribution';
-import { CHECKOUT_HOLD_WINDOW_SECONDS, checkoutAttemptExpiresAt, MAX_STRIPE_HOLD_SCAN_PAGES } from '@/lib/checkoutExpiry';
+import { checkoutAttemptExpiresAt, MAX_STRIPE_HOLD_SCAN_PAGES, STRIPE_HOLD_SCAN_WINDOW_SECONDS } from '@/lib/checkoutExpiry';
 import { checkoutSiteOrigin } from '@/lib/siteOrigin';
 import { pocketWifiRentalCents } from '@/lib/pocketWifiPricing';
 import { safeStripeCheckoutUrl } from '@/lib/stripeCheckoutUrl';
@@ -61,7 +61,10 @@ function matchesRequestedPocketWifi(session:Stripe.Checkout.Session,requestId:st
 
 async function activeStripeHolds(stripe:Stripe,stripeKey:string,start:string,end:string,requestId:string|null,requested:RequestedPocketWifi) {
   const nowSeconds=Math.floor(Date.now()/1000);
-  const cutoff=nowSeconds-CHECKOUT_HOLD_WINDOW_SECONDS;
+  // The expiry is derived from a browser timestamp with a bounded future-skew
+  // allowance. Scan that complete possible lifetime, not just the nominal
+  // payment window, so a still-payable session never falls out of inventory.
+  const cutoff=nowSeconds-STRIPE_HOLD_SCAN_WINDOW_SECONDS;
   let startingAfter:string|undefined;
   let pagesScanned=0;
   let holds=0;

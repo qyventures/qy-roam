@@ -13,7 +13,7 @@ import {
   hasRequiredStripeCheckoutConfig,
   hasRequiredStripeWebhookConfig,
 } from '@/lib/productionReadiness';
-import { CHECKOUT_HOLD_WINDOW_SECONDS, CHECKOUT_WEBHOOK_HANDOFF_GRACE_MS, MAX_STRIPE_HOLD_SCAN_PAGES } from '@/lib/checkoutExpiry';
+import { CHECKOUT_WEBHOOK_HANDOFF_GRACE_MS, MAX_STRIPE_HOLD_SCAN_PAGES, STRIPE_HOLD_SCAN_WINDOW_SECONDS } from '@/lib/checkoutExpiry';
 import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
@@ -48,7 +48,10 @@ function unavailableAvailability() {
 
 async function activeStripeHolds(stripe: Stripe, stripeKey: string, start: string, end: string) {
   const nowSeconds = Math.floor(Date.now() / 1000);
-  const cutoff = nowSeconds - CHECKOUT_HOLD_WINDOW_SECONDS;
+  // Checkout expiry is based on a browser timestamp that may be slightly
+  // ahead of this server. Include that accepted skew so availability cannot
+  // omit a Session that is still open during the final minute of its life.
+  const cutoff = nowSeconds - STRIPE_HOLD_SCAN_WINDOW_SECONDS;
   let startingAfter: string | undefined;
   let pagesScanned = 0;
   let holds = 0;

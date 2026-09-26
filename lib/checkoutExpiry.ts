@@ -43,6 +43,14 @@ export const CHECKOUT_WEBHOOK_HANDOFF_GRACE_MS = 4 * 24 * 60 * 60 * 1000;
 // Keep one second of margin for the floor/ceil conversion below.
 export const CHECKOUT_ATTEMPT_MAX_AGE_MS = (STRIPE_EXPIRY_SAFETY_SECONDS - CHECKOUT_EXPIRY_CREATION_MARGIN_SECONDS) * 1000 - 1_000;
 export const CHECKOUT_ATTEMPT_MAX_FUTURE_MS = 60 * 1000;
+// A browser clock can be slightly ahead of the server, and that accepted
+// timestamp is the authority for the fixed Stripe expiry. In the maximum-skew
+// case a Session created "now" therefore remains payable beyond the ordinary
+// hold window. Stripe hold scans must include that extra interval or the
+// Session can disappear from capacity calculations during its final minute
+// and let the last Pocket WiFi unit be sold twice.
+export const STRIPE_HOLD_SCAN_WINDOW_SECONDS = CHECKOUT_HOLD_WINDOW_SECONDS +
+  Math.ceil(CHECKOUT_ATTEMPT_MAX_FUTURE_MS / 1000);
 
 export function checkoutAttemptExpiresAt(value: unknown, nowMs = Date.now()) {
   if (typeof value !== 'number' || !Number.isSafeInteger(value)) return null;
