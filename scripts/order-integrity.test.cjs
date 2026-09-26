@@ -77,6 +77,7 @@ const smtpClient = fs.readFileSync(require.resolve('../lib/smtp.ts'), 'utf8');
 const webhookRoute = fs.readFileSync(require.resolve('../app/api/stripe-webhook/route.ts'), 'utf8');
 const healthRoute = fs.readFileSync(require.resolve('../app/api/health/route.ts'), 'utf8');
 const successPage = fs.readFileSync(require.resolve('../app/success/page.tsx'), 'utf8');
+const orderConfirmationRefresh = fs.readFileSync(require.resolve('../components/OrderConfirmationRefresh.tsx'), 'utf8');
 const metaPurchase = fs.readFileSync(require.resolve('../components/MetaPurchase.tsx'), 'utf8');
 const metaConsent = fs.readFileSync(require.resolve('../components/MetaConsent.tsx'), 'utf8');
 const metaClient = fs.readFileSync(require.resolve('../lib/metaClient.ts'), 'utf8');
@@ -725,6 +726,16 @@ test('success confirmation does not imply fulfilment is durable before the paid 
   assert.match(successPage, /orderPersisted \? 'Order confirmed' : 'Payment confirmed'/);
   assert.match(successPage, /Please do not place a second order/);
   assert.match(successPage, /orderLookupFailed \? 'temporarily unable to verify' : 'finalising'/);
+});
+
+test('paid confirmation automatically reconciles a delayed durable order without polling forever', () => {
+  assert.match(successPage, /!orderPersisted && <OrderConfirmationRefresh \/>/);
+  assert.match(orderConfirmationRefresh, /const REFRESH_INTERVAL_MS = 3_000/);
+  assert.match(orderConfirmationRefresh, /const MAX_REFRESH_ATTEMPTS = 20/);
+  assert.match(orderConfirmationRefresh, /attempts >= MAX_REFRESH_ATTEMPTS/);
+  assert.match(orderConfirmationRefresh, /document\.visibilityState !== 'visible'/);
+  assert.match(orderConfirmationRefresh, /router\.refresh\(\)/);
+  assert.match(orderConfirmationRefresh, /Please do not place a second order|checking the secure order record automatically/);
 });
 
 test('customer confirmation views distinguish expired Checkout Sessions from delayed payment confirmation', () => {

@@ -5,6 +5,7 @@ import MetaPurchase from '@/components/MetaPurchase';
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
+import OrderConfirmationRefresh from '@/components/OrderConfirmationRefresh';
 
 export const dynamic = 'force-dynamic';
 export const metadata = {
@@ -138,6 +139,7 @@ export default async function SuccessPage({ searchParams }: Props) {
       {sessionId && <MetaPurchase sessionId={sessionId} measurementConsent={measurementConsent} orderPersisted={orderPersisted} productType={productType} contentId={contentId} value={purchaseValue} />}
       <span className="eyebrow">{orderPersisted ? 'Order confirmed' : 'Payment confirmed'}</span>
       <h1>{orderPersisted ? 'Thank you — your QY Roam order is confirmed.' : 'Thank you — your payment is confirmed.'}</h1>
+      {!orderPersisted && <OrderConfirmationRefresh />}
       {(destination || planName) && <p><strong>{planName || destination}</strong>{start && end ? ` · ${start} to ${end}` : ''}{amount ? ` · ${amount}` : ''}</p>}
       {isEsim ? (
         <>
