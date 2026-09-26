@@ -1999,6 +1999,21 @@ test('Pocket WiFi idempotent recovery completes the inventory hold scan', () => 
   assert.match(scan, /return \{holds,requestIds,existingUrl,existingSessionId,requestConflict\};/);
 });
 
+test('Pocket WiFi hold scans fail closed on an empty Stripe continuation page', () => {
+  for (const [name, route] of [
+    ['checkout', wifiCheckoutRoute],
+    ['availability', availabilityRoute],
+  ]) {
+    const scanStart = route.indexOf('async function activeStripeHolds(');
+    const scanEnd = route.indexOf('\n}\n', scanStart);
+    assert.ok(scanStart >= 0 && scanEnd > scanStart, `${name} hold scan must be present`);
+    const scan = route.slice(scanStart, scanEnd);
+    assert.match(scan, /if\s*\(?!sessions\.has_more\)\s*break;/, `${name} must stop only when Stripe says pagination is complete`);
+    assert.match(scan, /if\s*\(sessions\.data\.length\s*===?\s*0\)\s*throw new Error\(/, `${name} must reject an unusable continuation cursor`);
+    assert.doesNotMatch(scan, /if\s*\(?!sessions\.has_more\s*\|\|\s*sessions\.data\.length\s*===?\s*0\)\s*break;/, `${name} must not accept a partial hold count`);
+  }
+});
+
 test('Pocket WiFi holds require server-issued checkout provenance', () => {
   const checkoutRoute = fs.readFileSync(require.resolve('../app/api/checkout/route.ts'), 'utf8');
   assert.match(checkoutRoute, /validQyRoamProvenance\(sessionId,\s*session\.metadata\)/);

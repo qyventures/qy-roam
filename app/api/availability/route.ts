@@ -98,7 +98,11 @@ async function activeStripeHolds(stripe: Stripe, stripeKey: string, start: strin
         if (requestId) requestIds.add(requestId);
       }
     }
-    if (!sessions.has_more || sessions.data.length === 0) break;
+    if (!sessions.has_more) break;
+    // `has_more` without a row cannot provide the next cursor. Returning the
+    // partial count would make availability optimistic and could invite a
+    // checkout for inventory held on an unread provider page.
+    if (sessions.data.length === 0) throw new Error('Stripe Pocket WiFi hold scan returned an empty continuation page');
     // Every returned row, including this cursor, was validated above.
     startingAfter = validStripeCheckoutSessionId(sessions.data[sessions.data.length - 1].id)!;
   }

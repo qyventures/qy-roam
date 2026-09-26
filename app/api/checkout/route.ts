@@ -126,7 +126,11 @@ async function activeStripeHolds(stripe:Stripe,stripeKey:string,start:string,end
         if(holdRequestId) requestIds.push(holdRequestId);
       }
     }
-    if(!sessions.has_more||sessions.data.length===0) break;
+    if(!sessions.has_more) break;
+    // `has_more` promises a usable cursor. Treat a contradictory empty page
+    // as an incomplete provider scan rather than accepting the partial hold
+    // count and potentially selling capacity represented on a later page.
+    if(sessions.data.length===0) throw new Error('Stripe Pocket WiFi hold scan returned an empty continuation page');
     // Every row was validated above, including the final pagination cursor.
     startingAfter=validStripeCheckoutSessionId(sessions.data[sessions.data.length-1].id)!;
   }
