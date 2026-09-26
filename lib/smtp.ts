@@ -88,6 +88,31 @@ function safeMessageId(value: string | undefined) {
   return value && /^<[A-Za-z0-9._-]+@[A-Za-z0-9.-]+>$/.test(value) ? value : null;
 }
 
+// TCP does not preserve SMTP line boundaries. In particular, a chunk ending
+// with `250 O` is not yet a complete reply even though its prefix looks like
+// one. Resolve only after the final CRLF/LF-terminated line, and require a
+// coherent RFC-style multiline response (`250-...` followed by `250 ...`).
+// This keeps a fragmented EHLO or DATA acknowledgement from being consumed
+// early and leaving the next command out of sync with the relay.
+export function completeSmtpResponseCode(buffer: string) {
+  if (!buffer.endsWith('\n')) return null;
+  const lines = buffer.split(/\r?\n/);
+  lines.pop();
+  if (!lines.length || lines.some((line) => line.length === 0)) throw new Error('Invalid SMTP response');
+
+  const first = /^(\d{3})([ -])/.exec(lines[0]);
+  if (!first) throw new Error('Invalid SMTP response');
+  const code = first[1];
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = /^(\d{3})([ -])/.exec(lines[index]);
+    const expectedSeparator = index === lines.length - 1 ? ' ' : '-';
+    if (!match || match[1] !== code || match[2] !== expectedSeparator) {
+      throw new Error('Invalid SMTP response');
+    }
+  }
+  return Number(code);
+}
+
 function waitForResponse(socket: net.Socket | tls.TLSSocket, expected: number[]) {
   return new Promise<string>((resolve, reject) => {
     let buffer = '';
@@ -103,11 +128,16 @@ function waitForResponse(socket: net.Socket | tls.TLSSocket, expected: number[])
         return;
       }
       buffer += chunk.toString('utf8');
-      const lines = buffer.split(/\r?\n/).filter(Boolean);
-      const last = lines[lines.length - 1];
-      if (!last || !/^\d{3} /.test(last)) return;
+      let code: number | null;
+      try {
+        code = completeSmtpResponseCode(buffer);
+      } catch (error) {
+        cleanup();
+        reject(error);
+        return;
+      }
+      if (code === null) return;
       cleanup();
-      const code = Number(last.slice(0, 3));
       // SMTP responses come from an external service and flow into the
       // durable fulfilment retry ledger when delivery fails. Keep the
       // actionable status code, but never retain or log the response text:

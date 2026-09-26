@@ -49,7 +49,7 @@ const { safeHttpsDeliveryEndpoint } = require('../lib/deliveryEndpoint.ts');
 const { fulfilmentRelayAcknowledged } = require('../lib/deliveryAcknowledgement.ts');
 const { safeProviderDeliveryFailure, safeWebhookProcessingFailure } = require('../lib/deliveryFailure.ts');
 const { nextRetryAttempt } = require('../lib/retryAttempt.ts');
-const { isSafeSmtpHost } = require('../lib/smtp.ts');
+const { completeSmtpResponseCode, isSafeSmtpHost } = require('../lib/smtp.ts');
 const { safeStripeCheckoutUrl } = require('../lib/stripeCheckoutUrl.ts');
 const { metaCapiPurchaseAcknowledged } = require('../lib/metaCapiAcknowledgement.ts');
 
@@ -240,6 +240,27 @@ test('SMTP relay success is bound to the exact fulfilment message identity', () 
       webhookRoute.indexOf('if(!response.ok) throw new Error(`SMTP relay failed (${response.status})`)'),
     'relay acknowledgement must be checked after transport success and before delivery returns',
   );
+});
+
+test('SMTP fulfilment waits for complete, coherent protocol replies', () => {
+  assert.equal(completeSmtpResponseCode('250 OK'), null);
+  assert.equal(completeSmtpResponseCode('250 OK\r'), null);
+  assert.equal(completeSmtpResponseCode('250 OK\r\n'), 250);
+  assert.equal(
+    completeSmtpResponseCode('250-mail.example\r\n250-STARTTLS\r\n250 AUTH LOGIN\r\n'),
+    250,
+  );
+  assert.throws(
+    () => completeSmtpResponseCode('250-mail.example\r\n220 STARTTLS\r\n'),
+    /Invalid SMTP response/,
+  );
+  assert.throws(
+    () => completeSmtpResponseCode('250 mail.example\r\n250 AUTH LOGIN\r\n'),
+    /Invalid SMTP response/,
+  );
+  assert.throws(() => completeSmtpResponseCode('relay ready\r\n'), /Invalid SMTP response/);
+
+  assert.match(smtpClient, /code = completeSmtpResponseCode\(buffer\)/);
 });
 
 test('Meta CAPI success is bound to an exact single-Purchase acknowledgement', () => {
