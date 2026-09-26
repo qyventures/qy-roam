@@ -3,6 +3,17 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const schema = readFileSync(new URL('../supabase/schema.sql', import.meta.url), 'utf8');
+const productionReadiness = readFileSync(new URL('../lib/productionReadiness.ts', import.meta.url), 'utf8');
+
+// Checkout and the migration publish opposite sides of one compatibility
+// handshake. Catch a one-sided version bump locally: otherwise a release can
+// either accept payment against stale database logic or remain unnecessarily
+// unavailable after the matching migration is installed.
+const applicationSchemaVersion = productionReadiness.match(/const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = (\d+);/)?.[1];
+const databaseSchemaVersion = schema.match(/create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select (\d+);/)?.[1];
+assert.ok(applicationSchemaVersion, 'Missing application order-integrity schema version');
+assert.ok(databaseSchemaVersion, 'Missing database order-integrity schema version');
+assert.equal(applicationSchemaVersion, databaseSchemaVersion, 'Application and database order-integrity schema versions must match');
 
 // This guard runs without production database credentials, so it cannot ask
 // PostgreSQL to compile the migration. Still reject the two most damaging

@@ -1509,11 +1509,14 @@ test('post-payment readiness checks every webhook-persisted delivery field and p
 });
 
 test('checkout readiness rejects an older order-integrity schema with matching object names', () => {
-  assert.match(productionReadiness, /const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 1/);
+  // Version 2 includes the database-enforced Stripe event identity contract.
+  // Keeping version 1 here would let a rolling app deploy accept payment
+  // against the earlier schema even though all object names still exist.
+  assert.match(productionReadiness, /const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 2/);
   assert.match(productionReadiness, /database\.rpc\('qy_order_integrity_schema_version', \{\}\)\.abortSignal\(signal\)/);
   assert.match(productionReadiness, /versionProbe\.data !== REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION/);
   assert.match(productionReadiness, /if \(!await hasCurrentOrderIntegritySchema\(database, signal\)\) return false/);
-  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 1;/);
+  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 2;/);
   assert.match(schema, /grant execute on function public\.qy_order_integrity_schema_version\(\) to service_role/);
   assert.ok(
     schema.indexOf('create or replace function public.qy_order_integrity_schema_version') >

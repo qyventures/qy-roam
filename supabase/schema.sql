@@ -1505,7 +1505,11 @@ immutable
 security definer
 set search_path = pg_catalog
 as $$
-  select 1;
+  -- Version 2 adds database-enforced Stripe event identity, Checkout Session
+  -- identity, and subscribed terminal-event type constraints to the durable
+  -- idempotency ledger. An application expecting those boundaries must not
+  -- accept payment against the earlier presence-compatible version 1 schema.
+  select 2;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
