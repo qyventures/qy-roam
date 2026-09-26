@@ -66,6 +66,9 @@ async function activeStripeHolds(stripe:Stripe,stripeKey:string,start:string,end
   let pagesScanned=0;
   let holds=0;
   const requestIds:string[]=[];
+  let existingUrl:string|null=null;
+  let existingSessionId:string|null=null;
+  let requestConflict=false;
   // Every still-valid QY Roam Checkout Session is an inventory hold. Scan the
   // complete hold window within the shared, fail-closed page ceiling below:
   // stopping with a partial count could oversell the final routers. The server
@@ -107,7 +110,14 @@ async function activeStripeHolds(stripe:Stripe,stripeKey:string,start:string,end
       if(session.metadata?.product_type!=='pocket_wifi') continue;
       if(requestId&&session.metadata?.checkout_request_id===requestId){
         const sameBooking=matchesRequestedPocketWifi(session,requestId,requested);
-        return {holds,requestIds,existingUrl:sameBooking?session.url:null,existingSessionId:sameBooking?sessionId:null,requestConflict:!sameBooking};
+        existingUrl=sameBooking?session.url:null;
+        existingSessionId=sameBooking?sessionId:null;
+        requestConflict=!sameBooking;
+        // This Session is already represented by the caller's reservation,
+        // so it must not consume capacity twice. Still finish the bounded
+        // scan: later pages can contain valid holds whose reservation write is
+        // temporarily absent, and omitting them could oversell the last unit.
+        continue;
       }
       const holdStart=session.metadata?.start, holdEnd=session.metadata?.end;
       if(holdStart&&holdEnd&&holdStart<=end&&holdEnd>=start){
@@ -120,7 +130,7 @@ async function activeStripeHolds(stripe:Stripe,stripeKey:string,start:string,end
     // Every row was validated above, including the final pagination cursor.
     startingAfter=validStripeCheckoutSessionId(sessions.data[sessions.data.length-1].id)!;
   }
-  return {holds,requestIds,existingUrl:null,existingSessionId:null,requestConflict:false};
+  return {holds,requestIds,existingUrl,existingSessionId,requestConflict};
 }
 
 // A Stripe Checkout URL is only safe to expose once its durable inventory hold

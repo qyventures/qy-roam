@@ -1204,7 +1204,7 @@ test('checkout provider responses are bounded before their Session ids become AP
   assert.doesNotMatch(wifiCheckoutRoute.slice(wifiCreate), /sessions\.(?:update|retrieve)\(session\.id/);
 
   assert.match(wifiCheckoutRoute, /const sessionId=validStripeCheckoutSessionId\(session\.id\)/);
-  assert.match(wifiCheckoutRoute, /existingSessionId:sameBooking\?sessionId:null/);
+  assert.match(wifiCheckoutRoute, /existingSessionId=sameBooking\?sessionId:null/);
   assert.match(wifiCheckoutRoute, /startingAfter=validStripeCheckoutSessionId\(sessions\.data\[sessions\.data\.length-1\]\.id\)!/);
   assert.match(availabilityRoute, /const sessionId = validStripeCheckoutSessionId\(session\.id\)/);
   assert.match(availabilityRoute, /startingAfter = validStripeCheckoutSessionId\(sessions\.data\[sessions\.data\.length - 1\]\.id\)!/);
@@ -1982,6 +1982,21 @@ test('Pocket WiFi Stripe-hold scans paginate recent sessions with a fail-closed 
   }
   const checkoutExpiry = fs.readFileSync(require.resolve('../lib/checkoutExpiry.ts'), 'utf8');
   assert.match(checkoutExpiry, /export const MAX_STRIPE_HOLD_SCAN_PAGES\s*=\s*5/);
+});
+
+test('Pocket WiFi idempotent recovery completes the inventory hold scan', () => {
+  const scanStart = wifiCheckoutRoute.indexOf('async function activeStripeHolds(');
+  const scanEnd = wifiCheckoutRoute.indexOf('\n}\n\n// A Stripe Checkout URL', scanStart);
+  assert.ok(scanStart >= 0 && scanEnd > scanStart, 'Pocket WiFi hold scan must be present');
+  const scan = wifiCheckoutRoute.slice(scanStart, scanEnd);
+  const ownSessionBranch = scan.slice(
+    scan.indexOf("if(requestId&&session.metadata?.checkout_request_id===requestId)"),
+    scan.indexOf('const holdStart=', scan.indexOf("if(requestId&&session.metadata?.checkout_request_id===requestId)")),
+  );
+  assert.match(ownSessionBranch, /existingSessionId=sameBooking\?sessionId:null/);
+  assert.match(ownSessionBranch, /continue;/);
+  assert.doesNotMatch(ownSessionBranch, /return\s+\{/);
+  assert.match(scan, /return \{holds,requestIds,existingUrl,existingSessionId,requestConflict\};/);
 });
 
 test('Pocket WiFi holds require server-issued checkout provenance', () => {
