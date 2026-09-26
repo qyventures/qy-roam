@@ -1267,6 +1267,15 @@ test('Pocket WiFi expiry and inventory scans share the Stripe-safe hold window',
   assert.match(availabilityRoute, /const cutoff = nowSeconds - CHECKOUT_HOLD_WINDOW_SECONDS/);
 });
 
+test('Pocket WiFi checkout inventory holds enforce the configured Stripe mode boundary', () => {
+  // Availability already applies this boundary. Checkout is the final stock
+  // authority and must reject wrong-mode list objects before they can consume
+  // capacity or become the idempotent recovery Session for this request.
+  assert.match(wifiCheckoutRoute, /async function activeStripeHolds\(stripe:Stripe,stripeKey:string,/);
+  assert.match(wifiCheckoutRoute, /if\(!stripeEventMatchesConfiguredMode\(stripeKey,session\.livemode\)\) continue;/);
+  assert.match(wifiCheckoutRoute, /activeStripeHolds\(stripe,key,start,end,requestId,requested\)/);
+});
+
 test('eSIM checkout fails closed when its durable post-payment order boundary is unavailable', () => {
   assert.match(esimCheckoutRoute, /hasRequiredEsimOrderSchema/);
   assert.match(esimCheckoutRoute, /if \(!await hasRequiredEsimOrderSchema\(\)\)/);

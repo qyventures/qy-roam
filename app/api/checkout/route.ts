@@ -59,7 +59,7 @@ function matchesRequestedPocketWifi(session:Stripe.Checkout.Session,requestId:st
     session.currency?.toLowerCase()==='sgd' && session.amount_total===expectedAmount;
 }
 
-async function activeStripeHolds(stripe:Stripe,start:string,end:string,requestId:string|null,requested:RequestedPocketWifi) {
+async function activeStripeHolds(stripe:Stripe,stripeKey:string,start:string,end:string,requestId:string|null,requested:RequestedPocketWifi) {
   const nowSeconds=Math.floor(Date.now()/1000);
   const cutoff=nowSeconds-CHECKOUT_HOLD_WINDOW_SECONDS;
   let startingAfter:string|undefined;
@@ -87,6 +87,12 @@ async function activeStripeHolds(stripe:Stripe,start:string,end:string,requestId
       // a bounded canonical Checkout id.
       const sessionId=validStripeCheckoutSessionId(session.id);
       if(!sessionId) throw new Error('Stripe returned an invalid Checkout Session identifier');
+      // Stripe credentials ordinarily scope list results to one mode, but this
+      // scan is an authority for scarce physical inventory. Keep it on the
+      // same explicit live/test boundary as availability and every later
+      // Checkout response: a wrong-mode object must neither consume stock nor
+      // be selected as this request's idempotent recovery Session.
+      if(!stripeEventMatchesConfiguredMode(stripeKey,session.livemode)) continue;
       // Stripe normally removes expired sessions from the "open" list, but
       // expiry is the inventory boundary. Check it explicitly so a session
       // expired early (or retained briefly by the API) cannot block a router.
@@ -191,7 +197,7 @@ export async function POST(req: Request) {
   const rentalAmount=promo.amountCents;
   const courierFee=config.courierFeeCents;
   const requested={country,start,end,days,daily,rentalBeforePromo,promoCode:promo.promoCode,promoDiscount:promo.discountCents,courierFee};
-  const holdState=await activeStripeHolds(stripe,start,end,requestId,requested);
+  const holdState=await activeStripeHolds(stripe,key,start,end,requestId,requested);
   if(holdState.requestConflict) return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.',checkoutRequestConflict:true},{status:409,headers:{'Cache-Control':'no-store'}});
   const supabase=getSupabaseAdmin();
   if(!supabase) return NextResponse.json({error:'Live reservation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
