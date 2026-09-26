@@ -22,8 +22,10 @@ assert.ok(
 );
 assert.match(deploy, /git branch --show-current/);
 assert.match(deploy, /production checkout must already be on main/);
-assert.match(deploy, /git diff --quiet/);
-assert.match(deploy, /git diff --cached --quiet/);
+assert.match(deploy, /git status --porcelain=v1 --untracked-files=normal/);
+assert.match(deploy, /production checkout has tracked or untracked local changes/);
+assert.doesNotMatch(deploy, /git diff --quiet/);
+assert.doesNotMatch(deploy, /git diff --cached --quiet/);
 assert.doesNotMatch(deploy, /git checkout\s/);
 assert.match(deploy, /npm ci --no-audit --no-fund/);
 assert.doesNotMatch(deploy, /npm install --no-audit --no-fund/);

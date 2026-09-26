@@ -26,8 +26,14 @@ if [[ "$(git branch --show-current)" != "main" ]]; then
   echo "Refusing to deploy: production checkout must already be on main" >&2
   exit 1
 fi
-if ! git diff --quiet || ! git diff --cached --quiet; then
-  echo "Refusing to deploy: production checkout has tracked local changes" >&2
+# `git diff` does not report untracked files. Next.js discovers routes and
+# configuration from the worktree, so an untracked source file could otherwise
+# be compiled into the production artifact even though the deploy claimed to
+# use the reviewed commit. Ignore only files covered by the repository's
+# ignore rules (such as `.next` and `node_modules`); every other worktree entry
+# must be committed or removed before a release.
+if [[ -n "$(git status --porcelain=v1 --untracked-files=normal)" ]]; then
+  echo "Refusing to deploy: production checkout has tracked or untracked local changes" >&2
   exit 1
 fi
 git fetch --prune origin
