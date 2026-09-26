@@ -3229,7 +3229,7 @@ test('admin Meta recovery rejects corrupt or future payment timestamps', () => {
 
 test('consented browser and CAPI Purchases share a stable deduplication identity', () => {
   assert.match(successPage, /<MetaPurchase sessionId=\{sessionId\}/);
-  assert.match(successPage, /measurementConsent=\{measurementConsent\}/);
+  assert.doesNotMatch(successPage, /measurementConsent=\{measurementConsent\}/);
   assert.match(metaPurchase, /metaMeasurementAllowed\(\)/);
   assert.match(metaPurchase, /qyroam_meta_purchase_/);
   assert.match(metaPurchase, /eventID: `stripe_\$\{sessionId\}`/);
@@ -3248,8 +3248,8 @@ test('browser Purchase waits for the same durable paid-order boundary as CAPI', 
   // boundary rather than reporting an operationally unrecoverable payment.
   assert.match(successPage, /orderPersisted=\{orderPersisted\}/);
   assert.match(metaPurchase, /orderPersisted: boolean/);
-  assert.match(metaPurchase, /if \(!orderPersisted \|\| !measurementConsent/);
-  assert.match(metaPurchase, /\[consentRevision, contentId, measurementConsent, orderPersisted, productType, sessionId, value\]/);
+  assert.match(metaPurchase, /if \(!orderPersisted \|\| !metaMeasurementAllowed\(\)/);
+  assert.match(metaPurchase, /\[consentRevision, contentId, orderPersisted, productType, sessionId, value\]/);
   const persisted = webhookRoute.indexOf('await persistSession(sessionForEvent,event.type,eventCreated)');
   const capi = webhookRoute.indexOf('await deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated)');
   assert.ok(persisted >= 0 && capi > persisted, 'CAPI must remain after durable order persistence');
@@ -3269,7 +3269,9 @@ test('first-time consent on the confirmation page delivers Purchase without a re
   assert.match(metaClient, /export const META_CONSENT_CHANGED_EVENT = 'qyroam:meta-consent-changed'/);
   assert.match(metaClient, /window\.dispatchEvent\(new Event\(META_CONSENT_CHANGED_EVENT\)\)/);
   assert.match(metaPurchase, /window\.addEventListener\(META_CONSENT_CHANGED_EVENT, consentChanged\)/);
-  assert.match(metaPurchase, /\[consentRevision, contentId, measurementConsent, orderPersisted, productType, sessionId, value\]/);
+  assert.doesNotMatch(metaPurchase, /!measurementConsent/);
+  assert.match(metaPurchase, /if \(!orderPersisted \|\| !metaMeasurementAllowed\(\)/);
+  assert.match(metaPurchase, /\[consentRevision, contentId, orderPersisted, productType, sessionId, value\]/);
   assert.match(metaConsent, /f\('consent', 'grant'\)/);
   assert.match(metaConsent, /window\.fbq\?\.\('consent', 'revoke'\)/);
 });

@@ -5,7 +5,6 @@ import { META_CONSENT_CHANGED_EVENT, metaMeasurementAllowed, trackMetaWhenReady 
 
 type Props = {
   sessionId: string;
-  measurementConsent: boolean;
   orderPersisted: boolean;
   productType: 'esim' | 'pocket_wifi';
   contentId: string;
@@ -20,7 +19,12 @@ const PURCHASE_KEY_PREFIX = 'qyroam_meta_purchase_';
 // importantly, a Stripe payment alone is not the operational order boundary:
 // wait until the webhook has durably recorded the paid order, just as CAPI
 // does, so reporting never counts a payment whose fulfilment record failed.
-export default function MetaPurchase({ sessionId, measurementConsent, orderPersisted, productType, contentId, value }: Props) {
+// Browser measurement follows the visitor's current consent choice. The
+// server-side CAPI path deliberately remains bound to the immutable consent
+// snapshot captured at checkout, but a visitor who first opts in on this
+// confirmation page has just authorised the browser Purchase and should not
+// need to reload before it is delivered.
+export default function MetaPurchase({ sessionId, orderPersisted, productType, contentId, value }: Props) {
   const [consentRevision, setConsentRevision] = useState(0);
 
   useEffect(() => {
@@ -30,7 +34,7 @@ export default function MetaPurchase({ sessionId, measurementConsent, orderPersi
   }, []);
 
   useEffect(() => {
-    if (!orderPersisted || !measurementConsent || !metaMeasurementAllowed() || !Number.isFinite(value) || value < 0) return;
+    if (!orderPersisted || !metaMeasurementAllowed() || !Number.isFinite(value) || value < 0) return;
     const key = `${PURCHASE_KEY_PREFIX}${sessionId}`;
     try {
       if (window.sessionStorage.getItem(key)) return;
@@ -52,7 +56,7 @@ export default function MetaPurchase({ sessionId, measurementConsent, orderPersi
         // The stable eventID still deduplicates browser and CAPI delivery.
       }
     });
-  }, [consentRevision, contentId, measurementConsent, orderPersisted, productType, sessionId, value]);
+  }, [consentRevision, contentId, orderPersisted, productType, sessionId, value]);
 
   return null;
 }

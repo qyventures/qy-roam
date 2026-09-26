@@ -29,7 +29,6 @@ export default async function SuccessPage({ searchParams }: Props) {
   let planName = '';
   let planId = '';
   let checkoutExpired = false;
-  let measurementConsent = false;
   let orderPersisted = false;
   let orderLookupFailed = false;
 
@@ -69,7 +68,6 @@ export default async function SuccessPage({ searchParams }: Props) {
       end = session.metadata?.end || '';
       planName = session.metadata?.plan_name || '';
       planId = session.metadata?.plan_id || '';
-      measurementConsent = session.metadata?.measurement_consent === 'accepted';
       amount = session.amount_total != null ? `S$${(session.amount_total / 100).toFixed(2)}` : '';
 
       // Stripe remains the authority for payment, but do not imply that
@@ -136,7 +134,7 @@ export default async function SuccessPage({ searchParams }: Props) {
   const purchaseValue = amount ? Number(amount.slice(2)) : Number.NaN;
   return (
     <main className="wrap section legal">
-      {sessionId && <MetaPurchase sessionId={sessionId} measurementConsent={measurementConsent} orderPersisted={orderPersisted} productType={productType} contentId={contentId} value={purchaseValue} />}
+      {sessionId && <MetaPurchase sessionId={sessionId} orderPersisted={orderPersisted} productType={productType} contentId={contentId} value={purchaseValue} />}
       <span className="eyebrow">{orderPersisted ? 'Order confirmed' : 'Payment confirmed'}</span>
       <h1>{orderPersisted ? 'Thank you — your QY Roam order is confirmed.' : 'Thank you — your payment is confirmed.'}</h1>
       {!orderPersisted && <OrderConfirmationRefresh />}
