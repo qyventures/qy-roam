@@ -110,14 +110,45 @@ restore_previous_artifact() {
     echo "Previous QY Roam artifact restored; the serving process was not interrupted." >&2
     return 0
   fi
-  if systemctl restart "$SERVICE_NAME"; then
-    echo "Previous QY Roam artifact restored and restarted." >&2
+  if ! systemctl restart "$SERVICE_NAME"; then
+    release_snapshot_cleanup_enabled=0
+    echo "Automatic rollback restart failed; operator intervention is required." >&2
+    echo "Recovery snapshot retained at $rollback_dir/previous-next" >&2
+    systemctl --no-pager --full status "$SERVICE_NAME" >&2 || true
+    return 1
+  fi
+
+  # A successful systemd restart only confirms that the start request was
+  # accepted. The restored process can still fail to bind, boot, or satisfy
+  # the order-critical configuration/schema boundary. Do not discard the
+  # recovery snapshot or report a successful rollback until the old artifact
+  # is actually serving the same authenticated readiness contract used for
+  # release verification.
+  local rollback_health_config
+  rollback_health_config="$(mktemp /tmp/qyroam-rollback-curl.XXXXXX.conf)"
+  chmod 600 "$rollback_health_config"
+  printf 'header = "Authorization: Bearer %s"\n' "${health_check_token:-}" > "$rollback_health_config"
+  local rollback_ready=0
+  local attempt
+  for attempt in {1..15}; do
+    if curl --config "$rollback_health_config" --fail --silent --show-error --max-time "$READINESS_CURL_TIMEOUT_SECONDS" "$HEALTH_URL" |
+       node -e "let body='';process.stdin.on('data',chunk=>body+=chunk).on('end',()=>{const result=JSON.parse(body);if(result.launchReady!==true||result.service!=='qy-roam')process.exit(1)})"; then
+      rollback_ready=1
+      break
+    fi
+    sleep 2
+  done
+  rm -f "$rollback_health_config"
+  if [[ "$rollback_ready" -eq 1 ]]; then
+    echo "Previous QY Roam artifact restored, restarted, and launch-ready." >&2
     return 0
   fi
+
   release_snapshot_cleanup_enabled=0
-  echo "Automatic rollback restart failed; operator intervention is required." >&2
+  echo "Automatic rollback did not become launch-ready; operator intervention is required." >&2
   echo "Recovery snapshot retained at $rollback_dir/previous-next" >&2
   systemctl --no-pager --full status "$SERVICE_NAME" >&2 || true
+  journalctl -u "$SERVICE_NAME" -n 50 --no-pager >&2 || true
   return 1
 }
 

@@ -49,6 +49,19 @@ assert.ok(
 );
 assert.match(deploy, /cutover_attempted=1\nif ! systemctl restart/);
 assert.match(deploy, /if \[\[ "\$cutover_attempted" -eq 0 \]\]; then/);
+assert.match(deploy, /qyroam-rollback-curl/);
+assert.match(deploy, /rollback_ready=0/);
+assert.match(deploy, /result\.launchReady!==true\|\|result\.service!=='qy-roam'/);
+assert.match(deploy, /Previous QY Roam artifact restored, restarted, and launch-ready/);
+assert.match(deploy, /Automatic rollback did not become launch-ready/);
+assert.ok(
+  deploy.indexOf('if systemctl restart "$SERVICE_NAME"; then') === -1,
+  'rollback must not treat systemd accepting a restart as proof that checkout recovered',
+);
+assert.ok(
+  deploy.indexOf('rollback_ready=0') < deploy.indexOf('Previous QY Roam artifact restored, restarted, and launch-ready'),
+  'rollback success must be reported only after authenticated readiness succeeds',
+);
 assert.match(deploy, /release_verified=1\ncleanup_release_snapshot/);
 assert.ok(
   deploy.lastIndexOf('cleanup_release_snapshot') > deploy.indexOf('if [[ "$ready" -ne 1 ]]'),
