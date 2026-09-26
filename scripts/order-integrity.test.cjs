@@ -43,7 +43,7 @@ const { checkoutSiteOrigin, isProductionQyRoamOrigin, metaPurchaseEventSourceUrl
 const { hasRequiredAdminCredentials, hasRequiredMetaCapiPurchaseConfig, metaPixelId } = require('../lib/runtimeConfig.ts');
 const { metaMeasurementAllowed, setMetaMeasurementConsent } = require('../lib/metaClient.ts');
 const { digitalDeliveryReferenceIssue, isSafeDigitalDeliveryReference } = require('../lib/digitalDeliveryReference.ts');
-const { SUPABASE_REQUEST_TIMEOUT_MS, canonicalSupabaseProjectUrl, fetchSupabaseWithTimeout, hasRequiredSupabaseAdminConfig, supabaseServiceRoleKey } = require('../lib/supabaseAdmin.ts');
+const { SUPABASE_REQUEST_TIMEOUT_MS, SUPABASE_RESPONSE_MAX_BYTES, canonicalSupabaseProjectUrl, fetchSupabaseWithTimeout, hasRequiredSupabaseAdminConfig, supabaseServiceRoleKey } = require('../lib/supabaseAdmin.ts');
 const { checkoutAttempt, clearCheckoutAttempt, CHECKOUT_ATTEMPT_MAX_AGE_MS } = require('../lib/checkoutAttempt.ts');
 const { safeHttpsDeliveryEndpoint } = require('../lib/deliveryEndpoint.ts');
 const { fulfilmentRelayAcknowledged } = require('../lib/deliveryAcknowledgement.ts');
@@ -3342,6 +3342,7 @@ test('Stripe network calls use a bounded shared production client', () => {
 
 test('Supabase order-critical requests use a bounded shared transport', async () => {
   assert.equal(SUPABASE_REQUEST_TIMEOUT_MS, 15_000);
+  assert.equal(SUPABASE_RESPONSE_MAX_BYTES, 8 * 1024 * 1024);
   assert.match(supabaseAdmin, /global: \{ fetch: fetchSupabaseWithTimeout \}/);
   assert.match(supabaseAdmin, /const timeout = setTimeout\(\(\) => controller\.abort\(timeoutError\), timeoutMs\)/);
   assert.match(supabaseAdmin, /requestSignal\?\.addEventListener\('abort', abortFromRequest, \{ once: true \}\)/);
@@ -3358,6 +3359,39 @@ test('Supabase order-critical requests use a bounded shared transport', async ()
       /Supabase request timed out/,
     );
     assert.equal(receivedSignal.aborted, true);
+  } finally {
+    global.fetch = originalFetch;
+  }
+
+  // Reject a declared oversized response before consuming it. PostgREST
+  // normally provides compact paginated JSON, so this indicates a broken or
+  // misrouted upstream response rather than legitimate order data.
+  let declaredBodyCancelled = false;
+  global.fetch = async () => new Response(new ReadableStream({
+    cancel() { declaredBodyCancelled = true; },
+  }), { status: 200, headers: { 'content-length': '17' } });
+  try {
+    await assert.rejects(
+      () => fetchSupabaseWithTimeout('https://supabase.example/rest/v1/orders', undefined, 100, 16),
+      /Supabase response body is too large or invalid/,
+    );
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(declaredBodyCancelled, true);
+  } finally {
+    global.fetch = originalFetch;
+  }
+
+  // Chunked responses have no useful Content-Length. Enforce the same limit
+  // while Supabase consumes the stream so an upstream cannot bypass the bound.
+  global.fetch = async () => new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(new Uint8Array(9));
+      controller.enqueue(new Uint8Array(8));
+    },
+  }), { status: 200 });
+  try {
+    const response = await fetchSupabaseWithTimeout('https://supabase.example/rest/v1/orders', undefined, 100, 16);
+    await assert.rejects(() => response.arrayBuffer(), /Supabase response body is too large/);
   } finally {
     global.fetch = originalFetch;
   }

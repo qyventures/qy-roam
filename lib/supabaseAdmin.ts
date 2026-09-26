@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { declaredContentLength } from './contentLength';
 
 // PostgREST requests otherwise inherit the platform fetch timeout, which can
 // be several minutes (or unlimited). Supabase backs checkout reservations,
@@ -6,6 +7,11 @@ import { createClient } from '@supabase/supabase-js';
 // must release the Node worker and let the existing idempotent recovery paths
 // retry rather than indefinitely consuming capacity.
 export const SUPABASE_REQUEST_TIMEOUT_MS = 15_000;
+// Every current operational list is explicitly paginated, while checkout and
+// webhook mutations return only a handful of rows. This ceiling is generous
+// for those responses but prevents a broken PostgREST gateway or proxy from
+// streaming an unbounded body into a worker that will eventually call json().
+export const SUPABASE_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
 
 // The service-role key bypasses row-level security and is attached to every
 // Supabase request. Treat its destination as a credential boundary rather
@@ -45,7 +51,15 @@ export function hasRequiredSupabaseAdminConfig() {
   );
 }
 
-export async function fetchSupabaseWithTimeout(input: RequestInfo | URL, init?: RequestInit, timeoutMs = SUPABASE_REQUEST_TIMEOUT_MS) {
+export async function fetchSupabaseWithTimeout(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  timeoutMs = SUPABASE_REQUEST_TIMEOUT_MS,
+  maximumResponseBytes = SUPABASE_RESPONSE_MAX_BYTES,
+) {
+  if (!Number.isSafeInteger(maximumResponseBytes) || maximumResponseBytes < 0) {
+    throw new RangeError('Invalid Supabase response body limit');
+  }
   const controller = new AbortController();
   const requestSignal = init?.signal || (input instanceof Request ? input.signal : undefined);
   const timeoutError = new Error('Supabase request timed out');
@@ -71,6 +85,14 @@ export async function fetchSupabaseWithTimeout(input: RequestInfo | URL, init?: 
     throw error;
   }
 
+  try {
+    declaredContentLength(response.headers.get('content-length'), maximumResponseBytes);
+  } catch {
+    cleanup();
+    void response.body?.cancel().catch(() => undefined);
+    throw new RangeError('Supabase response body is too large or invalid');
+  }
+
   // `fetch` resolves as soon as response headers arrive. Supabase then reads
   // the PostgREST body (usually with `response.json()`), so clearing the
   // deadline here would let a proxy that stalls after its headers pin an
@@ -82,6 +104,7 @@ export async function fetchSupabaseWithTimeout(input: RequestInfo | URL, init?: 
   }
 
   const reader = response.body.getReader();
+  let responseBytes = 0;
   const body = new ReadableStream<Uint8Array>({
     async pull(streamController) {
       try {
@@ -89,6 +112,16 @@ export async function fetchSupabaseWithTimeout(input: RequestInfo | URL, init?: 
         if (chunk.done) {
           cleanup();
           streamController.close();
+          return;
+        }
+        responseBytes += chunk.value.byteLength;
+        if (responseBytes > maximumResponseBytes) {
+          const sizeError = new RangeError('Supabase response body is too large');
+          cleanup();
+          // Do not await cancellation: a broken upstream must not be able to
+          // turn the response-size boundary into another unbounded wait.
+          void reader.cancel(sizeError).catch(() => undefined);
+          streamController.error(sizeError);
           return;
         }
         streamController.enqueue(chunk.value);
