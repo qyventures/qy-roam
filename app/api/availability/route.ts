@@ -16,6 +16,7 @@ import {
 import { CHECKOUT_HOLD_WINDOW_SECONDS, CHECKOUT_WEBHOOK_HANDOFF_GRACE_MS, MAX_STRIPE_HOLD_SCAN_PAGES } from '@/lib/checkoutExpiry';
 import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
+import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
 
 export const dynamic = 'force-dynamic';
 
@@ -67,6 +68,12 @@ async function activeStripeHolds(stripe: Stripe, stripeKey: string, start: strin
     const sessions = await stripe.checkout.sessions.list({ status: 'open', limit: 100, created: { gte: cutoff }, ...(startingAfter ? { starting_after: startingAfter } : {}) });
     pagesScanned += 1;
     for (const session of sessions.data) {
+      // The final list row also becomes the next provider pagination cursor.
+      // Fail this inventory promise closed if Stripe ever returns an
+      // unexpected identity instead of sending unbounded runtime data back in
+      // a follow-up API request or into provenance verification.
+      const sessionId = validStripeCheckoutSessionId(session.id);
+      if (!sessionId) throw new Error('Stripe returned an invalid Checkout Session identifier');
       // Session status is eventually consistent around expiry. Capacity must
       // follow the Checkout Session's actual expiry, not only its age.
       // Inventory holds must be as trustworthy as fulfilment. A source marker
@@ -76,7 +83,7 @@ async function activeStripeHolds(stripe: Stripe, stripeKey: string, start: strin
       // Stripe mode, but availability is a customer-facing stock promise.
       // Apply the same live/test boundary as Checkout before an upstream
       // response can consume inventory capacity.
-      if (session.mode !== 'payment' || session.created < cutoff || !session.expires_at || session.expires_at <= nowSeconds || session.metadata?.source !== 'qyroam.com' || !validQyRoamProvenance(session.id, session.metadata)) continue;
+      if (session.mode !== 'payment' || session.created < cutoff || !session.expires_at || session.expires_at <= nowSeconds || session.metadata?.source !== 'qyroam.com' || !validQyRoamProvenance(sessionId, session.metadata)) continue;
       if (!stripeEventMatchesConfiguredMode(stripeKey, session.livemode)) continue;
       // Only explicitly identified router sessions can consume router stock.
       // Never infer Pocket WiFi from the absence of a product marker: a valid
@@ -92,7 +99,8 @@ async function activeStripeHolds(stripe: Stripe, stripeKey: string, start: strin
       }
     }
     if (!sessions.has_more || sessions.data.length === 0) break;
-    startingAfter = sessions.data[sessions.data.length - 1].id;
+    // Every returned row, including this cursor, was validated above.
+    startingAfter = validStripeCheckoutSessionId(sessions.data[sessions.data.length - 1].id)!;
   }
   return { holds, requestIds };
 }

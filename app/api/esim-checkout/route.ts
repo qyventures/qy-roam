@@ -13,6 +13,7 @@ import { checkoutAttemptExpiresAt } from '@/lib/checkoutExpiry';
 import { checkoutSiteOrigin } from '@/lib/siteOrigin';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { safeStripeCheckoutUrl } from '@/lib/stripeCheckoutUrl';
+import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
 
 export const runtime = 'nodejs';
 
@@ -170,6 +171,20 @@ export async function POST(req: Request) {
       consent_collection: { terms_of_service: 'required' }
     }, { idempotencyKey: `qyroam_esim_${requestId}` });
 
+    // The create response controls the identifier used by the metadata write
+    // and subsequent recovery read. Stripe normally supplies a canonical
+    // Checkout Session id, but SDK types do not validate provider responses
+    // at runtime. Bound it before it can become an outbound API path or an
+    // order-provenance input.
+    const createdSessionId = validStripeCheckoutSessionId(session.id);
+    if (!createdSessionId) {
+      console.error('esim_checkout_session_id_invalid');
+      return NextResponse.json({ error: 'Secure checkout confirmation is temporarily unavailable. Please try again shortly.' }, {
+        status: 503,
+        headers: { 'Cache-Control': 'no-store', 'Retry-After': '10' },
+      });
+    }
+
     // A Stripe credential should only return Sessions from its own mode, but
     // this response becomes a customer payment capability. Match the mode
     // boundary already enforced by webhook and confirmation flows before
@@ -195,9 +210,9 @@ export async function POST(req: Request) {
     // bound to that id before exposing the Checkout URL, preventing a manually
     // created lookalike session from crossing the fulfilment boundary.
     const metadata = { ...session.metadata } as Record<string, string>;
-    const provenance = signedQyRoamProvenance(session.id, metadata);
+    const provenance = signedQyRoamProvenance(createdSessionId, metadata);
     if (metadata[QY_ROAM_PROVENANCE_METADATA_KEY] !== provenance) {
-      await stripe.checkout.sessions.update(session.id, { metadata: { [QY_ROAM_PROVENANCE_METADATA_KEY]: provenance } });
+      await stripe.checkout.sessions.update(createdSessionId, { metadata: { [QY_ROAM_PROVENANCE_METADATA_KEY]: provenance } });
     }
 
     // Stripe caches the response for an idempotency key. A browser retry can
@@ -205,12 +220,12 @@ export async function POST(req: Request) {
     // has completed payment in another tab. Retrieve the Session again before
     // choosing a recovery response: a completed payment must lead to its
     // confirmation page, never back to an unusable Checkout URL.
-    const currentSession = await stripe.checkout.sessions.retrieve(session.id);
+    const currentSession = await stripe.checkout.sessions.retrieve(createdSessionId);
     // This fresh object can expose either a paid-order confirmation or a live
     // payment URL. Bind it to the idempotent create result before trusting any
     // metadata, status, provenance, or URL on it.
-    if (currentSession.id !== session.id) {
-      console.error('esim_checkout_session_identity_mismatch', { expectedSessionId: session.id, retrievedSessionId: currentSession.id });
+    if (currentSession.id !== createdSessionId) {
+      console.error('esim_checkout_session_identity_mismatch', { expectedSessionId: createdSessionId, retrievedSessionId: currentSession.id });
       return NextResponse.json({ error: 'Secure checkout confirmation is temporarily unavailable. Please try again shortly.' }, {
         status: 503,
         headers: { 'Cache-Control': 'no-store', 'Retry-After': '10' },

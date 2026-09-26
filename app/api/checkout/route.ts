@@ -17,6 +17,7 @@ import { CHECKOUT_HOLD_WINDOW_SECONDS, checkoutAttemptExpiresAt, MAX_STRIPE_HOLD
 import { checkoutSiteOrigin } from '@/lib/siteOrigin';
 import { pocketWifiRentalCents } from '@/lib/pocketWifiPricing';
 import { safeStripeCheckoutUrl } from '@/lib/stripeCheckoutUrl';
+import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
 
 export const runtime = 'nodejs';
 
@@ -80,13 +81,19 @@ async function activeStripeHolds(stripe:Stripe,start:string,end:string,requestId
     const sessions=await stripe.checkout.sessions.list({status:'open',limit:100,created:{gte:cutoff},...(startingAfter?{starting_after:startingAfter}:{})});
     pagesScanned+=1;
     for(const session of sessions.data){
+      // List results become pagination cursors and, for an idempotent retry,
+      // an outbound retrieve target. Treat the provider response as runtime
+      // data and fail the capacity scan closed if any Session identity is not
+      // a bounded canonical Checkout id.
+      const sessionId=validStripeCheckoutSessionId(session.id);
+      if(!sessionId) throw new Error('Stripe returned an invalid Checkout Session identifier');
       // Stripe normally removes expired sessions from the "open" list, but
       // expiry is the inventory boundary. Check it explicitly so a session
       // expired early (or retained briefly by the API) cannot block a router.
       // Do not let a manually-created lookalike session in a shared Stripe
       // account consume scarce router capacity. Holds use the same
       // server-authored provenance boundary as paid-order fulfilment.
-      if(session.mode!=='payment'||session.created<cutoff||!session.expires_at||session.expires_at<=nowSeconds||session.metadata?.source!=='qyroam.com'||!validQyRoamProvenance(session.id,session.metadata)) continue;
+      if(session.mode!=='payment'||session.created<cutoff||!session.expires_at||session.expires_at<=nowSeconds||session.metadata?.source!=='qyroam.com'||!validQyRoamProvenance(sessionId,session.metadata)) continue;
       // A signed QY Roam session is not necessarily a router reservation.
       // Require the explicit server-authored product identity; treating an
       // absent type as Pocket WiFi could reserve stock for another product
@@ -94,7 +101,7 @@ async function activeStripeHolds(stripe:Stripe,start:string,end:string,requestId
       if(session.metadata?.product_type!=='pocket_wifi') continue;
       if(requestId&&session.metadata?.checkout_request_id===requestId){
         const sameBooking=matchesRequestedPocketWifi(session,requestId,requested);
-        return {holds,requestIds,existingUrl:sameBooking?session.url:null,existingSessionId:sameBooking?session.id:null,requestConflict:!sameBooking};
+        return {holds,requestIds,existingUrl:sameBooking?session.url:null,existingSessionId:sameBooking?sessionId:null,requestConflict:!sameBooking};
       }
       const holdStart=session.metadata?.start, holdEnd=session.metadata?.end;
       if(holdStart&&holdEnd&&holdStart<=end&&holdEnd>=start){
@@ -104,7 +111,8 @@ async function activeStripeHolds(stripe:Stripe,start:string,end:string,requestId
       }
     }
     if(!sessions.has_more||sessions.data.length===0) break;
-    startingAfter=sessions.data[sessions.data.length-1].id;
+    // Every row was validated above, including the final pagination cursor.
+    startingAfter=validStripeCheckoutSessionId(sessions.data[sessions.data.length-1].id)!;
   }
   return {holds,requestIds,existingUrl:null,existingSessionId:null,requestConflict:false};
 }
@@ -324,6 +332,11 @@ export async function POST(req: Request) {
   // holds. An idempotency key can also replay a completed or expired Session,
   // so validate the response from the create call itself before linking the
   // newly-created reservation or returning any checkout state to the browser.
+  const createdSessionId=validStripeCheckoutSessionId(session.id);
+  if(!createdSessionId){
+    console.error('checkout_session_id_invalid');
+    return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
+  }
   if(!stripeEventMatchesConfiguredMode(key,session.livemode)){
     // Preserve the unlinked reservation. A response that fails this
     // credential-mode boundary must never be exposed or treated as a safe
@@ -341,9 +354,9 @@ export async function POST(req: Request) {
   // Retrying the same idempotency key also repairs a session if a process died
   // between Stripe creation and this metadata update.
   const metadata={...session.metadata} as Record<string,string>;
-  const provenance=signedQyRoamProvenance(session.id,metadata);
+  const provenance=signedQyRoamProvenance(createdSessionId,metadata);
   if(metadata[QY_ROAM_PROVENANCE_METADATA_KEY]!==provenance){
-    try { await stripe.checkout.sessions.update(session.id,{metadata:{[QY_ROAM_PROVENANCE_METADATA_KEY]:provenance}}); }
+    try { await stripe.checkout.sessions.update(createdSessionId,{metadata:{[QY_ROAM_PROVENANCE_METADATA_KEY]:provenance}}); }
     catch(error){
       // This update can fail after Stripe created a usable Checkout Session.
       // As above, retain capacity rather than creating an uncounted payable
@@ -358,11 +371,11 @@ export async function POST(req: Request) {
   // decision from that fresh state. This also proves the id-bound provenance
   // update is visible before exposing a URL that can create a paid inventory
   // obligation.
-  const currentSession=await stripe.checkout.sessions.retrieve(session.id);
+  const currentSession=await stripe.checkout.sessions.retrieve(createdSessionId);
   // Keep the fresh response bound to the idempotent create result before it
   // can confirm payment, mutate this booking's reservation, or expose a URL.
-  if(currentSession.id!==session.id){
-    console.error('checkout_session_identity_mismatch',{expectedSessionId:session.id,retrievedSessionId:currentSession.id});
+  if(currentSession.id!==createdSessionId){
+    console.error('checkout_session_identity_mismatch',{expectedSessionId:createdSessionId,retrievedSessionId:currentSession.id});
     return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
   }
   if(!stripeEventMatchesConfiguredMode(key,currentSession.livemode)){

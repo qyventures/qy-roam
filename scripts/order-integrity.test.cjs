@@ -1132,6 +1132,28 @@ test('admin delivery recovery validates its stored Stripe Checkout Session id be
   assert.doesNotMatch(adminOrderRoute, /stripe\.checkout\.sessions\.retrieve\(order\.stripe_session_id\)/);
 });
 
+test('checkout provider responses are bounded before their Session ids become API targets or provenance inputs', () => {
+  const esimCreate = esimCheckoutRoute.indexOf('const session = await stripe.checkout.sessions.create');
+  const esimId = esimCheckoutRoute.indexOf('const createdSessionId = validStripeCheckoutSessionId(session.id)', esimCreate);
+  const esimUpdate = esimCheckoutRoute.indexOf('stripe.checkout.sessions.update(createdSessionId', esimCreate);
+  const esimRetrieve = esimCheckoutRoute.indexOf('stripe.checkout.sessions.retrieve(createdSessionId)', esimCreate);
+  assert.ok(esimCreate >= 0 && esimId > esimCreate && esimUpdate > esimId && esimRetrieve > esimId);
+  assert.doesNotMatch(esimCheckoutRoute.slice(esimCreate), /sessions\.(?:update|retrieve)\(session\.id/);
+
+  const wifiCreate = wifiCheckoutRoute.indexOf('session=await stripe.checkout.sessions.create');
+  const wifiId = wifiCheckoutRoute.indexOf('const createdSessionId=validStripeCheckoutSessionId(session.id)', wifiCreate);
+  const wifiUpdate = wifiCheckoutRoute.indexOf('stripe.checkout.sessions.update(createdSessionId', wifiCreate);
+  const wifiRetrieve = wifiCheckoutRoute.indexOf('stripe.checkout.sessions.retrieve(createdSessionId)', wifiCreate);
+  assert.ok(wifiCreate >= 0 && wifiId > wifiCreate && wifiUpdate > wifiId && wifiRetrieve > wifiId);
+  assert.doesNotMatch(wifiCheckoutRoute.slice(wifiCreate), /sessions\.(?:update|retrieve)\(session\.id/);
+
+  assert.match(wifiCheckoutRoute, /const sessionId=validStripeCheckoutSessionId\(session\.id\)/);
+  assert.match(wifiCheckoutRoute, /existingSessionId:sameBooking\?sessionId:null/);
+  assert.match(wifiCheckoutRoute, /startingAfter=validStripeCheckoutSessionId\(sessions\.data\[sessions\.data\.length-1\]\.id\)!/);
+  assert.match(availabilityRoute, /const sessionId = validStripeCheckoutSessionId\(session\.id\)/);
+  assert.match(availabilityRoute, /startingAfter = validStripeCheckoutSessionId\(sessions\.data\[sessions\.data\.length - 1\]\.id\)!/);
+});
+
 test('eSIM checkout never redirects a reused idempotency key to another plan', () => {
   assert.match(esimCheckoutRoute, /function matchesRequestedEsim/);
   assert.match(esimCheckoutRoute, /session\.metadata\?\.plan_id === plan\.id/);
@@ -1185,7 +1207,7 @@ test('checkout retries keep Stripe idempotency parameters stable', () => {
 test('eSIM idempotent recovery uses a fresh Stripe session state before returning a payment URL', () => {
   // Stripe caches idempotent POST responses. The route must not make a
   // recovery decision from a stale original `open` snapshot after payment.
-  assert.match(esimCheckoutRoute, /const currentSession = await stripe\.checkout\.sessions\.retrieve\(session\.id\)/);
+  assert.match(esimCheckoutRoute, /const currentSession = await stripe\.checkout\.sessions\.retrieve\(createdSessionId\)/);
   assert.match(esimCheckoutRoute, /if \(!validQyRoamProvenance\(currentSession\.id, currentSession\.metadata\)\)/);
   assert.match(esimCheckoutRoute, /currentSession\.status === 'complete' && currentSession\.payment_status === 'paid'/);
   assert.match(esimCheckoutRoute, /url: checkoutUrl/);
@@ -1206,22 +1228,22 @@ test('eSIM paid checkout recovery waits for the durable paid order ledger', () =
 test('checkout recovery binds every fresh Stripe response to the requested Session id', () => {
   // A fresh retrieve supplies status and customer data, but only the requested
   // Session may confirm payment, mutate a reservation, or return a payment URL.
-  assert.match(esimCheckoutRoute, /currentSession\.id !== session\.id/);
+  assert.match(esimCheckoutRoute, /currentSession\.id !== createdSessionId/);
   assert.match(esimCheckoutRoute, /esim_checkout_session_identity_mismatch/);
   assert.ok(
-    esimCheckoutRoute.indexOf('currentSession.id !== session.id') <
+    esimCheckoutRoute.indexOf('currentSession.id !== createdSessionId') <
       esimCheckoutRoute.indexOf("if (!stripeEventMatchesConfiguredMode(key, currentSession.livemode))"),
     'eSIM response identity must be checked before its mode, metadata, status, or URL',
   );
 
   assert.match(wifiCheckoutRoute, /existing\.id!==holdState\.existingSessionId/);
-  assert.match(wifiCheckoutRoute, /currentSession\.id!==session\.id/);
+  assert.match(wifiCheckoutRoute, /currentSession\.id!==createdSessionId/);
   const existingRead = wifiCheckoutRoute.indexOf('let existing=await stripe.checkout.sessions.retrieve(holdState.existingSessionId)');
   const existingIdentity = wifiCheckoutRoute.indexOf('existing.id!==holdState.existingSessionId', existingRead);
   const existingUrl = wifiCheckoutRoute.indexOf('{url:existingCheckoutUrl}', existingRead);
   assert.ok(existingRead >= 0 && existingIdentity > existingRead && existingIdentity < existingUrl);
-  const currentRead = wifiCheckoutRoute.indexOf('const currentSession=await stripe.checkout.sessions.retrieve(session.id)');
-  const currentIdentity = wifiCheckoutRoute.indexOf('currentSession.id!==session.id', currentRead);
+  const currentRead = wifiCheckoutRoute.indexOf('const currentSession=await stripe.checkout.sessions.retrieve(createdSessionId)');
+  const currentIdentity = wifiCheckoutRoute.indexOf('currentSession.id!==createdSessionId', currentRead);
   const currentUrl = wifiCheckoutRoute.indexOf('{url:checkoutUrl}', currentRead);
   assert.ok(currentRead >= 0 && currentIdentity > currentRead && currentIdentity < currentUrl);
 });
@@ -1640,7 +1662,7 @@ test('idempotent checkout replays recover paid orders without a second payment a
   assert.match(wifiCheckoutRoute, /\{completed:true,sessionId:currentSession\.id\}/);
   assert.match(wifiCheckoutRoute, /\.eq\('stripe_session_id',currentSession\.id\)\.maybeSingle\(\)/);
   assert.match(wifiCheckoutRoute, /paymentPending:true/);
-  assert.match(esimCheckoutRoute, /const currentSession = await stripe\.checkout\.sessions\.retrieve\(session\.id\)/);
+  assert.match(esimCheckoutRoute, /const currentSession = await stripe\.checkout\.sessions\.retrieve\(createdSessionId\)/);
   assert.match(esimCheckoutRoute, /currentSession\.status === 'complete' && currentSession\.payment_status === 'paid'/);
   assert.match(esimCheckoutRoute, /\{ completed: true, sessionId: currentSession\.id \}/);
   assert.match(esimCheckoutRoute, /paymentPending: true/);
@@ -1650,7 +1672,7 @@ test('idempotent checkout replays recover paid orders without a second payment a
 
 test('Pocket WiFi create recovery uses fresh Stripe state and confirms provenance before exposing checkout', () => {
   const createCall = wifiCheckoutRoute.indexOf("session=await stripe.checkout.sessions.create");
-  const currentRead = wifiCheckoutRoute.indexOf("const currentSession=await stripe.checkout.sessions.retrieve(session.id)", createCall);
+  const currentRead = wifiCheckoutRoute.indexOf("const currentSession=await stripe.checkout.sessions.retrieve(createdSessionId)", createCall);
   const paidBranch = wifiCheckoutRoute.indexOf("if(currentSession.status==='complete'&&currentSession.payment_status==='paid')", currentRead);
   const expiredBranch = wifiCheckoutRoute.indexOf("if(currentSession.status==='expired')", currentRead);
   const urlResponse = wifiCheckoutRoute.indexOf("{url:checkoutUrl}", currentRead);
@@ -1881,9 +1903,8 @@ test('Pocket WiFi Stripe-hold scans paginate recent sessions with a fail-closed 
 
 test('Pocket WiFi holds require server-issued checkout provenance', () => {
   const checkoutRoute = fs.readFileSync(require.resolve('../app/api/checkout/route.ts'), 'utf8');
-  for (const source of [checkoutRoute, availabilityRoute]) {
-    assert.match(source, /validQyRoamProvenance\(session\.id,\s*session\.metadata\)/);
-  }
+  assert.match(checkoutRoute, /validQyRoamProvenance\(sessionId,\s*session\.metadata\)/);
+  assert.match(availabilityRoute, /validQyRoamProvenance\(sessionId,\s*session\.metadata\)/);
 });
 
 test('Pocket WiFi holds require an explicit Pocket WiFi product identity', () => {
