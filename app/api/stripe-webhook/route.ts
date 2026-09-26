@@ -248,10 +248,9 @@ async function postJsonWithTimeout(url:string,body:unknown,timeoutMs=DELIVERY_TI
   }
 }
 
-function metaPurchaseConfigured(session: Stripe.Checkout.Session) {
+function metaPurchaseEligible(session: Stripe.Checkout.Session) {
   return session.payment_status === 'paid' &&
-    session.metadata?.measurement_consent === 'accepted' &&
-    hasRequiredMetaCapiPurchaseConfig();
+    session.metadata?.measurement_consent === 'accepted';
 }
 
 async function sendMetaPurchase(session: Stripe.Checkout.Session, eventTime: number) {
@@ -548,7 +547,7 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
 }
 
 export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session,eventTime:number){
-  if(!metaPurchaseConfigured(session)) return;
+  if(!metaPurchaseEligible(session)) return;
   // A Meta timeout can leave us unable to tell whether Meta accepted the
   // event. Keep Stripe's signed event time on the delivery record so every
   // retry presents exactly the same Purchase identity to Meta for dedupe.
@@ -565,6 +564,13 @@ export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof
     if(existing.data?.status==='sent') return;
   }
   const delivery=existing.data!;
+  // Meta is optional for an organic launch, but consented attribution should
+  // not disappear merely because its credential is absent during the one
+  // signed payment webhook. The pending row above preserves both the exact
+  // Purchase identity and Stripe event time. Leave it unattempted until the
+  // destination is configured; the admin recovery path can then deliver it
+  // without replaying or reconstructing the original payment event.
+  if(!hasRequiredMetaCapiPurchaseConfig()) return;
   const persistedEventTime=Number(delivery.event_time);
   const metaEventTime=Number.isSafeInteger(persistedEventTime)&&persistedEventTime>0 ? persistedEventTime : requestedEventTime;
   const staleSending=delivery.status==='sending'&&deliveryLeaseIsStale(delivery.updated_at);

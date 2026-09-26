@@ -2995,6 +2995,24 @@ test('Meta Purchase retries preserve one durable event timestamp for deduplicati
   assert.doesNotMatch(adminOrderRoute, /Math\.floor\(Date\.now\(\) \/ 1000\)/);
 });
 
+test('consented Purchases remain recoverable when Meta CAPI is temporarily unconfigured', () => {
+  // Meta is intentionally optional for launch readiness. Still create the
+  // durable Purchase ledger before checking its destination so enabling CAPI
+  // later does not depend on reconstructing a payment from Stripe history.
+  const delivery = webhookRoute.slice(
+    webhookRoute.indexOf('export async function deliverMetaPurchase'),
+    webhookRoute.indexOf('export async function deliverPaidOrderSideEffects'),
+  );
+  assert.match(webhookRoute, /function metaPurchaseEligible\(session: Stripe\.Checkout\.Session\)/);
+  assert.doesNotMatch(webhookRoute, /function metaPurchaseConfigured\(/);
+  assert.match(delivery, /if\(!metaPurchaseEligible\(session\)\) return;/);
+  const ledgerInsert = delivery.indexOf("from('meta_purchase_deliveries').insert");
+  const configurationGate = delivery.indexOf('if(!hasRequiredMetaCapiPurchaseConfig()) return;');
+  const providerSend = delivery.indexOf('await sendMetaPurchase(');
+  assert.ok(ledgerInsert >= 0 && configurationGate > ledgerInsert, 'the pending Purchase must exist before configuration is checked');
+  assert.ok(providerSend > configurationGate, 'an unconfigured destination must not be called or fail the paid-order webhook');
+});
+
 test('paid-order email and Meta deliveries are attempted independently', () => {
   // A persistent failure in either external provider must not starve the
   // other's durable delivery attempt. Promise.allSettled guarantees both are
