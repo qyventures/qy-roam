@@ -124,21 +124,21 @@ restore_previous_artifact() {
   # recovery snapshot or report a successful rollback until the old artifact
   # is actually serving the same authenticated readiness contract used for
   # release verification.
-  local rollback_health_config
-  rollback_health_config="$(mktemp /tmp/qyroam-rollback-curl.XXXXXX.conf)"
-  chmod 600 "$rollback_health_config"
-  printf 'header = "Authorization: Bearer %s"\n' "${health_check_token:-}" > "$rollback_health_config"
+  local rollback_health_header
+  rollback_health_header="$(mktemp /tmp/qyroam-rollback-health.XXXXXX.header)"
+  chmod 600 "$rollback_health_header"
+  printf 'Authorization: Bearer %s\n' "${health_check_token:-}" > "$rollback_health_header"
   local rollback_ready=0
   local attempt
   for attempt in {1..15}; do
-    if curl --config "$rollback_health_config" --fail --silent --show-error --max-time "$READINESS_CURL_TIMEOUT_SECONDS" "$HEALTH_URL" |
+    if curl --header "@$rollback_health_header" --fail --silent --show-error --max-time "$READINESS_CURL_TIMEOUT_SECONDS" "$HEALTH_URL" |
        node -e "let body='';process.stdin.on('data',chunk=>body+=chunk).on('end',()=>{const result=JSON.parse(body);if(result.launchReady!==true||result.service!=='qy-roam')process.exit(1)})"; then
       rollback_ready=1
       break
     fi
     sleep 2
   done
-  rm -f "$rollback_health_config"
+  rm -f "$rollback_health_header"
   if [[ "$rollback_ready" -eq 1 ]]; then
     echo "Previous QY Roam artifact restored, restarted, and launch-ready." >&2
     return 0
@@ -174,8 +174,8 @@ set -a
 source "$ENV_FILE"
 set +a
 health_check_token="${HEALTH_CHECK_TOKEN:-}"
-if [[ ${#health_check_token} -lt 24 ]]; then
-  echo "HEALTH_CHECK_TOKEN must be configured with at least 24 characters" >&2
+if ! node -e "const token=process.env.HEALTH_CHECK_TOKEN||'';if(token.length<24||token.length>1024||!/^[\\x20-\\x7e]+$/.test(token))process.exit(1)"; then
+  echo "HEALTH_CHECK_TOKEN must be 24-1024 printable ASCII characters" >&2
   exit 1
 fi
 npm run check:esim-pricing
@@ -198,16 +198,16 @@ if [[ ! "$smoke_port" =~ ^[0-9]+$ ]] || (( smoke_port < 1024 || smoke_port > 655
   exit 1
 fi
 smoke_log="$(mktemp /tmp/qyroam-smoke.XXXXXX.log)"
-smoke_curl_config="$(mktemp /tmp/qyroam-smoke-curl.XXXXXX.conf)"
-chmod 600 "$smoke_log" "$smoke_curl_config"
-printf 'header = "Authorization: Bearer %s"\n' "$health_check_token" > "$smoke_curl_config"
+smoke_health_header="$(mktemp /tmp/qyroam-smoke-health.XXXXXX.header)"
+chmod 600 "$smoke_log" "$smoke_health_header"
+printf 'Authorization: Bearer %s\n' "$health_check_token" > "$smoke_health_header"
 smoke_pid=""
 cleanup_smoke() {
   if [[ -n "$smoke_pid" ]] && kill -0 "$smoke_pid" 2>/dev/null; then
     kill "$smoke_pid" 2>/dev/null || true
     wait "$smoke_pid" 2>/dev/null || true
   fi
-  rm -f "$smoke_log" "$smoke_curl_config"
+  rm -f "$smoke_log" "$smoke_health_header"
 }
 trap 'status=$?; cleanup_smoke; handle_release_exit "$status"' EXIT
 HOSTNAME=127.0.0.1 PORT="$smoke_port" node .next/standalone/server.js >"$smoke_log" 2>&1 &
@@ -217,7 +217,7 @@ for attempt in {1..15}; do
   if ! kill -0 "$smoke_pid" 2>/dev/null; then
     break
   fi
-  if curl --config "$smoke_curl_config" --fail --silent --show-error --max-time "$READINESS_CURL_TIMEOUT_SECONDS" "http://127.0.0.1:${smoke_port}/api/health" |
+  if curl --header "@$smoke_health_header" --fail --silent --show-error --max-time "$READINESS_CURL_TIMEOUT_SECONDS" "http://127.0.0.1:${smoke_port}/api/health" |
      node -e "let body='';process.stdin.on('data',chunk=>body+=chunk).on('end',()=>{const result=JSON.parse(body);if(result.launchReady!==true||result.service!=='qy-roam')process.exit(1)})"; then
     smoke_ready=1
     break
@@ -311,13 +311,13 @@ systemctl --no-pager --full status "$SERVICE_NAME" | sed -n '1,15p'
 
 echo "[11/11] Waiting for application readiness"
 health_output="$(mktemp /tmp/qyroam-health.XXXXXX.json)"
-health_config="$(mktemp /tmp/qyroam-curl.XXXXXX.conf)"
-trap 'status=$?; rm -f "$health_output" "$health_config"; handle_release_exit "$status"' EXIT
-chmod 600 "$health_output" "$health_config"
-printf 'header = "Authorization: Bearer %s"\n' "$health_check_token" > "$health_config"
+health_header="$(mktemp /tmp/qyroam-health.XXXXXX.header)"
+trap 'status=$?; rm -f "$health_output" "$health_header"; handle_release_exit "$status"' EXIT
+chmod 600 "$health_output" "$health_header"
+printf 'Authorization: Bearer %s\n' "$health_check_token" > "$health_header"
 ready=0
 for attempt in {1..15}; do
-  if curl --config "$health_config" --fail --silent --show-error --max-time "$READINESS_CURL_TIMEOUT_SECONDS" "$HEALTH_URL" > "$health_output" &&
+  if curl --header "@$health_header" --fail --silent --show-error --max-time "$READINESS_CURL_TIMEOUT_SECONDS" "$HEALTH_URL" > "$health_output" &&
      node -e "const fs=require('fs');const result=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(result.launchReady!==true)process.exit(1)" "$health_output"; then
     ready=1
     break

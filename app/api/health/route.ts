@@ -4,6 +4,7 @@ import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig, hasRequir
 import { operationalConfig } from '@/lib/operationalConfig';
 import { isProductionQyRoamOrigin } from '@/lib/siteOrigin';
 import { hasOrderIntegritySigningConfig } from '@/lib/orderProvenance';
+import { healthCheckToken } from '@/lib/healthCheckToken';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -12,12 +13,6 @@ export const runtime = 'nodejs';
 // request payload. Bound the comparison loop as a defence in depth measure
 // for deployments that do not enforce a proxy header limit.
 const MAX_HEALTH_AUTHORIZATION_HEADER_LENGTH = 1_024;
-// The configured token participates in the same constant-time comparison as
-// the request header. Bound it too: a malformed environment value must not
-// turn every authenticated readiness probe into work proportional to an
-// arbitrarily large secret.
-const MAX_HEALTH_CHECK_TOKEN_LENGTH = 1_024;
-
 function constantTimeEqual(a: string, b: string) {
   const encoder = new TextEncoder();
   const left = encoder.encode(a), right = encoder.encode(b);
@@ -28,8 +23,8 @@ function constantTimeEqual(a: string, b: string) {
 }
 
 function isAuthorized(req: Request) {
-  const expected = process.env.HEALTH_CHECK_TOKEN;
-  if (!expected || expected.length < 24 || expected.length > MAX_HEALTH_CHECK_TOKEN_LENGTH) return false;
+  const expected = healthCheckToken();
+  if (!expected) return false;
   const supplied = req.headers.get('authorization');
   return Boolean(
     supplied?.startsWith('Bearer ') &&

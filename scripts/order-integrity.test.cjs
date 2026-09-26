@@ -81,6 +81,7 @@ const operationalDate = fs.readFileSync(require.resolve('../lib/operationalDate.
 const smtpClient = fs.readFileSync(require.resolve('../lib/smtp.ts'), 'utf8');
 const webhookRoute = fs.readFileSync(require.resolve('../app/api/stripe-webhook/route.ts'), 'utf8');
 const healthRoute = fs.readFileSync(require.resolve('../app/api/health/route.ts'), 'utf8');
+const healthCheckToken = fs.readFileSync(require.resolve('../lib/healthCheckToken.ts'), 'utf8');
 const successPage = fs.readFileSync(require.resolve('../app/success/page.tsx'), 'utf8');
 const orderConfirmationRefresh = fs.readFileSync(require.resolve('../components/OrderConfirmationRefresh.tsx'), 'utf8');
 const metaPurchase = fs.readFileSync(require.resolve('../components/MetaPurchase.tsx'), 'utf8');
@@ -3367,8 +3368,10 @@ test('admin and authenticated health checks bound credential inputs before compa
   assert.match(middleware, /auth\.length <= MAX_BASIC_AUTH_HEADER_LENGTH/);
   assert.match(middleware, /decoded\.length <= MAX_BASIC_AUTH_DECODED_LENGTH/);
   assert.match(healthRoute, /MAX_HEALTH_AUTHORIZATION_HEADER_LENGTH = 1_024/);
-  assert.match(healthRoute, /MAX_HEALTH_CHECK_TOKEN_LENGTH = 1_024/);
-  assert.match(healthRoute, /expected\.length > MAX_HEALTH_CHECK_TOKEN_LENGTH/);
+  assert.match(healthRoute, /const expected = healthCheckToken\(\)/);
+  assert.match(healthCheckToken, /MAX_HEALTH_CHECK_TOKEN_LENGTH = 1_024/);
+  assert.match(healthCheckToken, /value\.length > MAX_HEALTH_CHECK_TOKEN_LENGTH/);
+  assert.match(healthCheckToken, /\^\[\\x20-\\x7e\]\+\$/);
   assert.match(healthRoute, /supplied\.length <= MAX_HEALTH_AUTHORIZATION_HEADER_LENGTH/);
 });
 

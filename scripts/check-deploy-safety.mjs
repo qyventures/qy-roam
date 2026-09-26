@@ -5,6 +5,8 @@ const deploy = readFileSync(new URL('../deploy/deploy.sh', import.meta.url), 'ut
 const service = readFileSync(new URL('../deploy/qy-roam.service', import.meta.url), 'utf8');
 const nginx = readFileSync(new URL('../deploy/nginx-qyroam.conf', import.meta.url), 'utf8');
 const productionReadiness = readFileSync(new URL('../lib/productionReadiness.ts', import.meta.url), 'utf8');
+const healthRoute = readFileSync(new URL('../app/api/health/route.ts', import.meta.url), 'utf8');
+const healthCheckToken = readFileSync(new URL('../lib/healthCheckToken.ts', import.meta.url), 'utf8');
 const standalonePackager = readFileSync(new URL('./package-standalone.mjs', import.meta.url), 'utf8');
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
@@ -49,7 +51,7 @@ assert.ok(
 );
 assert.match(deploy, /cutover_attempted=1\nif ! systemctl restart/);
 assert.match(deploy, /if \[\[ "\$cutover_attempted" -eq 0 \]\]; then/);
-assert.match(deploy, /qyroam-rollback-curl/);
+assert.match(deploy, /qyroam-rollback-health/);
 assert.match(deploy, /rollback_ready=0/);
 assert.match(deploy, /result\.launchReady!==true\|\|result\.service!=='qy-roam'/);
 assert.match(deploy, /Previous QY Roam artifact restored, restarted, and launch-ready/);
@@ -75,9 +77,9 @@ assert.ok(
 assert.match(deploy, /node \.next\/standalone\/server\.js/);
 assert.match(deploy, /HOSTNAME=127\.0\.0\.1 PORT="\$smoke_port"/);
 assert.match(deploy, /http:\/\/127\.0\.0\.1:\$\{smoke_port\}\/api\/health/);
-assert.match(deploy, /smoke_curl_config=/);
-assert.match(deploy, /chmod 600 "\$smoke_log" "\$smoke_curl_config"/);
-assert.match(deploy, /curl --config "\$smoke_curl_config" --fail --silent --show-error --max-time "\$READINESS_CURL_TIMEOUT_SECONDS"/);
+assert.match(deploy, /smoke_health_header=/);
+assert.match(deploy, /chmod 600 "\$smoke_log" "\$smoke_health_header"/);
+assert.match(deploy, /curl --header "@\$smoke_health_header" --fail --silent --show-error --max-time "\$READINESS_CURL_TIMEOUT_SECONDS"/);
 assert.match(deploy, /result\.launchReady!==true\|\|result\.service!=='qy-roam'/);
 assert.match(deploy, /Built QY Roam artifact failed its isolated startup smoke test/);
 assert.match(standalonePackager, /resolve\(root, 'public'\)/);
@@ -129,7 +131,20 @@ assert.ok(
   readinessCurlTimeout * 1_000 > readinessProbeTimeout,
   'deployment readiness deadline must exceed the application probe deadline',
 );
-assert.match(deploy, /curl --config "\$health_config" --fail --silent --show-error --max-time "\$READINESS_CURL_TIMEOUT_SECONDS"/);
+assert.match(deploy, /curl --header "@\$health_header" --fail --silent --show-error --max-time "\$READINESS_CURL_TIMEOUT_SECONDS"/);
+
+// Readiness credentials are copied into protected curl header files during
+// smoke, live, and rollback checks. The application and wrapper must reject
+// control characters before that write so one environment value cannot add a
+// second header, while the secret itself never appears in curl's argv or
+// config language.
+assert.match(healthRoute, /healthCheckToken\(\)/);
+assert.match(healthCheckToken, /value\.length < 24/);
+assert.match(healthCheckToken, /value\.length > MAX_HEALTH_CHECK_TOKEN_LENGTH/);
+assert.match(healthCheckToken, /\^\[\\x20-\\x7e\]\+\$/);
+assert.match(deploy, /token\.length<24\|\|token\.length>1024/);
+assert.match(deploy, /printf 'Authorization: Bearer %s\\n'/);
+assert.doesNotMatch(deploy, /header = "Authorization: Bearer/);
 
 // Checkout throttling and consented CAPI attribution use the single client IP
 // written by Nginx. The app must therefore never be reachable directly on a
