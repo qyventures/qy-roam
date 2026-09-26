@@ -2637,8 +2637,9 @@ test('admin recovery only resumes actionable fulfilment while preserving consent
   assert.match(adminOrderRoute, /validateQyRoamSession\(session\)/);
   assert.match(adminOrderRoute, /fulfilmentNotificationActionable\(validation\.productType, order\.fulfilment_status\)/);
   assert.match(adminOrderRoute, /const metaRequested = order\.measurement_consent === 'accepted'/);
-  assert.match(adminOrderRoute, /if \(metaRequested && !hasRequiredMetaCapiPurchaseConfig\(\)\)/);
-  assert.match(adminOrderRoute, /const retryMeta = metaRequested/);
+  assert.match(adminOrderRoute, /const metaConfigured = hasRequiredMetaCapiPurchaseConfig\(\)/);
+  assert.match(adminOrderRoute, /if \(!retryFulfilment && metaRequested && !metaConfigured\)/);
+  assert.match(adminOrderRoute, /const retryMeta = metaRequested && metaConfigured/);
   assert.match(adminOrderRoute, /deliverFulfilmentNotification\(supabase, session\)/);
   assert.match(adminOrderRoute, /deliverMetaPurchase\(supabase, session, metaEventTime!\)/);
   assert.match(adminOrderActions, /Retry order deliveries/);
@@ -3023,6 +3024,20 @@ test('paid-order email and Meta deliveries are attempted independently', () => {
   assert.match(adminOrderRoute, /Promise\.allSettled\(\[/);
   assert.match(adminOrderRoute, /retryFulfilment \? \[deliverFulfilmentNotification\(supabase, session\)\]/);
   assert.match(adminOrderRoute, /retryMeta \? \[deliverMetaPurchase\(supabase, session, metaEventTime!\)\]/);
+});
+
+test('admin fulfilment recovery is not blocked by optional Meta configuration', () => {
+  // A consented order can require both an operations email and a CAPI event.
+  // If Meta is temporarily unconfigured, the independently actionable email
+  // must still be retried while the durable Purchase ledger remains pending.
+  const recovery = adminOrderRoute.slice(
+    adminOrderRoute.indexOf('const retryFulfilment ='),
+    adminOrderRoute.indexOf('const confirmedAtMs='),
+  );
+  assert.match(recovery, /const metaConfigured = hasRequiredMetaCapiPurchaseConfig\(\);/);
+  assert.match(recovery, /if \(!retryFulfilment && metaRequested && !metaConfigured\)/);
+  assert.match(recovery, /const retryMeta = metaRequested && metaConfigured;/);
+  assert.doesNotMatch(recovery, /if \(metaRequested && !hasRequiredMetaCapiPurchaseConfig\(\)\)/);
 });
 
 test('Meta CAPI requires a complete destination and admin recovery never reports a no-op retry', () => {

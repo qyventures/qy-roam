@@ -276,13 +276,16 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     const retryFulfilment = fulfilmentNotificationActionable(validation.productType, order.fulfilment_status);
     const metaRequested = order.measurement_consent === 'accepted' && session.metadata?.measurement_consent === 'accepted';
     // The webhook intentionally treats Meta as optional so a missing campaign
-    // integration cannot block customer fulfilment. An explicit admin retry,
-    // however, must never claim it recovered a Purchase event when no valid
-    // CAPI destination exists.
-    if (metaRequested && !hasRequiredMetaCapiPurchaseConfig()) {
+    // integration cannot block customer fulfilment. Preserve that separation
+    // during manual recovery too: a consented Purchase can remain pending
+    // while an independently actionable operations email is retried. When
+    // Meta is the only remaining delivery, fail explicitly rather than claim
+    // that an unconfigured CAPI destination was recovered.
+    const metaConfigured = hasRequiredMetaCapiPurchaseConfig();
+    if (!retryFulfilment && metaRequested && !metaConfigured) {
       return NextResponse.json({ error: 'Meta CAPI is not configured, so this consented Purchase cannot be retried yet.' }, { status: 503 });
     }
-    const retryMeta = metaRequested;
+    const retryMeta = metaRequested && metaConfigured;
     if (!retryFulfilment && !retryMeta) {
       return NextResponse.json({ error: 'This order no longer needs a fulfilment or consented analytics delivery retry' }, { status: 409 });
     }
