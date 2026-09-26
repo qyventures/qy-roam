@@ -1,4 +1,16 @@
-export const metadata = { title: 'FAQ | QY Roam', description: 'Frequently asked questions about QY Roam pocket WiFi rental, delivery, use and returns.' };
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = {
+  title: 'FAQ',
+  description: 'Frequently asked questions about QY Roam pocket WiFi rental, travel eSIMs, delivery, use and returns.',
+  alternates: { canonical: '/faq' },
+  openGraph: {
+    type: 'website',
+    url: 'https://qyroam.com/faq',
+    title: 'QY Roam FAQ | eSIM & Pocket WiFi Help',
+    description: 'Answers about QY Roam travel eSIMs, Pocket WiFi booking, delivery, use and returns.',
+  },
+};
 
 const faqs = [
   ['How does QY Roam work?', 'Choose your destination and travel dates, reserve your pocket WiFi online, and we will courier it to your Singapore delivery address before departure. After your trip, follow the return instructions supplied with your order.'],

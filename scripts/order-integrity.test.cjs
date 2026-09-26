@@ -66,6 +66,7 @@ const esimCheckoutRoute = fs.readFileSync(require.resolve('../app/api/esim-check
 const wifiCheckoutRoute = fs.readFileSync(require.resolve('../app/api/checkout/route.ts'), 'utf8');
 const availabilityRoute = fs.readFileSync(require.resolve('../app/api/availability/route.ts'), 'utf8');
 const esimPage = fs.readFileSync(require.resolve('../app/esim/page.tsx'), 'utf8');
+const esimLayout = fs.readFileSync(require.resolve('../app/esim/layout.tsx'), 'utf8');
 const homePage = fs.readFileSync(require.resolve('../app/page.tsx'), 'utf8');
 const manualOrderForm = fs.readFileSync(require.resolve('../components/ManualOrderForm.tsx'), 'utf8');
 const adminOpsForms = fs.readFileSync(require.resolve('../components/AdminOpsForms.tsx'), 'utf8');
@@ -98,6 +99,9 @@ const nextConfig = fs.readFileSync(require.resolve('../next.config.mjs'), 'utf8'
 const supabaseAdmin = fs.readFileSync(require.resolve('../lib/supabaseAdmin.ts'), 'utf8');
 const robots = fs.readFileSync(require.resolve('../app/robots.ts'), 'utf8');
 const sitemap = fs.readFileSync(require.resolve('../app/sitemap.ts'), 'utf8');
+const faqPage = fs.readFileSync(require.resolve('../app/faq/page.tsx'), 'utf8');
+const privacyPage = fs.readFileSync(require.resolve('../app/privacy/page.tsx'), 'utf8');
+const termsPage = fs.readFileSync(require.resolve('../app/terms/page.tsx'), 'utf8');
 
 const requestId = 'checkout_request_123456';
 
@@ -3403,6 +3407,24 @@ test('crawler directives keep customer checkout capability URLs out of discovery
   // crawlers to recrawl unchanged pages and makes the sitemap signal noisy.
   assert.doesNotMatch(sitemap, /lastModified:\s*new Date\(\)/);
   assert.doesNotMatch(sitemap, /path:\s*'\/(?:success|booking)'/);
+});
+
+test('every indexed secondary page publishes its own canonical and social URL', () => {
+  // Root layout metadata is inherited. Without a page override, an indexed
+  // secondary page would emit the homepage canonical/Open Graph URL and ask
+  // search engines to consolidate that useful content into `/`.
+  for (const [source, path] of [
+    [esimLayout, '/esim'],
+    [faqPage, '/faq'],
+    [privacyPage, '/privacy'],
+    [termsPage, '/terms'],
+  ]) {
+    assert.match(source, new RegExp(`alternates:\\s*\\{\\s*canonical:\\s*'${path}'\\s*\\}`));
+    assert.match(source, new RegExp(`url:\\s*'https:\\/\\/qyroam\\.com${path}'`));
+  }
+  // The shared title template supplies the brand suffix exactly once.
+  assert.match(faqPage, /title:\s*'FAQ'/);
+  assert.doesNotMatch(faqPage, /title:\s*'FAQ \| QY Roam'/);
 });
 
 test('production CSP does not permit JavaScript eval', () => {

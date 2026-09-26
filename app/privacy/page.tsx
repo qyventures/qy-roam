@@ -1,3 +1,17 @@
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = {
+  title: 'Privacy Notice',
+  description: 'How QY Roam collects, uses, discloses and protects personal data for travel eSIM and Pocket WiFi services.',
+  alternates: { canonical: '/privacy' },
+  openGraph: {
+    type: 'website',
+    url: 'https://qyroam.com/privacy',
+    title: 'Privacy Notice | QY Roam',
+    description: 'How QY Roam handles personal data for travel eSIM and Pocket WiFi services.',
+  },
+};
+
 export default function PrivacyPage() {
   return <main className="wrap section legal">
     <span className="eyebrow">Privacy</span><h1>Privacy Notice</h1>

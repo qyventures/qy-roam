@@ -1,3 +1,17 @@
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = {
+  title: 'Service Terms',
+  description: 'Terms for QY Roam travel eSIM purchases and Pocket WiFi rentals, including delivery, returns and support.',
+  alternates: { canonical: '/terms' },
+  openGraph: {
+    type: 'website',
+    url: 'https://qyroam.com/terms',
+    title: 'Service Terms | QY Roam',
+    description: 'Terms for QY Roam travel eSIM purchases and Pocket WiFi rentals.',
+  },
+};
+
 export default function TermsPage() {
   return <main className="wrap section legal">
     <span className="eyebrow">Terms</span><h1>QY Roam Service Terms</h1>
