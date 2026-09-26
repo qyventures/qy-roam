@@ -25,6 +25,7 @@ type SmtpOptions = {
 // on the paid-order webhook path: a malformed relay must not turn one pending
 // fulfilment notification into an avoidable worker-memory exhaustion.
 const MAX_SMTP_RESPONSE_BYTES = 64 * 1024;
+const MIN_SMTP_TLS_VERSION = 'TLSv1.2' as const;
 
 // Fulfilment delivery is retried independently from checkout, including for
 // sessions created before a deployment changes its environment validation.
@@ -133,6 +134,42 @@ async function command(socket: net.Socket | tls.TLSSocket, value: string, expect
   return waitForResponse(socket, expected);
 }
 
+function smtpTlsOptions(host: string) {
+  return {
+    // SNI and certificate hostname verification must use the configured SMTP
+    // host on both implicit TLS and STARTTLS connections. TLS 1.0/1.1 are no
+    // longer suitable for a transport carrying paid-order PII and relay
+    // credentials, even if an old provider still offers them.
+    servername: host,
+    minVersion: MIN_SMTP_TLS_VERSION,
+    rejectUnauthorized: true,
+  } satisfies tls.ConnectionOptions;
+}
+
+function waitForTlsHandshake(socket: tls.TLSSocket) {
+  if (socket.authorized) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      socket.off('secureConnect', onSecureConnect);
+      socket.off('error', onError);
+      socket.off('timeout', onTimeout);
+    };
+    const onSecureConnect = () => {
+      cleanup();
+      // rejectUnauthorized normally turns this into an `error`, but retain an
+      // explicit authorization check at the irreversible credential boundary
+      // in case a runtime/provider edge case emits secureConnect first.
+      if (!socket.authorized) reject(new Error('SMTP TLS certificate was not authorized'));
+      else resolve();
+    };
+    const onError = (error: Error) => { cleanup(); reject(error); };
+    const onTimeout = () => { cleanup(); reject(new Error('SMTP TLS handshake timed out')); };
+    socket.once('secureConnect', onSecureConnect);
+    socket.once('error', onError);
+    socket.once('timeout', onTimeout);
+  });
+}
+
 export async function sendSmtpMail(options: SmtpOptions) {
   const host = safeSmtpHost(options.host);
   const from = normalizedMailbox(options.from, 'from');
@@ -143,7 +180,7 @@ export async function sendSmtpMail(options: SmtpOptions) {
   if (!Number.isFinite(timeoutMs) || timeoutMs < 1) throw new Error('Invalid SMTP timeout');
   const safeOptions = { ...options, host, from, to, subject };
   let activeSocket: net.Socket | tls.TLSSocket = options.secure
-    ? tls.connect({ host, port: options.port, servername: host })
+    ? tls.connect({ host, port: options.port, ...smtpTlsOptions(host) })
     : net.connect({ host, port: options.port });
   activeSocket.setTimeout(timeoutMs);
   // Bound the whole SMTP conversation, not every command independently. Without
@@ -152,6 +189,7 @@ export async function sendSmtpMail(options: SmtpOptions) {
   const deadline = setTimeout(() => activeSocket.destroy(new Error('SMTP delivery timed out')), timeoutMs);
 
   try {
+    if (activeSocket instanceof tls.TLSSocket) await waitForTlsHandshake(activeSocket);
     await waitForResponse(activeSocket, [220]);
     await command(activeSocket, `EHLO qyroam.com`, [250]);
 
@@ -164,8 +202,14 @@ export async function sendSmtpMail(options: SmtpOptions) {
     // leaves the durable delivery record retryable rather than leaking PII.
     if (!options.secure) {
       await command(activeSocket, 'STARTTLS', [220]);
-      activeSocket = tls.connect({ socket: activeSocket, servername: host });
-      activeSocket.setTimeout(timeoutMs);
+      const upgradedSocket = tls.connect({ socket: activeSocket, ...smtpTlsOptions(host) });
+      activeSocket = upgradedSocket;
+      upgradedSocket.setTimeout(timeoutMs);
+      // Node can buffer writes made before `secureConnect`, but queuing AUTH
+      // dialogue before certificate authorization makes the security boundary
+      // implicit and runtime-dependent. Do not send another byte until the
+      // negotiated channel is explicitly known to be authenticated.
+      await waitForTlsHandshake(upgradedSocket);
       await command(activeSocket, 'EHLO qyroam.com', [250]);
     }
 

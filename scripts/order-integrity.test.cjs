@@ -1484,6 +1484,18 @@ test('SMTP transport independently validates the envelope and message header bou
   assert.match(webhookRoute, /to=\(process\.env\.ORDER_FULFILMENT_EMAIL\|\|process\.env\.FULFILMENT_TO\|\|''\)\.trim\(\)/);
 });
 
+test('SMTP authentication waits for an authorized modern TLS channel', () => {
+  assert.match(smtpClient, /const MIN_SMTP_TLS_VERSION = 'TLSv1\.2'/);
+  assert.match(smtpClient, /rejectUnauthorized: true/);
+  assert.match(smtpClient, /if \(!socket\.authorized\) reject\(new Error\('SMTP TLS certificate was not authorized'\)\)/);
+  assert.match(smtpClient, /const upgradedSocket = tls\.connect\(\{ socket: activeSocket, \.\.\.smtpTlsOptions\(host\) \}\);/);
+  const startTls = smtpClient.indexOf("await command(activeSocket, 'STARTTLS', [220])");
+  const handshake = smtpClient.indexOf('await waitForTlsHandshake(upgradedSocket)', startTls);
+  const auth = smtpClient.indexOf("await command(activeSocket, 'AUTH LOGIN', [334])");
+  assert.ok(startTls >= 0 && handshake > startTls && auth > handshake,
+    'STARTTLS must complete certificate authorization before SMTP credentials are sent');
+});
+
 test('checkout readiness rejects an SMTP host the fulfilment transport would reject', () => {
   assert.match(smtpClient, /export function isSafeSmtpHost\(value: string \| undefined\)/);
   assert.match(smtpClient, /host\.length > 253/);
