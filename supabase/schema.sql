@@ -554,6 +554,37 @@ alter table public.stripe_events add column if not exists last_error text;
 alter table public.stripe_events drop constraint if exists stripe_events_attempts_check;
 alter table public.stripe_events add constraint stripe_events_attempts_check
   check (attempts > 0) not valid;
+-- The webhook applies these boundaries before it claims an event, but this
+-- ledger is also reachable by service-role repair jobs and future workers.
+-- A malformed direct insert could otherwise occupy the primary key of a real
+-- Stripe event, make the webhook treat a different event type/session as a
+-- permanent identity conflict, or leave an operations row that can never be
+-- safely replayed. Keep the database contract identical to the application:
+-- the stored event id includes QY Roam's namespace prefix, Checkout Session
+-- ids are bounded canonical Stripe ids, and only subscribed terminal event
+-- types can enter this idempotency ledger. NOT VALID preserves any historical
+-- exceptions for reconciliation while protecting every new or changed row.
+alter table public.stripe_events drop constraint if exists stripe_events_event_id_check;
+alter table public.stripe_events add constraint stripe_events_event_id_check check (
+  event_id ~ '^stripe:evt_[A-Za-z0-9]{8,96}$'
+) not valid;
+alter table public.stripe_events drop constraint if exists stripe_events_session_id_check;
+alter table public.stripe_events add constraint stripe_events_session_id_check check (
+  coalesce(
+    length(stripe_session_id) between 12 and 255 and
+    stripe_session_id ~ '^cs_(test|live)_[A-Za-z0-9]+$',
+    false
+  )
+) not valid;
+alter table public.stripe_events drop constraint if exists stripe_events_event_type_check;
+alter table public.stripe_events add constraint stripe_events_event_type_check check (
+  event_type in (
+    'checkout.session.completed',
+    'checkout.session.async_payment_succeeded',
+    'checkout.session.async_payment_failed',
+    'checkout.session.expired'
+  )
+) not valid;
 alter table public.stripe_events enable row level security;
 
 -- Stripe's event id is the durable idempotency identity. The webhook checks
@@ -928,7 +959,12 @@ as $$
       'orders_pocket_wifi_dispatch_evidence_check',
       'orders_pocket_wifi_return_evidence_check'
     )) = 11 and
-    (select count(*) from pg_constraint where conrelid = 'public.stripe_events'::regclass and conname = 'stripe_events_attempts_check') = 1 and
+    (select count(*) from pg_constraint where conrelid = 'public.stripe_events'::regclass and conname in (
+      'stripe_events_attempts_check',
+      'stripe_events_event_id_check',
+      'stripe_events_session_id_check',
+      'stripe_events_event_type_check'
+    )) = 4 and
     (select count(*) from pg_constraint where conrelid = 'public.fulfilment_notifications'::regclass and conname in (
       'fulfilment_notifications_status_check',
       'fulfilment_notifications_attempts_check',

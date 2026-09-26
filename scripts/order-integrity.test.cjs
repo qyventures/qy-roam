@@ -2957,6 +2957,17 @@ test('Stripe event idempotency records stay bound to one event type and Checkout
   assert.match(schema, /create trigger qy_enforce_stripe_event_identity_immutability\s+before update of event_id, event_type, stripe_session_id on public\.stripe_events/);
 });
 
+test('Stripe idempotency ledger rejects malformed direct service-role identities', () => {
+  // The public webhook validates these values before the RPC, but migration,
+  // repair, and future worker code can write with the service role directly.
+  // Keep those writers from poisoning a genuine event primary key or adding
+  // an event that the recovery UI/webhook can never safely replay.
+  assert.match(schema, /stripe_events add constraint stripe_events_event_id_check check \(\s*event_id ~ '\^stripe:evt_\[A-Za-z0-9\]\{8,96\}\$'\s*\) not valid/);
+  assert.match(schema, /stripe_events add constraint stripe_events_session_id_check check \(\s*coalesce\(\s*length\(stripe_session_id\) between 12 and 255 and\s*stripe_session_id ~ '\^cs_\(test\|live\)_\[A-Za-z0-9\]\+\$',\s*false\s*\)\s*\) not valid/);
+  assert.match(schema, /stripe_events add constraint stripe_events_event_type_check check \(\s*event_type in \(\s*'checkout\.session\.completed',\s*'checkout\.session\.async_payment_succeeded',\s*'checkout\.session\.async_payment_failed',\s*'checkout\.session\.expired'\s*\)\s*\) not valid/);
+  assert.match(schema, /conname in \(\s*'stripe_events_attempts_check',\s*'stripe_events_event_id_check',\s*'stripe_events_session_id_check',\s*'stripe_events_event_type_check'\s*\)\) = 4/);
+});
+
 test('processed Stripe webhook events remain final in the durable idempotency ledger', () => {
   assert.match(schema, /create or replace function public\.qy_enforce_stripe_event_lifecycle\(\)/);
   assert.match(schema, /processed Stripe event is immutable/);
