@@ -54,6 +54,7 @@ const { safeStripeCheckoutUrl } = require('../lib/stripeCheckoutUrl.ts');
 const { metaCapiPurchaseAcknowledged } = require('../lib/metaCapiAcknowledgement.ts');
 const { stripeCheckoutEventStateIssue } = require('../lib/stripeCheckoutEventState.ts');
 const { contentLengthMatches, declaredContentLength } = require('../lib/contentLength.ts');
+const { paidFulfilmentDetailsIssue } = require('../lib/paidFulfilmentDetails.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { hasOrderIntegritySecret, hasOrderIntegritySigningConfig, signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -727,13 +728,41 @@ test('eSIM fulfilment preserves the exact plan identity and data allowance', () 
 });
 
 test('paid orders fail into the durable webhook recovery ledger when fulfilment contact data is incomplete', () => {
-  assert.match(webhookRoute, /function paidFulfilmentDetailsIssue\(session:Stripe\.Checkout\.Session,productType:'esim'\|'pocket_wifi'\)/);
-  assert.match(webhookRoute, /Paid order is missing a valid customer email/);
-  assert.match(webhookRoute, /if\(!isSafeSmtpMailbox\(email\)\)/);
-  assert.match(webhookRoute, /import \{ isSafeSmtpMailbox, sendSmtpMail \} from '@\/lib\/smtp';/);
-  assert.match(webhookRoute, /Paid Pocket WiFi order is missing a valid customer phone number/);
-  assert.match(webhookRoute, /shipping\?\.country!=='SG'/);
-  assert.match(webhookRoute, /Paid Pocket WiFi order is missing a complete Singapore delivery address/);
+  const paidEsim = {
+    payment_status: 'paid',
+    customer_details: { email: 'traveller@example.com', phone: null },
+    shipping_details: null,
+  };
+  assert.equal(paidFulfilmentDetailsIssue(paidEsim, 'esim'), null);
+  assert.equal(
+    paidFulfilmentDetailsIssue({ ...paidEsim, customer_details: { email: 'not-an-email', phone: null } }, 'esim'),
+    'Paid order is missing a valid customer email',
+  );
+
+  const paidWifi = {
+    payment_status: 'paid',
+    customer_details: { email: 'traveller@example.com', phone: '+65 8032 7183' },
+    shipping_details: { address: { country: 'SG', line1: '1 Airport Boulevard', postal_code: '819642' } },
+  };
+  assert.equal(paidFulfilmentDetailsIssue(paidWifi, 'pocket_wifi'), null);
+  assert.equal(
+    paidFulfilmentDetailsIssue({ ...paidWifi, customer_details: { ...paidWifi.customer_details, phone: '123' } }, 'pocket_wifi'),
+    'Paid Pocket WiFi order is missing a valid customer phone number',
+  );
+  assert.equal(
+    paidFulfilmentDetailsIssue({ ...paidWifi, shipping_details: { address: { country: 'MY', line1: '1 Road', postal_code: '12345' } } }, 'pocket_wifi'),
+    'Paid Pocket WiFi order is missing a complete Singapore delivery address',
+  );
+  assert.equal(
+    paidFulfilmentDetailsIssue({ ...paidWifi, shipping_details: { address: { country: 'SG', line1: ' ', postal_code: '819642' } } }, 'pocket_wifi'),
+    'Paid Pocket WiFi order is missing a complete Singapore delivery address',
+  );
+  assert.equal(
+    paidFulfilmentDetailsIssue({ ...paidWifi, payment_status: 'unpaid', customer_details: null, shipping_details: null }, 'pocket_wifi'),
+    null,
+  );
+
+  assert.match(webhookRoute, /import \{ paidFulfilmentDetailsIssue \} from '@\/lib\/paidFulfilmentDetails';/);
 
   const paidValidationAt = webhookRoute.indexOf('const validation=validateQyRoamSession(sessionForEvent)');
   const paidClaimAt = webhookRoute.lastIndexOf("const eventClaimId=`stripe:${stripeEventId}`", paidValidationAt);

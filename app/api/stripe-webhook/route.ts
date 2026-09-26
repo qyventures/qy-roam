@@ -3,7 +3,7 @@ import Stripe from 'stripe';
 import { createStripeClient } from '../../../lib/stripeClient';
 import crypto from 'crypto';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
-import { isSafeSmtpMailbox, sendSmtpMail } from '@/lib/smtp';
+import { sendSmtpMail } from '@/lib/smtp';
 import { getMetaCapiToken, hasRequiredMetaCapiPurchaseConfig, metaPixelId } from '@/lib/runtimeConfig';
 import { validateQyRoamSession } from '@/lib/qyRoamSession';
 import { validCheckoutRequestId } from '@/lib/checkoutValidation';
@@ -25,6 +25,7 @@ import { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookChec
 import { metaCapiPurchaseAcknowledged } from '@/lib/metaCapiAcknowledgement';
 import { stripeCheckoutEventStateIssue, type QyRoamCheckoutEventType } from '@/lib/stripeCheckoutEventState';
 import { contentLengthMatches, declaredContentLength } from '@/lib/contentLength';
+import { paidFulfilmentDetailsIssue } from '@/lib/paidFulfilmentDetails';
 
 export const runtime = 'nodejs';
 
@@ -124,33 +125,6 @@ function sha256(value?: string | null) { return value ? crypto.createHash('sha25
 function normalizeEmail(value?: string | null) { return value?.trim().toLowerCase(); }
 function normalizePhone(value?: string | null) { if (!value) return undefined; const digits=value.replace(/\D/g,''); return digits||undefined; }
 function fulfilmentMessageId(sessionId:string) { return `<qyroam-${crypto.createHash('sha256').update(sessionId).digest('hex').slice(0,32)}@qyroam.com>`; }
-
-// Stripe Checkout normally guarantees the fields requested when the Session
-// was created, but the signed completion event is the final hand-off into
-// operations. Do not create an apparently fulfilable paid order if that
-// hand-off is incomplete. In particular, an eSIM without an email address has
-// no digital delivery destination, while a Pocket WiFi order needs both a
-// Singapore delivery address and a phone number for courier coordination.
-// This runs after the event claim so any anomaly is retained in stripe_events
-// with the affected Checkout Session id for operator recovery.
-function paidFulfilmentDetailsIssue(session:Stripe.Checkout.Session,productType:'esim'|'pocket_wifi') {
-  if(session.payment_status!=='paid') return null;
-  const email=session.customer_details?.email?.trim();
-  // Stripe Checkout validates its email field, but this is the final
-  // fulfilment boundary and can also process historical or manually repaired
-  // Checkout Sessions. Require the same safe mailbox shape used by the SMTP
-  // transport so an eSIM order is never presented to staff as deliverable
-  // when its only customer contact cannot receive a fulfilment email.
-  if(!isSafeSmtpMailbox(email)) return 'Paid order is missing a valid customer email';
-  if(productType==='esim') return null;
-  const phone=normalizePhone(session.customer_details?.phone);
-  if(!phone||phone.length<7||phone.length>15) return 'Paid Pocket WiFi order is missing a valid customer phone number';
-  const shipping=session.shipping_details?.address;
-  if(shipping?.country!=='SG'||!shipping.line1?.trim()||!shipping.postal_code?.trim()) {
-    return 'Paid Pocket WiFi order is missing a complete Singapore delivery address';
-  }
-  return null;
-}
 
 const DELIVERY_TIMEOUT_MS=20_000;
 // Meta retires Graph API versions on a rolling schedule. Keep this explicit
