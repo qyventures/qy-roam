@@ -65,6 +65,16 @@ export async function fetchSupabaseWithTimeout(
   const timeoutError = new Error('Supabase request timed out');
   const abortFromRequest = () => controller.abort(requestSignal?.reason);
   let cleanedUp = false;
+  let rejectDeadline: ((reason: Error) => void) | undefined;
+
+  // Aborting the fetch is normally enough to reject an in-flight body read,
+  // but the custom fetch boundary can also be backed by a proxy/runtime stream
+  // that does not promptly observe AbortSignal. Race the header request and
+  // every body read against one explicit deadline so an order-critical worker
+  // is released even when that upstream stream never settles.
+  const deadline = new Promise<never>((_, reject) => {
+    rejectDeadline = reject;
+  });
 
   const cleanup = () => {
     if (cleanedUp) return;
@@ -76,10 +86,16 @@ export async function fetchSupabaseWithTimeout(
   if (requestSignal?.aborted) abortFromRequest();
   else requestSignal?.addEventListener('abort', abortFromRequest, { once: true });
 
-  const timeout = setTimeout(() => controller.abort(timeoutError), timeoutMs);
+  const timeout = setTimeout(() => {
+    controller.abort(timeoutError);
+    rejectDeadline?.(timeoutError);
+  }, timeoutMs);
   let response: Response;
   try {
-    response = await fetch(input, { ...init, signal: controller.signal });
+    response = await Promise.race([
+      fetch(input, { ...init, signal: controller.signal }),
+      deadline,
+    ]);
   } catch (error) {
     cleanup();
     throw error;
@@ -108,7 +124,7 @@ export async function fetchSupabaseWithTimeout(
   const body = new ReadableStream<Uint8Array>({
     async pull(streamController) {
       try {
-        const chunk = await reader.read();
+        const chunk = await Promise.race([reader.read(), deadline]);
         if (chunk.done) {
           cleanup();
           streamController.close();

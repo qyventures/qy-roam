@@ -3344,7 +3344,8 @@ test('Supabase order-critical requests use a bounded shared transport', async ()
   assert.equal(SUPABASE_REQUEST_TIMEOUT_MS, 15_000);
   assert.equal(SUPABASE_RESPONSE_MAX_BYTES, 8 * 1024 * 1024);
   assert.match(supabaseAdmin, /global: \{ fetch: fetchSupabaseWithTimeout \}/);
-  assert.match(supabaseAdmin, /const timeout = setTimeout\(\(\) => controller\.abort\(timeoutError\), timeoutMs\)/);
+  assert.match(supabaseAdmin, /const timeout = setTimeout\(\(\) => \{[\s\S]*?controller\.abort\(timeoutError\);[\s\S]*?rejectDeadline\?\.\(timeoutError\);[\s\S]*?\}, timeoutMs\)/);
+  assert.match(supabaseAdmin, /Promise\.race\(\[reader\.read\(\), deadline\]\)/);
   assert.match(supabaseAdmin, /requestSignal\?\.addEventListener\('abort', abortFromRequest, \{ once: true \}\)/);
 
   const originalFetch = global.fetch;
@@ -3407,6 +3408,20 @@ test('Supabase order-critical requests use a bounded shared transport', async ()
   }), { status: 200, headers: { 'content-type': 'application/json' } });
   try {
     const response = await fetchSupabaseWithTimeout('https://supabase.example/rest/v1/orders', undefined, 5);
+    await assert.rejects(() => response.text(), /Supabase request timed out/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+
+  // The deadline must not depend on the response stream implementing abort.
+  // A broken proxy/runtime stream can leave read() pending forever even after
+  // fetch's AbortSignal fires; the wrapper still has to release the checkout
+  // or webhook worker at the configured boundary.
+  global.fetch = async () => new Response(new ReadableStream({
+    pull() { return new Promise(() => {}); },
+  }), { status: 200 });
+  try {
+    const response = await fetchSupabaseWithTimeout('https://supabase.example/rest/v1/orders', undefined, 20);
     await assert.rejects(() => response.text(), /Supabase request timed out/);
   } finally {
     global.fetch = originalFetch;
