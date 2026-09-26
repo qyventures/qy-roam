@@ -133,6 +133,26 @@ assert.ok(
 );
 assert.match(deploy, /curl --header "@\$health_header" --fail --silent --show-error --max-time "\$READINESS_CURL_TIMEOUT_SECONDS"/);
 
+// A healthy loopback process is not sufficient for a sales-ready release:
+// customers still depend on the local TLS listener, certificate, canonical
+// virtual host, Nginx proxy, and packaged browser assets. Route the canonical
+// hostname to loopback so this verifies the public ingress without depending
+// on external DNS or hairpin networking.
+assert.match(deploy, /PUBLIC_ORIGIN="\$\{PUBLIC_ORIGIN:-https:\/\/qyroam\.com\}"/);
+assert.match(deploy, /--noproxy '\*' --resolve qyroam\.com:443:127\.0\.0\.1/);
+assert.match(deploy, /PUBLIC_ORIGIN must be the canonical https:\/\/qyroam\.com origin/);
+assert.match(deploy, /"\$PUBLIC_ORIGIN\/api\/health"/);
+assert.match(deploy, /verify_public_sales_page_assets\(\)/);
+assert.match(deploy, /QY Roam public TLS ingress has an unavailable sales page or browser asset/);
+assert.ok(
+  deploy.indexOf('verify_public_sales_page_assets()') < deploy.indexOf('release_verified=1'),
+  'public ingress and browser assets must pass before the rollback artifact is discarded',
+);
+assert.ok(
+  deploy.indexOf('--resolve qyroam.com:443:127.0.0.1') > deploy.indexOf('echo "[11/11] Waiting for application readiness"'),
+  'public ingress verification must exercise the restarted live service',
+);
+
 // Readiness credentials are copied into protected curl header files during
 // smoke, live, and rollback checks. The application and wrapper must reject
 // control characters before that write so one environment value cannot add a

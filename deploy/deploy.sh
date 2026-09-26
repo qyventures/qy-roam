@@ -5,6 +5,7 @@ APP_DIR="${APP_DIR:-/root/qy-roam}"
 ENV_FILE="${ENV_FILE:-/root/.config/qyroam/.env}"
 SERVICE_NAME="${SERVICE_NAME:-qy-roam}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3100/api/health}"
+PUBLIC_ORIGIN="${PUBLIC_ORIGIN:-https://qyroam.com}"
 SYSTEMD_UNIT_PATH="${SYSTEMD_UNIT_PATH:-/etc/systemd/system/${SERVICE_NAME}.service}"
 NGINX_CONFIG_PATH="${NGINX_CONFIG_PATH:-/etc/nginx/sites-available/qyroam}"
 # Authenticated readiness can legitimately wait for the application's bounded
@@ -337,6 +338,47 @@ if [[ "$ready" -ne 1 ]]; then
 fi
 cat "$health_output"
 printf '\n'
+
+# Loopback readiness proves that the restarted application and its order
+# dependencies are healthy, but customers reach it through the reviewed TLS
+# and Nginx boundary. Exercise that exact local ingress without relying on
+# public DNS: --resolve keeps the qyroam.com hostname/SNI (and therefore normal
+# certificate validation) while routing the request to this VPS. Verify the
+# authenticated readiness response and both public sales pages, including all
+# browser assets they advertise, before discarding the rollback artifact.
+if [[ "$PUBLIC_ORIGIN" != "https://qyroam.com" ]]; then
+  echo "PUBLIC_ORIGIN must be the canonical https://qyroam.com origin" >&2
+  exit 1
+fi
+# Ignore any host-level proxy environment for this local assertion; otherwise
+# curl can send the request to an outbound proxy and accidentally test a
+# different server despite the loopback --resolve entry.
+public_curl=(curl --noproxy '*' --resolve qyroam.com:443:127.0.0.1 --fail --silent --show-error --max-time "$READINESS_CURL_TIMEOUT_SECONDS")
+if ! "${public_curl[@]}" --header "@$health_header" "$PUBLIC_ORIGIN/api/health" |
+   node -e "let body='';process.stdin.on('data',chunk=>body+=chunk).on('end',()=>{const result=JSON.parse(body);if(result.launchReady!==true||result.service!=='qy-roam')process.exit(1)})"; then
+  echo "QY Roam public TLS ingress did not reach the launch-ready service" >&2
+  exit 1
+fi
+
+verify_public_sales_page_assets() {
+  local page_path="$1"
+  local page_assets
+  page_assets="$(
+    "${public_curl[@]}" "$PUBLIC_ORIGIN${page_path}" |
+      node -e "let body='';process.stdin.on('data',chunk=>body+=chunk).on('end',()=>{const assets=[...body.matchAll(/(?:src|href)=\"(\/_next\/static\/[^\"?#]+(?:[?#][^\"]*)?)\"/g)].map(match=>match[1]);const unique=[...new Set(assets)];if(!unique.length||!unique.some(asset=>asset.split(/[?#]/,1)[0].endsWith('.js')))process.exit(1);process.stdout.write(unique.join('\\n'))})"
+  )" || return 1
+  while IFS= read -r static_asset; do
+    [[ "$static_asset" == /_next/static/* ]] || return 1
+    "${public_curl[@]}" --output /dev/null "$PUBLIC_ORIGIN${static_asset}" || return 1
+  done <<< "$page_assets"
+}
+
+for sales_page in / /esim; do
+  if ! verify_public_sales_page_assets "$sales_page"; then
+    echo "QY Roam public TLS ingress has an unavailable sales page or browser asset: $sales_page" >&2
+    exit 1
+  fi
+done
 
 release_verified=1
 cleanup_release_snapshot
