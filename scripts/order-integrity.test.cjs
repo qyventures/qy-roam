@@ -729,6 +729,21 @@ test('accepts an authenticated historical eSIM plan after it is retired', () => 
   }
 });
 
+test('retired eSIM plans require a complete signed data entitlement snapshot', () => {
+  const plan = ESIM_PLANS[0];
+  const session = esimSession(plan);
+  delete session.metadata.data_allowance;
+  session.metadata.qyroam_provenance = signedQyRoamProvenance(session.id, session.metadata);
+  ESIM_PLANS.splice(0, 1);
+  try {
+    const validation = validateQyRoamSession(session);
+    assert.equal(validation.valid, false);
+    assert.match(validation.reason, /historical snapshot/);
+  } finally {
+    ESIM_PLANS.unshift(plan);
+  }
+});
+
 test('accepts a signed legacy eSIM session opened before data allowance snapshots', () => {
   const session = esimSession();
   delete session.metadata.data_allowance;

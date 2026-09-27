@@ -71,7 +71,13 @@ function historicalEsimSnapshotIsConsistent(session: Stripe.Checkout.Session) {
   // been retired or repriced in the live catalogue.
   return /^[a-z0-9][a-z0-9-]{1,80}$/.test(planId) && country.length > 0 && country.length <= 100 &&
     planName.startsWith(`${country} · `) && / · [1-9]\d{0,2} days$/.test(planName) &&
-    (dataAllowance === undefined || (dataAllowance.length > 0 && dataAllowance.length <= 200)) &&
+    // A current catalogue plan can safely supply a missing allowance for a
+    // legacy in-flight Session. Once that plan is retired, however, this
+    // signed snapshot is the only entitlement authority available to the
+    // webhook and fulfilment team. Require it to identify the actual package
+    // instead of accepting an order that the database must reject (and staff
+    // could not provision unambiguously).
+    typeof dataAllowance === 'string' && dataAllowance.length > 0 && dataAllowance.length <= 200 &&
     metadata?.promo_code === ESIM_PROMO.code && metadata?.promo_discount_percent === String(ESIM_PROMO.percent) &&
     moneyMetadataCents(metadata?.benchmark_price_sgd) !== null &&
     checkoutAmountSnapshotIsConsistent(session) && Number.isSafeInteger(checkoutAmount) && checkoutAmount >= 50 &&
