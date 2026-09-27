@@ -366,6 +366,24 @@ alter table public.orders add constraint orders_paid_stripe_fulfilment_details_c
     )
   )
 ) not valid;
+
+-- A manual/offline eSIM sale creates the same digital entitlement as a
+-- Stripe sale and must have the same deliverable email destination. The
+-- protected admin route validates this before inserting, but service-role
+-- imports and recovery scripts can bypass that application boundary. Keep
+-- every newly written paid eSIM order deliverable regardless of its payment
+-- source. NOT VALID preserves any historical exception for reconciliation.
+alter table public.orders drop constraint if exists orders_paid_esim_delivery_email_check;
+alter table public.orders add constraint orders_paid_esim_delivery_email_check check (
+  payment_status is distinct from 'paid' or
+  product_type <> 'esim' or
+  (
+    email is not null and
+    email = btrim(email) and
+    length(email) <= 254 and
+    email ~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$'
+  )
+) not valid;
 alter table public.orders enable row level security;
 
 -- Create the physical stock register before any reservation/manual-order
@@ -988,10 +1006,11 @@ as $$
       'orders_payment_confirmed_at_requires_paid_payment_check',
       'orders_paid_amount_positive_check',
       'orders_paid_stripe_fulfilment_details_check',
+      'orders_paid_esim_delivery_email_check',
       'orders_pocket_wifi_dispatch_evidence_check',
       'orders_pocket_wifi_return_evidence_check',
       'orders_session_id_format_check'
-    )) = 13 and
+    )) = 14 and
     (select count(*) from pg_constraint where conrelid = 'public.stripe_events'::regclass and conname in (
       'stripe_events_attempts_check',
       'stripe_events_event_id_check',
@@ -1561,10 +1580,10 @@ immutable
 security definer
 set search_path = pg_catalog
 as $$
-  -- Version 6 makes every new or changed eSIM entitlement snapshot bounded
-  -- and printable at the database boundary. An application expecting that
-  -- operational identity contract must reject the earlier version 5 schema.
-  select 6;
+  -- Version 7 requires a deliverable email destination for every newly
+  -- written paid eSIM entitlement, including protected manual/offline sales.
+  -- An application expecting that boundary must reject version 6.
+  select 7;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
