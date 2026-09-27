@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const test = require('node:test');
 const ts = require('typescript');
@@ -50,7 +51,7 @@ const { safeHttpsDeliveryEndpoint } = require('../lib/deliveryEndpoint.ts');
 const { fulfilmentRelayAcknowledged } = require('../lib/deliveryAcknowledgement.ts');
 const { safeProviderDeliveryFailure, safeWebhookProcessingFailure } = require('../lib/deliveryFailure.ts');
 const { nextRetryAttempt } = require('../lib/retryAttempt.ts');
-const { completeSmtpResponseCode, isSafeSmtpHost } = require('../lib/smtp.ts');
+const { completeSmtpResponseCode, isSafeSmtpHost, waitForResponse, waitForTlsHandshake } = require('../lib/smtp.ts');
 const { safeStripeCheckoutUrl } = require('../lib/stripeCheckoutUrl.ts');
 const { metaCapiPurchaseAcknowledged } = require('../lib/metaCapiAcknowledgement.ts');
 const { stripeCheckoutEventStateIssue } = require('../lib/stripeCheckoutEventState.ts');
@@ -375,6 +376,23 @@ test('SMTP fulfilment waits for complete, coherent protocol replies', () => {
   assert.throws(() => completeSmtpResponseCode('relay ready\r\n'), /Invalid SMTP response/);
 
   assert.match(smtpClient, /code = completeSmtpResponseCode\(buffer\)/);
+});
+
+test('SMTP fulfilment fails promptly when a relay disconnects before its reply or TLS handshake', async () => {
+  const responseSocket = new EventEmitter();
+  const response = waitForResponse(responseSocket, [250]);
+  responseSocket.emit('end');
+  await assert.rejects(response, /closed before a complete response/);
+  assert.equal(responseSocket.listenerCount('data'), 0);
+  assert.equal(responseSocket.listenerCount('close'), 0);
+
+  const tlsSocket = new EventEmitter();
+  tlsSocket.authorized = false;
+  const handshake = waitForTlsHandshake(tlsSocket);
+  tlsSocket.emit('close');
+  await assert.rejects(handshake, /closed during TLS handshake/);
+  assert.equal(tlsSocket.listenerCount('secureConnect'), 0);
+  assert.equal(tlsSocket.listenerCount('end'), 0);
 });
 
 test('Meta CAPI success is bound to an exact single-Purchase acknowledgement', () => {

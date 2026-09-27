@@ -113,7 +113,7 @@ export function completeSmtpResponseCode(buffer: string) {
   return Number(code);
 }
 
-function waitForResponse(socket: net.Socket | tls.TLSSocket, expected: number[]) {
+export function waitForResponse(socket: net.Socket | tls.TLSSocket, expected: number[]) {
   return new Promise<string>((resolve, reject) => {
     let buffer = '';
     let responseBytes = 0;
@@ -148,14 +148,25 @@ function waitForResponse(socket: net.Socket | tls.TLSSocket, expected: number[])
     };
     const onError = (error: Error) => { cleanup(); reject(error); };
     const onTimeout = () => { cleanup(); reject(new Error('SMTP connection timed out')); };
+    // A peer can close cleanly without emitting `error` (for example, a relay
+    // refusing a connection before its banner or disconnecting midway through
+    // a multiline reply). Once `end`/`close` has fired, the socket timeout is
+    // no longer a reliable escape hatch. Reject immediately so the paid-order
+    // delivery ledger becomes retryable instead of leaving its webhook worker
+    // awaiting a response that can never arrive.
+    const onDisconnect = () => { cleanup(); reject(new Error('SMTP connection closed before a complete response')); };
     const cleanup = () => {
       socket.off('data', onData);
       socket.off('error', onError);
       socket.off('timeout', onTimeout);
+      socket.off('end', onDisconnect);
+      socket.off('close', onDisconnect);
     };
     socket.on('data', onData);
     socket.on('error', onError);
     socket.on('timeout', onTimeout);
+    socket.on('end', onDisconnect);
+    socket.on('close', onDisconnect);
   });
 }
 
@@ -176,13 +187,15 @@ function smtpTlsOptions(host: string) {
   } satisfies tls.ConnectionOptions;
 }
 
-function waitForTlsHandshake(socket: tls.TLSSocket) {
+export function waitForTlsHandshake(socket: tls.TLSSocket) {
   if (socket.authorized) return Promise.resolve();
   return new Promise<void>((resolve, reject) => {
     const cleanup = () => {
       socket.off('secureConnect', onSecureConnect);
       socket.off('error', onError);
       socket.off('timeout', onTimeout);
+      socket.off('end', onDisconnect);
+      socket.off('close', onDisconnect);
     };
     const onSecureConnect = () => {
       cleanup();
@@ -194,9 +207,12 @@ function waitForTlsHandshake(socket: tls.TLSSocket) {
     };
     const onError = (error: Error) => { cleanup(); reject(error); };
     const onTimeout = () => { cleanup(); reject(new Error('SMTP TLS handshake timed out')); };
+    const onDisconnect = () => { cleanup(); reject(new Error('SMTP connection closed during TLS handshake')); };
     socket.once('secureConnect', onSecureConnect);
     socket.once('error', onError);
     socket.once('timeout', onTimeout);
+    socket.once('end', onDisconnect);
+    socket.once('close', onDisconnect);
   });
 }
 
