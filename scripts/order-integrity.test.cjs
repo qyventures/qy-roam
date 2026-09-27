@@ -324,6 +324,17 @@ test('Pocket WiFi deployment inventory cannot exceed the database reservation bo
   }
 });
 
+test('Pocket WiFi availability scans the full saleable register with bounded arithmetic', () => {
+  assert.match(availabilityRoute, /const MAX_INVENTORY_SCAN_PAGES = 11/);
+  assert.match(availabilityRoute, /\.select\('id,quantity_on_hand'\)/);
+  assert.match(availabilityRoute, /\.order\('id'\)/);
+  assert.match(availabilityRoute, /query = query\.gt\('id', afterId\)/);
+  assert.match(availabilityRoute, /if \(total >= configuredInventory\) return total/);
+  assert.match(availabilityRoute, /throw new Error\('Pocket WiFi inventory scan exceeded its safe page limit'\)/);
+  const boundedSaleableSums = schema.match(/least\(p_inventory::bigint, coalesce\(sum\(quantity_on_hand::bigint\), 0\)\)::integer/g) || [];
+  assert.equal(boundedSaleableSums.length, 2, 'public and manual capacity authorities must clamp saleable stock before integer conversion');
+});
+
 test('optional Meta consent storage cannot block checkout in privacy-restricted browsers', () => {
   const previousWindow = global.window;
   global.window = {
@@ -1989,7 +2000,7 @@ test('Pocket WiFi capacity cannot exceed physically saleable inventory', () => {
   assert.match(schema, /if v_effective_inventory < 1 or v_committed >= v_effective_inventory then/);
   assert.match(schema, /if v_effective_inventory < 1 or v_booked \+ v_reserved >= v_effective_inventory then/);
   assert.match(productionReadiness, /table: 'inventory_items',[\s\S]*?columns: 'id,product_type,status,quantity_on_hand'/);
-  assert.match(availabilityRoute, /supabase\.from\('inventory_items'\)\.select\('quantity_on_hand'\)/);
+  assert.match(availabilityRoute, /supabase\.from\('inventory_items'\)\.select\('id,quantity_on_hand'\)/);
   assert.match(availabilityRoute, /const effectiveInventory = Math\.min\(inventory, inventoryState\.saleableInventory\)/);
 });
 
@@ -2521,7 +2532,7 @@ test('manual paid Pocket WiFi retries resolve before capacity is counted', () =>
   assert.match(manualPocketWifiRpc, /manual order reference already belongs to different order details/);
   assert.match(manualPocketWifiRpc, /return v_order;/);
   assert.ok(
-    manualPocketWifiRpc.indexOf('where stripe_session_id = p_stripe_session_id') < manualPocketWifiRpc.indexOf('select coalesce(sum(quantity_on_hand), 0)::integer into v_saleable_inventory'),
+    manualPocketWifiRpc.indexOf('where stripe_session_id = p_stripe_session_id') < manualPocketWifiRpc.indexOf('coalesce(sum(quantity_on_hand::bigint), 0)'),
     'manual retry lookup must precede the capacity calculation',
   );
 });

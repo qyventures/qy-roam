@@ -1192,7 +1192,11 @@ begin
   -- the stock register, but physical saleable stock is the hard ceiling. A
   -- unit in quarantine, maintenance or with no on-hand balance must never be
   -- promised by checkout simply because the environment still says "10".
-  select coalesce(sum(quantity_on_hand), 0)::integer into v_saleable_inventory
+  -- Clamp in bigint space before converting back to the bounded application
+  -- inventory type. A fragmented or manually repaired register must not make
+  -- checkout fail with an integer overflow before the configured 10,000-unit
+  -- operating ceiling is applied.
+  select least(p_inventory::bigint, coalesce(sum(quantity_on_hand::bigint), 0))::integer into v_saleable_inventory
   from public.inventory_items
   where product_type = 'pocket_wifi'
     and status = 'available';
@@ -1357,7 +1361,7 @@ begin
   -- Apply the same physical-stock ceiling used by public checkout. Manual
   -- paid orders are genuine rental commitments and cannot bypass a
   -- quarantined, maintenance, or empty router fleet.
-  select coalesce(sum(quantity_on_hand), 0)::integer into v_saleable_inventory
+  select least(p_inventory::bigint, coalesce(sum(quantity_on_hand::bigint), 0))::integer into v_saleable_inventory
   from public.inventory_items
   where product_type = 'pocket_wifi'
     and status = 'available';
