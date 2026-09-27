@@ -69,7 +69,18 @@ export async function fetchSupabaseWithTimeout(
   const controller = new AbortController();
   const requestSignal = init?.signal || (input instanceof Request ? input.signal : undefined);
   const timeoutError = new Error('Supabase request timed out');
-  const abortFromRequest = () => controller.abort(requestSignal?.reason);
+  const abortFromRequest = () => {
+    const reason = requestSignal?.reason instanceof Error
+      ? requestSignal.reason
+      : new Error('Supabase request aborted');
+    controller.abort(reason);
+    // Some fetch implementations and proxy-backed response streams do not
+    // promptly reject when their AbortSignal fires. Caller cancellation is a
+    // stricter deadline than this transport's own timeout (notably the 8s
+    // production-readiness probe inside the 15s Supabase boundary), so race
+    // it explicitly as well as forwarding the signal to fetch.
+    rejectDeadline?.(reason);
+  };
   let cleanedUp = false;
   let rejectDeadline: ((reason: Error) => void) | undefined;
 

@@ -3634,6 +3634,24 @@ test('Supabase order-critical requests use a bounded shared transport', async ()
     global.fetch = originalFetch;
   }
 
+  // A narrower caller deadline (such as the 8-second production-readiness
+  // probe) must win even when a broken fetch implementation ignores abort.
+  // Otherwise it falls through to the transport's 15-second timeout and can
+  // outlive the deployment health client's own deadline.
+  global.fetch = async () => new Promise(() => {});
+  try {
+    const caller = new AbortController();
+    const request = fetchSupabaseWithTimeout(
+      'https://supabase.example/rest/v1/orders',
+      { signal: caller.signal },
+      500,
+    );
+    caller.abort(new Error('Readiness probe cancelled'));
+    await assert.rejects(() => request, /Readiness probe cancelled/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+
   // Reject a declared oversized response before consuming it. PostgREST
   // normally provides compact paginated JSON, so this indicates a broken or
   // misrouted upstream response rather than legitimate order data.
