@@ -1310,6 +1310,14 @@ begin
   if p_amount_sgd is null or p_amount_sgd <= 0 then raise exception 'manual order amount must be positive'; end if;
   if coalesce(length(trim(p_country)), 0) = 0 then raise exception 'Pocket WiFi destination is required'; end if;
   if p_travel_start is null or p_travel_end is null or p_travel_end < p_travel_start then raise exception 'invalid Pocket WiFi travel dates'; end if;
+  -- This SECURITY DEFINER function is a second entry point into the same
+  -- scarce fleet protected by qy_reserve_pocket_wifi. Keep its caller-supplied
+  -- deployment ceiling on the identical bounded contract: an operational
+  -- repair or future service-role caller must not manufacture capacity that
+  -- public checkout is forbidden to use.
+  if p_inventory is null or p_inventory < 0 or p_inventory > 10000 then
+    raise exception 'invalid Pocket WiFi inventory limit';
+  end if;
 
   perform pg_advisory_xact_lock(hashtext('qy_roam_pocket_wifi_checkout'));
   -- Match public checkout: only a Stripe-linked handoff needs the webhook
@@ -1688,10 +1696,10 @@ immutable
 security definer
 set search_path = pg_catalog
 as $$
-  -- Version 12 certifies both the immutable audit boundaries and the
-  -- reservation handoff rule: unlinked attempts expire normally while only
-  -- Stripe-linked holds receive the four-day webhook recovery window.
-  select 12;
+  -- Version 13 certifies both the immutable audit boundaries and the
+  -- reservation handoff rule, plus the shared 10,000-unit capacity ceiling
+  -- on public reservations and protected manual Pocket WiFi sales.
+  select 13;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
