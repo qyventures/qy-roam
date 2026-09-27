@@ -27,7 +27,14 @@ async function loadPages(fetchPage: (from: number, to: number) => PromiseLike<{ 
     data.push(...page);
     if (page.length < ADMIN_PAGE_SIZE) return { data, error: null, truncated: false };
   }
-  return { data, error: null, truncated: true };
+  // A full final page does not prove that rows were omitted. Probe exactly
+  // one row beyond the rendered boundary so an account with precisely 5,000
+  // records is not put into a permanent false incident state. Conversely, a
+  // failed probe means completeness is unknown and must fail the panel closed
+  // instead of presenting the first 5,000 rows as a trustworthy full view.
+  const beyond = await fetchPage(ADMIN_MAX_ROWS, ADMIN_MAX_ROWS);
+  if (beyond.error) return { data: [], error: beyond.error, truncated: false };
+  return { data, error: null, truncated: (beyond.data || []).length > 0 };
 }
 
 function daysFromToday(value: string | null | undefined) {

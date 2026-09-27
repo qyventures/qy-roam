@@ -2696,6 +2696,18 @@ test('admin Pocket WiFi dispatch selector pages the fleet and warns when its bou
   assert.doesNotMatch(adminPage, /supabase\.from\('inventory_items'\)\.select\('id,sku,name,quantity_on_hand,status'\)\.eq\('product_type', 'pocket_wifi'\)\.order\('name'\),/);
 });
 
+test('admin operational pagination distinguishes an exact view limit from a genuinely truncated backlog', () => {
+  // Exactly 5,000 rows are complete, not an incident. Both bounded admin
+  // loaders must probe row 5,001 and propagate probe failures so operators
+  // never receive either a false truncation warning or trusted partial data.
+  assert.match(adminPage, /const beyond = await fetchPage\(ADMIN_MAX_ROWS, ADMIN_MAX_ROWS\)/);
+  assert.match(adminPage, /if \(beyond\.error\) return \{ data: \[\], error: beyond\.error, truncated: false \}/);
+  assert.match(adminPage, /truncated: \(beyond\.data \|\| \[\]\)\.length > 0/);
+  assert.match(crmPage, /const beyond=await fetchPage\(CRM_MAX_ROWS,CRM_MAX_ROWS\)/);
+  assert.match(crmPage, /if\(beyond\.error\)return \{data:\[\],error:beyond\.error,truncated:false\}/);
+  assert.match(crmPage, /truncated:\(beyond\.data\|\|\[\]\)\.length>0/);
+});
+
 test('admin webhook recovery visibility pages every actionable Stripe exception within its declared bound', () => {
   // A newest-100 diagnostic sample can hide a failed payment event from the
   // same dashboard staff use to reconcile fulfilment. Keep this recovery

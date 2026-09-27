@@ -18,7 +18,12 @@ async function loadCrmPages(fetchPage:(from:number,to:number)=>PromiseLike<{data
   data.push(...page);
   if(page.length<CRM_PAGE_SIZE)return {data,error:null,truncated:false};
  }
- return {data,error:null,truncated:true};
+ // A full last page can be the complete data set. Check for one additional
+ // row before declaring customer or follow-up work hidden, and treat a failed
+ // completeness probe as unavailable data rather than safe partial totals.
+ const beyond=await fetchPage(CRM_MAX_ROWS,CRM_MAX_ROWS);
+ if(beyond.error)return {data:[],error:beyond.error,truncated:false};
+ return {data,error:null,truncated:(beyond.data||[]).length>0};
 }
 export default async function CrmPage(){
  const db=getSupabaseAdmin();
