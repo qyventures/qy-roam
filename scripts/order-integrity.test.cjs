@@ -221,7 +221,7 @@ test('durable orders accept only canonical Stripe or protected manual-sale ident
     'checkout readiness must reject a deployed schema missing the order identity boundary',
   );
   assert.match(adminOpsRoute, /`manual_\$\{crypto\.createHash\('sha256'\)\.update\(reference\)\.digest\('hex'\)\.slice\(0, 48\)\}`/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 3/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 4/);
 });
 
 test('optional Meta consent storage cannot block checkout in privacy-restricted browsers', () => {
@@ -1541,11 +1541,11 @@ test('checkout readiness rejects an older order-integrity schema with matching o
   // Version 3 includes the database-enforced durable order identity contract.
   // Keeping version 2 here would let a rolling app deploy accept payment
   // against the earlier schema even though all object names still exist.
-  assert.match(productionReadiness, /const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 3/);
+  assert.match(productionReadiness, /const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 4/);
   assert.match(productionReadiness, /database\.rpc\('qy_order_integrity_schema_version', \{\}\)\.abortSignal\(signal\)/);
   assert.match(productionReadiness, /versionProbe\.data !== REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION/);
   assert.match(productionReadiness, /if \(!await hasCurrentOrderIntegritySchema\(database, signal\)\) return false/);
-  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 3;/);
+  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 4;/);
   assert.match(schema, /grant execute on function public\.qy_order_integrity_schema_version\(\) to service_role/);
   assert.ok(
     schema.indexOf('create or replace function public.qy_order_integrity_schema_version') >
@@ -2829,6 +2829,27 @@ test('Stripe order persistence cannot overwrite concurrent fulfilment progress',
   assert.match(webhookRoute, /qy_persist_stripe_pocket_wifi_order/);
   assert.doesNotMatch(webhookRoute, /from\('orders'\)\.update\(order\)/);
   assert.match(schema, /v_order\.fulfilment_status not in \('awaiting_payment','payment_failed'\) then v_order\.fulfilment_status/g);
+});
+
+test('paid webhook retries preserve staff-corrected fulfilment contact details', () => {
+  // Stripe can retry a completed event after operations has corrected a
+  // customer's email, phone, name, or shipping address. Both product RPCs
+  // must take final Stripe details during an unpaid -> paid promotion without
+  // replaying the old Checkout snapshot over an already-paid order.
+  const esimPersistence = schema.slice(
+    schema.indexOf('create or replace function public.qy_persist_stripe_esim_order'),
+    schema.indexOf('-- Stripe completion must cross from a temporary checkout hold'),
+  );
+  const wifiPersistence = schema.slice(
+    schema.indexOf('create or replace function public.qy_persist_stripe_pocket_wifi_order'),
+    schema.indexOf('-- Presence checks cannot tell whether a deployed function'),
+  );
+  for (const persistence of [esimPersistence, wifiPersistence]) {
+    assert.match(persistence, /customer_name = case when orders\.payment_status = 'paid' then orders\.customer_name else excluded\.customer_name end/);
+    assert.match(persistence, /email = case when orders\.payment_status = 'paid' then orders\.email else excluded\.email end/);
+    assert.match(persistence, /phone = case when orders\.payment_status = 'paid' then orders\.phone else excluded\.phone end/);
+    assert.match(persistence, /shipping_address = case when orders\.payment_status = 'paid' then orders\.shipping_address else excluded\.shipping_address end/);
+  }
 });
 
 test('terminal failed payment states cannot be reopened by a later paid event', () => {

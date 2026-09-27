@@ -1345,9 +1345,15 @@ begin
   )
   on conflict (stripe_session_id) do update set
     payment_status = excluded.payment_status,
-    customer_name = excluded.customer_name,
-    email = excluded.email,
-    phone = excluded.phone,
+    -- The first paid snapshot establishes the operational contact record.
+    -- A later webhook retry is allowed to resume persistence/delivery, but it
+    -- must not silently undo a correction made by staff after payment (for
+    -- example, replacing a mistyped fulfilment email). The unpaid -> paid
+    -- transition still takes Stripe's current details because the existing
+    -- row is not paid yet.
+    customer_name = case when orders.payment_status = 'paid' then orders.customer_name else excluded.customer_name end,
+    email = case when orders.payment_status = 'paid' then orders.email else excluded.email end,
+    phone = case when orders.payment_status = 'paid' then orders.phone else excluded.phone end,
     amount_sgd = excluded.amount_sgd,
     plan_id = excluded.plan_id,
     plan_name = excluded.plan_name,
@@ -1356,7 +1362,7 @@ begin
     fulfilment_status = v_fulfilment,
     payment_confirmed_at = case when v_paid then coalesce(orders.payment_confirmed_at, p_payment_confirmed_at) else orders.payment_confirmed_at end,
     measurement_consent = excluded.measurement_consent,
-    shipping_address = excluded.shipping_address,
+    shipping_address = case when orders.payment_status = 'paid' then orders.shipping_address else excluded.shipping_address end,
     updated_at = now()
   returning * into v_order;
   return v_order;
@@ -1478,9 +1484,14 @@ begin
   )
   on conflict (stripe_session_id) do update set
     payment_status = excluded.payment_status,
-    customer_name = excluded.customer_name,
-    email = excluded.email,
-    phone = excluded.phone,
+    -- Preserve staff-corrected contact and delivery details once payment is
+    -- durable. Stripe retries and distinct terminal events can arrive long
+    -- after operations has corrected an address; replaying the Checkout
+    -- snapshot here would send fulfilment back to the obsolete destination.
+    -- An awaiting-payment row still receives the final paid Session details.
+    customer_name = case when orders.payment_status = 'paid' then orders.customer_name else excluded.customer_name end,
+    email = case when orders.payment_status = 'paid' then orders.email else excluded.email end,
+    phone = case when orders.payment_status = 'paid' then orders.phone else excluded.phone end,
     amount_sgd = excluded.amount_sgd,
     plan_name = excluded.plan_name,
     country = excluded.country,
@@ -1489,7 +1500,7 @@ begin
     fulfilment_status = v_fulfilment,
     payment_confirmed_at = case when v_paid then coalesce(orders.payment_confirmed_at, p_payment_confirmed_at) else orders.payment_confirmed_at end,
     measurement_consent = excluded.measurement_consent,
-    shipping_address = excluded.shipping_address,
+    shipping_address = case when orders.payment_status = 'paid' then orders.shipping_address else excluded.shipping_address end,
     updated_at = now()
   returning * into v_order;
 
@@ -1520,11 +1531,11 @@ immutable
 security definer
 set search_path = pg_catalog
 as $$
-  -- Version 3 also constrains every durable order key to a canonical Stripe
-  -- Checkout Session or the protected manual-sale identity format. An
-  -- application expecting that recovery boundary must not accept payment
-  -- against the earlier presence-compatible version 2 schema.
-  select 3;
+  -- Version 4 preserves operator-corrected contact and shipping details after
+  -- payment while still allowing an awaiting-payment order to take Stripe's
+  -- final paid snapshot. An application expecting that retry boundary must
+  -- not accept payment against the earlier presence-compatible version 3.
+  select 4;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
