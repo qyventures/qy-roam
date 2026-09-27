@@ -1481,6 +1481,8 @@ declare
   v_fulfilment text;
 begin
   if coalesce(length(trim(p_stripe_session_id)), 0) = 0 then raise exception 'Stripe session id is required'; end if;
+  if p_stripe_session_id !~ '^cs_(test|live)_[A-Za-z0-9]+$' then raise exception 'invalid Stripe session id'; end if;
+  if p_checkout_request_id is null or p_checkout_request_id !~ '^[A-Za-z0-9_-]{16,80}$' then raise exception 'invalid checkout request id'; end if;
   -- Keep the privileged persistence boundary aligned with the application
   -- validator. This RPC is deliberately callable only by service_role, but a
   -- future worker or recovery script must not be able to create a capacity-
@@ -1520,13 +1522,11 @@ begin
   -- An out-of-order failed event must never downgrade an already-paid order.
   if found and v_order.payment_status = 'paid' and not v_paid then
     delete from public.checkout_reservations
-    -- Stripe can deliver a terminal event after the Session was created but
-    -- before the application linked this durable hold. The signed,
-    -- provenance-validated webhook still owns this request id, so clean up
-    -- its unlinked hold too. A row linked to a different Session is a newer
-    -- recovery attempt and must continue protecting capacity.
+    -- A late unpaid event may retire only the hold durably linked to this
+    -- already-paid Session. Never use a caller-supplied request id to remove
+    -- an ambiguous unlinked reservation.
     where checkout_request_id = p_checkout_request_id
-      and (stripe_session_id is null or stripe_session_id = p_stripe_session_id);
+      and stripe_session_id = p_stripe_session_id;
     return v_order;
   end if;
 
@@ -1582,12 +1582,17 @@ begin
   returning * into v_order;
 
   -- The durable order now represents the commitment, including while an
-  -- asynchronous payment is pending, so retaining the hold would double-count.
-  -- Clear the safe unlinked crash-recovery state as well, but never a hold
-  -- that has since been linked to a different Checkout Session.
+  -- asynchronous payment is pending, so retaining its linked hold would
+  -- double-count. Do not delete an unlinked row using only the caller-supplied
+  -- request id: the RPC is a privileged recovery boundary, and a future
+  -- service-role caller with mismatched inputs must not retire another
+  -- shopper's reservation and make capacity appear available. Checkout links
+  -- the row before exposing the payment URL. An ambiguous unlinked crash hold
+  -- therefore remains conservative and ages out through the normal bounded
+  -- reservation cleanup instead of risking an oversale.
   delete from public.checkout_reservations
   where checkout_request_id = p_checkout_request_id
-    and (stripe_session_id is null or stripe_session_id = p_stripe_session_id);
+    and stripe_session_id = p_stripe_session_id;
   return v_order;
 end;
 $$;
@@ -1608,10 +1613,10 @@ immutable
 security definer
 set search_path = pg_catalog
 as $$
-  -- Version 8 makes the privileged Pocket WiFi reservation RPC validate its
-  -- complete caller-supplied capacity snapshot and immutable expiry. An
-  -- application expecting that boundary must reject version 7.
-  select 8;
+  -- Version 9 prevents the privileged paid-order RPC from retiring an
+  -- ambiguous unlinked reservation using only a caller-supplied request id.
+  -- An application expecting that boundary must reject version 8.
+  select 9;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;

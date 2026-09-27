@@ -248,7 +248,7 @@ test('durable orders accept only canonical Stripe or protected manual-sale ident
     'checkout readiness must reject a deployed schema missing the order identity boundary',
   );
   assert.match(adminOpsRoute, /`manual_\$\{crypto\.createHash\('sha256'\)\.update\(reference\)\.digest\('hex'\)\.slice\(0, 48\)\}`/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 8/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 9/);
 });
 
 test('manual sales cannot create permanent unpaid Pocket WiFi capacity holds', () => {
@@ -279,7 +279,7 @@ test('Pocket WiFi reservation authority validates its complete capacity snapshot
   assert.match(schema, /hold_id is null or hold_id !~ '\^\[A-Za-z0-9_\-\]\{16,80\}\$'/);
   assert.match(schema, /cardinality\(p_stripe_hold_request_ids\) <> \(\s*select count\(distinct hold_id\)/);
   assert.match(schema, /v_existing\.expires_at <> p_expires_at/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 8/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 9/);
 });
 
 test('optional Meta consent storage cannot block checkout in privacy-restricted browsers', () => {
@@ -1644,11 +1644,11 @@ test('checkout readiness rejects an older order-integrity schema with matching o
   // Version 3 includes the database-enforced durable order identity contract.
   // Keeping version 2 here would let a rolling app deploy accept payment
   // against the earlier schema even though all object names still exist.
-  assert.match(productionReadiness, /const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 8/);
+  assert.match(productionReadiness, /const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 9/);
   assert.match(productionReadiness, /database\.rpc\('qy_order_integrity_schema_version', \{\}\)\.abortSignal\(signal\)/);
   assert.match(productionReadiness, /versionProbe\.data !== REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION/);
   assert.match(productionReadiness, /if \(!await hasCurrentOrderIntegritySchema\(database, signal\)\) return false/);
-  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 8;/);
+  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 9;/);
   assert.match(schema, /grant execute on function public\.qy_order_integrity_schema_version\(\) to service_role/);
   assert.ok(
     schema.indexOf('create or replace function public.qy_order_integrity_schema_version') >
@@ -1933,7 +1933,14 @@ test('Pocket WiFi payment persistence atomically replaces its checkout hold with
   assert.match(schema, /expires_at > now\(\) - interval '4 days'/);
   assert.match(availabilityRoute, /fulfilment_status\.eq\.awaiting_payment/);
   assert.match(availabilityRoute, /CHECKOUT_WEBHOOK_HANDOFF_GRACE_MS/);
-  assert.match(schema, /delete from public\.checkout_reservations[\s\S]*checkout_request_id = p_checkout_request_id[\s\S]*\(stripe_session_id is null or stripe_session_id = p_stripe_session_id\)/);
+  const wifiPersistence = schema.slice(
+    schema.indexOf('create or replace function public.qy_persist_stripe_pocket_wifi_order'),
+    schema.indexOf('-- Presence checks cannot tell whether a deployed function'),
+  );
+  assert.match(wifiPersistence, /p_stripe_session_id !~ '\^cs_\(test\|live\)_\[A-Za-z0-9\]\+\$'/);
+  assert.match(wifiPersistence, /p_checkout_request_id !~ '\^\[A-Za-z0-9_-\]\{16,80\}\$'/);
+  assert.match(wifiPersistence, /where checkout_request_id = p_checkout_request_id\s+and stripe_session_id = p_stripe_session_id/);
+  assert.doesNotMatch(wifiPersistence, /stripe_session_id is null or stripe_session_id = p_stripe_session_id/);
   assert.match(productionReadiness, /production_payment_persistence_rpc_check_failed/);
 });
 
@@ -2484,14 +2491,14 @@ test('eSIM entitlement snapshots stay bounded and printable at the database boun
   assert.match(schema, /if coalesce\(length\(p_plan_name\), 0\) not between 1 and 200[\s\S]*?raise exception 'invalid eSIM plan name'/);
   assert.match(schema, /if coalesce\(length\(p_data_allowance\), 0\) not between 1 and 200[\s\S]*?raise exception 'invalid eSIM data allowance'/);
   assert.match(schema, /if coalesce\(length\(p_country\), 0\) not between 1 and 100[\s\S]*?raise exception 'invalid eSIM destination'/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 8/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 9/);
 });
 
 test('every paid eSIM order requires a database-enforced delivery email', () => {
   assert.match(schema, /orders_paid_esim_delivery_email_check/);
   assert.match(schema, /orders_paid_esim_delivery_email_check check \([\s\S]*?payment_status is distinct from 'paid' or[\s\S]*?product_type <> 'esim' or[\s\S]*?email is not null and[\s\S]*?email = btrim\(email\) and[\s\S]*?length\(email\) <= 254 and[\s\S]*?email ~ '\^\[\^\[:space:\]@\]\+@\[\^\[:space:\]@\]\+\\\.\[\^\[:space:\]@\]\+\$'/);
   assert.match(adminOpsRoute, /product === 'esim' && !isSafeSmtpMailbox\(row\.email \|\| undefined\)/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 8/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 9/);
 });
 
 test('paid-order measurement consent cannot be broadened after checkout', () => {
@@ -3867,16 +3874,21 @@ test('expired checkout sessions close only their provisional pending orders', ()
   assert.match(webhookRoute, /await closeExpiredAwaitingPaymentOrder\(supabase,session\)/);
 });
 
-test('Pocket WiFi terminal events clear only their own linked or recoverably unlinked reservation', () => {
+test('Pocket WiFi terminal events clear only their own durably linked reservation', () => {
   // eSIM and Pocket WiFi have separate Stripe idempotency namespaces, so the
   // shared request-id syntax alone must never make an eSIM payment release a
   // router held by another checkout. The Pocket WiFi-only persistence RPC
-  // matches both identities while it holds the inventory lock. A hold that
-  // has not yet been linked after a process crash belongs to that same
-  // server-issued request id, while a different Session's linked hold stays.
+  // matches both identities while it holds the inventory lock. An unlinked
+  // crash hold is intentionally ambiguous at this privileged boundary: keep
+  // it until bounded cleanup rather than freeing capacity for a possible
+  // second sale based only on a caller-supplied request id.
   assert.match(webhookRoute, /if\(productType==='pocket_wifi'\)/);
-  assert.match(schema, /where checkout_request_id = p_checkout_request_id\s+and \(stripe_session_id is null or stripe_session_id = p_stripe_session_id\)/);
-  assert.doesNotMatch(schema, /checkout_request_id = p_checkout_request_id\s+and \(stripe_session_id = p_stripe_session_id or stripe_session_id is not null\)/);
+  const wifiPersistence = schema.slice(
+    schema.indexOf('create or replace function public.qy_persist_stripe_pocket_wifi_order'),
+    schema.indexOf('-- Presence checks cannot tell whether a deployed function'),
+  );
+  assert.match(wifiPersistence, /where checkout_request_id = p_checkout_request_id\s+and stripe_session_id = p_stripe_session_id/);
+  assert.doesNotMatch(wifiPersistence, /stripe_session_id is null/);
 });
 
 test('authenticated admin browser mutations reject cross-site request triggering', () => {
