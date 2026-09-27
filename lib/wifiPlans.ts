@@ -7,12 +7,12 @@ export type WifiPlan = {
   daily: number;
 };
 
-// Public Yoowifi benchmark verified 28 Aug 2026. Asia destinations are advertised
+// Public Yoowifi benchmark re-verified 28 Sep 2026. Asia destinations are advertised
 // from S$1.90/day and Australia/North America/Europe from S$3.90/day. QY's
 // server-authoritative rates are floored to cents at >=3% below benchmark.
 export const WIFI_BENCHMARK = {
   provider: 'Yoowifi',
-  verifiedOn: '2026-08-28',
+  verifiedOn: '2026-09-28',
   sourceUrl: 'https://order.yoowifi.com/how-it-works',
   minimumDiscountPercent: 3
 } as const;
