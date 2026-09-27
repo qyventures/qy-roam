@@ -86,6 +86,7 @@ const requiredContracts = [
   'stripe_events_event_id_check',
   'stripe_events_session_id_check',
   'stripe_events_event_type_check',
+  'orders_session_id_format_check',
   "after insert or update of payment_status, customer_name, email, phone, amount_sgd on public.orders",
   "new.payment_status <> 'paid'",
   "pg_advisory_xact_lock(hashtext('qy_roam_customer:' || v_identity))",

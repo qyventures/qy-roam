@@ -210,6 +210,20 @@ test('durable retry counters recover malformed inherited values without exceedin
   assert.match(webhookRoute, /attempts:nextRetryAttempt\(delivery\.attempts,0\)/);
 });
 
+test('durable orders accept only canonical Stripe or protected manual-sale identities', () => {
+  assert.match(
+    schema,
+    /orders_session_id_format_check check \(\s*stripe_session_id ~ '\^cs_\(test\|live\)_\[A-Za-z0-9\]\+\$' or\s*stripe_session_id ~ '\^manual_\[a-f0-9\]\{48\}\$'\s*\) not valid/,
+  );
+  assert.match(
+    schema,
+    /'orders_session_id_format_check'\s*\)\) = 12 and/,
+    'checkout readiness must reject a deployed schema missing the order identity boundary',
+  );
+  assert.match(adminOpsRoute, /`manual_\$\{crypto\.createHash\('sha256'\)\.update\(reference\)\.digest\('hex'\)\.slice\(0, 48\)\}`/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 3/);
+});
+
 test('optional Meta consent storage cannot block checkout in privacy-restricted browsers', () => {
   const previousWindow = global.window;
   global.window = {
@@ -1509,14 +1523,14 @@ test('post-payment readiness checks every webhook-persisted delivery field and p
 });
 
 test('checkout readiness rejects an older order-integrity schema with matching object names', () => {
-  // Version 2 includes the database-enforced Stripe event identity contract.
-  // Keeping version 1 here would let a rolling app deploy accept payment
+  // Version 3 includes the database-enforced durable order identity contract.
+  // Keeping version 2 here would let a rolling app deploy accept payment
   // against the earlier schema even though all object names still exist.
-  assert.match(productionReadiness, /const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 2/);
+  assert.match(productionReadiness, /const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 3/);
   assert.match(productionReadiness, /database\.rpc\('qy_order_integrity_schema_version', \{\}\)\.abortSignal\(signal\)/);
   assert.match(productionReadiness, /versionProbe\.data !== REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION/);
   assert.match(productionReadiness, /if \(!await hasCurrentOrderIntegritySchema\(database, signal\)\) return false/);
-  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 2;/);
+  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 3;/);
   assert.match(schema, /grant execute on function public\.qy_order_integrity_schema_version\(\) to service_role/);
   assert.ok(
     schema.indexOf('create or replace function public.qy_order_integrity_schema_version') >
@@ -1820,7 +1834,7 @@ test('database rejects paid Stripe orders without their product delivery destina
   assert.match(schema, /shipping_address ->> 'country' = 'SG'/);
   assert.match(schema, /nullif\(btrim\(shipping_address ->> 'line1'\), ''\) is not null/);
   assert.match(schema, /nullif\(btrim\(shipping_address ->> 'postal_code'\), ''\) is not null/);
-  assert.match(schema, /'orders_paid_stripe_fulfilment_details_check',[\s\S]*?\)\) = 11 and/);
+  assert.match(schema, /'orders_paid_stripe_fulfilment_details_check',[\s\S]*?'orders_session_id_format_check'[\s\S]*?\)\) = 12 and/);
 });
 
 test('eSIM payment persistence serializes digital entitlement transitions in the database', () => {

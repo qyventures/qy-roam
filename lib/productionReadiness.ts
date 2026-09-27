@@ -23,7 +23,7 @@ const READINESS_PROBE_TIMEOUT_MS = 8_000;
 // probes cannot distinguish an old function body from the current one; this
 // explicit handshake prevents a rolling application deploy from accepting a
 // payment against stale database logic.
-const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 2;
+const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 3;
 let paymentSchemaReadyUntil = 0;
 let esimOrderSchemaReadyUntil = 0;
 let operationsSchemaReadyUntil = 0;
