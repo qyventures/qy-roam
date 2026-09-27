@@ -2682,8 +2682,8 @@ test('generic inventory mutations cannot make a router saleable while it is in c
     'both quantity adjustments and status changes must reject assigned in-custody routers',
   );
   assert.match(schema, /inventory item is assigned to an active Pocket WiFi custody order/);
-  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 3; \$\$/);
-  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 3/);
+  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 4; \$\$/);
+  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 4/);
   assert.match(productionReadiness, /database\.rpc\('qy_pocket_wifi_fulfilment_schema_version', \{\}\)/);
   assert.match(productionReadiness, /versionProbe\.data !== REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION/);
 });
@@ -2760,8 +2760,34 @@ test('Pocket WiFi inventory movements remain append-only audit evidence', () => 
     guard,
     /create trigger qy_enforce_inventory_movement_immutability[\s\S]*before update or delete on public\.inventory_movements/,
   );
-  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 3; \$\$/);
-  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 3/);
+  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 4; \$\$/);
+  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 4/);
+});
+
+test('Pocket WiFi stock can only be mutated through audited inventory RPCs', () => {
+  assert.match(
+    schema,
+    /grant select on table public\.inventory_items, public\.inventory_movements to service_role;/,
+    'availability and admin inventory views must retain service-role read access',
+  );
+  assert.match(
+    schema,
+    /revoke insert, update, delete, truncate, references, trigger\s+on table public\.inventory_items, public\.inventory_movements\s+from service_role;/,
+    'the RLS-bypassing application role must not write around the audited RPC boundary',
+  );
+  for (const rpc of [
+    'qy_create_inventory_item',
+    'qy_adjust_inventory',
+    'qy_set_inventory_status',
+    'qy_transition_pocket_wifi_order',
+  ]) {
+    const start = schema.indexOf(`create or replace function public.${rpc}(`);
+    assert.notEqual(start, -1, `${rpc} must exist`);
+    const body = schema.slice(start, schema.indexOf('$$;', start) + 3);
+    assert.match(body, /security definer/, `${rpc} must retain owner-authorized writes`);
+  }
+  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 4; \$\$/);
+  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 4/);
 });
 
 test('admin actions advance their transition baseline after each save', () => {

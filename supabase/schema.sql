@@ -1713,6 +1713,20 @@ create trigger qy_enforce_inventory_movement_immutability
 before update or delete on public.inventory_movements
 for each row execute function public.qy_enforce_inventory_movement_immutability();
 
+-- The service role powers both the supported operations RPCs and ordinary
+-- PostgREST table access. RLS does not constrain that role, so leaving its
+-- default table-write grants in place would let a future worker (or an
+-- operator using the API directly) change saleable quantity/status, insert a
+-- fabricated movement, or delete an inventory item without the atomic audit
+-- boundary below. The SECURITY DEFINER inventory RPCs continue to write as
+-- the table owner; application callers retain read access for availability
+-- and admin visibility, but cannot mutate either side of the stock ledger
+-- directly.
+grant select on table public.inventory_items, public.inventory_movements to service_role;
+revoke insert, update, delete, truncate, references, trigger
+  on table public.inventory_items, public.inventory_movements
+  from service_role;
+
 -- Opening inventory is an auditable stock receipt, not a special direct table
 -- write. Keeping creation and the first movement in one transaction prevents
 -- a router from becoming saleable without a ledger record of how it entered
@@ -2052,7 +2066,7 @@ language sql
 immutable
 security definer
 set search_path = pg_catalog
-as $$ select 3; $$;
+as $$ select 4; $$;
 revoke all on function public.qy_pocket_wifi_fulfilment_schema_version() from public;
 grant execute on function public.qy_pocket_wifi_fulfilment_schema_version() to service_role;
 
