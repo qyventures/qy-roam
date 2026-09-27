@@ -59,6 +59,7 @@ const { metaCapiPurchaseAcknowledged } = require('../lib/metaCapiAcknowledgement
 const { stripeCheckoutEventStateIssue } = require('../lib/stripeCheckoutEventState.ts');
 const { contentLengthMatches, declaredContentLength } = require('../lib/contentLength.ts');
 const { paidFulfilmentDetailsIssue } = require('../lib/paidFulfilmentDetails.ts');
+const { exactNonnegativeCount } = require('../lib/exactCount.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { hasOrderIntegritySecret, hasOrderIntegritySigningConfig, signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -4293,4 +4294,15 @@ test('deployment rejects structurally broken PL/pgSQL before schema application'
   `), /IF without a matching END IF/);
   assert.throws(() => validatePlpgsqlStructure('create function public.example() returns void language plpgsql as $$ begin return; end;'), /Unterminated SQL dollar-quoted block/);
   assert.throws(() => validatePlpgsqlStructure('create function public.example() returns void language plpgsql as $body$ begin return; end; $$;'), /Unterminated SQL dollar-quoted block/);
+});
+
+test('Pocket WiFi availability fails closed when its exact committed-order count is missing or malformed', () => {
+  assert.equal(exactNonnegativeCount(0), 0);
+  assert.equal(exactNonnegativeCount(17), 17);
+  for (const invalid of [null, undefined, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1, '2']) {
+    assert.throws(() => exactNonnegativeCount(invalid, 'Committed Pocket WiFi order count'), /unavailable or invalid/);
+  }
+  assert.match(availabilityRoute, /const committedOrders = exactNonnegativeCount\(orders\.count, 'Committed Pocket WiFi order count'\)/);
+  assert.match(availabilityRoute, /committed: committedOrders \+ unlinkedReservations/);
+  assert.doesNotMatch(availabilityRoute, /orders\.count \|\| 0/);
 });

@@ -17,6 +17,7 @@ import { CHECKOUT_WEBHOOK_HANDOFF_GRACE_MS, MAX_STRIPE_HOLD_SCAN_PAGES, STRIPE_H
 import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
+import { exactNonnegativeCount } from '@/lib/exactCount';
 
 export const dynamic = 'force-dynamic';
 
@@ -234,13 +235,19 @@ async function committedInventory(start: string, end: string, stripeHoldRequestI
   ]);
   if (orders.error) throw orders.error;
 
+  // PostgREST normally returns a number for an exact HEAD count, but a
+  // missing/invalid Content-Range can leave `count` null without an ordinary
+  // query error. This value is an authority for the last physical router: do
+  // not interpret an incomplete provider response as zero committed orders.
+  const committedOrders = exactNonnegativeCount(orders.count, 'Committed Pocket WiFi order count');
+
   // A checkout session normally has a matching reservation. Count that session
   // once via Stripe, then add only reservations that have no open session yet.
   const unlinkedReservations = reservations.filter(
     ({ checkout_request_id }) => !stripeHoldRequestIds.has(checkout_request_id),
   ).length;
   return {
-    committed: (orders.count || 0) + unlinkedReservations,
+    committed: committedOrders + unlinkedReservations,
     saleableInventory: saleableItems,
   };
 }
