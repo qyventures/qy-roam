@@ -2657,6 +2657,20 @@ test('admin reporting screens do not present failed database reads as empty oper
   assert.match(closingPage, /periodsUnavailable\?<p>Closing-period data is unavailable/);
 });
 
+test('CRM headline metrics page through bounded data and warn when totals can be incomplete', () => {
+  assert.match(crmPage, /const CRM_PAGE_SIZE=250/);
+  assert.match(crmPage, /const CRM_MAX_ROWS=5_000/);
+  assert.match(crmPage, /async function loadCrmPages/);
+  assert.match(crmPage, /from<CRM_MAX_ROWS;from\+=CRM_PAGE_SIZE/);
+  assert.match(crmPage, /\.order\('last_order_at',\{ascending:false\}\)\.order\('id',\{ascending:false\}\)\.range\(from,to\)/);
+  assert.match(crmPage, /\.order\('updated_at',\{ascending:false\}\)\.order\('id',\{ascending:false\}\)\.range\(from,to\)/);
+  assert.match(crmPage, /\.order\('created_at',\{ascending:false\}\)\.order\('id',\{ascending:false\}\)\.range\(from,to\)/);
+  assert.match(crmPage, /const truncatedPanels=/);
+  assert.match(crmPage, /CRM view limit reached/);
+  assert.match(crmPage, /Headline totals and lists may be incomplete/);
+  assert.doesNotMatch(crmPage, /\.limit\((?:200|500)\)/);
+});
+
 test('admin operational visibility pages beyond one Supabase response and warns before a bounded view can hide work', () => {
   // Order, fulfilment-email, and CAPI exception counts must not silently stop
   // at the first response once the business has more than a few hundred rows.
