@@ -17,6 +17,11 @@ export const ESIM_PROMO = {
   endDate: '2026-09-30'
 } as const;
 
+export function esimPromoIsActive(now = new Date()) {
+  const end = new Date(`${ESIM_PROMO.endDate}T23:59:59+08:00`);
+  return Number.isFinite(now.getTime()) && Number.isFinite(end.getTime()) && now.getTime() <= end.getTime();
+}
+
 function discounted(price: number) {
   return Math.floor(price * 0.85 * 100) / 100;
 }

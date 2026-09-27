@@ -21,7 +21,7 @@ require.extensions['.ts'] = (module, filename) => {
   module._compile(output.outputText, filename);
 };
 
-const { ESIM_PLANS, ESIM_PROMO } = require('../lib/esimPlans.ts');
+const { ESIM_PLANS, ESIM_PROMO, esimPromoIsActive } = require('../lib/esimPlans.ts');
 const { LAUNCH_PROMO, applyPromoCents } = require('../lib/promotions.ts');
 const { validateQyRoamSession } = require('../lib/qyRoamSession.ts');
 const { parseExactIsoDate, validCheckoutRequestId } = require('../lib/checkoutValidation.ts');
@@ -111,6 +111,17 @@ const privacyPage = fs.readFileSync(require.resolve('../app/privacy/page.tsx'), 
 const termsPage = fs.readFileSync(require.resolve('../app/terms/page.tsx'), 'utf8');
 
 const requestId = 'checkout_request_123456';
+
+test('eSIM launch pricing expires at the approved Singapore campaign boundary', () => {
+  assert.equal(esimPromoIsActive(new Date('2026-09-30T15:59:59.000Z')), true);
+  assert.equal(esimPromoIsActive(new Date('2026-09-30T16:00:00.000Z')), false);
+  assert.equal(esimPromoIsActive(new Date(Number.NaN)), false);
+  assert.match(esimCheckoutRoute, /if \(!esimPromoIsActive\(\)\)/);
+  assert.match(esimCheckoutRoute, /status: 503/);
+  assert.match(esimCheckoutRoute, /'Cache-Control': 'no-store'/);
+  assert.match(esimPage, /disabled=\{busy \|\| !promoActive\}/);
+  assert.match(esimPage, /\{promoActive && <div className="esim-price-row">/);
+});
 
 test('privileged Supabase requests use one canonical hosted-project configuration boundary', () => {
   assert.equal(canonicalSupabaseProjectUrl(' https://project-ref.supabase.co/ '), 'https://project-ref.supabase.co');

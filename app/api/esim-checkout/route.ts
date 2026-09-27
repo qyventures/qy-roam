@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import type Stripe from 'stripe';
 import { createStripeClient } from '../../../lib/stripeClient';
-import { ESIM_PROMO, getEsimPlan } from '../../../lib/esimPlans';
+import { ESIM_PROMO, esimPromoIsActive, getEsimPlan } from '../../../lib/esimPlans';
 import { validCheckoutRequestId } from '../../../lib/checkoutValidation';
 import { hasOrderIntegritySigningConfig, QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance, validQyRoamProvenance } from '../../../lib/orderProvenance';
 import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '../../../lib/productionReadiness';
@@ -74,6 +74,15 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'eSIM ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.' }, {
         status: 503,
         headers: { 'Cache-Control': 'no-store', 'Retry-After': '30' },
+      });
+    }
+    // Build-time pricing checks prevent a new release with an expired offer,
+    // but an already-running production process must also stop creating
+    // discounted payment obligations at the approved campaign boundary.
+    if (!esimPromoIsActive()) {
+      return NextResponse.json({ error: 'This eSIM offer has ended. Please contact +65 8032 7183 for current availability.' }, {
+        status: 503,
+        headers: { 'Cache-Control': 'no-store' },
       });
     }
 
