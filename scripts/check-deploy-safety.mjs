@@ -94,6 +94,23 @@ assert.ok(
   deploy.indexOf('verify_sales_page_assets()') < deploy.indexOf('echo "[10/11] Restarting service"'),
   'every sales-page browser asset must be fetched from the isolated artifact before restart',
 );
+assert.match(deploy, /verify_customer_response_headers\(\)/);
+assert.match(deploy, /content-security-policy:.*frame-ancestors/);
+assert.match(deploy, /content-security-policy:.*unsafe-eval/);
+assert.match(deploy, /cache-control:.*no-store/);
+assert.match(deploy, /cache-control:.*private/);
+assert.match(deploy, /x-robots-tag:.*noindex/);
+assert.match(deploy, /referrer-policy:.*no-referrer/);
+assert.match(deploy, /Built QY Roam artifact is missing required customer security or privacy headers/);
+assert.match(deploy, /QY Roam public TLS ingress is missing required customer security or privacy headers/);
+assert.ok(
+  deploy.indexOf('verify_customer_response_headers "http://127.0.0.1:${smoke_port}"') < deploy.indexOf('echo "[10/11] Restarting service"'),
+  'the isolated artifact response headers must be verified before restart',
+);
+assert.ok(
+  deploy.lastIndexOf('verify_customer_response_headers "$PUBLIC_ORIGIN"') < deploy.indexOf('release_verified=1'),
+  'public ingress response headers must be verified before the rollback artifact is discarded',
+);
 assert.ok(
   deploy.indexOf('Smoke-testing the production artifact') < deploy.indexOf('echo "[10/11] Restarting service"'),
   'the built artifact must boot successfully before the live service is restarted',

@@ -186,6 +186,45 @@ npm run check:deploy-safety
 npm run test:order-integrity
 npm run build
 
+# Response headers are part of the customer-order boundary, not merely static
+# configuration. Verify the exact built server and, after cutover, the public
+# TLS ingress both preserve them. In particular, /success and /booking carry a
+# Stripe Checkout Session id in their query string and must remain private,
+# non-cacheable and unable to pass that capability in a referrer.
+verify_customer_response_headers() {
+  local base_url="$1"
+  shift
+  local response_headers
+  response_headers="$(mktemp /tmp/qyroam-response-headers.XXXXXX)"
+
+  if ! "$@" --dump-header "$response_headers" --output /dev/null "$base_url/"; then
+    rm -f "$response_headers"
+    return 1
+  fi
+  if ! grep -Eiq '^content-security-policy:.*frame-ancestors[^;]*none' "$response_headers" ||
+     grep -Eiq '^content-security-policy:.*unsafe-eval' "$response_headers" ||
+     ! grep -Eiq '^x-frame-options:[[:space:]]*DENY[[:space:]]*$' "$response_headers" ||
+     ! grep -Eiq '^x-content-type-options:[[:space:]]*nosniff[[:space:]]*$' "$response_headers"; then
+    rm -f "$response_headers"
+    return 1
+  fi
+
+  local private_path
+  for private_path in /success /booking; do
+    : > "$response_headers"
+    if ! "$@" --dump-header "$response_headers" --output /dev/null "${base_url}${private_path}?session_id=cs_test_release_header_probe" ||
+       ! grep -Eiq '^cache-control:.*no-store' "$response_headers" ||
+       ! grep -Eiq '^cache-control:.*private' "$response_headers" ||
+       ! grep -Eiq '^x-robots-tag:.*noindex' "$response_headers" ||
+       ! grep -Eiq '^referrer-policy:[[:space:]]*no-referrer[[:space:]]*$' "$response_headers"; then
+      rm -f "$response_headers"
+      return 1
+    fi
+  done
+
+  rm -f "$response_headers"
+}
+
 echo "[6/11] Smoke-testing the production artifact"
 # A successful compilation does not prove that the standalone server can boot
 # or accept an order with the deployed runtime configuration. Test the exact
@@ -256,6 +295,10 @@ for sales_page in / /esim; do
     exit 1
   fi
 done
+if ! verify_customer_response_headers "http://127.0.0.1:${smoke_port}" curl --fail --silent --show-error --max-time 10; then
+  echo "Built QY Roam artifact is missing required customer security or privacy headers" >&2
+  exit 1
+fi
 cleanup_smoke
 smoke_pid=""
 trap 'handle_release_exit "$?"' EXIT
@@ -379,6 +422,10 @@ for sales_page in / /esim; do
     exit 1
   fi
 done
+if ! verify_customer_response_headers "$PUBLIC_ORIGIN" "${public_curl[@]}"; then
+  echo "QY Roam public TLS ingress is missing required customer security or privacy headers" >&2
+  exit 1
+fi
 
 release_verified=1
 cleanup_release_snapshot
