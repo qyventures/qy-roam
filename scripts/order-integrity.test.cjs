@@ -1630,7 +1630,8 @@ test('production checkout and recovery reject test-mode Stripe server credential
   }
   assert.match(availabilityRoute, /!hasRequiredStripeCheckoutConfig\(\)/);
   assert.match(healthRoute, /stripe: hasRequiredStripeCheckoutConfig\(\)/);
-  assert.match(productionReadiness, /export \{ hasRequiredStripeCheckoutConfig \} from '@\/lib\/stripeCheckoutConfig';/);
+  assert.match(productionReadiness, /import \{ hasRequiredStripeCheckoutConfig \} from '@\/lib\/stripeCheckoutConfig';/);
+  assert.match(productionReadiness, /export \{ hasRequiredStripeCheckoutConfig \};/);
   assert.match(stripeCheckoutConfig, /\^\(\?:sk\|rk\)_\(live\|test\)_\[A-Za-z0-9\]\{16,/);
 });
 
@@ -2645,6 +2646,11 @@ test('admin webhook exceptions expose a safe manual Stripe resend path and order
 });
 
 test('launch control reports the same checkout prerequisites that protect real orders', () => {
+  assert.match(productionReadiness, /export async function hasRequiredStripeApiAccess\(\)/);
+  assert.match(productionReadiness, /stripe\.checkout\.sessions\.list\(/);
+  assert.match(productionReadiness, /timeout: STRIPE_READINESS_TIMEOUT_MS, maxNetworkRetries: 0/);
+  assert.match(launchPage, /hasRequiredStripeApiAccess\(\)/);
+  assert.match(launchPage, /stripe&&stripeApi&&webhook/);
   // The launch dashboard is an operational decision surface. It must not show
   // a green storefront state based only on a Stripe key and partial schema
   // probe while either public checkout route would reject a customer.
@@ -2655,7 +2661,7 @@ test('launch control reports the same checkout prerequisites that protect real o
   assert.match(launchPage, /hasOrderIntegritySigningConfig/);
   assert.match(launchPage, /hasRequiredEsimOrderSchema\(\)/);
   assert.match(launchPage, /hasRequiredPocketWifiFulfilmentSchema\(\)/);
-  assert.match(launchPage, /const commonCheckoutReady=stripe&&webhook&&site&&orderIntegrity&&smtp/);
+  assert.match(launchPage, /const commonCheckoutReady=stripe&&stripeApi&&webhook&&site&&orderIntegrity&&smtp/);
   assert.match(launchPage, /const esimReady=commonCheckoutReady&&esimOrderDbOk/);
   assert.match(launchPage, /const wifiReady=commonCheckoutReady&&paymentDbOk&&pocketWifiFulfilmentDbOk&&wifiInventory/);
   assert.match(launchPage, /Pocket WiFi dispatch and return custody schema/);
@@ -2675,7 +2681,9 @@ test('authenticated health readiness fails when any order-critical dependency is
   // boundary and must not return 200 for a service unable to take orders.
   assert.match(healthRoute, /hasRequiredEsimOrderSchema/);
   assert.match(healthRoute, /hasRequiredPocketWifiFulfilmentSchema/);
-  assert.match(healthRoute, /const \[esimOrderSchema, paymentSchema, pocketWifiFulfilmentSchema, operationsSchema\] = await Promise\.all\(\[/);
+  assert.match(healthRoute, /hasRequiredStripeApiAccess/);
+  assert.match(healthRoute, /const \[stripeApi, esimOrderSchema, paymentSchema, pocketWifiFulfilmentSchema, operationsSchema\] = await Promise\.all\(\[/);
+  assert.match(healthRoute, /stripeApi,/);
   assert.match(healthRoute, /esimOrderSchema,/);
   assert.match(healthRoute, /pocketWifiFulfilmentSchema,/);
   assert.match(healthRoute, /const launchReady = Object\.values\(checks\)\.every\(Boolean\)/);

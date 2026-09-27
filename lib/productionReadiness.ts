@@ -3,7 +3,9 @@ import crypto from 'crypto';
 import { isSafeSmtpHost, isSafeSmtpMailbox } from '@/lib/smtp';
 import { safeHttpsDeliveryEndpoint } from '@/lib/deliveryEndpoint';
 import { stripeWebhookSigningSecret } from '@/lib/stripeWebhookSecret';
-export { hasRequiredStripeCheckoutConfig } from '@/lib/stripeCheckoutConfig';
+import { createStripeClient } from '@/lib/stripeClient';
+import { hasRequiredStripeCheckoutConfig } from '@/lib/stripeCheckoutConfig';
+export { hasRequiredStripeCheckoutConfig };
 
 // Checkout invokes these guards immediately before creating a payable Stripe
 // Session. A healthy schema does not change between adjacent requests, while
@@ -32,8 +34,48 @@ let paymentSchemaCheckInFlight: Promise<boolean> | null = null;
 let esimOrderSchemaCheckInFlight: Promise<boolean> | null = null;
 let operationsSchemaCheckInFlight: Promise<boolean> | null = null;
 let pocketWifiFulfilmentSchemaCheckInFlight: Promise<boolean> | null = null;
+let stripeApiReadyUntil = 0;
+let stripeApiCheckInFlight: Promise<boolean> | null = null;
 
 class ReadinessProbeTimeoutError extends Error {}
+
+// Key syntax alone cannot prove that production can open Checkout. A revoked
+// key, account-access change, or Stripe connectivity failure would otherwise
+// pass deployment smoke checks and be discovered by the first shopper. Probe
+// the exact read capability used by router hold scans, with a deadline below
+// the authenticated health request budget. The call is read-only and cached
+// briefly so health polling cannot amplify provider traffic.
+const STRIPE_READINESS_TIMEOUT_MS = 6_000;
+
+async function checkRequiredStripeApiAccess() {
+  const key = process.env.STRIPE_SECRET_KEY?.trim();
+  if (!hasRequiredStripeCheckoutConfig() || !key) return false;
+  try {
+    const stripe = createStripeClient(key);
+    const sessions = await stripe.checkout.sessions.list(
+      { limit: 1 },
+      { timeout: STRIPE_READINESS_TIMEOUT_MS, maxNetworkRetries: 0 },
+    );
+    return Array.isArray(sessions.data);
+  } catch {
+    console.error('production_stripe_api_check_unavailable');
+    return false;
+  }
+}
+
+export async function hasRequiredStripeApiAccess() {
+  if (Date.now() < stripeApiReadyUntil) return true;
+  if (!stripeApiCheckInFlight) {
+    stripeApiCheckInFlight = checkRequiredStripeApiAccess()
+      .then((ready) => {
+        if (ready) stripeApiReadyUntil = Date.now() + READINESS_CACHE_MS;
+        return ready;
+      })
+      .catch(() => false)
+      .finally(() => { stripeApiCheckInFlight = null; });
+  }
+  return stripeApiCheckInFlight;
+}
 
 async function hasCurrentOrderIntegritySchema(database: any, signal: AbortSignal) {
   const [integrityProbe, versionProbe] = await Promise.all([

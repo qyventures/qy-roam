@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { hasRequiredAdminCredentials, hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
-import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig, hasRequiredOperationsSchema, hasRequiredPaymentSchema, hasRequiredPocketWifiFulfilmentSchema, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '@/lib/productionReadiness';
+import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig, hasRequiredOperationsSchema, hasRequiredPaymentSchema, hasRequiredPocketWifiFulfilmentSchema, hasRequiredStripeApiAccess, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '@/lib/productionReadiness';
 import { operationalConfig } from '@/lib/operationalConfig';
 import { isProductionQyRoamOrigin } from '@/lib/siteOrigin';
 import { hasOrderIntegritySigningConfig } from '@/lib/orderProvenance';
@@ -49,7 +49,8 @@ export async function GET(req: Request) {
   // Pocket WiFi requirement. Keep the authenticated release signal aligned
   // with both routes so it cannot declare the store ready while eSIM checkout
   // correctly fails closed against a partial migration.
-  const [esimOrderSchema, paymentSchema, pocketWifiFulfilmentSchema, operationsSchema] = await Promise.all([
+  const [stripeApi, esimOrderSchema, paymentSchema, pocketWifiFulfilmentSchema, operationsSchema] = await Promise.all([
+    hasRequiredStripeApiAccess(),
     hasRequiredEsimOrderSchema(),
     hasRequiredPaymentSchema(),
     hasRequiredPocketWifiFulfilmentSchema(),
@@ -57,6 +58,7 @@ export async function GET(req: Request) {
   ]);
   const checks = {
     stripe: hasRequiredStripeCheckoutConfig(),
+    stripeApi,
     siteUrl: isProductionQyRoamOrigin(process.env.NEXT_PUBLIC_SITE_URL),
     webhook: hasRequiredStripeWebhookConfig(),
     orderIntegrity: hasOrderIntegritySigningConfig(),
