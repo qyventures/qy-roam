@@ -55,6 +55,17 @@ function validStripeSignatureHeader(value: string | null) {
     : null;
 }
 
+function hasIdentityContentEncoding(value: string | null) {
+  // Stripe sends webhook JSON without Content-Encoding. Reject compressed or
+  // otherwise transformed bodies before reading them: across proxies and
+  // runtimes, Content-Length can describe either the encoded representation
+  // or the decoded stream. Accepting one here would make the byte limit and
+  // exact-length check ambiguous, and decompression could expand a small
+  // request beyond the memory boundary enforced below. An explicit
+  // `identity` value is harmless and has the same representation semantics.
+  return value === null || value.trim().toLowerCase() === 'identity';
+}
+
 async function readStripeWebhookBody(req: Request): Promise<Buffer> {
   let contentLength: number | null;
   try {
@@ -626,6 +637,9 @@ export async function POST(req:Request){
   // a service dependency failure.
   if(!hasRequiredStripeCheckoutConfig()||!hasRequiredStripeWebhookConfig()||!hasOrderIntegritySigningConfig()||!key||!webhookSecret) {
     return NextResponse.json({error:'Webhook configuration incomplete'},{status:503});
+  }
+  if(!hasIdentityContentEncoding(req.headers.get('content-encoding'))) {
+    return NextResponse.json({error:'Unsupported webhook content encoding'},{status:415});
   }
   const stripe=createStripeClient(key); let event:Stripe.Event;
   let payload:Buffer;

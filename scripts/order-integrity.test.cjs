@@ -3505,6 +3505,20 @@ test('Stripe webhook bounds raw payload memory before signature verification', (
   assert.ok(signatureValidation >= 0 && signatureCheck > signatureValidation, 'Stripe signature header must be bounded before verification');
 });
 
+test('Stripe webhook rejects encoded payloads before reading or signature verification', () => {
+  // The bounded reader compares Content-Length with the exact bytes supplied
+  // to Stripe's signature verifier. Compression makes that relationship
+  // runtime/proxy-dependent and can expand past the intended memory ceiling,
+  // so only the untransformed representation is accepted.
+  assert.match(webhookRoute, /function hasIdentityContentEncoding\(value: string \| null\)/);
+  assert.match(webhookRoute, /value === null \|\| value\.trim\(\)\.toLowerCase\(\) === 'identity'/);
+  const encodingGuard = webhookRoute.indexOf("if(!hasIdentityContentEncoding(req.headers.get('content-encoding'))) ");
+  const bodyRead = webhookRoute.indexOf('payload=await readStripeWebhookBody(req)');
+  const signatureVerification = webhookRoute.indexOf('stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret)');
+  assert.ok(encodingGuard >= 0 && encodingGuard < bodyRead && bodyRead < signatureVerification);
+  assert.match(webhookRoute, /Unsupported webhook content encoding'\},\{status:415\}/);
+});
+
 test('Stripe webhook bounds third-party delivery responses as well as request time', () => {
   assert.match(webhookRoute, /const MAX_DELIVERY_RESPONSE_BODY_BYTES=64 \* 1024/);
   assert.match(webhookRoute, /async function readDeliveryResponseBody\(response: Response\)/);
