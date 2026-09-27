@@ -105,12 +105,25 @@ async function activeStripeHolds(stripe:Stripe,stripeKey:string,start:string,end
       // Do not let a manually-created lookalike session in a shared Stripe
       // account consume scarce router capacity. Holds use the same
       // server-authored provenance boundary as paid-order fulfilment.
-      if(session.mode!=='payment'||session.created<cutoff||!session.expires_at||session.expires_at<=nowSeconds||session.metadata?.source!=='qyroam.com'||!validQyRoamProvenance(sessionId,session.metadata)) continue;
+      if(session.metadata?.source!=='qyroam.com'||!validQyRoamProvenance(sessionId,session.metadata)) continue;
       // A signed QY Roam session is not necessarily a router reservation.
       // Require the explicit server-authored product identity; treating an
       // absent type as Pocket WiFi could reserve stock for another product
       // during a metadata migration or an operational recovery.
       if(session.metadata?.product_type!=='pocket_wifi') continue;
+      // Once provenance proves this is one of our router checkouts, malformed
+      // lifecycle data is not safe to treat like an unrelated account-level
+      // Session. Ignoring a signed, still-payable hold because Stripe returned
+      // a missing/invalid expiry (or an impossible creation timestamp) can
+      // expose the final physical unit twice. Genuine sessions created by this
+      // route always satisfy these bounds, so fail the complete capacity scan
+      // closed and let the shopper retry after the provider anomaly clears.
+      if(session.mode!=='payment'||
+        !Number.isSafeInteger(session.created)||session.created<cutoff||
+        !Number.isSafeInteger(session.expires_at)||session.expires_at!<=session.created){
+        throw new Error('Stripe returned an invalid authenticated Pocket WiFi hold lifecycle');
+      }
+      if(session.expires_at<=nowSeconds) continue;
       if(requestId&&session.metadata?.checkout_request_id===requestId){
         const sameBooking=matchesRequestedPocketWifi(session,requestId,requested);
         existingUrl=sameBooking?session.url:null;
@@ -123,7 +136,11 @@ async function activeStripeHolds(stripe:Stripe,stripeKey:string,start:string,end
         continue;
       }
       const holdStart=session.metadata?.start, holdEnd=session.metadata?.end;
-      if(holdStart&&holdEnd&&holdStart<=end&&holdEnd>=start){
+      const holdStartDate=parseExactIsoDate(holdStart), holdEndDate=parseExactIsoDate(holdEnd);
+      if(!holdStartDate||!holdEndDate||holdEndDate<holdStartDate){
+        throw new Error('Stripe returned invalid dates for an authenticated Pocket WiFi hold');
+      }
+      if(holdStart!<=end&&holdEnd!>=start){
         holds+=1;
         const holdRequestId=validCheckoutRequestId(session.metadata?.checkout_request_id);
         if(holdRequestId) requestIds.push(holdRequestId);

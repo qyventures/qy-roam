@@ -86,16 +86,27 @@ async function activeStripeHolds(stripe: Stripe, stripeKey: string, start: strin
       // Stripe mode, but availability is a customer-facing stock promise.
       // Apply the same live/test boundary as Checkout before an upstream
       // response can consume inventory capacity.
-      if (session.mode !== 'payment' || session.created < cutoff || !session.expires_at || session.expires_at <= nowSeconds || session.metadata?.source !== 'qyroam.com' || !validQyRoamProvenance(sessionId, session.metadata)) continue;
       if (!stripeEventMatchesConfiguredMode(stripeKey, session.livemode)) continue;
+      if (session.metadata?.source !== 'qyroam.com' || !validQyRoamProvenance(sessionId, session.metadata)) continue;
       // Only explicitly identified router sessions can consume router stock.
       // Never infer Pocket WiFi from the absence of a product marker: a valid
       // signed session for another QY Roam flow must not make availability
       // appear lower than it is.
       if (session.metadata?.product_type !== 'pocket_wifi') continue;
+      if (session.mode !== 'payment' ||
+        !Number.isSafeInteger(session.created) || session.created < cutoff ||
+        !Number.isSafeInteger(session.expires_at) || session.expires_at! <= session.created) {
+        throw new Error('Stripe returned an invalid authenticated Pocket WiFi hold lifecycle');
+      }
+      if (session.expires_at <= nowSeconds) continue;
       const holdStart = session.metadata?.start;
       const holdEnd = session.metadata?.end;
-      if (holdStart && holdEnd && holdStart <= end && holdEnd >= start) {
+      const holdStartDate = parseExactIsoDate(holdStart);
+      const holdEndDate = parseExactIsoDate(holdEnd);
+      if (!holdStartDate || !holdEndDate || holdEndDate < holdStartDate) {
+        throw new Error('Stripe returned invalid dates for an authenticated Pocket WiFi hold');
+      }
+      if (holdStart! <= end && holdEnd! >= start) {
         holds += 1;
         const requestId = session.metadata?.checkout_request_id;
         if (requestId) requestIds.add(requestId);

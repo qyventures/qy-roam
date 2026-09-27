@@ -766,8 +766,8 @@ test('rejects non-payment Checkout modes even with valid signed order metadata',
   // while counting short-lived router reservations for availability.
   assert.match(esimCheckoutRoute, /return session\.mode === 'payment' &&/);
   assert.match(wifiCheckoutRoute, /return session\.mode==='payment' &&/);
-  assert.match(wifiCheckoutRoute, /if\(session\.mode!=='payment'\|\|session\.created<cutoff/);
-  assert.match(availabilityRoute, /if \(session\.mode !== 'payment' \|\| session\.created < cutoff/);
+  assert.match(wifiCheckoutRoute, /if\(session\.mode!=='payment'\|\|\s*!Number\.isSafeInteger\(session\.created\)\|\|session\.created<cutoff/);
+  assert.match(availabilityRoute, /if \(session\.mode !== 'payment' \|\|\s*!Number\.isSafeInteger\(session\.created\) \|\| session\.created < cutoff/);
 });
 
 test('rejects unsupported Stripe payment states before order persistence', () => {
@@ -2350,7 +2350,7 @@ test('Pocket WiFi availability only counts Checkout Sessions that are still unex
   const checkoutRoute = fs.readFileSync(require.resolve('../app/api/checkout/route.ts'), 'utf8');
   for (const source of [checkoutRoute, availabilityRoute]) {
     assert.match(source, /session\.expires_at\s*<=\s*nowSeconds/);
-    assert.match(source, /!session\.expires_at/);
+    assert.match(source, /!Number\.isSafeInteger\(session\.expires_at\)/);
   }
 });
 
@@ -2364,6 +2364,28 @@ test('Pocket WiFi Stripe-hold scans paginate recent sessions with a fail-closed 
   }
   const checkoutExpiry = fs.readFileSync(require.resolve('../lib/checkoutExpiry.ts'), 'utf8');
   assert.match(checkoutExpiry, /export const MAX_STRIPE_HOLD_SCAN_PAGES\s*=\s*5/);
+});
+
+test('authenticated Pocket WiFi hold anomalies fail capacity scans closed', () => {
+  for (const [name, route, endMarker] of [
+    ['checkout', wifiCheckoutRoute, '// A Stripe Checkout URL'],
+    ['availability', availabilityRoute, 'async function activeReservations('],
+  ]) {
+    const scanStart = route.indexOf('async function activeStripeHolds(');
+    const scanEnd = route.indexOf(endMarker, scanStart);
+    const scan = route.slice(scanStart, scanEnd);
+    const provenance = scan.indexOf('validQyRoamProvenance(sessionId,');
+    const lifecycleFailure = scan.indexOf("throw new Error('Stripe returned an invalid authenticated Pocket WiFi hold lifecycle')");
+    const dateFailure = scan.indexOf("throw new Error('Stripe returned invalid dates for an authenticated Pocket WiFi hold')");
+
+    assert.ok(provenance >= 0, `${name} hold scans must authenticate QY Roam sessions`);
+    assert.ok(lifecycleFailure > provenance, `${name} must fail closed on malformed signed hold lifecycle data`);
+    assert.ok(dateFailure > lifecycleFailure, `${name} must fail closed on malformed signed hold travel dates`);
+    assert.match(scan, /Number\.isSafeInteger\(session\.created\)/);
+    assert.match(scan, /Number\.isSafeInteger\(session\.expires_at\)/);
+    assert.match(scan, /parseExactIsoDate\(holdStart\)/);
+    assert.match(scan, /parseExactIsoDate\(holdEnd\)/);
+  }
 });
 
 test('Pocket WiFi idempotent recovery completes the inventory hold scan', () => {
