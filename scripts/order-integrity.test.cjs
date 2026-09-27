@@ -217,11 +217,11 @@ test('durable orders accept only canonical Stripe or protected manual-sale ident
   );
   assert.match(
     schema,
-    /'orders_session_id_format_check'\s*\)\) = 12 and/,
+    /'orders_session_id_format_check'\s*\)\) = 13 and/,
     'checkout readiness must reject a deployed schema missing the order identity boundary',
   );
   assert.match(adminOpsRoute, /`manual_\$\{crypto\.createHash\('sha256'\)\.update\(reference\)\.digest\('hex'\)\.slice\(0, 48\)\}`/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 5/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 6/);
 });
 
 test('manual sales cannot create permanent unpaid Pocket WiFi capacity holds', () => {
@@ -1557,11 +1557,11 @@ test('checkout readiness rejects an older order-integrity schema with matching o
   // Version 3 includes the database-enforced durable order identity contract.
   // Keeping version 2 here would let a rolling app deploy accept payment
   // against the earlier schema even though all object names still exist.
-  assert.match(productionReadiness, /const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 5/);
+  assert.match(productionReadiness, /const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 6/);
   assert.match(productionReadiness, /database\.rpc\('qy_order_integrity_schema_version', \{\}\)\.abortSignal\(signal\)/);
   assert.match(productionReadiness, /versionProbe\.data !== REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION/);
   assert.match(productionReadiness, /if \(!await hasCurrentOrderIntegritySchema\(database, signal\)\) return false/);
-  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 5;/);
+  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 6;/);
   assert.match(schema, /grant execute on function public\.qy_order_integrity_schema_version\(\) to service_role/);
   assert.ok(
     schema.indexOf('create or replace function public.qy_order_integrity_schema_version') >
@@ -1866,7 +1866,7 @@ test('database rejects paid Stripe orders without their product delivery destina
   assert.match(schema, /shipping_address ->> 'country' = 'SG'/);
   assert.match(schema, /nullif\(btrim\(shipping_address ->> 'line1'\), ''\) is not null/);
   assert.match(schema, /nullif\(btrim\(shipping_address ->> 'postal_code'\), ''\) is not null/);
-  assert.match(schema, /'orders_paid_stripe_fulfilment_details_check',[\s\S]*?'orders_session_id_format_check'[\s\S]*?\)\) = 12 and/);
+  assert.match(schema, /'orders_paid_stripe_fulfilment_details_check',[\s\S]*?'orders_session_id_format_check'[\s\S]*?\)\) = 13 and/);
 });
 
 test('eSIM payment persistence serializes digital entitlement transitions in the database', () => {
@@ -2385,6 +2385,19 @@ test('paid order commercial identity cannot be rewritten after payment', () => {
   assert.match(schema, /create or replace function public\.qy_enforce_paid_order_identity_immutability\(\)/);
   assert.match(schema, /if old\.payment_status = 'paid' and \([\s\S]*new\.stripe_session_id is distinct from old\.stripe_session_id[\s\S]*new\.payment_status is distinct from old\.payment_status[\s\S]*new\.payment_confirmed_at is distinct from old\.payment_confirmed_at[\s\S]*new\.amount_sgd is distinct from old\.amount_sgd[\s\S]*new\.product_type is distinct from old\.product_type[\s\S]*new\.plan_id is distinct from old\.plan_id[\s\S]*new\.plan_name is distinct from old\.plan_name[\s\S]*new\.data_allowance is distinct from old\.data_allowance[\s\S]*new\.country is distinct from old\.country[\s\S]*new\.travel_start is distinct from old\.travel_start[\s\S]*new\.travel_end is distinct from old\.travel_end/);
   assert.match(schema, /create trigger qy_enforce_paid_order_identity_immutability[\s\S]*before update of stripe_session_id, payment_status, payment_confirmed_at,[\s\S]*amount_sgd, product_type, measurement_consent, plan_id, plan_name, data_allowance, country,[\s\S]*travel_start, travel_end on public\.orders/);
+});
+
+test('eSIM entitlement snapshots stay bounded and printable at the database boundary', () => {
+  assert.match(schema, /orders_esim_plan_identity_shape_check/);
+  assert.match(schema, /plan_id ~ '\^\[a-z0-9\]\[a-z0-9-\]\{1,80\}\$'/);
+  assert.match(schema, /length\(plan_name\) between 1 and 200[\s\S]*?plan_name = btrim\(plan_name\)[\s\S]*?plan_name !~ '\[\[:cntrl:\]\]'/);
+  assert.match(schema, /length\(data_allowance\) between 1 and 200[\s\S]*?data_allowance = btrim\(data_allowance\)[\s\S]*?data_allowance !~ '\[\[:cntrl:\]\]'/);
+  assert.match(schema, /length\(country\) between 1 and 100[\s\S]*?country = btrim\(country\)[\s\S]*?country !~ '\[\[:cntrl:\]\]'/);
+  assert.match(schema, /if p_plan_id !~ '\^\[a-z0-9\]\[a-z0-9-\]\{1,80\}\$' then raise exception 'invalid eSIM plan id'/);
+  assert.match(schema, /if coalesce\(length\(p_plan_name\), 0\) not between 1 and 200[\s\S]*?raise exception 'invalid eSIM plan name'/);
+  assert.match(schema, /if coalesce\(length\(p_data_allowance\), 0\) not between 1 and 200[\s\S]*?raise exception 'invalid eSIM data allowance'/);
+  assert.match(schema, /if coalesce\(length\(p_country\), 0\) not between 1 and 100[\s\S]*?raise exception 'invalid eSIM destination'/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 6/);
 });
 
 test('paid-order measurement consent cannot be broadened after checkout', () => {

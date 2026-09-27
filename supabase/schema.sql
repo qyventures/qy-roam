@@ -143,6 +143,23 @@ alter table public.orders add constraint orders_esim_plan_identity_required_chec
   )
 ) not valid;
 
+-- The fields above are rendered in operations and copied into fulfilment
+-- messages, so "non-empty" is not a sufficient digital-entitlement
+-- boundary. Keep the signed catalogue snapshot compact and printable even
+-- when a service-role repair/import bypasses the application validators.
+-- NOT VALID keeps historical rows available for reconciliation while every
+-- new or changed eSIM order must carry the same bounded identity shape as a
+-- Checkout Session created by this application.
+alter table public.orders drop constraint if exists orders_esim_plan_identity_shape_check;
+alter table public.orders add constraint orders_esim_plan_identity_shape_check check (
+  product_type <> 'esim' or (
+    plan_id ~ '^[a-z0-9][a-z0-9-]{1,80}$' and
+    length(plan_name) between 1 and 200 and plan_name = btrim(plan_name) and plan_name !~ '[[:cntrl:]]' and
+    length(data_allowance) between 1 and 200 and data_allowance = btrim(data_allowance) and data_allowance !~ '[[:cntrl:]]' and
+    length(country) between 1 and 100 and country = btrim(country) and country !~ '[[:cntrl:]]'
+  )
+) not valid;
+
 -- eSIM credentials must never be stored as a delivery "reference". Keep a
 -- database backstop for direct operational writes as well as the stricter
 -- application validation; NOT VALID preserves review access to any legacy
@@ -963,6 +980,7 @@ as $$
     (select count(*) from pg_constraint where conrelid = 'public.orders'::regclass and conname in (
       'orders_measurement_consent_check',
       'orders_esim_plan_identity_required_check',
+      'orders_esim_plan_identity_shape_check',
       'orders_digital_delivery_reference_safe_check',
       'orders_esim_fulfilled_delivery_reference_required_check',
       'orders_product_fulfilment_status_check',
@@ -973,7 +991,7 @@ as $$
       'orders_pocket_wifi_dispatch_evidence_check',
       'orders_pocket_wifi_return_evidence_check',
       'orders_session_id_format_check'
-    )) = 12 and
+    )) = 13 and
     (select count(*) from pg_constraint where conrelid = 'public.stripe_events'::regclass and conname in (
       'stripe_events_attempts_check',
       'stripe_events_event_id_check',
@@ -1316,6 +1334,10 @@ begin
   if not v_paid and p_payment_confirmed_at is not null then raise exception 'unpaid Stripe order cannot have a payment confirmation time'; end if;
   if p_amount_sgd is null or p_amount_sgd <= 0 then raise exception 'invalid eSIM payment amount'; end if;
   if coalesce(length(trim(p_plan_id)), 0) = 0 then raise exception 'eSIM plan id is required'; end if;
+  if p_plan_id !~ '^[a-z0-9][a-z0-9-]{1,80}$' then raise exception 'invalid eSIM plan id'; end if;
+  if coalesce(length(p_plan_name), 0) not between 1 and 200 or p_plan_name <> btrim(p_plan_name) or p_plan_name ~ '[[:cntrl:]]' then raise exception 'invalid eSIM plan name'; end if;
+  if coalesce(length(p_data_allowance), 0) not between 1 and 200 or p_data_allowance <> btrim(p_data_allowance) or p_data_allowance ~ '[[:cntrl:]]' then raise exception 'invalid eSIM data allowance'; end if;
+  if coalesce(length(p_country), 0) not between 1 and 100 or p_country <> btrim(p_country) or p_country ~ '[[:cntrl:]]' then raise exception 'invalid eSIM destination'; end if;
 
   perform pg_advisory_xact_lock(hashtext('qy_roam_esim:' || p_stripe_session_id));
   select * into v_order from public.orders where stripe_session_id = p_stripe_session_id for update;
@@ -1539,11 +1561,10 @@ immutable
 security definer
 set search_path = pg_catalog
 as $$
-  -- Version 5 limits awaiting-payment inventory commitments to canonical
-  -- Stripe Sessions. Legacy unpaid manual records have no settlement callback
-  -- and must not reserve physical stock forever. An application expecting
-  -- that capacity boundary must reject the earlier version 4 functions.
-  select 5;
+  -- Version 6 makes every new or changed eSIM entitlement snapshot bounded
+  -- and printable at the database boundary. An application expecting that
+  -- operational identity contract must reject the earlier version 5 schema.
+  select 6;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
