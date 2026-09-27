@@ -30,7 +30,7 @@ const { POCKET_WIFI_RETURN_GRACE_DAYS } = require('../lib/pocketWifiReturns.ts')
 const { WIFI_BENCHMARK, WIFI_PLANS } = require('../lib/wifiPlans.ts');
 const { pocketWifiRentalCents, sgdFromCents } = require('../lib/pocketWifiPricing.ts');
 const { allowedFulfilmentStatuses, fulfilmentNotificationActionable, validFulfilmentTransition, STRIPE_EVENT_CLAIM_STALE_MS, STRIPE_EVENT_CLAIM_CLOCK_SKEW_MS, stripeEventClaimInProgress } = require('../lib/orderLifecycle.ts');
-const { operationalConfig } = require('../lib/operationalConfig.ts');
+const { MAX_POCKET_WIFI_INVENTORY, operationalConfig } = require('../lib/operationalConfig.ts');
 const { validStripeCheckoutSessionId } = require('../lib/stripeSessionId.ts');
 const { validStripeEventCreated, validStripePaymentEventCreated, STRIPE_EVENT_CREATED_MIN_SECONDS, STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS } = require('../lib/stripeEventCreated.ts');
 const { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesEvent, stripeWebhookEventEnvelope } = require('../lib/stripeWebhookObject.ts');
@@ -280,6 +280,35 @@ test('Pocket WiFi reservation authority validates its complete capacity snapshot
   assert.match(schema, /cardinality\(p_stripe_hold_request_ids\) <> \(\s*select count\(distinct hold_id\)/);
   assert.match(schema, /v_existing\.expires_at <> p_expires_at/);
   assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 12/);
+});
+
+test('Pocket WiFi deployment inventory cannot exceed the database reservation boundary', () => {
+  assert.equal(MAX_POCKET_WIFI_INVENTORY, 10_000);
+  assert.match(schema, /p_inventory is null or p_inventory < 0 or p_inventory > 10000/);
+
+  const previousInventory = process.env.POCKET_WIFI_INVENTORY;
+  const previousLeadDays = process.env.MIN_DELIVERY_LEAD_DAYS;
+  const previousCourierFee = process.env.COURIER_FEE_SGD;
+  const previousNodeEnv = process.env.NODE_ENV;
+  try {
+    process.env.NODE_ENV = 'production';
+    process.env.MIN_DELIVERY_LEAD_DAYS = '2';
+    process.env.COURIER_FEE_SGD = '0';
+    process.env.POCKET_WIFI_INVENTORY = String(MAX_POCKET_WIFI_INVENTORY);
+    assert.equal(operationalConfig()?.pocketWifiInventory, MAX_POCKET_WIFI_INVENTORY);
+
+    process.env.POCKET_WIFI_INVENTORY = String(MAX_POCKET_WIFI_INVENTORY + 1);
+    assert.equal(operationalConfig(), null);
+  } finally {
+    if (previousInventory === undefined) delete process.env.POCKET_WIFI_INVENTORY;
+    else process.env.POCKET_WIFI_INVENTORY = previousInventory;
+    if (previousLeadDays === undefined) delete process.env.MIN_DELIVERY_LEAD_DAYS;
+    else process.env.MIN_DELIVERY_LEAD_DAYS = previousLeadDays;
+    if (previousCourierFee === undefined) delete process.env.COURIER_FEE_SGD;
+    else process.env.COURIER_FEE_SGD = previousCourierFee;
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+  }
 });
 
 test('optional Meta consent storage cannot block checkout in privacy-restricted browsers', () => {

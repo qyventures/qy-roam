@@ -4,7 +4,12 @@ type OperationalConfig = {
   courierFeeCents: number;
 };
 
-const MAX_INVENTORY = 1_000_000;
+// Keep this admission boundary identical to qy_reserve_pocket_wifi's
+// database-enforced p_inventory ceiling. If the application accepted a
+// larger deployment value, availability could advertise saleable stock while
+// every checkout failed when the atomic reservation RPC rejected its capacity
+// snapshot.
+export const MAX_POCKET_WIFI_INVENTORY = 10_000;
 const MAX_LEAD_DAYS = 365;
 const MAX_COURIER_FEE_CENTS = 1_000_000;
 
@@ -49,7 +54,7 @@ export function operationalConfig(): OperationalConfig | null {
     requiredProductionValue(process.env.MIN_DELIVERY_LEAD_DAYS) ||
     requiredProductionValue(process.env.COURIER_FEE_SGD)
   ) return null;
-  const pocketWifiInventory = wholeNumber(process.env.POCKET_WIFI_INVENTORY, 10, MAX_INVENTORY);
+  const pocketWifiInventory = wholeNumber(process.env.POCKET_WIFI_INVENTORY, 10, MAX_POCKET_WIFI_INVENTORY);
   const minDeliveryLeadDays = wholeNumber(process.env.MIN_DELIVERY_LEAD_DAYS, 2, MAX_LEAD_DAYS);
   const courierFeeCents = moneyCents(process.env.COURIER_FEE_SGD, 0);
   if (pocketWifiInventory === null || minDeliveryLeadDays === null || courierFeeCents === null) return null;
