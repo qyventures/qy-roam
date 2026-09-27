@@ -26,21 +26,40 @@ function isUnsafeMethod(method: string) {
 /**
  * Basic Auth proves who the operator is, but browsers can retain those
  * credentials and attach them to a cross-site form submission. Reject an
- * explicitly cross-site mutation, and require any supplied Origin to match
- * the API origin. Requests from the admin UI are same-origin; non-browser
- * recovery clients that do not send browser provenance headers remain usable.
+ * explicitly cross-site mutation, and require any supplied Origin or Referer
+ * to match the API origin. Requests from the admin UI are same-origin;
+ * non-browser recovery clients without browser provenance remain usable.
  */
 function isTrustedAdminMutation(req: NextRequest) {
   if (!req.nextUrl.pathname.startsWith('/api/admin') || !isUnsafeMethod(req.method)) return true;
   if (req.headers.get('sec-fetch-site') === 'cross-site') return false;
 
   const origin = req.headers.get('origin');
-  if (!origin) return true;
-  try {
-    return new URL(origin).origin === req.nextUrl.origin;
-  } catch {
-    return false;
+  if (origin) {
+    try {
+      return new URL(origin).origin === req.nextUrl.origin;
+    } catch {
+      return false;
+    }
   }
+
+  // Some browsers, privacy tools, and reverse proxies can omit Origin while
+  // retaining Referer. A cross-site form can issue the bodyless POST used to
+  // retry paid-order fulfilment/CAPI, and cached Basic Auth credentials may be
+  // attached by the browser. Treat a supplied Referer as provenance too so
+  // stripping only Origin cannot downgrade the same-origin check. Purposeful
+  // non-browser recovery clients remain supported because they normally send
+  // neither browser provenance header.
+  const referer = req.headers.get('referer');
+  if (referer) {
+    try {
+      return new URL(referer).origin === req.nextUrl.origin;
+    } catch {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 export function middleware(req: NextRequest) {

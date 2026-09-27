@@ -4071,6 +4071,9 @@ test('authenticated admin browser mutations reject cross-site request triggering
   assert.match(middleware, /!\['GET', 'HEAD', 'OPTIONS'\]\.includes/);
   assert.match(middleware, /req\.headers\.get\('sec-fetch-site'\) === 'cross-site'/);
   assert.match(middleware, /new URL\(origin\)\.origin === req\.nextUrl\.origin/);
+  assert.match(middleware, /req\.headers\.get\('referer'\)/);
+  assert.match(middleware, /new URL\(referer\)\.origin === req\.nextUrl\.origin/);
+  assert.match(middleware, /non-browser recovery clients remain supported/);
   assert.match(middleware, /if \(!isTrustedAdminMutation\(req\)\)/);
   assert.match(middleware, /status: 403/);
   assert.match(middleware, /'Cache-Control': 'no-store'/);
