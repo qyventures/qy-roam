@@ -1030,6 +1030,14 @@ as $$
       'meta_purchase_deliveries_sent_at_check',
       'meta_purchase_deliveries_order_fk'
     )) = 5 and
+    -- This table is defined just after the readiness function on a clean
+    -- install. Resolve it softly here so function creation remains additive;
+    -- the completed migration cannot report ready until the table and both
+    -- constraints exist.
+    (select count(*) from pg_constraint where conrelid = to_regclass('public.checkout_reservations') and conname in (
+      'checkout_reservations_request_id_check',
+      'checkout_reservations_session_id_check'
+    )) = 2 and
     (select count(*) from pg_trigger where tgrelid = 'public.orders'::regclass and not tgisinternal and tgenabled <> 'D' and tgname in (
       'qy_enforce_paid_order_identity_immutability',
       'qy_enforce_esim_delivery_reference_immutability',
@@ -1059,6 +1067,22 @@ create table if not exists public.checkout_reservations (
   created_at timestamptz not null default now(),
   check (travel_end >= travel_start)
 );
+
+-- Reservations are part of the physical-capacity ledger, not disposable
+-- cache rows. The reservation RPC validates these identities, but direct
+-- service-role repairs and future workers can write the table without that
+-- function. A malformed request id can become an undeletable capacity hold;
+-- a malformed linked Session id cannot be reconciled by a terminal Stripe
+-- event. Protect new and changed rows while leaving any historical damage
+-- visible for an operator to repair deliberately.
+alter table public.checkout_reservations drop constraint if exists checkout_reservations_request_id_check;
+alter table public.checkout_reservations add constraint checkout_reservations_request_id_check check (
+  checkout_request_id ~ '^[A-Za-z0-9_-]{16,80}$'
+) not valid;
+alter table public.checkout_reservations drop constraint if exists checkout_reservations_session_id_check;
+alter table public.checkout_reservations add constraint checkout_reservations_session_id_check check (
+  stripe_session_id is null or stripe_session_id ~ '^cs_(test|live)_[A-Za-z0-9]+$'
+) not valid;
 alter table public.checkout_reservations enable row level security;
 
 create or replace function public.qy_reserve_pocket_wifi(
@@ -1613,10 +1637,10 @@ immutable
 security definer
 set search_path = pg_catalog
 as $$
-  -- Version 9 prevents the privileged paid-order RPC from retiring an
-  -- ambiguous unlinked reservation using only a caller-supplied request id.
-  -- An application expecting that boundary must reject version 8.
-  select 9;
+  -- Version 10 certifies that direct writes cannot introduce malformed
+  -- checkout or Stripe identities into the physical-capacity ledger.
+  -- An application expecting that boundary must reject version 9.
+  select 10;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
