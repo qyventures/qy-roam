@@ -2682,8 +2682,8 @@ test('generic inventory mutations cannot make a router saleable while it is in c
     'both quantity adjustments and status changes must reject assigned in-custody routers',
   );
   assert.match(schema, /inventory item is assigned to an active Pocket WiFi custody order/);
-  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 2; \$\$/);
-  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 2/);
+  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 3; \$\$/);
+  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 3/);
   assert.match(productionReadiness, /database\.rpc\('qy_pocket_wifi_fulfilment_schema_version', \{\}\)/);
   assert.match(productionReadiness, /versionProbe\.data !== REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION/);
 });
@@ -2748,6 +2748,20 @@ test('database enforces the Pocket WiFi lifecycle and stock evidence for every w
   assert.match(guard, /old\.dispatched_at is not null[\s\S]*new\.courier_tracking is distinct from old\.courier_tracking[\s\S]*Pocket WiFi dispatch custody evidence is immutable/);
   assert.match(guard, /old\.returned_at is not null[\s\S]*new\.return_tracking is distinct from old\.return_tracking[\s\S]*Pocket WiFi return custody evidence is immutable/);
   assert.match(schema, /create trigger qy_enforce_pocket_wifi_fulfilment_transition[\s\S]*before insert or update of product_type, fulfilment_status, stripe_session_id,[\s\S]*inventory_item_id, courier_tracking, return_tracking, return_disposition,[\s\S]*dispatched_at, returned_at on public\.orders/);
+});
+
+test('Pocket WiFi inventory movements remain append-only audit evidence', () => {
+  const guard = schema.slice(
+    schema.indexOf('create or replace function public.qy_enforce_inventory_movement_immutability()'),
+    schema.indexOf('-- Opening inventory is an auditable stock receipt'),
+  );
+  assert.match(guard, /raise exception 'inventory movements are append-only; record a compensating movement instead'/);
+  assert.match(
+    guard,
+    /create trigger qy_enforce_inventory_movement_immutability[\s\S]*before update or delete on public\.inventory_movements/,
+  );
+  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 3; \$\$/);
+  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 3/);
 });
 
 test('admin actions advance their transition baseline after each save', () => {

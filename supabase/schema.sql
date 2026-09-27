@@ -1690,6 +1690,29 @@ alter table public.inventory_movements drop constraint if exists inventory_movem
 alter table public.inventory_movements add constraint inventory_movements_quantity_check check (quantity <> 0 or movement_type in ('return_quarantined', 'return_damaged', 'status_change'));
 alter table public.inventory_movements enable row level security;
 
+-- Stock movements are the audit evidence behind both saleable quantity and
+-- the Pocket WiFi custody checks above. Once recorded, changing or deleting a
+-- movement could make a dispatch/return appear to have happened differently,
+-- or remove the only evidence for it without touching the protected order.
+-- Corrections must therefore be new compensating movements, preserving the
+-- original event for reconciliation. This also protects the ledger from
+-- direct service-role writes outside the supported operations RPCs.
+create or replace function public.qy_enforce_inventory_movement_immutability()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public
+as $$
+begin
+  raise exception 'inventory movements are append-only; record a compensating movement instead';
+end;
+$$;
+
+drop trigger if exists qy_enforce_inventory_movement_immutability on public.inventory_movements;
+create trigger qy_enforce_inventory_movement_immutability
+before update or delete on public.inventory_movements
+for each row execute function public.qy_enforce_inventory_movement_immutability();
+
 -- Opening inventory is an auditable stock receipt, not a special direct table
 -- write. Keeping creation and the first movement in one transaction prevents
 -- a router from becoming saleable without a ledger record of how it entered
@@ -2029,7 +2052,7 @@ language sql
 immutable
 security definer
 set search_path = pg_catalog
-as $$ select 2; $$;
+as $$ select 3; $$;
 revoke all on function public.qy_pocket_wifi_fulfilment_schema_version() from public;
 grant execute on function public.qy_pocket_wifi_fulfilment_schema_version() to service_role;
 
