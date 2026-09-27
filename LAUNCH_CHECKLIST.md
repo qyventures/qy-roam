@@ -100,6 +100,12 @@ Subscribe to `checkout.session.completed`, `checkout.session.async_payment_succe
 
 Before deploying this application version, apply `supabase/schema.sql` to the production Supabase project. The checkout and webhook require the `orders`, `checkout_reservations`, `stripe_events`, `fulfilment_notifications`, and `meta_purchase_deliveries` tables plus the Pocket WiFi reservation, Stripe-persistence, manual-order, inventory-creation, inventory-adjustment, inventory-status, and dispatch/return RPCs defined there. Deploy the schema before restarting the app so checkout, staff-created paid rentals, and opening router stock all use their atomic inventory and audit boundaries.
 
+Pricing preflight is intentionally fail-closed. If `npm run check:wifi-pricing` or
+`npm run check:esim-pricing` reports a stale benchmark, re-open the exact public
+source recorded in the relevant server catalogue, verify the comparable price,
+and record the new verification date. Do not advance a date without reviewing
+the source, and do not deploy by weakening or skipping the freshness check.
+
 Before advertising, make one controlled real booking using the lowest practical charge and verify:
 
 1. Destination/date availability succeeds.
