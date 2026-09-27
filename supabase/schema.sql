@@ -1089,6 +1089,32 @@ begin
   if p_travel_start is null or p_travel_end is null or p_travel_end < p_travel_start then
     raise exception 'invalid reservation dates';
   end if;
+  -- This SECURITY DEFINER function is the final stock authority. Keep its
+  -- caller-supplied capacity snapshot inside the exact bounds enforced by the
+  -- application: a future worker or partial rolling deployment must not be
+  -- able to suppress real reservations with invented hold identities, create
+  -- a practically permanent hold, or make a negative/oversized provider count
+  -- participate in the final-unit calculation.
+  if p_inventory is null or p_inventory < 0 or p_inventory > 10000 then
+    raise exception 'invalid Pocket WiFi inventory limit';
+  end if;
+  if p_expires_at is null or p_expires_at <= now() or p_expires_at > now() + interval '37 minutes' then
+    raise exception 'invalid checkout reservation expiry';
+  end if;
+  if p_stripe_hold_count is null or p_stripe_hold_count < 0 or p_stripe_hold_count > 500 then
+    raise exception 'invalid Stripe hold count';
+  end if;
+  if p_stripe_hold_request_ids is null
+    or cardinality(p_stripe_hold_request_ids) > p_stripe_hold_count
+    or exists (
+      select 1 from unnest(p_stripe_hold_request_ids) as hold_ids(hold_id)
+      where hold_id is null or hold_id !~ '^[A-Za-z0-9_-]{16,80}$'
+    )
+    or cardinality(p_stripe_hold_request_ids) <> (
+      select count(distinct hold_id) from unnest(p_stripe_hold_request_ids) as hold_ids(hold_id)
+    ) then
+    raise exception 'invalid Stripe hold request identities';
+  end if;
 
   -- A single transaction-level lock makes capacity calculation plus insertion
   -- atomic across every application instance.
@@ -1112,8 +1138,10 @@ begin
   from public.checkout_reservations
   where checkout_request_id = p_checkout_request_id;
   if found then
-    if v_existing.travel_start <> p_travel_start or v_existing.travel_end <> p_travel_end then
-      raise exception 'checkout request id was already used for different dates';
+    if v_existing.travel_start <> p_travel_start
+      or v_existing.travel_end <> p_travel_end
+      or v_existing.expires_at <> p_expires_at then
+      raise exception 'checkout request id was already used for different reservation details';
     end if;
   end if;
 
@@ -1580,10 +1608,10 @@ immutable
 security definer
 set search_path = pg_catalog
 as $$
-  -- Version 7 requires a deliverable email destination for every newly
-  -- written paid eSIM entitlement, including protected manual/offline sales.
-  -- An application expecting that boundary must reject version 6.
-  select 7;
+  -- Version 8 makes the privileged Pocket WiFi reservation RPC validate its
+  -- complete caller-supplied capacity snapshot and immutable expiry. An
+  -- application expecting that boundary must reject version 7.
+  select 8;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
