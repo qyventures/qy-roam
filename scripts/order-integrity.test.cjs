@@ -43,7 +43,7 @@ const { checkoutSiteOrigin, isProductionQyRoamOrigin, metaPurchaseEventSourceUrl
 const { hasRequiredAdminCredentials, hasRequiredMetaCapiPurchaseConfig, metaPixelId } = require('../lib/runtimeConfig.ts');
 const { metaMeasurementAllowed, setMetaMeasurementConsent } = require('../lib/metaClient.ts');
 const { digitalDeliveryReferenceIssue, isSafeDigitalDeliveryReference } = require('../lib/digitalDeliveryReference.ts');
-const { SUPABASE_REQUEST_TIMEOUT_MS, SUPABASE_RESPONSE_MAX_BYTES, canonicalSupabaseProjectUrl, fetchSupabaseWithTimeout, hasRequiredSupabaseAdminConfig, supabaseServiceRoleKey } = require('../lib/supabaseAdmin.ts');
+const { SUPABASE_REQUEST_TIMEOUT_MS, SUPABASE_RESPONSE_MAX_BYTES, SUPABASE_RESPONSE_MAX_CHUNKS, canonicalSupabaseProjectUrl, fetchSupabaseWithTimeout, hasRequiredSupabaseAdminConfig, supabaseServiceRoleKey } = require('../lib/supabaseAdmin.ts');
 const { checkoutAttempt, clearCheckoutAttempt, CHECKOUT_ATTEMPT_MAX_AGE_MS } = require('../lib/checkoutAttempt.ts');
 const { safeHttpsDeliveryEndpoint } = require('../lib/deliveryEndpoint.ts');
 const { fulfilmentRelayAcknowledged } = require('../lib/deliveryAcknowledgement.ts');
@@ -3609,6 +3609,7 @@ test('Stripe network calls use a bounded shared production client', () => {
 test('Supabase order-critical requests use a bounded shared transport', async () => {
   assert.equal(SUPABASE_REQUEST_TIMEOUT_MS, 15_000);
   assert.equal(SUPABASE_RESPONSE_MAX_BYTES, 8 * 1024 * 1024);
+  assert.equal(SUPABASE_RESPONSE_MAX_CHUNKS, 16_384);
   assert.match(supabaseAdmin, /global: \{ fetch: fetchSupabaseWithTimeout \}/);
   assert.match(supabaseAdmin, /const timeout = setTimeout\(\(\) => \{[\s\S]*?controller\.abort\(timeoutError\);[\s\S]*?rejectDeadline\?\.\(timeoutError\);[\s\S]*?\}, timeoutMs\)/);
   assert.match(supabaseAdmin, /Promise\.race\(\[reader\.read\(\), deadline\]\)/);
@@ -3659,6 +3660,23 @@ test('Supabase order-critical requests use a bounded shared transport', async ()
   try {
     const response = await fetchSupabaseWithTimeout('https://supabase.example/rest/v1/orders', undefined, 100, 16);
     await assert.rejects(() => response.arrayBuffer(), /Supabase response body is too large/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+
+  // Bound stream-processing work independently from response bytes. A
+  // one-byte-at-a-time gateway must not occupy an order-critical worker for
+  // millions of pull turns while technically remaining below the byte cap.
+  let fragmentedBodyCancelled = false;
+  global.fetch = async () => new Response(new ReadableStream({
+    pull(controller) { controller.enqueue(new Uint8Array(0)); },
+    cancel() { fragmentedBodyCancelled = true; },
+  }), { status: 200 });
+  try {
+    const response = await fetchSupabaseWithTimeout('https://supabase.example/rest/v1/orders', undefined, 5_000);
+    await assert.rejects(() => response.arrayBuffer(), /Supabase response body is too fragmented/);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(fragmentedBodyCancelled, true);
   } finally {
     global.fetch = originalFetch;
   }

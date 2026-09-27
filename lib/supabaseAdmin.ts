@@ -12,6 +12,12 @@ export const SUPABASE_REQUEST_TIMEOUT_MS = 15_000;
 // for those responses but prevents a broken PostgREST gateway or proxy from
 // streaming an unbounded body into a worker that will eventually call json().
 export const SUPABASE_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
+// A byte ceiling alone does not bound the amount of stream bookkeeping. A
+// broken gateway can deliver a legal-sized JSON response one byte at a time,
+// forcing millions of pull/promise turns on a checkout or webhook worker.
+// Normal PostgREST responses use comparatively large network chunks; this
+// ceiling leaves ample headroom while putting a deterministic bound on work.
+export const SUPABASE_RESPONSE_MAX_CHUNKS = 16_384;
 
 // The service-role key bypasses row-level security and is attached to every
 // Supabase request. Treat its destination as a credential boundary rather
@@ -121,6 +127,7 @@ export async function fetchSupabaseWithTimeout(
 
   const reader = response.body.getReader();
   let responseBytes = 0;
+  let responseChunks = 0;
   const body = new ReadableStream<Uint8Array>({
     async pull(streamController) {
       try {
@@ -128,6 +135,14 @@ export async function fetchSupabaseWithTimeout(
         if (chunk.done) {
           cleanup();
           streamController.close();
+          return;
+        }
+        responseChunks += 1;
+        if (responseChunks > SUPABASE_RESPONSE_MAX_CHUNKS) {
+          const fragmentationError = new RangeError('Supabase response body is too fragmented');
+          cleanup();
+          void reader.cancel(fragmentationError).catch(() => undefined);
+          streamController.error(fragmentationError);
           return;
         }
         responseBytes += chunk.value.byteLength;
