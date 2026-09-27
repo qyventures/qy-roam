@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminCredentials, hasRequiredAdminCredentials } from './lib/runtimeConfig';
+import { ADMIN_AUTH_FAILURE_WINDOW_MS, createFailedAdminAuthLimiter } from './lib/adminAuthRateLimit';
 
 // Reverse proxies normally impose a header limit, but authentication is a
 // public edge of the operations surface and must retain a bounded CPU/memory
@@ -7,6 +8,7 @@ import { getAdminCredentials, hasRequiredAdminCredentials } from './lib/runtimeC
 // leaves substantially more room than a normal username/password pair.
 const MAX_BASIC_AUTH_HEADER_LENGTH = 8_192;
 const MAX_BASIC_AUTH_DECODED_LENGTH = 4_096;
+const failedAdminAuthLimited = createFailedAdminAuthLimiter();
 
 function safeEqual(a: string, b: string) {
   const maxLength = Math.max(a.length, b.length);
@@ -75,6 +77,20 @@ export function middleware(req: NextRequest) {
         if (safeEqual(givenUser, user) && safeEqual(givenPass, pass)) return NextResponse.next();
       }
     } catch {}
+  }
+
+  // Count only failed authentication. Normal admin page loads and mutations
+  // are not throttled, while repeated guesses from one trusted proxy identity
+  // receive a finite retry boundary. Missing/malformed identities deliberately
+  // share one conservative bucket.
+  if (failedAdminAuthLimited(req)) {
+    return new NextResponse('Too many authentication attempts. Try again later.', {
+      status: 429,
+      headers: {
+        'Cache-Control': 'no-store',
+        'Retry-After': String(Math.ceil(ADMIN_AUTH_FAILURE_WINDOW_MS / 1000)),
+      },
+    });
   }
 
   return new NextResponse('Authentication required.', {

@@ -36,6 +36,7 @@ const { validStripeEventCreated, validStripePaymentEventCreated, STRIPE_EVENT_CR
 const { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesEvent, stripeWebhookEventEnvelope } = require('../lib/stripeWebhookObject.ts');
 const { isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError, InvalidRequestBodyLimitError, MAX_REQUEST_BODY_CHUNKS } = require('../lib/requestBody.ts');
 const { checkoutClientKey, createCheckoutAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
+const { adminAuthClientKey, createFailedAdminAuthLimiter } = require('../lib/adminAuthRateLimit.ts');
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = require('../lib/stripeCheckoutConfig.ts');
 const { stripeWebhookSigningSecret } = require('../lib/stripeWebhookSecret.ts');
 const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
@@ -338,6 +339,34 @@ test('admin authentication shares the health release boundary and rejects unsafe
   assert.match(runtimeConfig, /export function hasRequiredAdminCredentials\(\)/);
   assert.match(middleware, /hasRequiredAdminCredentials\(\)/);
   assert.match(healthRoute, /admin: hasRequiredAdminCredentials\(\)/);
+});
+
+test('failed admin authentication is throttled without limiting valid admin traffic', () => {
+  const request = (ip) => new Request('https://qyroam.com/admin', { headers: { 'x-real-ip': ip } });
+  const limited = createFailedAdminAuthLimiter(1_000, 2, 3);
+
+  assert.equal(limited(request('198.51.100.40'), 100), false);
+  assert.equal(limited(request('198.51.100.40'), 101), false);
+  assert.equal(limited(request('198.51.100.40'), 102), true);
+  assert.equal(limited(request('198.51.100.41'), 103), false);
+  // Once individual capacity is full, rotating identities share one bucket.
+  assert.equal(limited(request('198.51.100.42'), 104), false);
+  assert.equal(limited(request('198.51.100.43'), 105), false);
+  assert.equal(limited(request('198.51.100.44'), 106), true);
+  assert.equal(limited(request('198.51.100.40'), 1_101), false);
+
+  assert.equal(adminAuthClientKey(request('203.0.113.009')), 'unknown');
+  assert.equal(adminAuthClientKey(request('203.0.113.9')), '203.0.113.9');
+  assert.equal(adminAuthClientKey(request('2001:db8::9')), '2001:db8::9');
+  assert.equal(adminAuthClientKey(request('forged-client')), 'unknown');
+
+  // Middleware returns before consulting the failed-attempt limiter when the
+  // constant-time credential comparison succeeds, so normal operations do not
+  // consume this budget.
+  assert.match(middleware, /if \(safeEqual\(givenUser, user\) && safeEqual\(givenPass, pass\)\) return NextResponse\.next\(\);/);
+  assert.match(middleware, /if \(failedAdminAuthLimited\(req\)\)/);
+  assert.match(middleware, /status: 429/);
+  assert.match(middleware, /'Retry-After'/);
 });
 
 test('SMTP relay success is bound to the exact fulfilment message identity', () => {
