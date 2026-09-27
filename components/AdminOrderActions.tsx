@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { allowedFulfilmentStatuses } from '@/lib/orderLifecycle';
+import { adminMutationHeaders } from '@/lib/adminMutation';
 
 export default function AdminOrderActions({ id, initialStatus, paymentStatus, productType = 'pocket_wifi', courierTracking = '', returnTracking = '', digitalDeliveryReference = '', inventoryItemId = null, inventoryItems = [], canRetryNotifications = false }: { id: number; initialStatus: string; paymentStatus: string | null; productType?: string | null; courierTracking?: string | null; returnTracking?: string | null; digitalDeliveryReference?: string | null; inventoryItemId?: number | null; inventoryItems?: { id: number; name: string; sku: string; quantity_on_hand: number; status: string }[]; canRetryNotifications?: boolean }) {
   const isEsim = productType === 'esim';
@@ -50,7 +51,7 @@ export default function AdminOrderActions({ id, initialStatus, paymentStatus, pr
         // terminal action (closing an already fulfilled order).
         if (deliveryReference.trim()) body.digital_delivery_reference = deliveryReference;
       }
-      const res = await fetch(`/api/admin/orders/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const res = await fetch(`/api/admin/orders/${id}`, { method: 'PATCH', headers: adminMutationHeaders(true), body: JSON.stringify(body) });
       const result = await res.json().catch(() => null) as { fulfilment_status?: string; error?: string } | null;
       if (!res.ok) throw new Error(result?.error || 'Update failed');
       if (!result?.fulfilment_status) throw new Error('Invalid update response');
@@ -64,7 +65,7 @@ export default function AdminOrderActions({ id, initialStatus, paymentStatus, pr
   async function retryNotifications() {
     setRetrying(true); setMessage('');
     try {
-      const res = await fetch(`/api/admin/orders/${id}`, { method: 'POST' });
+      const res = await fetch(`/api/admin/orders/${id}`, { method: 'POST', headers: adminMutationHeaders() });
       const result = await res.json().catch(() => null) as { error?: string } | null;
       if (!res.ok) throw new Error(result?.error || 'Notification retry failed');
       setMessage('Order delivery retry started');

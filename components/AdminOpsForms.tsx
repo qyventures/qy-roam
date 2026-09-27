@@ -1,13 +1,14 @@
 'use client';
 import { FormEvent, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { adminMutationHeaders } from '@/lib/adminMutation';
 
 const box={border:'1px solid #e4e8ef',borderRadius:16,padding:18,background:'#fff',margin:'18px 0'} as const;
 const grid={display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:10} as const;
 const input={width:'100%',padding:'10px 12px',border:'1px solid #d8dee8',borderRadius:9,boxSizing:'border-box' as const};
 
 function FormBox({title,children}:{title:string,children:any}){return <section style={box}><h3 style={{marginTop:0}}>{title}</h3>{children}</section>}
-function useSubmit(){const router=useRouter();const [busy,setBusy]=useState(false);const [msg,setMsg]=useState('');async function submit(payload:any){setBusy(true);setMsg('');try{const r=await fetch('/api/admin/ops',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const j=await r.json();if(!r.ok)throw new Error(j.error||'Operation failed');setMsg('Saved');router.refresh();return true}catch(e:any){setMsg(e.message||'Operation failed');return false}finally{setBusy(false)}}return{busy,msg,submit}}
+function useSubmit(){const router=useRouter();const [busy,setBusy]=useState(false);const [msg,setMsg]=useState('');async function submit(payload:any){setBusy(true);setMsg('');try{const r=await fetch('/api/admin/ops',{method:'POST',headers:adminMutationHeaders(true),body:JSON.stringify(payload)});const j=await r.json();if(!r.ok)throw new Error(j.error||'Operation failed');setMsg('Saved');router.refresh();return true}catch(e:any){setMsg(e.message||'Operation failed');return false}finally{setBusy(false)}}return{busy,msg,submit}}
 function Msg({busy,msg}:{busy:boolean,msg:string}){return <small style={{marginLeft:10}}>{busy?'Saving…':msg}</small>}
 
 export function InventoryCreateForm(){const s=useSubmit();async function go(e:FormEvent<HTMLFormElement>){e.preventDefault();const f=new FormData(e.currentTarget);if(await s.submit({action:'inventory_create',...Object.fromEntries(f)}))e.currentTarget.reset()}return <FormBox title="Add inventory item"><form onSubmit={go}><div style={grid}><input style={input} name="sku" placeholder="SKU" required/><input style={input} name="name" placeholder="Item name" required/><select style={input} name="product_type"><option value="pocket_wifi">Pocket WiFi</option><option value="esim">eSIM / digital stock</option></select><input style={input} name="serial_no" placeholder="Serial no. (optional)"/><input style={input} name="quantity_on_hand" type="number" min="0" defaultValue="0" placeholder="Qty"/><input style={input} name="reorder_level" type="number" min="0" defaultValue="2"/><input style={input} name="unit_cost_sgd" type="number" min="0" step="0.01" placeholder="Unit cost S$"/><input style={input} name="location" placeholder="Location"/></div><div style={{marginTop:12}}><button className="primary">Add item</button><Msg {...s}/></div></form></FormBox>}

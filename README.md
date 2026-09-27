@@ -52,3 +52,11 @@ For compatibility, deployments using the older `ADMIN_BASIC_USER`,
 deployments should use the canonical names shown in `.env.example`.
 
 Never commit `.env` or live secrets to this public repository.
+
+## Admin API mutations
+
+The browser admin uses HTTP Basic Auth and same-origin request provenance.
+Intentional non-browser clients that call a mutating `/api/admin/*` endpoint
+without `Origin`, `Referer`, or Fetch Metadata headers must also send
+`X-QYRoam-Admin-Request: 1`. This marker is a CSRF boundary, not a replacement
+for the configured admin credentials.

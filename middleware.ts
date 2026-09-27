@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminCredentials, hasRequiredAdminCredentials } from './lib/runtimeConfig';
 import { ADMIN_AUTH_FAILURE_WINDOW_MS, createFailedAdminAuthLimiter } from './lib/adminAuthRateLimit';
+import { ADMIN_MUTATION_HEADER, ADMIN_MUTATION_HEADER_VALUE } from './lib/adminMutation';
 
 // Reverse proxies normally impose a header limit, but authentication is a
 // public edge of the operations surface and must retain a bounded CPU/memory
@@ -27,8 +28,10 @@ function isUnsafeMethod(method: string) {
  * Basic Auth proves who the operator is, but browsers can retain those
  * credentials and attach them to a cross-site form submission. Reject an
  * explicitly cross-site mutation, and require any supplied Origin or Referer
- * to match the API origin. Requests from the admin UI are same-origin;
- * non-browser recovery clients without browser provenance remain usable.
+ * to match the API origin. Requests from the admin UI are same-origin. A
+ * non-browser recovery client without browser provenance must send the
+ * explicit admin-mutation marker used by the first-party UI; unlike a simple
+ * HTML form, an intentional API client can set that custom header.
  */
 function isTrustedAdminMutation(req: NextRequest) {
   if (!req.nextUrl.pathname.startsWith('/api/admin') || !isUnsafeMethod(req.method)) return true;
@@ -59,7 +62,12 @@ function isTrustedAdminMutation(req: NextRequest) {
     }
   }
 
-  return true;
+  // Modern same-origin fetches normally carry at least one of the headers
+  // above. When all provenance is absent, fail closed unless the caller opts
+  // into the explicit API contract. This preserves CLI recovery without
+  // leaving bodyless delivery-retry POSTs triggerable by a cross-site form in
+  // a legacy/privacy-stripped browser with cached Basic Auth credentials.
+  return req.headers.get(ADMIN_MUTATION_HEADER) === ADMIN_MUTATION_HEADER_VALUE;
 }
 
 export function middleware(req: NextRequest) {

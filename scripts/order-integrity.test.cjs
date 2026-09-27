@@ -37,6 +37,7 @@ const { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheck
 const { isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError, InvalidRequestBodyLimitError, MAX_REQUEST_BODY_CHUNKS } = require('../lib/requestBody.ts');
 const { checkoutClientKey, createCheckoutAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { adminAuthClientKey, createFailedAdminAuthLimiter } = require('../lib/adminAuthRateLimit.ts');
+const { ADMIN_MUTATION_HEADER, ADMIN_MUTATION_HEADER_VALUE, adminMutationHeaders } = require('../lib/adminMutation.ts');
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = require('../lib/stripeCheckoutConfig.ts');
 const { stripeWebhookSigningSecret } = require('../lib/stripeWebhookSecret.ts');
 const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
@@ -4084,10 +4085,26 @@ test('authenticated admin browser mutations reject cross-site request triggering
   assert.match(middleware, /new URL\(origin\)\.origin === req\.nextUrl\.origin/);
   assert.match(middleware, /req\.headers\.get\('referer'\)/);
   assert.match(middleware, /new URL\(referer\)\.origin === req\.nextUrl\.origin/);
-  assert.match(middleware, /non-browser recovery clients remain supported/);
+  assert.match(middleware, /req\.headers\.get\(ADMIN_MUTATION_HEADER\) === ADMIN_MUTATION_HEADER_VALUE/);
   assert.match(middleware, /if \(!isTrustedAdminMutation\(req\)\)/);
   assert.match(middleware, /status: 403/);
   assert.match(middleware, /'Cache-Control': 'no-store'/);
+
+  // Headerless requests no longer receive an implicit non-browser exemption.
+  // Every first-party mutation supplies the same non-secret custom marker,
+  // including the bodyless delivery-retry POST that a simple form could most
+  // easily reproduce. JSON callers retain their required media type.
+  assert.equal(ADMIN_MUTATION_HEADER, 'x-qyroam-admin-request');
+  assert.equal(ADMIN_MUTATION_HEADER_VALUE, '1');
+  assert.deepEqual(adminMutationHeaders(), { 'x-qyroam-admin-request': '1' });
+  assert.deepEqual(adminMutationHeaders(true), {
+    'x-qyroam-admin-request': '1',
+    'Content-Type': 'application/json',
+  });
+  assert.match(adminOrderActions, /method: 'POST', headers: adminMutationHeaders\(\)/);
+  assert.match(adminOrderActions, /method: 'PATCH', headers: adminMutationHeaders\(true\)/);
+  assert.match(adminOpsForms, /method:'POST',headers:adminMutationHeaders\(true\)/);
+  assert.match(manualOrderForm, /method:'POST',headers:adminMutationHeaders\(true\)/);
 });
 
 test('admin and authenticated health checks bound credential inputs before comparison', () => {
