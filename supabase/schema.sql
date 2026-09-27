@@ -993,6 +993,20 @@ create trigger qy_enforce_meta_purchase_delivery_immutability
 before insert or update on public.meta_purchase_deliveries
 for each row execute function public.qy_enforce_meta_purchase_delivery_immutability();
 
+-- These relations are the durable financial, webhook-idempotency and
+-- outbound-delivery audit trail. Their triggers permit the bounded inserts
+-- and updates used by Checkout, webhook retries and admin recovery, but
+-- DELETE and TRUNCATE do not pass through those update safeguards. The
+-- service role bypasses RLS, so remove its destructive table privileges: an
+-- application regression or ad-hoc API repair must not erase a paid order,
+-- forget a processed Stripe event and replay it, or remove evidence that an
+-- email / Meta Purchase was already delivered. Owner-run migrations remain
+-- possible, and application SELECT/INSERT/UPDATE access is unchanged.
+revoke delete, truncate
+  on table public.orders, public.stripe_events,
+    public.fulfilment_notifications, public.meta_purchase_deliveries
+  from service_role;
+
 -- Table and column probes catch an incomplete migration, but they cannot tell
 -- checkout whether the integrity constraints and triggers behind those tables
 -- are actually installed and enabled. That distinction matters because a
@@ -1660,10 +1674,10 @@ immutable
 security definer
 set search_path = pg_catalog
 as $$
-  -- Version 10 certifies that direct writes cannot introduce malformed
-  -- checkout or Stripe identities into the physical-capacity ledger.
-  -- An application expecting that boundary must reject version 9.
-  select 10;
+  -- Version 11 certifies that service-role application clients cannot erase
+  -- the paid-order, Stripe-idempotency or outbound-delivery audit trail.
+  -- An application expecting that boundary must reject version 10.
+  select 11;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
