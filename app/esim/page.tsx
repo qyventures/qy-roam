@@ -48,9 +48,10 @@ export default function EsimPage() {
       else {
         // Do not rotate an idempotency key on a transient failure, since Stripe
         // may already have created the session. An explicit expiry or a
-        // server-detected request/plan mismatch is safe to restart with a
-        // fresh request id.
-        if (data.checkoutExpired || data.checkoutRequestConflict) {
+        // server-detected request/plan mismatch, or a durably recorded
+        // terminal payment failure is safe to restart with a fresh request
+        // id.
+        if (data.checkoutExpired || data.checkoutRequestConflict || data.paymentFailed) {
           activeCheckoutAttempt.current = null;
           clearCheckoutAttempt('esim');
         }

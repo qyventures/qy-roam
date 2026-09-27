@@ -2575,6 +2575,17 @@ test('database lifecycle backstop prevents direct eSIM fulfilment inserts and pr
   assert.match(schema, /before insert or update of product_type, fulfilment_status on public\.orders/);
 });
 
+test('terminal asynchronous payment failures rotate checkout only after durable webhook persistence', () => {
+  for (const route of [esimCheckoutRoute, wifiCheckoutRoute]) {
+    assert.match(route, /status\s*===?\s*'complete'\s*&&\s*[^\n]*payment_status\s*===?\s*'unpaid'/);
+    assert.match(route, /from\('orders'\)\s*\.select\('payment_status'\)\s*\.eq\('stripe_session_id',\s*[^)]+\)\s*\.maybeSingle\(\)/);
+    assert.match(route, /order\.data\?\.payment_status\s*===?\s*'failed'/);
+    assert.match(route, /paymentFailed:\s*true/);
+  }
+  assert.match(esimPage, /checkoutExpired \|\| data\.checkoutRequestConflict \|\| data\.paymentFailed/);
+  assert.match(homePage, /checkoutExpired \|\| data\.checkoutRequestConflict \|\| data\.paymentFailed/);
+});
+
 test('database enforces product-specific fulfilment status domains on new order writes', () => {
   // API validation is useful feedback for staff, but this constraint is the
   // final persistence boundary for webhook recovery and service-role work.

@@ -305,6 +305,13 @@ export async function POST(req: Request) {
       }
       return NextResponse.json({completed:true,sessionId:existing.id},{headers:{'Cache-Control':'no-store'}});
     }
+    if(existing.status==='complete'&&existing.payment_status==='unpaid'){
+      const order=await supabase.from('orders').select('payment_status').eq('stripe_session_id',existing.id).maybeSingle();
+      if(order.error) throw order.error;
+      if(order.data?.payment_status==='failed'){
+        return NextResponse.json({error:'This payment attempt was unsuccessful. Please try again with a new secure checkout.',paymentFailed:true},{status:409,headers:{'Cache-Control':'no-store'}});
+      }
+    }
     if(existing.status==='expired'){
       // Expiry makes the payment URL unusable. Release only the reservation
       // that is unlinked or belongs to this exact expired session; a newer
@@ -463,6 +470,17 @@ export async function POST(req: Request) {
       return NextResponse.json({error:'Your payment is confirmed and your order is still being recorded. Please wait a moment and try again.',paymentPending:true},{status:409,headers:{'Cache-Control':'no-store','Retry-After':'3'}});
     }
     return NextResponse.json({completed:true,sessionId:currentSession.id},{headers:{'Cache-Control':'no-store'}});
+  }
+  // Stripe Checkout is terminal after an asynchronous payment failure. Only
+  // rotate the durable browser idempotency key after the signed webhook has
+  // recorded that failure; before then, preserving the attempt protects an
+  // in-flight payment and its linked inventory reservation.
+  if(currentSession.status==='complete'&&currentSession.payment_status==='unpaid'){
+    const order=await supabase.from('orders').select('payment_status').eq('stripe_session_id',currentSession.id).maybeSingle();
+    if(order.error) throw order.error;
+    if(order.data?.payment_status==='failed'){
+      return NextResponse.json({error:'This payment attempt was unsuccessful. Please try again with a new secure checkout.',paymentFailed:true},{status:409,headers:{'Cache-Control':'no-store'}});
+    }
   }
   // Stripe retains idempotency keys after a Checkout Session expires. A client
   // retry using that key can therefore receive the old session, whose URL is

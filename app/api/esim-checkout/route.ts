@@ -290,6 +290,28 @@ export async function POST(req: Request) {
       }
       return NextResponse.json({ completed: true, sessionId: currentSession.id }, { headers: { 'Cache-Control': 'no-store' } });
     }
+    // An asynchronous method can finish Checkout and later fail. Once the
+    // signed webhook has durably recorded that terminal failure, this
+    // idempotency key can never produce a payable Session again. Tell the
+    // browser to rotate the attempt instead of leaving the shopper in an
+    // endless "still confirming" loop. Until that durable row exists we keep
+    // the attempt stable, because a delayed success event may still arrive.
+    if (currentSession.status === 'complete' && currentSession.payment_status === 'unpaid') {
+      const supabase = getSupabaseAdmin();
+      if (!supabase) throw new Error('Order persistence unavailable');
+      const order = await supabase
+        .from('orders')
+        .select('payment_status')
+        .eq('stripe_session_id', currentSession.id)
+        .maybeSingle();
+      if (order.error) throw order.error;
+      if (order.data?.payment_status === 'failed') {
+        return NextResponse.json({
+          error: 'This payment attempt was unsuccessful. Please try again with a new secure checkout.',
+          paymentFailed: true,
+        }, { status: 409, headers: { 'Cache-Control': 'no-store' } });
+      }
+    }
     // Stripe can return the prior response for this idempotency key after its
     // Checkout Session has expired. That response has no usable URL, so make
     // the recovery path explicit instead of returning a misleading success.

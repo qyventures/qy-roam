@@ -149,8 +149,9 @@ export default function Home() {
         // Keep the idempotency key after ordinary failures: the server may have
         // created a session before a network response was lost. Rotate it only
         // after the server has confirmed that the prior session expired or
-        // belongs to different server-priced booking details.
-        if (data.checkoutExpired || data.checkoutRequestConflict) {
+        // belongs to different server-priced booking details, or its signed
+        // webhook has durably recorded a terminal payment failure.
+        if (data.checkoutExpired || data.checkoutRequestConflict || data.paymentFailed) {
           activeCheckoutAttempt.current = null;
           clearCheckoutAttempt('pocket_wifi');
         }
