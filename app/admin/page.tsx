@@ -205,7 +205,7 @@ export default async function AdminPage() {
   return <main className="wrap section legal" style={{maxWidth:1280}}>
     <span className="eyebrow">QY Roam Operations & CRM</span>
     <h1 style={{marginBottom:8}}>Sales, orders and customers</h1>
-    <p style={{marginTop:0,color:'#64748b'}}>One operating view for Pocket WiFi and travel eSIM. Data is sourced from paid Stripe orders persisted in Supabase.</p>
+    <p style={{marginTop:0,color:'#64748b'}}>One operating view for Pocket WiFi and travel eSIM. Data is sourced from paid Stripe checkouts and protected manual sales persisted in Supabase.</p>
 
     {!supabase && <div style={cardStyle}><strong>Order database is not configured yet.</strong></div>}
     {supabase && <>
@@ -277,12 +277,13 @@ export default async function AdminPage() {
         <tbody>{orders.map((o:any)=>{
           const flag = tripFlag(o);
           const product = isEsim(o) ? 'eSIM' : 'Pocket WiFi';
+          const stripeCheckoutOrder = isStripeCheckoutOrder(o);
           const notification:any = notificationBySession.get(o.stripe_session_id);
           const metaDelivery:any = metaDeliveryBySession.get(o.stripe_session_id);
           // The recovery endpoint retries both delivery ledgers idempotently.
           // Expose it for a missing/failed Meta event even after the ops email
           // was successfully sent, which is the common post-Stripe-retry case.
-          const canRetryNotifications = o.payment_status === 'paid' && isStripeCheckoutOrder(o) && (
+          const canRetryNotifications = o.payment_status === 'paid' && stripeCheckoutOrder && (
             (fulfilmentNotificationActionable(o.product_type, o.fulfilment_status) && notification?.status !== 'sent') ||
             (metaCapiConfigured && o.measurement_consent === 'accepted' && metaDelivery?.status !== 'sent')
           );
@@ -292,8 +293,8 @@ export default async function AdminPage() {
             <td style={{padding:'14px 8px'}}><strong>{product}</strong>{o.plan_name && <><br/><small>{o.plan_name}</small></>}{isEsim(o) && o.plan_id && <><br/><small>Plan ID: {o.plan_id}</small></>}{isEsim(o) && o.data_allowance && <><br/><small>Data: {o.data_allowance}</small></>}<br/>{o.country || '-'}<br/><small>{o.travel_start || '-'} → {o.travel_end || '-'}</small>{flag && <><br/><small><strong>{flag}</strong></small></>}</td>
             <td style={{padding:'14px 8px'}}>{o.payment_status || '-'}</td>
             <td style={{padding:'14px 8px'}}><strong>{money(o.amount_sgd)}</strong></td>
-            <td style={{padding:'14px 8px'}}>{notification?.status === 'sent' ? '✓ Sent' : notification ? `⚠ ${notification.status}` : o.payment_status === 'paid' ? '⚠ Not recorded' : '-'}{notification?.last_error && <><br/><small>{String(notification.last_error).slice(0,120)}</small></>}</td>
-            <td style={{padding:'14px 8px'}}>{metaDelivery?.status === 'sent' ? '✓ Sent' : !metaCapiConfigured && o.measurement_consent === 'accepted' ? 'CAPI unavailable' : metaDelivery ? `⚠ ${metaDelivery.status}` : o.payment_status === 'paid' ? 'Not requested / not recorded' : '-'}{metaDelivery?.last_error && <><br/><small>{String(metaDelivery.last_error).slice(0,120)}</small></>}</td>
+            <td style={{padding:'14px 8px'}}>{notification?.status === 'sent' ? '✓ Sent' : notification ? `⚠ ${notification.status}` : o.payment_status === 'paid' && stripeCheckoutOrder ? '⚠ Not recorded' : o.payment_status === 'paid' ? 'Manual sale · operator recorded' : '-'}{notification?.last_error && <><br/><small>{String(notification.last_error).slice(0,120)}</small></>}</td>
+            <td style={{padding:'14px 8px'}}>{metaDelivery?.status === 'sent' ? '✓ Sent' : !metaCapiConfigured && o.measurement_consent === 'accepted' ? 'CAPI unavailable' : metaDelivery ? `⚠ ${metaDelivery.status}` : o.payment_status === 'paid' && stripeCheckoutOrder ? 'Not requested / not recorded' : o.payment_status === 'paid' ? 'Manual sale · no measurement consent' : '-'}{metaDelivery?.last_error && <><br/><small>{String(metaDelivery.last_error).slice(0,120)}</small></>}</td>
             <td style={{padding:'14px 8px'}}>{o.return_disposition && <small>Return: {String(o.return_disposition).replaceAll('_',' ')}</small>}{isEsim(o) && o.digital_delivery_reference && <small>{isSafeDigitalDeliveryReference(o.digital_delivery_reference) ? 'Delivery audit reference recorded' : '⚠ Unsafe legacy delivery value hidden — review support record'}</small>}<AdminOrderActions id={o.id} initialStatus={o.fulfilment_status} paymentStatus={o.payment_status} productType={o.product_type} courierTracking={o.courier_tracking} returnTracking={o.return_tracking} digitalDeliveryReference={isSafeDigitalDeliveryReference(o.digital_delivery_reference) ? o.digital_delivery_reference : ''} inventoryItemId={o.inventory_item_id} inventoryItems={inventoryItems} canRetryNotifications={canRetryNotifications}/></td>
           </tr>;
         })}</tbody>

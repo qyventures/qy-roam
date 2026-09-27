@@ -2788,6 +2788,13 @@ test('admin email exceptions include paid Stripe orders missing their notificati
   assert.match(adminOrderActions, /\{canRetryNotifications && <button/);
 });
 
+test('admin delivery visibility does not report intentional manual-order ledger gaps as failures', () => {
+  assert.match(adminPage, /paid Stripe checkouts and protected manual sales persisted in Supabase/);
+  assert.match(adminPage, /const stripeCheckoutOrder = isStripeCheckoutOrder\(o\)/);
+  assert.match(adminPage, /o\.payment_status === 'paid' && stripeCheckoutOrder \? '⚠ Not recorded' : o\.payment_status === 'paid' \? 'Manual sale · operator recorded'/);
+  assert.match(adminPage, /o\.payment_status === 'paid' && stripeCheckoutOrder \? 'Not requested \/ not recorded' : o\.payment_status === 'paid' \? 'Manual sale · no measurement consent'/);
+});
+
 test('admin CAPI recovery is limited to consented purchases and remains available after email delivery', () => {
   assert.match(schema, /measurement_consent text/);
   assert.match(productionReadiness, /measurement_consent/);
