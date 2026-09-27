@@ -2609,6 +2609,10 @@ test('database preserves dispatch and return evidence throughout the Pocket WiFi
   assert.match(schema, /returned_at is not null/);
   assert.match(schema, /return_tracking is not null and btrim\(return_tracking\) <> ''/);
   assert.match(schema, /return_disposition in \('restock', 'quarantine', 'damaged'\)/);
+  assert.match(adminOrderRoute, /courier tracking reference is immutable after a Pocket WiFi order is dispatched/);
+  assert.match(adminOrderRoute, /return receipt reference is immutable after a Pocket WiFi order is received/);
+  assert.match(adminOrderActions, /readOnly=\{\['dispatched','with_customer','return_due','returned','closed'\]\.includes\(currentStatus\)\}/);
+  assert.match(adminOrderActions, /readOnly=\{\['returned','closed'\]\.includes\(currentStatus\)\}/);
 });
 
 test('Pocket WiFi dispatch and return atomically reconcile the assigned stock item', () => {
@@ -2678,8 +2682,8 @@ test('generic inventory mutations cannot make a router saleable while it is in c
     'both quantity adjustments and status changes must reject assigned in-custody routers',
   );
   assert.match(schema, /inventory item is assigned to an active Pocket WiFi custody order/);
-  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 1; \$\$/);
-  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 1/);
+  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 2; \$\$/);
+  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 2/);
   assert.match(productionReadiness, /database\.rpc\('qy_pocket_wifi_fulfilment_schema_version', \{\}\)/);
   assert.match(productionReadiness, /versionProbe\.data !== REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION/);
 });
@@ -2741,7 +2745,9 @@ test('database enforces the Pocket WiFi lifecycle and stock evidence for every w
   assert.match(guard, /Pocket WiFi custody requires a matching dispatch inventory movement/);
   assert.match(guard, /new\.fulfilment_status in \('returned', 'closed'\)/);
   assert.match(guard, /Pocket WiFi completed custody requires a matching return inventory movement/);
-  assert.match(schema, /create trigger qy_enforce_pocket_wifi_fulfilment_transition[\s\S]*before insert or update of product_type, fulfilment_status, stripe_session_id,[\s\S]*inventory_item_id, return_disposition on public\.orders/);
+  assert.match(guard, /old\.dispatched_at is not null[\s\S]*new\.courier_tracking is distinct from old\.courier_tracking[\s\S]*Pocket WiFi dispatch custody evidence is immutable/);
+  assert.match(guard, /old\.returned_at is not null[\s\S]*new\.return_tracking is distinct from old\.return_tracking[\s\S]*Pocket WiFi return custody evidence is immutable/);
+  assert.match(schema, /create trigger qy_enforce_pocket_wifi_fulfilment_transition[\s\S]*before insert or update of product_type, fulfilment_status, stripe_session_id,[\s\S]*inventory_item_id, courier_tracking, return_tracking, return_disposition,[\s\S]*dispatched_at, returned_at on public\.orders/);
 });
 
 test('admin actions advance their transition baseline after each save', () => {

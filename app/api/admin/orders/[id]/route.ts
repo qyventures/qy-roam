@@ -105,6 +105,17 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const returnTracking = trackingValue(body.return_tracking, existing.data.return_tracking);
   const deliveryReference = digitalDeliveryReference(body.digital_delivery_reference, existing.data.digital_delivery_reference);
   const returnDisposition = typeof body.return_disposition === 'string' ? body.return_disposition.trim().toLowerCase() : '';
+  // Courier and receipt references are custody evidence, not editable order
+  // notes. Once the corresponding physical boundary has been crossed, a
+  // later lifecycle save must not replace the evidence staff used to hand
+  // off or receive the exact router. The database trigger below is the final
+  // authority; this check gives the operator an actionable response first.
+  if (existing.data.product_type === 'pocket_wifi' && existing.data.dispatched_at && typeof body.courier_tracking === 'string' && courierTracking !== trackingValue(undefined, existing.data.courier_tracking)) {
+    return NextResponse.json({ error: 'The courier tracking reference is immutable after a Pocket WiFi order is dispatched. Record corrections in the order notes.' }, { status: 409 });
+  }
+  if (existing.data.product_type === 'pocket_wifi' && existing.data.returned_at && typeof body.return_tracking === 'string' && returnTracking !== trackingValue(undefined, existing.data.return_tracking)) {
+    return NextResponse.json({ error: 'The return receipt reference is immutable after a Pocket WiFi order is received. Record corrections in the order notes.' }, { status: 409 });
+  }
   if (existing.data.product_type === 'esim' && status === 'fulfilled' && !deliveryReference) {
     return NextResponse.json({ error: 'A delivery reference is required before marking an eSIM order fulfilled. Record a provider order ID or secure delivery/email log reference, not the eSIM QR code.' }, { status: 400 });
   }

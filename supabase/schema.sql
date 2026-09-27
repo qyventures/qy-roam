@@ -102,6 +102,7 @@ begin
   ) then
     raise exception 'paid order commercial identity is immutable';
   end if;
+
   return new;
 end;
 $$;
@@ -474,6 +475,27 @@ begin
     return new;
   end if;
 
+  -- Custody evidence becomes an append-only audit boundary when the physical
+  -- hand-off/receipt is recorded. Constraints can ensure these values remain
+  -- present, but cannot stop a later service-role write from replacing one
+  -- plausible reference with another. Preserve the exact references,
+  -- timestamps, assigned stock item and inspection decision after the event.
+  if old.product_type = 'pocket_wifi' and old.dispatched_at is not null and (
+    new.dispatched_at is distinct from old.dispatched_at or
+    new.courier_tracking is distinct from old.courier_tracking or
+    new.inventory_item_id is distinct from old.inventory_item_id
+  ) then
+    raise exception 'Pocket WiFi dispatch custody evidence is immutable';
+  end if;
+
+  if old.product_type = 'pocket_wifi' and old.returned_at is not null and (
+    new.returned_at is distinct from old.returned_at or
+    new.return_tracking is distinct from old.return_tracking or
+    new.return_disposition is distinct from old.return_disposition
+  ) then
+    raise exception 'Pocket WiFi return custody evidence is immutable';
+  end if;
+
   if old.product_type = 'pocket_wifi'
     and new.fulfilment_status is distinct from old.fulfilment_status
     and not (
@@ -567,7 +589,8 @@ $$;
 drop trigger if exists qy_enforce_pocket_wifi_fulfilment_transition on public.orders;
 create trigger qy_enforce_pocket_wifi_fulfilment_transition
 before insert or update of product_type, fulfilment_status, stripe_session_id,
-  inventory_item_id, return_disposition on public.orders
+  inventory_item_id, courier_tracking, return_tracking, return_disposition,
+  dispatched_at, returned_at on public.orders
 for each row execute function public.qy_enforce_pocket_wifi_fulfilment_transition();
 
 -- Stripe event idempotency ledger: Stripe may retry the same event multiple times.
@@ -2006,7 +2029,7 @@ language sql
 immutable
 security definer
 set search_path = pg_catalog
-as $$ select 1; $$;
+as $$ select 2; $$;
 revoke all on function public.qy_pocket_wifi_fulfilment_schema_version() from public;
 grant execute on function public.qy_pocket_wifi_fulfilment_schema_version() to service_role;
 

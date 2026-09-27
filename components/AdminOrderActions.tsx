@@ -85,8 +85,8 @@ export default function AdminOrderActions({ id, initialStatus, paymentStatus, pr
   return <div style={{display:'grid',gap:6,minWidth:190}}>
     <select aria-label="Fulfilment status" value={status} onChange={e=>setStatus(e.target.value)} disabled={statuses.length < 2}>{statuses.map(s=><option key={s} value={s}>{s.replaceAll('_',' ')}</option>)}</select>
     {!isEsim && <>
-      <input aria-label="Courier tracking" placeholder="Courier tracking / delivery reference" value={courier} onChange={e=>setCourier(e.target.value)} />
-      <input aria-label="Return tracking" placeholder="Return tracking / receipt reference" value={returned} onChange={e=>setReturned(e.target.value)} />
+      <input aria-label="Courier tracking" placeholder="Courier tracking / delivery reference" value={courier} onChange={e=>setCourier(e.target.value)} readOnly={['dispatched','with_customer','return_due','returned','closed'].includes(currentStatus)} />
+      <input aria-label="Return tracking" placeholder="Return tracking / receipt reference" value={returned} onChange={e=>setReturned(e.target.value)} readOnly={['returned','closed'].includes(currentStatus)} />
       {status === 'returned' && <select aria-label="Return disposition" value={returnDisposition} onChange={e=>setReturnDisposition(e.target.value)}>
         <option value="" disabled>Choose inspection disposition</option>
         <option value="restock">Restock after receipt</option>
