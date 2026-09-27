@@ -1083,7 +1083,12 @@ begin
   select count(*)::integer into v_booked
   from public.orders
   where product_type = 'pocket_wifi'
-    and (payment_status = 'paid' or fulfilment_status = 'awaiting_payment')
+    -- Only Stripe asynchronous payments have a supported later settlement.
+    -- Ignore legacy unpaid manual rows that otherwise reserve stock forever.
+    and (payment_status = 'paid' or (
+      stripe_session_id ~ '^cs_(test|live)_[A-Za-z0-9]+$' and
+      fulfilment_status = 'awaiting_payment'
+    ))
     and travel_start <= p_travel_end
     and travel_end >= p_travel_start
     -- A recorded dispatch with an assigned stock item already decrements
@@ -1216,7 +1221,10 @@ begin
   select count(*)::integer into v_booked
   from public.orders
   where product_type = 'pocket_wifi'
-    and (payment_status = 'paid' or fulfilment_status = 'awaiting_payment')
+    and (payment_status = 'paid' or (
+      stripe_session_id ~ '^cs_(test|live)_[A-Za-z0-9]+$' and
+      fulfilment_status = 'awaiting_payment'
+    ))
     and travel_start <= p_travel_end
     and travel_end >= p_travel_start
     -- Match public checkout: an assigned dispatched device is already removed
@@ -1531,11 +1539,11 @@ immutable
 security definer
 set search_path = pg_catalog
 as $$
-  -- Version 4 preserves operator-corrected contact and shipping details after
-  -- payment while still allowing an awaiting-payment order to take Stripe's
-  -- final paid snapshot. An application expecting that retry boundary must
-  -- not accept payment against the earlier presence-compatible version 3.
-  select 4;
+  -- Version 5 limits awaiting-payment inventory commitments to canonical
+  -- Stripe Sessions. Legacy unpaid manual records have no settlement callback
+  -- and must not reserve physical stock forever. An application expecting
+  -- that capacity boundary must reject the earlier version 4 functions.
+  select 5;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;

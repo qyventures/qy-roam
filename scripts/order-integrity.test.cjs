@@ -221,7 +221,23 @@ test('durable orders accept only canonical Stripe or protected manual-sale ident
     'checkout readiness must reject a deployed schema missing the order identity boundary',
   );
   assert.match(adminOpsRoute, /`manual_\$\{crypto\.createHash\('sha256'\)\.update\(reference\)\.digest\('hex'\)\.slice\(0, 48\)\}`/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 4/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 5/);
+});
+
+test('manual sales cannot create permanent unpaid Pocket WiFi capacity holds', () => {
+  // There is no external callback or protected admin payment transition for
+  // an offline order. Accept only confirmed sales, and keep any legacy unpaid
+  // manual rows out of all three customer-facing capacity calculations while
+  // preserving genuine Stripe asynchronous-payment commitments.
+  assert.match(adminOpsRoute, /if \(paymentStatus !== 'paid'\)/);
+  assert.match(adminOpsRoute, /Manual sales orders can only be recorded after payment is confirmed/);
+  assert.match(manualOrderForm, /type="hidden" name="payment_status" value="paid"/);
+  assert.doesNotMatch(manualOrderForm, /<option value="unpaid">/);
+  assert.doesNotMatch(manualOrderForm, /<option value="pending">/);
+  assert.doesNotMatch(manualOrderForm, /<option value="failed">/);
+  assert.match(availabilityRoute, /and\(stripe_session_id\.like\.cs_\*,fulfilment_status\.eq\.awaiting_payment\)/);
+  const stripePendingCommitments = schema.match(/stripe_session_id ~ '\^cs_\(test\|live\)_\[A-Za-z0-9\]\+\$' and\s*fulfilment_status = 'awaiting_payment'/g) || [];
+  assert.equal(stripePendingCommitments.length, 2);
 });
 
 test('optional Meta consent storage cannot block checkout in privacy-restricted browsers', () => {
@@ -1541,11 +1557,11 @@ test('checkout readiness rejects an older order-integrity schema with matching o
   // Version 3 includes the database-enforced durable order identity contract.
   // Keeping version 2 here would let a rolling app deploy accept payment
   // against the earlier schema even though all object names still exist.
-  assert.match(productionReadiness, /const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 4/);
+  assert.match(productionReadiness, /const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 5/);
   assert.match(productionReadiness, /database\.rpc\('qy_order_integrity_schema_version', \{\}\)\.abortSignal\(signal\)/);
   assert.match(productionReadiness, /versionProbe\.data !== REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION/);
   assert.match(productionReadiness, /if \(!await hasCurrentOrderIntegritySchema\(database, signal\)\) return false/);
-  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 4;/);
+  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 5;/);
   assert.match(schema, /grant execute on function public\.qy_order_integrity_schema_version\(\) to service_role/);
   assert.ok(
     schema.indexOf('create or replace function public.qy_order_integrity_schema_version') >
@@ -1826,7 +1842,7 @@ test('Pocket WiFi payment persistence atomically replaces its checkout hold with
   assert.match(webhookRoute, /qy_persist_stripe_pocket_wifi_order/);
   assert.match(schema, /create or replace function public\.qy_persist_stripe_pocket_wifi_order/);
   assert.match(schema, /pg_advisory_xact_lock\(hashtext\('qy_roam_pocket_wifi_checkout'\)\)/);
-  assert.match(schema, /payment_status = 'paid' or fulfilment_status = 'awaiting_payment'/);
+  assert.match(schema, /payment_status = 'paid' or \(\s*stripe_session_id ~ '\^cs_\(test\|live\)_\[A-Za-z0-9\]\+\$' and\s*fulfilment_status = 'awaiting_payment'/);
   assert.match(schema, /expires_at > now\(\) - interval '4 days'/);
   assert.match(availabilityRoute, /fulfilment_status\.eq\.awaiting_payment/);
   assert.match(availabilityRoute, /CHECKOUT_WEBHOOK_HANDOFF_GRACE_MS/);
@@ -2219,7 +2235,7 @@ test('Pocket WiFi holds require an explicit Pocket WiFi product identity', () =>
 });
 
 test('manual orders cannot bypass paid-order lifecycle, pricing, or WiFi capacity fields', () => {
-  assert.match(adminOpsRoute, /\['paid', 'unpaid', 'pending', 'failed'\]\.includes\(paymentStatus\)/);
+  assert.match(adminOpsRoute, /paymentStatus !== 'paid'/);
   assert.match(adminOpsRoute, /function money\(value: unknown\)/);
   assert.match(adminOpsRoute, /parseExactIsoDate\(startRaw\)/);
   assert.match(adminOpsRoute, /New orders must start in their initial fulfilment status/);

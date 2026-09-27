@@ -156,7 +156,10 @@ async function committedInventory(start: string, end: string, stripeHoldRequestI
   const [orders, reservations, saleableItems] = await Promise.all([
     supabase.from('orders').select('id', { count: 'exact', head: true })
       .eq('product_type', 'pocket_wifi')
-      .or('payment_status.eq.paid,fulfilment_status.eq.awaiting_payment')
+      // Only Stripe can create an asynchronous awaiting-payment commitment.
+      // Legacy unpaid manual rows have no settlement callback and must not
+      // consume physical capacity forever.
+      .or('payment_status.eq.paid,and(stripe_session_id.like.cs_*,fulfilment_status.eq.awaiting_payment)')
       .lte('travel_start', end)
       .gte('travel_end', start)
       // Dispatch atomically removes an assigned router from quantity_on_hand.

@@ -133,7 +133,12 @@ export async function POST(req: NextRequest) {
       const product = text(body.product_type, 40) || 'pocket_wifi';
       if (product !== 'pocket_wifi' && product !== 'esim') return NextResponse.json({ error: 'Invalid product type' }, { status: 400 });
       const paymentStatus = text(body.payment_status, 40) || 'paid';
-      if (!['paid', 'unpaid', 'pending', 'failed'].includes(paymentStatus)) return NextResponse.json({ error: 'Invalid payment status' }, { status: 400 });
+      // Manual orders represent an already-confirmed offline sale. There is
+      // no payment provider callback (or protected admin transition) that can
+      // later settle an unpaid manual record. Allowing one would leave Pocket
+      // WiFi in `awaiting_payment` indefinitely and used to consume router
+      // capacity forever. Quotes/leads belong in CRM until payment is real.
+      if (paymentStatus !== 'paid') return NextResponse.json({ error: 'Manual sales orders can only be recorded after payment is confirmed' }, { status: 400 });
       const reference = manualOrderReference(body.order_reference);
       if (!reference) return NextResponse.json({ error: 'A payment or sales reference of 5–120 letters, numbers, or . _ : / # - characters is required' }, { status: 400 });
       const requestedStatus = text(body.fulfilment_status, 40);
