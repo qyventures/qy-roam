@@ -2685,6 +2685,17 @@ test('admin operational visibility pages beyond one Supabase response and warns 
   assert.doesNotMatch(adminPage, /from\('orders'\)\.select\('\*'\)\.order\('created_at', \{ ascending: false \}\)\.limit\(500\)/);
 });
 
+test('admin Pocket WiFi dispatch selector pages the fleet and warns when its bounded view is incomplete', () => {
+  // The main order dashboard supplies inventoryItems directly to every
+  // dispatch action. A one-response inventory query can hide an otherwise
+  // available router after PostgREST's row cap and block a valid hand-off.
+  assert.match(adminPage, /loadPages\(\(from, to\) => supabase\.from\('inventory_items'\)/);
+  assert.match(adminPage, /\.eq\('product_type', 'pocket_wifi'\)\s*\.order\('name'\)\s*\.order\('id'\)\s*\.range\(from, to\)/);
+  assert.match(adminPage, /inventoryResult\.truncated && 'Pocket WiFi inventory'/);
+  assert.match(adminPage, /inventoryItems=\{inventoryItems\}/);
+  assert.doesNotMatch(adminPage, /supabase\.from\('inventory_items'\)\.select\('id,sku,name,quantity_on_hand,status'\)\.eq\('product_type', 'pocket_wifi'\)\.order\('name'\),/);
+});
+
 test('admin webhook recovery visibility pages every actionable Stripe exception within its declared bound', () => {
   // A newest-100 diagnostic sample can hide a failed payment event from the
   // same dashboard staff use to reconcile fulfilment. Keep this recovery

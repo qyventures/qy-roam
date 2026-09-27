@@ -92,7 +92,19 @@ export default async function AdminPage() {
   const [result, inventoryResult, notificationResult, metaDeliveryResult, stripeEventResult] = supabase
     ? await Promise.all([
         loadPages((from, to) => supabase.from('orders').select('*').order('created_at', { ascending: false }).order('id', { ascending: false }).range(from, to)),
-        supabase.from('inventory_items').select('id,sku,name,quantity_on_hand,status').eq('product_type', 'pocket_wifi').order('name'),
+        // This list feeds the per-order dispatch selector, so a single
+        // PostgREST response is not a safe fleet boundary. Page with a stable
+        // secondary key just like orders and delivery ledgers: otherwise a
+        // valid router beyond the response cap silently disappears from the
+        // custody workflow and staff may conclude that no device is
+        // assignable. The shared ceiling keeps rendering bounded and the
+        // truncation warning below makes an oversized fleet explicit.
+        loadPages((from, to) => supabase.from('inventory_items')
+          .select('id,sku,name,quantity_on_hand,status')
+          .eq('product_type', 'pocket_wifi')
+          .order('name')
+          .order('id')
+          .range(from, to)),
         loadPages((from, to) => supabase.from('fulfilment_notifications').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('updated_at', { ascending: false }).order('stripe_session_id').range(from, to)),
         loadPages((from, to) => supabase.from('meta_purchase_deliveries').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('updated_at', { ascending: false }).order('stripe_session_id').range(from, to)),
         // Load every unfinished claim, then classify it with the exact same
@@ -152,6 +164,7 @@ export default async function AdminPage() {
   ].filter(Boolean) as string[];
   const truncatedPanels = [
     result.truncated && 'orders',
+    inventoryResult.truncated && 'Pocket WiFi inventory',
     notificationResult.truncated && 'fulfilment notifications',
     metaDeliveryResult.truncated && 'Meta delivery status',
     stripeEventResult.truncated && 'Stripe webhook failures',
