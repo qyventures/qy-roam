@@ -3521,13 +3521,16 @@ test('Stripe webhook rejects encoded payloads before reading or signature verifi
 
 test('Stripe webhook bounds third-party delivery responses as well as request time', () => {
   assert.match(webhookRoute, /const MAX_DELIVERY_RESPONSE_BODY_BYTES=64 \* 1024/);
-  assert.match(webhookRoute, /async function readDeliveryResponseBody\(response: Response\)/);
+  assert.match(webhookRoute, /async function readDeliveryResponseBody\(response: Response, deadline: Promise<never>\)/);
   assert.match(webhookRoute, /declaredContentLength\(response\.headers\.get\('content-length'\),MAX_DELIVERY_RESPONSE_BODY_BYTES\)/);
   assert.match(webhookRoute, /const exactLengthExpected=!contentEncoding\|\|contentEncoding==='identity'/);
   assert.match(webhookRoute, /exactLengthExpected&&!contentLengthMatches\(contentLength,total\)/);
   assert.match(webhookRoute, /throw new Error\('Delivery response body is incomplete'\)/);
   assert.match(webhookRoute, /total>MAX_DELIVERY_RESPONSE_BODY_BYTES/);
-  assert.match(webhookRoute, /await readDeliveryResponseBody\(response\)/);
+  assert.match(webhookRoute, /await Promise\.race\(\[reader\.read\(\),deadline\]\)/);
+  assert.match(webhookRoute, /controller\.abort\(timeoutError\);[\s\S]{0,100}rejectDeadline\?\.\(timeoutError\)/);
+  assert.match(webhookRoute, /const response=await Promise\.race\(\[[\s\S]{0,500}fetch\(url,[\s\S]{0,500}deadline,[\s\S]{0,100}\]\)/);
+  assert.match(webhookRoute, /await readDeliveryResponseBody\(response,deadline\)/);
   assert.doesNotMatch(webhookRoute, /const responseBody=await response\.text\(\)/);
 });
 

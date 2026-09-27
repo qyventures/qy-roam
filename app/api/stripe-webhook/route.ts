@@ -169,7 +169,7 @@ function deliveryLeaseIsStale(updatedAt: string | null | undefined) {
 const MAX_DELIVERY_RESPONSE_BODY_BYTES=64 * 1024;
 const MAX_DELIVERY_RESPONSE_BODY_CHUNKS=1_024;
 
-async function readDeliveryResponseBody(response: Response) {
+async function readDeliveryResponseBody(response: Response, deadline: Promise<never>) {
   let contentLength:number|null;
   try {
     contentLength=declaredContentLength(response.headers.get('content-length'),MAX_DELIVERY_RESPONSE_BODY_BYTES);
@@ -196,7 +196,11 @@ async function readDeliveryResponseBody(response: Response) {
   let chunks=0;
   try {
     for (;;) {
-      const {done,value}=await reader.read();
+      // Aborting fetch normally errors its response stream, but that behaviour
+      // depends on the runtime and the upstream connection. Race every read
+      // against our own deadline as well, so headers followed by a broken
+      // never-settling body cannot pin the Stripe webhook worker forever.
+      const {done,value}=await Promise.race([reader.read(),deadline]);
       if(done) break;
       chunks+=1;
       if(chunks>MAX_DELIVERY_RESPONSE_BODY_CHUNKS) {
@@ -213,6 +217,11 @@ async function readDeliveryResponseBody(response: Response) {
       }
       body.set(value,total-value.byteLength);
     }
+  } catch(error) {
+    // Cancellation is teardown only and must not extend or replace the
+    // deadline/size failure that makes the durable delivery retryable.
+    void reader.cancel(error).catch(()=>undefined);
+    throw error;
   } finally {
     // Response-body limits must retain their explicit failure even if a
     // broken upstream leaves a pending read while cancellation unwinds.
@@ -229,19 +238,29 @@ async function readDeliveryResponseBody(response: Response) {
 
 async function postJsonWithTimeout(url:string,body:unknown,timeoutMs=DELIVERY_TIMEOUT_MS,headers:Record<string,string>={}){
   const controller=new AbortController();
-  const deadline=setTimeout(()=>controller.abort(),timeoutMs);
+  const timeoutError=new Error('Delivery request timed out');
+  let rejectDeadline:((reason?:unknown)=>void)|undefined;
+  const deadline=new Promise<never>((_,reject)=>{rejectDeadline=reject;});
+  const timeout=setTimeout(()=>{
+    controller.abort(timeoutError);
+    rejectDeadline?.(timeoutError);
+  },timeoutMs);
   try{
     // Both the optional SMTP relay payload and Meta authorization header carry
     // credentials. Following a redirect would resend those values to a different endpoint,
     // and can turn a harmless relay typo into a paid-order data leak. Treat a
     // redirect as a failed retryable delivery instead.
-    const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify(body),signal:controller.signal,redirect:'error'});
+    const response=await Promise.race([
+      fetch(url,{method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify(body),signal:controller.signal,redirect:'error'}),
+      deadline,
+    ]);
     // Consume the response while the deadline is still active. A provider that
     // sends headers and then stalls its body must not hold the webhook open.
-    const responseBody=await readDeliveryResponseBody(response);
+    const responseBody=await readDeliveryResponseBody(response,deadline);
     return {ok:response.ok,status:response.status,responseBody};
   }finally{
-    clearTimeout(deadline);
+    clearTimeout(timeout);
+    rejectDeadline=undefined;
   }
 }
 
