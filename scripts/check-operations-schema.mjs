@@ -64,6 +64,100 @@ export function validatePlpgsqlStructure(sql) {
 
 validatePlpgsqlStructure(schema);
 
+// PostgreSQL rejects an ON CONFLICT update that assigns the same target
+// column twice. This is easy to introduce while editing the long, safety-
+// critical paid-order upserts below, and the duplicate can hide among comments
+// while all presence-based contract checks continue to pass. We do not have a
+// production database available in the build workspace, so parse the bounded
+// assignment lists here and fail before a partially applied schema reaches it.
+export function validateOnConflictAssignments(sql) {
+  const clause = /\bon\s+conflict\b[\s\S]*?\bdo\s+update\s+set\b/gi;
+  let match;
+
+  while ((match = clause.exec(sql)) !== null) {
+    const assignmentsStart = clause.lastIndex;
+    let depth = 0;
+    let quote = null;
+    let lineComment = false;
+    let blockComment = false;
+    let end = sql.length;
+
+    for (let index = assignmentsStart; index < sql.length; index += 1) {
+      const char = sql[index];
+      const next = sql[index + 1];
+      if (lineComment) {
+        if (char === '\n') lineComment = false;
+        continue;
+      }
+      if (blockComment) {
+        if (char === '*' && next === '/') { blockComment = false; index += 1; }
+        continue;
+      }
+      if (quote) {
+        if (char === quote && next === quote) { index += 1; continue; }
+        if (char === quote) quote = null;
+        continue;
+      }
+      if (char === '-' && next === '-') { lineComment = true; index += 1; continue; }
+      if (char === '/' && next === '*') { blockComment = true; index += 1; continue; }
+      if (char === "'" || char === '"') { quote = char; continue; }
+      if (char === '(') depth += 1;
+      else if (char === ')') depth -= 1;
+      else if (depth === 0 && char === ';') { end = index; break; }
+      else if (depth === 0 && /^\sreturning\b/i.test(sql.slice(index))) { end = index; break; }
+    }
+
+    const list = sql.slice(assignmentsStart, end)
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/--[^\r\n]*/g, ' ');
+    const columns = [];
+    let itemStart = 0;
+    depth = 0;
+    quote = null;
+    for (let index = 0; index <= list.length; index += 1) {
+      const char = list[index];
+      const next = list[index + 1];
+      if (quote) {
+        if (char === quote && next === quote) { index += 1; continue; }
+        if (char === quote) quote = null;
+      } else if (char === "'" || char === '"') quote = char;
+      else if (char === '(') depth += 1;
+      else if (char === ')') depth -= 1;
+      else if ((char === ',' && depth === 0) || index === list.length) {
+        const assignment = list.slice(itemStart, index).trim();
+        const column = assignment.match(/^([a-z_][a-z0-9_]*)\s*=/i)?.[1]?.toLowerCase();
+        assert.ok(column, `Unable to parse ON CONFLICT assignment: ${assignment.slice(0, 80)}`);
+        columns.push(column);
+        itemStart = index + 1;
+      }
+    }
+    const duplicates = columns.filter((column, index) => columns.indexOf(column) !== index);
+    assert.deepEqual([...new Set(duplicates)], [], `ON CONFLICT assigns a target column more than once: ${[...new Set(duplicates)].join(', ')}`);
+    clause.lastIndex = end;
+  }
+}
+
+validateOnConflictAssignments(schema);
+
+// Keep the guard itself honest: this is a release check, so a parser
+// regression must fail locally instead of silently weakening deployment.
+validateOnConflictAssignments(`
+  insert into example(id, email) values (1, 'a@example.com')
+  on conflict (id) do update set
+    email = case when (example.email is null) then excluded.email else example.email end,
+    updated_at = now()
+  returning id;
+`);
+assert.throws(
+  () => validateOnConflictAssignments(`
+    insert into example(id, email) values (1, 'a@example.com')
+    on conflict (id) do update set email = excluded.email, -- accidental copy
+      email = lower(excluded.email)
+    returning id;
+  `),
+  /assigns a target column more than once: email/,
+);
+
 const requiredContracts = [
   'create table if not exists public.inventory_items',
   'create table if not exists public.inventory_movements',
@@ -150,5 +244,5 @@ assert.ok(inventoryTable < manualOrderFunction, 'inventory_items must exist befo
 assert.ok(integritySchemaVersion > pocketWifiPersistenceFunction, 'order-integrity schema version must be written after every paid-order function it certifies');
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure, and clean-install dependency order.`);
+  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure, conflict-update assignments, and clean-install dependency order.`);
 }
