@@ -306,9 +306,13 @@ export async function POST(req: Request) {
       return NextResponse.json({completed:true,sessionId:existing.id},{headers:{'Cache-Control':'no-store'}});
     }
     if(existing.status==='complete'&&existing.payment_status==='unpaid'){
-      const order=await supabase.from('orders').select('payment_status').eq('stripe_session_id',existing.id).maybeSingle();
+      const order=await supabase.from('orders').select('payment_status,fulfilment_status').eq('stripe_session_id',existing.id).maybeSingle();
       if(order.error) throw order.error;
-      if(order.data?.payment_status==='failed'){
+      // Stripe's terminal failure state remains `unpaid`; the webhook records
+      // the durable outcome in our fulfilment lifecycle as `payment_failed`.
+      // Wait for that ledger transition before rotating the browser's
+      // idempotency key, otherwise a delayed async success could be abandoned.
+      if(order.data?.payment_status==='unpaid'&&order.data?.fulfilment_status==='payment_failed'){
         return NextResponse.json({error:'This payment attempt was unsuccessful. Please try again with a new secure checkout.',paymentFailed:true},{status:409,headers:{'Cache-Control':'no-store'}});
       }
     }
@@ -476,9 +480,9 @@ export async function POST(req: Request) {
   // recorded that failure; before then, preserving the attempt protects an
   // in-flight payment and its linked inventory reservation.
   if(currentSession.status==='complete'&&currentSession.payment_status==='unpaid'){
-    const order=await supabase.from('orders').select('payment_status').eq('stripe_session_id',currentSession.id).maybeSingle();
+    const order=await supabase.from('orders').select('payment_status,fulfilment_status').eq('stripe_session_id',currentSession.id).maybeSingle();
     if(order.error) throw order.error;
-    if(order.data?.payment_status==='failed'){
+    if(order.data?.payment_status==='unpaid'&&order.data?.fulfilment_status==='payment_failed'){
       return NextResponse.json({error:'This payment attempt was unsuccessful. Please try again with a new secure checkout.',paymentFailed:true},{status:409,headers:{'Cache-Control':'no-store'}});
     }
   }

@@ -301,11 +301,15 @@ export async function POST(req: Request) {
       if (!supabase) throw new Error('Order persistence unavailable');
       const order = await supabase
         .from('orders')
-        .select('payment_status')
+        .select('payment_status,fulfilment_status')
         .eq('stripe_session_id', currentSession.id)
         .maybeSingle();
       if (order.error) throw order.error;
-      if (order.data?.payment_status === 'failed') {
+      // Stripe represents an asynchronously failed Checkout Session as
+      // `unpaid`. The signed webhook makes that terminal outcome durable in
+      // QY Roam's lifecycle ledger as `payment_failed`; only then is it safe
+      // to rotate this idempotent browser attempt.
+      if (order.data?.payment_status === 'unpaid' && order.data?.fulfilment_status === 'payment_failed') {
         return NextResponse.json({
           error: 'This payment attempt was unsuccessful. Please try again with a new secure checkout.',
           paymentFailed: true,
