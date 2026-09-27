@@ -1180,10 +1180,13 @@ begin
   -- A single transaction-level lock makes capacity calculation plus insertion
   -- atomic across every application instance.
   perform pg_advisory_xact_lock(hashtext('qy_roam_pocket_wifi_checkout'));
-  -- Expiry events normally release holds immediately. Retain an unconfirmed
-  -- hold through Stripe's webhook retry window so a delayed paid event cannot
-  -- appear after the router was sold to another customer.
-  delete from public.checkout_reservations where expires_at <= now() - interval '4 days';
+  -- Before a reservation is linked to Stripe, its checkout expiry is the
+  -- complete authority: no customer can pay it and there is no terminal
+  -- webhook to wait for. Once linked, retain it through Stripe's retry window
+  -- so a delayed paid event cannot arrive after the router was resold.
+  delete from public.checkout_reservations
+  where (stripe_session_id is null and expires_at <= now())
+     or (stripe_session_id is not null and expires_at <= now() - interval '4 days');
 
   -- The configured fleet limit protects against an accidental over-count in
   -- the stock register, but physical saleable stock is the hard ceiling. A
@@ -1232,7 +1235,10 @@ begin
   -- represented by those sessions are excluded from the database count.
   select count(*)::integer into v_reserved
   from public.checkout_reservations
-  where expires_at > now() - interval '4 days'
+  where (
+      (stripe_session_id is null and expires_at > now())
+      or (stripe_session_id is not null and expires_at > now() - interval '4 days')
+    )
     and travel_start <= p_travel_end
     and travel_end >= p_travel_start
     and not (checkout_request_id = any(coalesce(p_stripe_hold_request_ids, array[]::text[])));
@@ -1306,7 +1312,12 @@ begin
   if p_travel_start is null or p_travel_end is null or p_travel_end < p_travel_start then raise exception 'invalid Pocket WiFi travel dates'; end if;
 
   perform pg_advisory_xact_lock(hashtext('qy_roam_pocket_wifi_checkout'));
-  delete from public.checkout_reservations where expires_at <= now() - interval '4 days';
+  -- Match public checkout: only a Stripe-linked handoff needs the webhook
+  -- retry grace period. A failed pre-Stripe attempt stops consuming stock at
+  -- its ordinary Checkout deadline.
+  delete from public.checkout_reservations
+  where (stripe_session_id is null and expires_at <= now())
+     or (stripe_session_id is not null and expires_at <= now() - interval '4 days');
 
   -- An offline sale has no Stripe idempotency key, so its deterministic
   -- internal reference is the retry boundary. Check it while holding the
@@ -1364,7 +1375,10 @@ begin
 
   select count(*)::integer into v_reserved
   from public.checkout_reservations
-  where expires_at > now() - interval '4 days'
+  where (
+      (stripe_session_id is null and expires_at > now())
+      or (stripe_session_id is not null and expires_at > now() - interval '4 days')
+    )
     and travel_start <= p_travel_end
     and travel_end >= p_travel_start;
 
@@ -1674,10 +1688,10 @@ immutable
 security definer
 set search_path = pg_catalog
 as $$
-  -- Version 11 certifies that service-role application clients cannot erase
-  -- the paid-order, Stripe-idempotency or outbound-delivery audit trail.
-  -- An application expecting that boundary must reject version 10.
-  select 11;
+  -- Version 12 certifies both the immutable audit boundaries and the
+  -- reservation handoff rule: unlinked attempts expire normally while only
+  -- Stripe-linked holds receive the four-day webhook recovery window.
+  select 12;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;

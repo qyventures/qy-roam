@@ -248,7 +248,7 @@ test('durable orders accept only canonical Stripe or protected manual-sale ident
     'checkout readiness must reject a deployed schema missing the order identity boundary',
   );
   assert.match(adminOpsRoute, /`manual_\$\{crypto\.createHash\('sha256'\)\.update\(reference\)\.digest\('hex'\)\.slice\(0, 48\)\}`/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 11/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 12/);
 });
 
 test('manual sales cannot create permanent unpaid Pocket WiFi capacity holds', () => {
@@ -279,7 +279,7 @@ test('Pocket WiFi reservation authority validates its complete capacity snapshot
   assert.match(schema, /hold_id is null or hold_id !~ '\^\[A-Za-z0-9_\-\]\{16,80\}\$'/);
   assert.match(schema, /cardinality\(p_stripe_hold_request_ids\) <> \(\s*select count\(distinct hold_id\)/);
   assert.match(schema, /v_existing\.expires_at <> p_expires_at/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 11/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 12/);
 });
 
 test('optional Meta consent storage cannot block checkout in privacy-restricted browsers', () => {
@@ -1660,11 +1660,11 @@ test('post-payment readiness checks every webhook-persisted delivery field and p
 test('checkout readiness rejects an older order-integrity schema with matching object names', () => {
   // The compatibility marker covers function bodies and privilege boundaries
   // that object-presence probes cannot distinguish during a rolling deploy.
-  assert.match(productionReadiness, /const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 11/);
+  assert.match(productionReadiness, /const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 12/);
   assert.match(productionReadiness, /database\.rpc\('qy_order_integrity_schema_version', \{\}\)\.abortSignal\(signal\)/);
   assert.match(productionReadiness, /versionProbe\.data !== REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION/);
   assert.match(productionReadiness, /if \(!await hasCurrentOrderIntegritySchema\(database, signal\)\) return false/);
-  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 11;/);
+  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 12;/);
   assert.match(schema, /grant execute on function public\.qy_order_integrity_schema_version\(\) to service_role/);
   assert.ok(
     schema.indexOf('create or replace function public.qy_order_integrity_schema_version') >
@@ -1958,6 +1958,20 @@ test('Pocket WiFi payment persistence atomically replaces its checkout hold with
   assert.match(wifiPersistence, /where checkout_request_id = p_checkout_request_id\s+and stripe_session_id = p_stripe_session_id/);
   assert.doesNotMatch(wifiPersistence, /stripe_session_id is null or stripe_session_id = p_stripe_session_id/);
   assert.match(productionReadiness, /production_payment_persistence_rpc_check_failed/);
+});
+
+test('only Stripe-linked Pocket WiFi reservations receive the webhook handoff grace period', () => {
+  // A process can stop after reserving capacity but before it creates a
+  // Checkout Session. That unlinked row has no payable Stripe capability and
+  // must not strand a router for the four-day webhook retry window.
+  assert.match(schema, /stripe_session_id is null and expires_at <= now\(\)/);
+  assert.match(schema, /stripe_session_id is not null and expires_at <= now\(\) - interval '4 days'/);
+  assert.match(schema, /stripe_session_id is null and expires_at > now\(\)/);
+  assert.match(schema, /stripe_session_id is not null and expires_at > now\(\) - interval '4 days'/);
+  assert.match(availabilityRoute, /stripe_session_id\.is\.null,expires_at\.gt\.\$\{checkoutCutoff\}/);
+  assert.match(availabilityRoute, /stripe_session_id\.not\.is\.null,expires_at\.gt\.\$\{reservationCutoff\}/);
+  assert.match(inventoryPage, /stripe_session_id\.is\.null,expires_at\.gt\.\$\{now\}/);
+  assert.match(inventoryPage, /stripe_session_id\.not\.is\.null,expires_at\.gt\.\$\{cutoff\}/);
 });
 
 test('database rejects paid Stripe orders without their product delivery destination', () => {
@@ -2515,8 +2529,8 @@ test('service-role clients cannot erase the paid-order idempotency audit trail',
     schema,
     /revoke delete, truncate\s+on table public\.orders, public\.stripe_events,\s+public\.fulfilment_notifications, public\.meta_purchase_deliveries\s+from service_role;/,
   );
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 11/);
-  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 11;/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 12/);
+  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 12;/);
 });
 
 test('eSIM entitlement snapshots stay bounded and printable at the database boundary', () => {
@@ -2529,14 +2543,14 @@ test('eSIM entitlement snapshots stay bounded and printable at the database boun
   assert.match(schema, /if coalesce\(length\(p_plan_name\), 0\) not between 1 and 200[\s\S]*?raise exception 'invalid eSIM plan name'/);
   assert.match(schema, /if coalesce\(length\(p_data_allowance\), 0\) not between 1 and 200[\s\S]*?raise exception 'invalid eSIM data allowance'/);
   assert.match(schema, /if coalesce\(length\(p_country\), 0\) not between 1 and 100[\s\S]*?raise exception 'invalid eSIM destination'/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 11/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 12/);
 });
 
 test('every paid eSIM order requires a database-enforced delivery email', () => {
   assert.match(schema, /orders_paid_esim_delivery_email_check/);
   assert.match(schema, /orders_paid_esim_delivery_email_check check \([\s\S]*?payment_status is distinct from 'paid' or[\s\S]*?product_type <> 'esim' or[\s\S]*?email is not null and[\s\S]*?email = btrim\(email\) and[\s\S]*?length\(email\) <= 254 and[\s\S]*?email ~ '\^\[\^\[:space:\]@\]\+@\[\^\[:space:\]@\]\+\\\.\[\^\[:space:\]@\]\+\$'/);
   assert.match(adminOpsRoute, /product === 'esim' && !isSafeSmtpMailbox\(row\.email \|\| undefined\)/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 11/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 12/);
 });
 
 test('paid-order measurement consent cannot be broadened after checkout', () => {
@@ -3007,7 +3021,7 @@ test('inventory register and movement audit visibility page beyond one Supabase 
 test('admin inventory exposes every capacity-protecting Pocket WiFi checkout reservation within a bounded view', () => {
   assert.match(inventoryPage, /RESERVATION_HANDOFF_GRACE_MS=4\*24\*60\*60\*1000/);
   assert.match(inventoryPage, /from\('checkout_reservations'\)/);
-  assert.match(inventoryPage, /\.gt\('expires_at',cutoff\)/);
+  assert.match(inventoryPage, /\.or\(activeFilter\)/);
   assert.match(inventoryPage, /Checkout capacity holds/);
   assert.match(inventoryPage, /Webhook handoff/);
   assert.match(inventoryPage, /Unconfirmed handoff/);

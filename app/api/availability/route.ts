@@ -118,6 +118,7 @@ async function activeReservations(
   end: string,
   reservationCutoff: string,
 ) {
+  const checkoutCutoff = new Date().toISOString();
   const reservations: { checkout_request_id: string }[] = [];
   let afterRequestId: string | null = null;
   for (let page = 0; page < MAX_RESERVATION_SCAN_PAGES; page += 1) {
@@ -126,7 +127,10 @@ async function activeReservations(
     // primary checkout identity as a keyset cursor so concurrent cleanup
     // cannot shift later rows into an already-read offset and overstate stock.
     let query = supabase.from('checkout_reservations').select('checkout_request_id')
-      .gt('expires_at', reservationCutoff)
+      // Unlinked attempts have no Stripe payment capability or webhook
+      // handoff, so they stop consuming stock at normal checkout expiry.
+      // Linked sessions retain the recovery grace used by the database RPC.
+      .or(`and(stripe_session_id.is.null,expires_at.gt.${checkoutCutoff}),and(stripe_session_id.not.is.null,expires_at.gt.${reservationCutoff})`)
       .lte('travel_start', end)
       .gte('travel_end', start)
       .order('checkout_request_id')
