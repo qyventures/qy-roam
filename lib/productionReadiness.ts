@@ -26,6 +26,7 @@ const READINESS_PROBE_TIMEOUT_MS = 8_000;
 // explicit handshake prevents a rolling application deploy from accepting a
 // payment against stale database logic.
 const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 8;
+const REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 1;
 let paymentSchemaReadyUntil = 0;
 let esimOrderSchemaReadyUntil = 0;
 let operationsSchemaReadyUntil = 0;
@@ -466,18 +467,25 @@ async function checkRequiredPocketWifiFulfilmentSchema() {
       // The zero id is rejected before the function can mutate either ledger.
       // Its deliberate domain error proves the currently deployed RPC accepts
       // every required custody argument and is executable by the service role.
-      const transitionProbe = await database.rpc('qy_transition_pocket_wifi_order', {
-        p_order_id: 0,
-        p_expected_status: 'paid',
-        p_next_status: 'paid',
-        p_courier_tracking: null,
-        p_return_tracking: null,
-        p_notes: null,
-        p_inventory_item_id: null,
-        p_return_disposition: 'restock',
-      }).abortSignal(signal);
+      const [transitionProbe, versionProbe] = await Promise.all([
+        database.rpc('qy_transition_pocket_wifi_order', {
+          p_order_id: 0,
+          p_expected_status: 'paid',
+          p_next_status: 'paid',
+          p_courier_tracking: null,
+          p_return_tracking: null,
+          p_notes: null,
+          p_inventory_item_id: null,
+          p_return_disposition: 'restock',
+        }).abortSignal(signal),
+        database.rpc('qy_pocket_wifi_fulfilment_schema_version', {}).abortSignal(signal),
+      ]);
       if (!transitionProbe.error || !/order not found/i.test(transitionProbe.error.message || '')) {
         console.error('production_pocket_wifi_fulfilment_transition_rpc_check_failed');
+        return false;
+      }
+      if (versionProbe.error || versionProbe.data !== REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION) {
+        console.error('production_pocket_wifi_fulfilment_schema_version_check_failed');
         return false;
       }
       return true;

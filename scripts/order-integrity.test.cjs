@@ -2601,6 +2601,20 @@ test('generic inventory adjustments cannot bypass the Pocket WiFi hand-off and i
   assert.match(adminOpsForms, /name="reference" placeholder="Inspection \/ repair reference" required/);
 });
 
+test('generic inventory mutations cannot make a router saleable while it is in customer custody', () => {
+  const activeCustodyGuard = /inventory_item_id = p_item_id[\s\S]{0,180}product_type = 'pocket_wifi'[\s\S]{0,180}fulfilment_status in \('dispatched', 'with_customer', 'return_due'\)/g;
+  assert.equal(
+    [...schema.matchAll(activeCustodyGuard)].length,
+    2,
+    'both quantity adjustments and status changes must reject assigned in-custody routers',
+  );
+  assert.match(schema, /inventory item is assigned to an active Pocket WiFi custody order/);
+  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 1; \$\$/);
+  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 1/);
+  assert.match(productionReadiness, /database\.rpc\('qy_pocket_wifi_fulfilment_schema_version', \{\}\)/);
+  assert.match(productionReadiness, /versionProbe\.data !== REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION/);
+});
+
 test('production readiness verifies the deployed Pocket WiFi dispatch and return contract', () => {
   assert.match(productionReadiness, /inventory_item_id,courier_tracking,return_tracking,digital_delivery_reference,return_disposition,dispatched_at,returned_at/);
   assert.match(productionReadiness, /database\.rpc\('qy_transition_pocket_wifi_order'/);
