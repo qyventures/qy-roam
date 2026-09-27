@@ -563,6 +563,16 @@ test('Stripe webhook failure logging does not print raw dependency errors', () =
   assert.match(webhookRoute, /console\.error\('stripe_webhook_processing_error'\)/);
 });
 
+test('Stripe webhook acknowledgements and retry responses are never cacheable', () => {
+  assert.match(webhookRoute, /const STRIPE_WEBHOOK_RESPONSE_HEADERS = \{ 'Cache-Control': 'no-store' \}/);
+  assert.match(webhookRoute, /function webhookJson\(body: unknown, init: ResponseInit = \{\}\)/);
+  assert.match(webhookRoute, /headers: \{ \.\.\.STRIPE_WEBHOOK_RESPONSE_HEADERS, \.\.\.init\.headers \}/);
+  // Keep every exit behind the shared response boundary. A later direct JSON
+  // response could otherwise reintroduce a cacheable success or retry error.
+  const directJsonResponses = webhookRoute.match(/NextResponse\.json\(/g) || [];
+  assert.equal(directJsonResponses.length, 1);
+});
+
 test('Stripe webhook failure recording cannot replace the controlled retry response', () => {
   const failureRecorder = webhookRoute.match(/async function recordEventFailure[\s\S]*?\n}\n\n\/\/ An expired Checkout Session/);
   assert.ok(failureRecorder, 'webhook must retain a dedicated event-failure recorder');
@@ -968,7 +978,7 @@ test('paid orders fail into the durable webhook recovery ledger when fulfilment 
   const paidClaimAt = webhookRoute.lastIndexOf("const eventClaimId=`stripe:${stripeEventId}`", paidValidationAt);
   const processing = webhookRoute.slice(
     paidClaimAt,
-    webhookRoute.indexOf("return NextResponse.json({received:true});", paidValidationAt),
+    webhookRoute.indexOf("return webhookJson({received:true});", paidValidationAt),
   );
   const claim = processing.indexOf('claimStartedAt=claim.processingStartedAt');
   const detailsGuard = processing.indexOf('paidFulfilmentDetailsIssue(sessionForEvent,validation.productType)');
@@ -1848,7 +1858,7 @@ test('signed Stripe webhooks cannot cross the configured test/live boundary', ()
   assert.match(stripeCheckoutConfig, /if \(typeof livemode !== 'boolean'\) return false/);
   assert.match(webhookRoute, /stripeEventMatchesConfiguredMode\(key,event\.livemode\)/);
   assert.match(webhookRoute, /Stripe event mode mismatch/);
-  assert.match(webhookRoute, /return NextResponse\.json\(\{error:'Stripe event mode mismatch'\},\{status:400\}\)/);
+  assert.match(webhookRoute, /return webhookJson\(\{error:'Stripe event mode mismatch'\},\{status:400\}\)/);
 });
 
 test('customer payment confirmation and status views enforce the Stripe credential mode boundary', () => {
@@ -4023,7 +4033,7 @@ test('expired lookalike sessions are ignored before claiming the webhook event',
   assert.notEqual(eventClaim, -1);
   assert.ok(provenanceGuard < eventClaim);
   assert.match(expiryBranch, /stripe_webhook_expiry_integrity_error/);
-  assert.match(expiryBranch, /return NextResponse\.json\(\{received:true,ignored:true\}\)/);
+  assert.match(expiryBranch, /return webhookJson\(\{received:true,ignored:true\}\)/);
 });
 
 test('expired checkout sessions close only their provisional pending orders', () => {

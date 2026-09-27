@@ -45,6 +45,14 @@ const MAX_STRIPE_SIGNATURE_HEADER_BYTES = 8_192;
 // webhook worker indefinitely. Stripe will retry a timed-out delivery, while
 // the bounded body size below continues to protect memory for completed reads.
 const STRIPE_WEBHOOK_BODY_TIMEOUT_MS = 15_000;
+const STRIPE_WEBHOOK_RESPONSE_HEADERS = { 'Cache-Control': 'no-store' } as const;
+
+function webhookJson(body: unknown, init: ResponseInit = {}) {
+  return NextResponse.json(body, {
+    ...init,
+    headers: { ...STRIPE_WEBHOOK_RESPONSE_HEADERS, ...init.headers },
+  });
+}
 
 class StripeWebhookBodyTimeoutError extends Error {}
 class InvalidStripeWebhookBodyLengthError extends Error {}
@@ -660,26 +668,26 @@ export async function POST(req:Request){
   // which prevents a configuration outage from being surfaced and retried as
   // a service dependency failure.
   if(!hasRequiredStripeCheckoutConfig()||!hasRequiredStripeWebhookConfig()||!hasOrderIntegritySigningConfig()||!key||!webhookSecret) {
-    return NextResponse.json({error:'Webhook configuration incomplete'},{status:503});
+    return webhookJson({error:'Webhook configuration incomplete'},{status:503});
   }
   if(!hasIdentityContentEncoding(req.headers.get('content-encoding'))) {
-    return NextResponse.json({error:'Unsupported webhook content encoding'},{status:415});
+    return webhookJson({error:'Unsupported webhook content encoding'},{status:415});
   }
   const stripe=createStripeClient(key); let event:Stripe.Event;
   let payload:Buffer;
   try { payload=await readStripeWebhookBody(req); }
   catch(error) {
-    if (error instanceof RangeError) return NextResponse.json({error:'Webhook payload too large'},{status:413});
-    if (error instanceof StripeWebhookBodyTimeoutError) return NextResponse.json({error:'Webhook payload timed out'},{status:408});
-    return NextResponse.json({error:'Invalid webhook payload'},{status:400});
+    if (error instanceof RangeError) return webhookJson({error:'Webhook payload too large'},{status:413});
+    if (error instanceof StripeWebhookBodyTimeoutError) return webhookJson({error:'Webhook payload timed out'},{status:408});
+    return webhookJson({error:'Invalid webhook payload'},{status:400});
   }
   const stripeSignature=validStripeSignatureHeader(req.headers.get('stripe-signature'));
-  if(!stripeSignature) return NextResponse.json({error:'Invalid signature'},{status:400});
-  try{event=stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret);}catch{return NextResponse.json({error:'Invalid signature'},{status:400});}
+  if(!stripeSignature) return webhookJson({error:'Invalid signature'},{status:400});
+  try{event=stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret);}catch{return webhookJson({error:'Invalid signature'},{status:400});}
   const webhookEvent=stripeWebhookEventEnvelope(event);
   if(!webhookEvent) {
     console.error('stripe_webhook_invalid_event_envelope');
-    return NextResponse.json({error:'Invalid Stripe event payload'},{status:400});
+    return webhookJson({error:'Invalid Stripe event payload'},{status:400});
   }
   event=webhookEvent;
   // A valid signature authenticates bytes, not the runtime shape supplied by
@@ -690,7 +698,7 @@ export async function POST(req:Request){
   const stripeEventId=validStripeEventId(event.id);
   if(!stripeEventId) {
     console.error('stripe_webhook_invalid_event_id');
-    return NextResponse.json({error:'Invalid Stripe event identifier'},{status:400});
+    return webhookJson({error:'Invalid Stripe event identifier'},{status:400});
   }
   // A webhook secret is scoped to a Stripe endpoint but its value does not
   // encode test versus live mode. Prevent an accidentally configured test
@@ -699,9 +707,9 @@ export async function POST(req:Request){
   // likewise prevent live events from entering a local/test installation).
   if(!stripeEventMatchesConfiguredMode(key,event.livemode)){
     console.error('stripe_webhook_mode_mismatch',{eventId:stripeEventId,eventLivemode:event.livemode});
-    return NextResponse.json({error:'Stripe event mode mismatch'},{status:400});
+    return webhookJson({error:'Stripe event mode mismatch'},{status:400});
   }
-  if(!['checkout.session.completed','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed','checkout.session.expired'].includes(event.type)) return NextResponse.json({received:true});
+  if(!['checkout.session.completed','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed','checkout.session.expired'].includes(event.type)) return webhookJson({received:true});
   // The SDK type is not a runtime validator. Inspect the deserialised event
   // object before reading its metadata or using its id in an outbound Stripe
   // request / durable ledger key. This leaves malformed signed payloads as a
@@ -709,7 +717,7 @@ export async function POST(req:Request){
   const eventSession=stripeWebhookCheckoutSession(event.data?.object);
   if(!eventSession) {
     console.error('stripe_webhook_invalid_checkout_session_object',{eventId:stripeEventId});
-    return NextResponse.json({error:'Invalid Checkout Session object'},{status:400});
+    return webhookJson({error:'Invalid Checkout Session object'},{status:400});
   }
   // The envelope mode was checked against the configured Stripe credential
   // above. Bind the embedded object to that same mode before trusting its
@@ -718,14 +726,14 @@ export async function POST(req:Request){
   // signed payload, not a retryable paid-order failure.
   if(!stripeWebhookCheckoutSessionMatchesEvent(event,eventSession)) {
     console.error('stripe_webhook_checkout_session_mode_mismatch',{eventId:stripeEventId});
-    return NextResponse.json({error:'Checkout Session mode does not match Stripe event'},{status:400});
+    return webhookJson({error:'Checkout Session mode does not match Stripe event'},{status:400});
   }
   // QY Roam can share a Stripe account with other products. A broad Checkout
   // webhook subscription must acknowledge their sessions without creating an
   // order, sending fulfilment email, or filling this app's idempotency ledger.
   // Both QY Roam checkout routes set this server-controlled marker.
-  if(!hasQyRoamWebhookSource(eventSession.metadata)) return NextResponse.json({received:true,ignored:true});
-  const supabase=getSupabaseAdmin(); if(!supabase) return NextResponse.json({error:'Persistence unavailable'},{status:503});
+  if(!hasQyRoamWebhookSource(eventSession.metadata)) return webhookJson({received:true,ignored:true});
+  const supabase=getSupabaseAdmin(); if(!supabase) return webhookJson({error:'Persistence unavailable'},{status:503});
   // The event is Stripe-signed, but retain the same bounded identifier
   // boundary used by customer-facing recovery pages before an SDK call or a
   // durable ledger write. This protects the worker from an unexpected API
@@ -734,7 +742,7 @@ export async function POST(req:Request){
   const eventSessionId=validStripeCheckoutSessionId(eventSession.id);
   if(!eventSessionId){
     console.error('stripe_webhook_invalid_session_id',{eventId:stripeEventId});
-    return NextResponse.json({error:'Invalid Checkout Session identifier'},{status:400});
+    return webhookJson({error:'Invalid Checkout Session identifier'},{status:400});
   }
   // Claim fulfilment-bearing events before the outbound Stripe refresh. If
   // that dependency is unavailable until Stripe exhausts its delivery retry
@@ -747,12 +755,12 @@ export async function POST(req:Request){
   if(event.type!=='checkout.session.expired'){
     try{
       const claim=await claimOnce(supabase,eventClaimId,event.type,eventSessionId);
-      if(claim.status==='processed') return NextResponse.json({received:true,duplicate:true});
-      if(claim.status==='in_progress') return NextResponse.json({error:'Event is still processing'},{status:500});
+      if(claim.status==='processed') return webhookJson({received:true,duplicate:true});
+      if(claim.status==='in_progress') return webhookJson({error:'Event is still processing'},{status:500});
       claimStartedAt=claim.processingStartedAt;
     }catch(error){
       console.error('stripe_webhook_claim_error',{eventId:stripeEventId,sessionId:eventSessionId});
-      return NextResponse.json({error:'Processing failed'},{status:500});
+      return webhookJson({error:'Processing failed'},{status:500});
     }
   }
   // Stripe signs the event snapshot, but fetch the Checkout Session again
@@ -771,7 +779,7 @@ export async function POST(req:Request){
     // safely reconstruct from a complete Checkout Session.
     console.error('stripe_webhook_session_retrieve_error',{eventId:stripeEventId,sessionId:eventSessionId});
     if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error);
-    return NextResponse.json({error:'Unable to retrieve Checkout Session'},{status:500});
+    return webhookJson({error:'Unable to retrieve Checkout Session'},{status:500});
   }
   // An authenticated Stripe API response is still deserialised runtime data.
   // Validate the same minimal object boundary used for the signed event before
@@ -783,7 +791,7 @@ export async function POST(req:Request){
   if(!session){
     console.error('stripe_webhook_invalid_retrieved_session',{eventId:stripeEventId,sessionId:eventSessionId});
     if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,new Error('Stripe returned an invalid Checkout Session object'));
-    return NextResponse.json({error:'Invalid retrieved Checkout Session'},{status:500});
+    return webhookJson({error:'Invalid retrieved Checkout Session'},{status:500});
   }
   // The signed event selects the Checkout Session to process; the refreshed
   // object only supplies its current customer and payment fields. Keep those
@@ -800,7 +808,7 @@ export async function POST(req:Request){
       retrievedLivemode:session.livemode,
     });
     if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,new Error('Retrieved Checkout Session does not match webhook event'));
-    return NextResponse.json({error:'Retrieved Checkout Session does not match webhook event'},{status:500});
+    return webhookJson({error:'Retrieved Checkout Session does not match webhook event'},{status:500});
   }
   // The retrieved Session is the freshest source for customer, shipping,
   // metadata, and amount fields, but it must not change what this particular
@@ -822,14 +830,14 @@ export async function POST(req:Request){
     // before their URL is exposed.
     if(!validQyRoamProvenance(session.id,session.metadata)){
       console.error('stripe_webhook_expiry_integrity_error',{sessionId:session.id});
-      return NextResponse.json({received:true,ignored:true});
+      return webhookJson({received:true,ignored:true});
     }
     const expiryEventClaimId=eventClaimId;
     let expiryClaimStartedAt:string|undefined;
     try{
       const claim=await claimOnce(supabase,expiryEventClaimId,event.type,session.id);
-      if(claim.status==='processed') return NextResponse.json({received:true,duplicate:true});
-      if(claim.status==='in_progress') return NextResponse.json({error:'Event is still processing'},{status:500});
+      if(claim.status==='processed') return webhookJson({received:true,duplicate:true});
+      if(claim.status==='in_progress') return webhookJson({error:'Event is still processing'},{status:500});
       expiryClaimStartedAt=claim.processingStartedAt;
       if(eventStateIssue) throw new Error(`Stripe event state validation failed: ${eventStateIssue}`);
       // Expiry releases scarce inventory and can close a provisional order,
@@ -854,9 +862,9 @@ export async function POST(req:Request){
       // may include provider response text, configuration, or order data.
       console.error('stripe_webhook_expiry_processing_error');
       if(expiryClaimStartedAt) await recordEventFailure(supabase,expiryEventClaimId,expiryClaimStartedAt,error);
-      return NextResponse.json({error:'Processing failed'},{status:500});
+      return webhookJson({error:'Processing failed'},{status:500});
     }
-    return NextResponse.json({received:true});
+    return webhookJson({received:true});
   }
   try{
     if(!claimStartedAt) throw new Error('Stripe event claim was not acquired');
@@ -914,7 +922,7 @@ export async function POST(req:Request){
     // intentionally application-authored. Keep logs on the same boundary.
     console.error('stripe_webhook_processing_error');
     if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error);
-    return NextResponse.json({error:'Processing failed'},{status:500});
+    return webhookJson({error:'Processing failed'},{status:500});
   }
-  return NextResponse.json({received:true});
+  return webhookJson({received:true});
 }
