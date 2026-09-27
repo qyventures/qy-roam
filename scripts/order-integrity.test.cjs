@@ -1023,7 +1023,7 @@ test('Stripe retries cannot revive fulfilment work after the order lifecycle has
     webhookRoute.indexOf('export async function deliverFulfilmentNotification'),
     webhookRoute.indexOf('export async function deliverMetaPurchase'),
   );
-  const lifecycleRead = delivery.indexOf(".select('payment_status,product_type,fulfilment_status')");
+  const lifecycleRead = delivery.indexOf(".select('payment_status,product_type,fulfilment_status,customer_name,email,phone,shipping_address')");
   const actionableGuard = delivery.indexOf('fulfilmentNotificationActionable(order.data.product_type,order.data.fulfilment_status)');
   const notificationClaim = delivery.indexOf(".from('fulfilment_notifications')");
   assert.ok(lifecycleRead >= 0, 'delivery must read the current durable order lifecycle');
@@ -1031,6 +1031,23 @@ test('Stripe retries cannot revive fulfilment work after the order lifecycle has
   assert.ok(notificationClaim > actionableGuard, 'a non-actionable order must be rejected before notification state is claimed');
   assert.match(delivery, /if\(!order\.data\) throw new Error\('Paid order is missing before fulfilment notification delivery'\)/);
   assert.match(delivery, /if\(order\.data\.product_type!==session\.metadata\?\.product_type\) throw new Error\('Stored order product does not match its Stripe session'\)/);
+});
+
+test('fulfilment retries use durable staff-corrected contact and delivery details', () => {
+  // Paid-order identity fields remain bound to the authenticated Stripe
+  // Session, while customer contact and shipping fields are intentionally
+  // editable for operational corrections. The actual email hand-off must use
+  // that durable record on every webhook or protected admin retry.
+  const delivery = webhookRoute.slice(
+    webhookRoute.indexOf('export async function deliverFulfilmentNotification'),
+    webhookRoute.indexOf('export async function deliverMetaPurchase'),
+  );
+  assert.match(delivery, /customer_details:\{\s*\.\.\.session\.customer_details,\s*name:order\.data\.customer_name,\s*email:order\.data\.email,\s*phone:order\.data\.phone,/);
+  assert.match(delivery, /shipping_details:order\.data\.shipping_address \? \{/);
+  assert.match(delivery, /address:order\.data\.shipping_address/);
+  assert.match(delivery, /paidFulfilmentDetailsIssue\(fulfilmentSession,order\.data\.product_type\)/);
+  assert.match(delivery, /await sendHumanFulfilmentEmail\(fulfilmentSession\)/);
+  assert.doesNotMatch(delivery, /await sendHumanFulfilmentEmail\(session\)/);
 });
 
 test('v2 provenance binds all checkout metadata, including same-priced travel dates', () => {

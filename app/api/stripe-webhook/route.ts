@@ -531,13 +531,36 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
   // row: skipped deliveries are not failures and must not remain as a false
   // pending exception on the operations dashboard.
   const order=await supabase.from('orders')
-    .select('payment_status,product_type,fulfilment_status')
+    // Stripe remains the authority for the signed commercial identity, but
+    // the paid order is deliberately allowed to carry staff-corrected contact
+    // and delivery details. A retry must use those durable corrections rather
+    // than resend the historical Checkout snapshot to fulfilment staff.
+    .select('payment_status,product_type,fulfilment_status,customer_name,email,phone,shipping_address')
     .eq('stripe_session_id',session.id)
     .maybeSingle();
   if(order.error) throw order.error;
   if(!order.data) throw new Error('Paid order is missing before fulfilment notification delivery');
   if(order.data.payment_status!=='paid'||!fulfilmentNotificationActionable(order.data.product_type,order.data.fulfilment_status)) return;
   if(order.data.product_type!==session.metadata?.product_type) throw new Error('Stored order product does not match its Stripe session');
+  const fulfilmentSession={
+    ...session,
+    customer_details:{
+      ...session.customer_details,
+      name:order.data.customer_name,
+      email:order.data.email,
+      phone:order.data.phone,
+    },
+    shipping_details:order.data.shipping_address ? {
+      ...session.shipping_details,
+      name:order.data.customer_name||session.shipping_details?.name||'',
+      address:order.data.shipping_address,
+    } : null,
+  } as Stripe.Checkout.Session;
+  // Validate the exact durable details that will enter the outbound message.
+  // A malformed manual repair must stay retryable and visible instead of
+  // silently falling back to stale Stripe contact data.
+  const fulfilmentDetailsIssue=paidFulfilmentDetailsIssue(fulfilmentSession,order.data.product_type);
+  if(fulfilmentDetailsIssue) throw new Error(fulfilmentDetailsIssue);
 
   let existing=await supabase.from('fulfilment_notifications').select('status,updated_at,attempts').eq('stripe_session_id',session.id).maybeSingle();
   if(existing.error) throw existing.error;
@@ -562,7 +585,7 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
   if(attempt.error) throw attempt.error;
   if(attempt.data?.length!==1) throw new Error('Fulfilment notification was claimed by another delivery attempt');
   try{
-    await sendHumanFulfilmentEmail(session);
+    await sendHumanFulfilmentEmail(fulfilmentSession);
     // The sending lease can be reclaimed after a timed-out worker. Only its
     // owner may settle it: an older worker must never mark a newer delivery
     // sent (or later reset it to pending in the catch below).
