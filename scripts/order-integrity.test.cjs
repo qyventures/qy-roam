@@ -45,6 +45,7 @@ const { metaMeasurementAllowed, setMetaMeasurementConsent } = require('../lib/me
 const { digitalDeliveryReferenceIssue, isSafeDigitalDeliveryReference } = require('../lib/digitalDeliveryReference.ts');
 const { SUPABASE_REQUEST_TIMEOUT_MS, SUPABASE_RESPONSE_MAX_BYTES, SUPABASE_RESPONSE_MAX_CHUNKS, canonicalSupabaseProjectUrl, fetchSupabaseWithTimeout, hasRequiredSupabaseAdminConfig, supabaseServiceRoleKey } = require('../lib/supabaseAdmin.ts');
 const { checkoutAttempt, clearCheckoutAttempt, CHECKOUT_ATTEMPT_MAX_AGE_MS } = require('../lib/checkoutAttempt.ts');
+const { CUSTOMER_REQUEST_TIMEOUT_MS, CustomerRequestTimeoutError, fetchCustomerRequest } = require('../lib/clientRequest.ts');
 const { safeHttpsDeliveryEndpoint } = require('../lib/deliveryEndpoint.ts');
 const { fulfilmentRelayAcknowledged } = require('../lib/deliveryAcknowledgement.ts');
 const { safeProviderDeliveryFailure, safeWebhookProcessingFailure } = require('../lib/deliveryFailure.ts');
@@ -193,6 +194,30 @@ test('checkout attempt identity survives reloads without becoming permanently st
     if (previousCrypto === undefined) delete global.crypto;
     else global.crypto = previousCrypto;
   }
+});
+
+test('customer checkout requests release a stuck browser without rotating their durable attempt identity', async () => {
+  assert.equal(CUSTOMER_REQUEST_TIMEOUT_MS, 120_000);
+  await assert.rejects(() => fetchCustomerRequest('/api/checkout', {}, 0), /Invalid customer request timeout/);
+
+  const originalFetch = global.fetch;
+  let receivedSignal;
+  global.fetch = async (_input, init) => new Promise(() => { receivedSignal = init.signal; });
+  try {
+    await assert.rejects(
+      () => fetchCustomerRequest('/api/checkout', { method: 'POST' }, 1),
+      CustomerRequestTimeoutError,
+    );
+    assert.equal(receivedSignal.aborted, true);
+  } finally {
+    global.fetch = originalFetch;
+  }
+
+  assert.match(homePage, /fetchCustomerRequest\(`\/api\/availability/);
+  assert.match(homePage, /fetchCustomerRequest\('\/api\/checkout'/);
+  assert.match(esimPage, /fetchCustomerRequest\('\/api\/esim-checkout'/);
+  assert.match(homePage, /checkoutAttempt\('pocket_wifi'/);
+  assert.match(esimPage, /checkoutAttempt\('esim'/);
 });
 
 test('durable retry counters recover malformed inherited values without exceeding PostgreSQL integer storage', () => {

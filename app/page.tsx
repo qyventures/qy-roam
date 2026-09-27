@@ -7,6 +7,7 @@ import { pocketWifiRentalCents, sgdFromCents } from '../lib/pocketWifiPricing';
 import { metaAttribution, metaMeasurementAllowed, trackMeta } from '../lib/metaClient';
 import { operationalIsoDateAfter } from '../lib/operationalDate';
 import { checkoutAttempt, clearCheckoutAttempt, type CheckoutAttempt } from '../lib/checkoutAttempt';
+import { fetchCustomerRequest } from '../lib/clientRequest';
 
 const plans = WIFI_PLANS;
 
@@ -81,7 +82,7 @@ export default function Home() {
     }
     setChecking(true); setAvailability(null); setCheckoutError('');
     try {
-      const res = await fetch(`/api/availability?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`, { cache: 'no-store' });
+      const res = await fetchCustomerRequest(`/api/availability?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`, { cache: 'no-store' });
       const data = (await res.json()) as Availability;
       // Availability is also the public source of operational booking terms.
       // Validate the response before using it in the browser; Checkout still
@@ -140,7 +141,7 @@ export default function Home() {
     }, { eventID: `checkout_${activeCheckoutAttempt.current.requestId}` });
     setCheckingOut(true);
     try {
-      const res = await fetch('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ country, start, end, promoCode, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: activeCheckoutAttempt.current.requestId, checkoutAttemptCreatedAt: activeCheckoutAttempt.current.createdAt }) });
+      const res = await fetchCustomerRequest('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ country, start, end, promoCode, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: activeCheckoutAttempt.current.requestId, checkoutAttemptCreatedAt: activeCheckoutAttempt.current.createdAt }) });
       const data = await res.json();
       if (data.url) window.location.href = data.url;
       else if (data.completed && typeof data.sessionId === 'string') window.location.href = `/success?session_id=${encodeURIComponent(data.sessionId)}`;

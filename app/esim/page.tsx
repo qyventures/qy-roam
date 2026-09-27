@@ -4,6 +4,7 @@ import { useMemo, useRef, useState } from 'react';
 import { ESIM_PLANS, ESIM_PROMO } from '../../lib/esimPlans';
 import { metaAttribution, metaMeasurementAllowed, trackMeta } from '../../lib/metaClient';
 import { checkoutAttempt, clearCheckoutAttempt, type CheckoutAttempt } from '../../lib/checkoutAttempt';
+import { fetchCustomerRequest } from '../../lib/clientRequest';
 
 export default function EsimPage() {
   const [planId, setPlanId] = useState<string>(ESIM_PLANS[0].id);
@@ -35,7 +36,7 @@ export default function EsimPage() {
         currency: 'SGD',
         num_items: 1
       }, { eventID: `checkout_${activeCheckoutAttempt.current.requestId}` });
-      const res = await fetch('/api/esim-checkout', {
+      const res = await fetchCustomerRequest('/api/esim-checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ planId, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: activeCheckoutAttempt.current.requestId, checkoutAttemptCreatedAt: activeCheckoutAttempt.current.createdAt })
