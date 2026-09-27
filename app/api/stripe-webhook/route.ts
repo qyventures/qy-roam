@@ -336,7 +336,12 @@ async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
     // or to a URL containing an embedded authority.
     const relayUrl=safeHttpsDeliveryEndpoint(configuredRelayUrl);
     if(!relayUrl) throw new Error('SMTP relay endpoint is invalid');
-    const response=await postJsonWithTimeout(relayUrl,{relay_secret:relaySecret,smtp_host:host,smtp_port:port,smtp_user:user,smtp_pass:pass,from,to,subject,text,message_id:messageId});
+    // The relay is a transport adapter, so it needs the same explicit TLS
+    // decision as the in-process SMTP client. Port 465 conventionally implies
+    // implicit TLS, but SMTP_SECURE also supports providers that use a custom
+    // secure submission port. Dropping this bit makes the relay guess and can
+    // leave every paid-order notification retrying after checkout was healthy.
+    const response=await postJsonWithTimeout(relayUrl,{relay_secret:relaySecret,smtp_host:host,smtp_port:port,smtp_secure:secure,smtp_user:user,smtp_pass:pass,from,to,subject,text,message_id:messageId});
     // Do not persist or log a relay response body. A relay failure may echo
     // this credential-bearing request, while the status code is sufficient
     // for a retrying webhook and for staff to identify the failing transport.

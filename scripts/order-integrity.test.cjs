@@ -384,6 +384,11 @@ test('SMTP relay success is bound to the exact fulfilment message identity', () 
       webhookRoute.indexOf('if(!response.ok) throw new Error(`SMTP relay failed (${response.status})`)'),
     'relay acknowledgement must be checked after transport success and before delivery returns',
   );
+  assert.match(
+    webhookRoute,
+    /postJsonWithTimeout\(relayUrl,\{relay_secret:relaySecret,smtp_host:host,smtp_port:port,smtp_secure:secure,smtp_user:user/,
+    'the HTTPS relay must receive the same explicit SMTP TLS mode as direct delivery',
+  );
 });
 
 test('SMTP fulfilment waits for complete, coherent protocol replies', () => {
