@@ -903,6 +903,18 @@ test('paid orders fail into the durable webhook recovery ledger when fulfilment 
     paidFulfilmentDetailsIssue({ ...paidWifi, shipping_details: { address: { country: 'SG', line1: ' ', postal_code: '819642' } } }, 'pocket_wifi'),
     'Paid Pocket WiFi order is missing a complete Singapore delivery address',
   );
+  for (const postalCode of ['81964', '8196420', 'ABC123', '819 642']) {
+    assert.equal(
+      paidFulfilmentDetailsIssue({ ...paidWifi, shipping_details: { address: { country: 'SG', line1: '1 Airport Boulevard', postal_code: postalCode } } }, 'pocket_wifi'),
+      'Paid Pocket WiFi order is missing a complete Singapore delivery address',
+      `invalid Singapore postal code ${postalCode} must not enter fulfilment`,
+    );
+  }
+  assert.equal(
+    paidFulfilmentDetailsIssue({ ...paidWifi, shipping_details: { address: { country: 'SG', line1: '1 Airport Boulevard', postal_code: ' 819642 ' } } }, 'pocket_wifi'),
+    null,
+    'ordinary surrounding whitespace from an external address snapshot is harmless',
+  );
   assert.equal(
     paidFulfilmentDetailsIssue({ ...paidWifi, payment_status: 'unpaid', customer_details: null, shipping_details: null }, 'pocket_wifi'),
     null,

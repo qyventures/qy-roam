@@ -9,6 +9,14 @@ function normalizedPhone(value?: string | null) {
   return digits.length >= 7 && digits.length <= 15 ? digits : null;
 }
 
+function validSingaporePostalCode(value?: string | null) {
+  // Singapore delivery postcodes are exactly six digits. Stripe asks for an
+  // SG shipping address, but its Checkout object remains external input at
+  // this boundary; a merely non-empty value can still leave operations with
+  // a paid router order that the courier cannot route.
+  return typeof value === 'string' && /^\d{6}$/.test(value.trim());
+}
+
 // Stripe Checkout normally guarantees the fields requested when the Session
 // was created, but the signed completion event is the final hand-off into
 // operations. Keep this boundary executable in isolation so both webhook and
@@ -28,7 +36,7 @@ export function paidFulfilmentDetailsIssue(
     return 'Paid Pocket WiFi order is missing a valid customer phone number';
   }
   const shipping = session.shipping_details?.address;
-  if (shipping?.country !== 'SG' || !shipping.line1?.trim() || !shipping.postal_code?.trim()) {
+  if (shipping?.country !== 'SG' || !shipping.line1?.trim() || !validSingaporePostalCode(shipping.postal_code)) {
     return 'Paid Pocket WiFi order is missing a complete Singapore delivery address';
   }
   return null;
