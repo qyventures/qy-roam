@@ -22,7 +22,7 @@ require.extensions['.ts'] = (module, filename) => {
 };
 
 const { ESIM_PLANS, ESIM_PROMO, esimPromoIsActive } = require('../lib/esimPlans.ts');
-const { LAUNCH_PROMO, applyPromoCents } = require('../lib/promotions.ts');
+const { LAUNCH_PROMO, applyPromoCents, promoIsActive } = require('../lib/promotions.ts');
 const { validateQyRoamSession } = require('../lib/qyRoamSession.ts');
 const { parseExactIsoDate, validCheckoutRequestId } = require('../lib/checkoutValidation.ts');
 const { operationalIsoDate, operationalIsoDateAfter, operationalDaysFromToday } = require('../lib/operationalDate.ts');
@@ -125,6 +125,19 @@ test('eSIM launch pricing expires at the approved Singapore campaign boundary', 
   assert.match(esimPage, /\{promoActive && <p className="muted">Effective price:/);
   assert.match(esimPage, /\{promoActive && <div className="esim-price-row">/);
   assert.doesNotMatch(esimLayout, /launch pricing benchmarked 15% below/);
+});
+
+test('Pocket WiFi promotion expires consistently across pricing and storefront claims', () => {
+  assert.equal(promoIsActive(new Date('2026-09-30T15:59:59.000Z')), true);
+  assert.equal(promoIsActive(new Date('2026-09-30T16:00:00.000Z')), false);
+  assert.deepEqual(
+    applyPromoCents(10_000, LAUNCH_PROMO.code, new Date('2026-09-30T16:00:00.000Z')),
+    { amountCents: 10_000, discountCents: 0, promoCode: '' },
+  );
+  assert.match(homePage, /const launchPromoActive = promoIsActive\(\)/);
+  assert.match(homePage, /useState<string>\(launchPromoActive \? LAUNCH_PROMO\.code : ''\)/);
+  assert.match(homePage, /\{launchPromoActive && <section className="promo-banner">/);
+  assert.match(homePage, /\{launchPromoActive && <section className="wrap section promo-section">/);
 });
 
 test('privileged Supabase requests use one canonical hosted-project configuration boundary', () => {

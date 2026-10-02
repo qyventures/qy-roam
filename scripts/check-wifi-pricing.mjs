@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 const src=fs.readFileSync(new URL('../lib/wifiPlans.ts',import.meta.url),'utf8');
+const storefront=fs.readFileSync(new URL('../app/page.tsx',import.meta.url),'utf8');
+const promotions=fs.readFileSync(new URL('../lib/promotions.ts',import.meta.url),'utf8');
 const MAX_BENCHMARK_AGE_DAYS=30;
 const min=Number((src.match(/minimumDiscountPercent:\s*(\d+(?:\.\d+)?)/)||[])[1]);
 const verifiedOn=(src.match(/verifiedOn:\s*'([^']+)'/)||[])[1];
@@ -9,6 +11,7 @@ const singaporeParts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Singapore',
 const today=`${singaporeParts.year}-${singaporeParts.month}-${singaporeParts.day}`;
 function exactIsoDate(value){if(!/^\d{4}-\d{2}-\d{2}$/.test(value||''))return null;const date=new Date(`${value}T00:00:00Z`);return Number.isNaN(date.getTime())||date.toISOString().slice(0,10)!==value?null:date;}
 const verified=exactIsoDate(verifiedOn), now=exactIsoDate(today);
+const promoEnd=(promotions.match(/endDate:\s*'([^']+)'/)||[])[1];
 const ageDays=verified&&now?(now.getTime()-verified.getTime())/86400000:Number.NaN;
 if(!Number.isFinite(min)||min<=0) throw new Error('Unable to parse WiFi pricing guard inputs');
 if(!provider||provider.length>100) throw new Error('Missing or invalid WiFi benchmark provider');
@@ -19,6 +22,14 @@ if(benchmarkSource.protocol!=='https:'||benchmarkSource.username||benchmarkSourc
 }
 if(provider!=='Yoowifi') throw new Error('WiFi benchmark provider does not match its reviewed source');
 if(!Number.isFinite(ageDays)||ageDays<0||ageDays>MAX_BENCHMARK_AGE_DAYS) throw new Error(`Stale WiFi benchmark: ${verifiedOn||'missing'} (checked ${today})`);
+if(!exactIsoDate(promoEnd)) throw new Error('The Pocket WiFi launch promotion has an invalid end date');
+if(today>promoEnd){
+  if(!/\{launchPromoActive && <section className="promo-banner">/.test(storefront)||
+    !/\{launchPromoActive && <section className="wrap section promo-section">/.test(storefront)||
+    !/useState<string>\(launchPromoActive \? LAUNCH_PROMO\.code : ''\)/.test(storefront)) {
+    throw new Error('Expired Pocket WiFi promotion remains advertised or prefilled on the storefront');
+  }
+}
 const undercut=b=>Math.floor(b*(1-min/100)*100)/100;
 const plans=[...src.matchAll(/\{\s*country:'([^']+)',\s*code:'[^']+',\s*benchmarkRateSgd:([^,]+),\s*daily:([^,}]+)/g)];
 if(!plans.length) throw new Error('No WiFi plans found');
@@ -33,4 +44,4 @@ for(const [,country,benchmarkExpression,dailyExpression] of plans){
   if(d+1e-9<min) throw new Error(`${country} discount ${d.toFixed(2)}% is below ${min}%`);
   console.log(`${country}: benchmark S$${benchmark.toFixed(2)} -> QY S$${q.toFixed(2)} (${d.toFixed(2)}% below)`);
 }
-console.log(`WiFi pricing guard passed for ${plans.length} destinations with benchmarks verified within ${MAX_BENCHMARK_AGE_DAYS} days.`);
+console.log(`WiFi pricing guard passed for ${plans.length} destinations with benchmarks verified within ${MAX_BENCHMARK_AGE_DAYS} days; ${today>promoEnd?'expired promotion is hidden':'active promotion is date-gated'}.`);
