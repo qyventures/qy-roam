@@ -211,6 +211,9 @@ assert.match(service, /^ReadWritePaths=\/root\/qy-roam\/\.next\/cache$/m, 'only 
 for (const directive of [
   'NoNewPrivileges=true',
   'PrivateTmp=true',
+  'CapabilityBoundingSet=',
+  'AmbientCapabilities=',
+  'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6',
   'PrivateDevices=true',
   'ProtectKernelTunables=true',
   'ProtectKernelModules=true',

@@ -39,7 +39,13 @@ ProtectHome=read-only
 ReadWritePaths=/root/qy-roam/.next/cache
 # The storefront needs ordinary network sockets for Stripe, Supabase, SMTP and
 # Meta, but it never needs device, kernel, namespace, control-group or setuid
-# administration. Remove those root capabilities from the service sandbox.
+# administration. An empty bounding set is required here: NoNewPrivileges only
+# prevents gaining new privileges and does not remove the capabilities already
+# held by this root-owned process. Limit socket creation to the Unix and IP
+# families used by DNS and the reviewed local/external HTTP/SMTP connections.
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
