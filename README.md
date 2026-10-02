@@ -39,6 +39,13 @@ bash deploy/deploy.sh
 
 The script requires Node.js 22.x and an already-clean `main` checkout, fast-forwards it, installs from the committed dependency lock, validates pricing, operations schema and order integrity, and builds with the protected env file. Before replacing the live process, it boots that exact standalone artifact on an isolated loopback port and requires the public liveness response; set `SMOKE_PORT` only if the default port `3199` is reserved locally. It then verifies the installed systemd unit and Nginx site against their checked-in definitions, validates Nginx, reloads the service definition, restarts the service, and uses `HEALTH_CHECK_TOKEN` to verify launch readiness at `http://127.0.0.1:3100/api/health`. The previously serving standalone artifact is retained outside the repository until that live check passes. Any failure after the snapshot restores it on disk; if live cutover was attempted, the restored artifact is restarted and must pass authenticated launch readiness before rollback is reported successful. An unready rollback retains its recovery snapshot and prints service diagnostics for operator recovery. The unit keeps a 150-second graceful-stop budget so a release does not cut off an in-flight webhook inside Nginx's 120-second reviewed proxy window. A failed runtime, artifact smoke test, ingress/unit verification, Nginx validation, unit reload, or restart stops the release; service failures print bounded service/journal diagnostics before the readiness loop. Set `NGINX_CONFIG_PATH` only when the installed site uses a nonstandard path (the default is `/etc/nginx/sites-available/qyroam`).
 
+The authenticated health response separates safe deployment (`launchReady`)
+from current product availability (`checkoutChecks` / `checkoutReady`) and the
+stricter paid-acquisition gate (`paidAcquisitionReady`). An intentionally
+expired eSIM offer therefore remains visibly blocked without preventing a
+safe Pocket WiFi release or rollback. Do not send paid traffic while
+`paidAcquisitionReady` is false.
+
 ## Nginx and TLS
 
 `deploy/qy-roam.service` binds the standalone Next.js app to `127.0.0.1:3100` only. `deploy/nginx-qyroam.conf` is the required production ingress: it terminates TLS, sets the trusted client IP header, and proxies to that loopback listener. Provision the certificate only after `qyroam.com` and `www.qyroam.com` point to the VPS. Then enable the site and test Nginx before reload.

@@ -6,6 +6,7 @@ import { isProductionQyRoamOrigin } from '@/lib/siteOrigin';
 import { hasOrderIntegritySigningConfig } from '@/lib/orderProvenance';
 import { healthCheckToken } from '@/lib/healthCheckToken';
 import { hasRequiredSupabaseAdminConfig } from '@/lib/supabaseAdmin';
+import { esimPromoIsActive } from '@/lib/esimPlans';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -77,11 +78,32 @@ export async function GET(req: Request) {
     metaCapi: hasRequiredMetaCapiPurchaseConfig(),
   };
   const launchReady = Object.values(checks).every(Boolean);
-  const paidAcquisitionReady = launchReady && Object.values(paidAcquisitionChecks).every(Boolean);
+  // Deployment readiness and product availability are related but distinct.
+  // A deliberately paused eSIM offer must not prevent a safe Pocket WiFi
+  // release or rollback, while the machine-readable paid-acquisition signal
+  // must never turn green if an advertised checkout will reject customers.
+  // These expressions mirror the two public checkout routes and the launch
+  // dashboard: eSIM has its own order schema and approved-offer window;
+  // Pocket WiFi additionally needs reservation, custody, and configured
+  // capacity boundaries.
+  const commonCheckoutReady = Boolean(
+    checks.stripe && checks.stripeApi && checks.siteUrl && checks.webhook &&
+    checks.orderIntegrity && checks.supabase && checks.fulfilmentEmail
+  );
+  const checkoutChecks = {
+    esim: commonCheckoutReady && Boolean(esimOrderSchema) && esimPromoIsActive(),
+    pocketWifi: commonCheckoutReady && Boolean(paymentSchema) &&
+      Boolean(pocketWifiFulfilmentSchema) && checks.inventory,
+  };
+  const checkoutReady = Object.values(checkoutChecks).every(Boolean);
+  const paidAcquisitionReady = launchReady && checkoutReady && Object.values(paidAcquisitionChecks).every(Boolean);
 
   const missing = Object.entries(checks).filter(([, configured]) => !configured).map(([name]) => name);
   const paidAcquisitionMissing = Object.entries(paidAcquisitionChecks)
     .filter(([, configured]) => !configured)
+    .map(([name]) => name);
+  const checkoutMissing = Object.entries(checkoutChecks)
+    .filter(([, ready]) => !ready)
     .map(([name]) => name);
   return NextResponse.json({
     // This authenticated endpoint is the production readiness signal. A 200
@@ -91,11 +113,14 @@ export async function GET(req: Request) {
     // supervision.
     ok: launchReady,
     launchReady,
+    checkoutReady,
     paidAcquisitionReady,
     service: 'qy-roam',
     checks,
+    checkoutChecks,
     paidAcquisitionChecks,
     missing,
+    checkoutMissing,
     paidAcquisitionMissing,
     timestamp: new Date().toISOString()
   }, { status: launchReady ? 200 : 503, headers });

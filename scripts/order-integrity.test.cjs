@@ -3143,6 +3143,14 @@ test('authenticated health readiness fails when any order-critical dependency is
   assert.match(healthRoute, /esimOrderSchema,/);
   assert.match(healthRoute, /pocketWifiFulfilmentSchema,/);
   assert.match(healthRoute, /const launchReady = Object\.values\(checks\)\.every\(Boolean\)/);
+  assert.match(healthRoute, /const commonCheckoutReady = Boolean\(/);
+  assert.match(healthRoute, /esim: commonCheckoutReady && Boolean\(esimOrderSchema\) && esimPromoIsActive\(\)/);
+  assert.match(healthRoute, /pocketWifi: commonCheckoutReady && Boolean\(paymentSchema\) &&/);
+  assert.match(healthRoute, /Boolean\(pocketWifiFulfilmentSchema\) && checks\.inventory/);
+  assert.match(healthRoute, /const checkoutReady = Object\.values\(checkoutChecks\)\.every\(Boolean\)/);
+  assert.match(healthRoute, /const paidAcquisitionReady = launchReady && checkoutReady && Object\.values\(paidAcquisitionChecks\)\.every\(Boolean\)/);
+  assert.match(healthRoute, /checkoutChecks,/);
+  assert.match(healthRoute, /checkoutMissing,/);
   assert.match(healthRoute, /ok: launchReady/);
   assert.match(healthRoute, /status: launchReady \? 200 : 503/);
   assert.doesNotMatch(healthRoute, /const coreReady/);
