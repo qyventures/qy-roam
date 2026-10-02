@@ -3112,11 +3112,17 @@ test('launch control reports the same checkout prerequisites that protect real o
   assert.match(launchPage, /hasRequiredEsimOrderSchema\(\)/);
   assert.match(launchPage, /hasRequiredPocketWifiFulfilmentSchema\(\)/);
   assert.match(launchPage, /const commonCheckoutReady=stripe&&stripeApi&&webhook&&site&&orderIntegrity&&smtp/);
-  assert.match(launchPage, /const esimReady=commonCheckoutReady&&esimOrderDbOk/);
+  assert.match(launchPage, /const esimOfferActive=esimPromoIsActive\(\)/);
+  assert.match(launchPage, /const wifiPromoActive=promoIsActive\(\)/);
+  assert.match(launchPage, /const esimReady=commonCheckoutReady&&esimOrderDbOk&&esimOfferActive/);
   assert.match(launchPage, /const wifiReady=commonCheckoutReady&&paymentDbOk&&pocketWifiFulfilmentDbOk&&wifiInventory/);
   assert.match(launchPage, /Pocket WiFi dispatch and return custody schema/);
   assert.doesNotMatch(launchPage, /const esimReady=.*paymentDbOk/);
   assert.match(launchPage, /const paidReady=esimReady&&wifiReady&&metaCapi/);
+  assert.match(launchPage, /eSIM approved offer/);
+  assert.match(launchPage, /public eSIM checkout is paused/);
+  assert.match(launchPage, /standard approved rates are active/);
+  assert.match(launchPage, /checkout and stale promotional prices are paused/);
   assert.match(launchPage, /eSIM checkout blockers/);
   assert.match(launchPage, /Pocket WiFi checkout blockers/);
   assert.match(launchPage, /eSIM checkout/);
