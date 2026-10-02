@@ -343,6 +343,24 @@ if ! systemctl daemon-reload; then
   exit 1
 fi
 
+# A byte-for-byte FragmentPath check above does not cover systemd drop-ins.
+# An operator override can replace ExecStart, remove loopback binding, weaken
+# the sandbox, or change shutdown/restart behaviour while the installed main
+# unit still matches this repository. Refuse cutover unless systemd confirms
+# that the reviewed file is the effective fragment and no drop-in is active.
+# This check belongs after daemon-reload so it inspects the definition that the
+# immediately following restart would actually use.
+effective_fragment="$(systemctl show "$SERVICE_NAME" --property=FragmentPath --value)"
+effective_drop_ins="$(systemctl show "$SERVICE_NAME" --property=DropInPaths --value)"
+if [[ "$effective_fragment" != "$SYSTEMD_UNIT_PATH" ]]; then
+  echo "Effective systemd unit is not the reviewed service definition: ${effective_fragment:-missing}" >&2
+  exit 1
+fi
+if [[ -n "$effective_drop_ins" ]]; then
+  echo "Refusing to deploy with unreviewed systemd drop-ins: $effective_drop_ins" >&2
+  exit 1
+fi
+
 echo "[10/11] Restarting service"
 cutover_attempted=1
 if ! systemctl restart "$SERVICE_NAME"; then

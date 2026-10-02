@@ -123,6 +123,19 @@ assert.match(deploy, /cmp -s deploy\/qy-roam\.service/);
 assert.match(deploy, /Installed systemd unit does not match deploy\/qy-roam\.service/);
 assert.match(deploy, /systemctl daemon-reload/);
 assert.match(deploy, /Unable to reload the systemd service definition/);
+// Comparing the main unit file is insufficient when systemd drop-ins can
+// override any effective property. Inspect the freshly reloaded definition
+// and fail before cutover if it is not exactly the reviewed fragment or if an
+// override directory contributes additional configuration.
+assert.match(deploy, /systemctl show "\$SERVICE_NAME" --property=FragmentPath --value/);
+assert.match(deploy, /systemctl show "\$SERVICE_NAME" --property=DropInPaths --value/);
+assert.match(deploy, /effective_fragment.*!=.*SYSTEMD_UNIT_PATH/);
+assert.match(deploy, /Refusing to deploy with unreviewed systemd drop-ins/);
+assert.ok(
+  deploy.indexOf('--property=DropInPaths') > deploy.indexOf('systemctl daemon-reload') &&
+    deploy.indexOf('--property=DropInPaths') < deploy.indexOf('cutover_attempted=1'),
+  'effective systemd overrides must be checked after reload and before cutover',
+);
 // Nginx is part of the paid-order trust boundary: it keeps the standalone
 // app on loopback, supplies the trusted client IP, and rejects oversized or
 // stalled public uploads. A production release must fail if that installed
