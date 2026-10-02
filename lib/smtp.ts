@@ -27,6 +27,16 @@ type SmtpOptions = {
 const MAX_SMTP_RESPONSE_BYTES = 64 * 1024;
 const MIN_SMTP_TLS_VERSION = 'TLSv1.2' as const;
 
+// Keep deployment parsing shared by checkout readiness and the paid-order
+// delivery boundary. Environment values are strings, and treating every typo
+// as `false` can make readiness approve one transport while fulfilment uses
+// another (most importantly when an HTTPS relay receives smtp_secure).
+export function smtpSecureTransport(value: string | undefined, port: number) {
+  const configured = value?.trim().toLowerCase();
+  if (configured && configured !== 'true' && configured !== 'false') return null;
+  return configured === 'true' || port === 465;
+}
+
 // Fulfilment delivery is retried independently from checkout, including for
 // sessions created before a deployment changes its environment validation.
 // Keep the transport boundary defensive as well: these values are interpolated

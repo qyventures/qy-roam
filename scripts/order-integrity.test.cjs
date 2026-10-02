@@ -53,7 +53,7 @@ const { safeHttpsDeliveryEndpoint } = require('../lib/deliveryEndpoint.ts');
 const { fulfilmentRelayAcknowledged } = require('../lib/deliveryAcknowledgement.ts');
 const { safeProviderDeliveryFailure, safeWebhookProcessingFailure } = require('../lib/deliveryFailure.ts');
 const { nextRetryAttempt } = require('../lib/retryAttempt.ts');
-const { completeSmtpResponseCode, isSafeSmtpHost, waitForResponse, waitForTlsHandshake } = require('../lib/smtp.ts');
+const { completeSmtpResponseCode, isSafeSmtpHost, smtpSecureTransport, waitForResponse, waitForTlsHandshake } = require('../lib/smtp.ts');
 const { safeStripeCheckoutUrl } = require('../lib/stripeCheckoutUrl.ts');
 const { metaCapiPurchaseAcknowledged } = require('../lib/metaCapiAcknowledgement.ts');
 const { stripeCheckoutEventStateIssue } = require('../lib/stripeCheckoutEventState.ts');
@@ -1781,6 +1781,21 @@ test('checkout never exposes payment when human fulfilment email is not configur
   assert.match(productionReadiness, /ORDER_FULFILMENT_EMAIL \|\| process\.env\.FULFILMENT_TO/);
 });
 
+test('checkout readiness and paid-order delivery share strict SMTP TLS configuration', () => {
+  assert.equal(smtpSecureTransport(undefined, 587), false);
+  assert.equal(smtpSecureTransport(' false ', 587), false);
+  assert.equal(smtpSecureTransport('TRUE', 587), true);
+  assert.equal(smtpSecureTransport('false', 465), true);
+  assert.equal(smtpSecureTransport('yes', 587), null);
+  assert.equal(smtpSecureTransport('tru', 465), null);
+  assert.equal(smtpSecureTransport('', 2525), false);
+
+  assert.match(productionReadiness, /smtpSecureTransport\(process\.env\.SMTP_SECURE, port\)/);
+  assert.match(productionReadiness, /secure !== null/);
+  assert.match(webhookRoute, /smtpSecureTransport\(process\.env\.SMTP_SECURE,port\)/);
+  assert.match(webhookRoute, /secure===null/);
+});
+
 test('checkout never exposes payment when signed Stripe webhook processing is not configured', () => {
   for (const route of [esimCheckoutRoute, wifiCheckoutRoute]) {
     assert.match(route, /hasRequiredStripeWebhookConfig/);
@@ -1913,7 +1928,7 @@ test('customer confirmation views require a completed Checkout Session before pr
 test('fulfilment recipients are explicitly configured and never fall back to a historical mailbox', () => {
   assert.match(productionReadiness, /ORDER_FULFILMENT_EMAIL \|\| process\.env\.FULFILMENT_TO \|\| ''/);
   assert.match(webhookRoute, /to=\(process\.env\.ORDER_FULFILMENT_EMAIL\|\|process\.env\.FULFILMENT_TO\|\|''\)\.trim\(\)/);
-  assert.match(webhookRoute, /if\(!host\|\|!user\|\|!pass\|\|!from\|\|!to\)/);
+  assert.match(webhookRoute, /if\(!host\|\|!user\|\|!pass\|\|!from\|\|!to\|\|secure===null\)/);
   assert.doesNotMatch(productionReadiness, /enquiries@sgsimshop\.com/);
   assert.doesNotMatch(webhookRoute, /enquiries@sgsimshop\.com/);
 });
@@ -1949,7 +1964,7 @@ test('checkout readiness rejects an SMTP host the fulfilment transport would rej
   assert.match(smtpClient, /export function isSafeSmtpHost\(value: string \| undefined\)/);
   assert.match(smtpClient, /host\.length > 253/);
   assert.match(smtpClient, /isIP\(host\) !== 0/);
-  assert.match(productionReadiness, /import \{ isSafeSmtpHost, isSafeSmtpMailbox \} from '@\/lib\/smtp';/);
+  assert.match(productionReadiness, /import \{ isSafeSmtpHost, isSafeSmtpMailbox, smtpSecureTransport \} from '@\/lib\/smtp';/);
   assert.match(productionReadiness, /isSafeSmtpHost\(host\)/);
 });
 

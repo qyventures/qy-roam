@@ -1,6 +1,6 @@
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import crypto from 'crypto';
-import { isSafeSmtpHost, isSafeSmtpMailbox } from '@/lib/smtp';
+import { isSafeSmtpHost, isSafeSmtpMailbox, smtpSecureTransport } from '@/lib/smtp';
 import { safeHttpsDeliveryEndpoint } from '@/lib/deliveryEndpoint';
 import { stripeWebhookSigningSecret } from '@/lib/stripeWebhookSecret';
 import { createStripeClient } from '@/lib/stripeClient';
@@ -215,6 +215,7 @@ const REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA = [
  */
 export function hasRequiredFulfilmentEmailConfig() {
   const port = Number(process.env.SMTP_PORT || '587');
+  const secure = smtpSecureTransport(process.env.SMTP_SECURE, port);
   const host = process.env.SMTP_HOST?.trim();
   const user = process.env.SMTP_USER?.trim();
   const pass = process.env.SMTP_PASS;
@@ -236,6 +237,7 @@ export function hasRequiredFulfilmentEmailConfig() {
   return Boolean(
     isSafeSmtpHost(host) &&
     Number.isInteger(port) && port > 0 && port <= 65535 &&
+    secure !== null &&
     user && !/[\r\n]/.test(user) && pass &&
     isSafeSmtpMailbox(from) && isSafeSmtpMailbox(recipient) && relayConfigured,
   );

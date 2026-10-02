@@ -3,7 +3,7 @@ import Stripe from 'stripe';
 import { createStripeClient } from '../../../lib/stripeClient';
 import crypto from 'crypto';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
-import { sendSmtpMail } from '@/lib/smtp';
+import { sendSmtpMail, smtpSecureTransport } from '@/lib/smtp';
 import { getMetaCapiToken, hasRequiredMetaCapiPurchaseConfig, metaPixelId } from '@/lib/runtimeConfig';
 import { validateQyRoamSession } from '@/lib/qyRoamSession';
 import { validCheckoutRequestId } from '@/lib/checkoutValidation';
@@ -315,8 +315,8 @@ async function sendMetaPurchase(session: Stripe.Checkout.Session, eventTime: num
 
 async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
   if(session.payment_status!=='paid') return;
-  const host=process.env.SMTP_HOST?.trim(), port=Number(process.env.SMTP_PORT||'587'), secure=process.env.SMTP_SECURE==='true'||port===465, user=process.env.SMTP_USER?.trim(), pass=process.env.SMTP_PASS, from=(process.env.SMTP_FROM||user||'').trim(), to=(process.env.ORDER_FULFILMENT_EMAIL||process.env.FULFILMENT_TO||'').trim();
-  if(!host||!user||!pass||!from||!to) throw new Error('SMTP fulfilment email is not configured');
+  const host=process.env.SMTP_HOST?.trim(), port=Number(process.env.SMTP_PORT||'587'), secure=smtpSecureTransport(process.env.SMTP_SECURE,port), user=process.env.SMTP_USER?.trim(), pass=process.env.SMTP_PASS, from=(process.env.SMTP_FROM||user||'').trim(), to=(process.env.ORDER_FULFILMENT_EMAIL||process.env.FULFILMENT_TO||'').trim();
+  if(!host||!user||!pass||!from||!to||secure===null) throw new Error('SMTP fulfilment email is not configured');
   const productType=session.metadata?.product_type;
   if(productType!=='esim'&&productType!=='pocket_wifi') throw new Error('Unknown or missing product_type on paid order');
   // Webhook processing applies this guard before it creates the order, but
