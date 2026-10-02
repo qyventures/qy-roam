@@ -28,11 +28,24 @@ RestartSec=5
 # request/dependency deadlines, while systemd retains a finite hard stop.
 TimeoutStopSec=150
 
-# Basic hardening while retaining access to app files and outbound network.
+# Treat the reviewed application artifact and its environment as immutable at
+# runtime. Next.js may use .next/cache for bounded framework caches, so retain
+# that one explicit write path instead of leaving the whole root-owned checkout
+# writable to a compromised request handler.
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=full
-ProtectHome=false
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/root/qy-roam/.next/cache
+# The storefront needs ordinary network sockets for Stripe, Supabase, SMTP and
+# Meta, but it never needs device, kernel, namespace, control-group or setuid
+# administration. Remove those root capabilities from the service sandbox.
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target

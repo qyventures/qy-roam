@@ -201,6 +201,25 @@ assert.doesNotMatch(service, /^ExecStart=.*\bnpm\b/m, 'systemd must not supervis
 // before Nginx's reviewed proxy window can complete. Stripe retries are an
 // idempotent recovery mechanism, not the normal outcome of a healthy restart.
 assert.match(service, /^TimeoutStopSec=150$/m, 'systemd graceful-stop budget must exceed the webhook proxy deadline');
+// The service currently starts as root because the deployed artifact and
+// protected environment live below /root. Make that unavoidable privilege
+// materially less dangerous: the reviewed checkout and secrets must be
+// read-only to the request worker, with only Next's framework cache writable.
+assert.match(service, /^ProtectSystem=strict$/m, 'the production filesystem must be read-only by default');
+assert.match(service, /^ProtectHome=read-only$/m, 'the root-owned checkout and environment must not be writable at runtime');
+assert.match(service, /^ReadWritePaths=\/root\/qy-roam\/\.next\/cache$/m, 'only the Next.js runtime cache may be writable below the checkout');
+for (const directive of [
+  'NoNewPrivileges=true',
+  'PrivateTmp=true',
+  'PrivateDevices=true',
+  'ProtectKernelTunables=true',
+  'ProtectKernelModules=true',
+  'ProtectControlGroups=true',
+  'RestrictSUIDSGID=true',
+  'LockPersonality=true',
+]) {
+  assert.match(service, new RegExp(`^${directive}$`, 'm'), `systemd sandbox is missing ${directive}`);
+}
 assert.match(nginx, /proxy_pass http:\/\/127\.0\.0\.1:3100;/);
 assert.match(nginx, /proxy_set_header X-Real-IP \$remote_addr;/);
 // Do not retain a client-supplied forwarding chain behind the trusted
