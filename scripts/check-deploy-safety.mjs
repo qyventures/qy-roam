@@ -8,6 +8,8 @@ const productionReadiness = readFileSync(new URL('../lib/productionReadiness.ts'
 const healthRoute = readFileSync(new URL('../app/api/health/route.ts', import.meta.url), 'utf8');
 const healthCheckToken = readFileSync(new URL('../lib/healthCheckToken.ts', import.meta.url), 'utf8');
 const standalonePackager = readFileSync(new URL('./package-standalone.mjs', import.meta.url), 'utf8');
+const nextConfig = readFileSync(new URL('../next.config.mjs', import.meta.url), 'utf8');
+const tsconfig = JSON.parse(readFileSync(new URL('../tsconfig.json', import.meta.url), 'utf8'));
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 assert.ok(existsSync(new URL('../package-lock.json', import.meta.url)), 'package-lock.json is required for reproducible production installs');
@@ -32,11 +34,29 @@ assert.doesNotMatch(deploy, /git diff --cached --quiet/);
 assert.doesNotMatch(deploy, /git checkout\s/);
 assert.match(deploy, /npm ci --no-audit --no-fund/);
 assert.doesNotMatch(deploy, /npm install --no-audit --no-fund/);
+// Building into the serving `.next` tree makes old HTML and route responses
+// reference chunks that Next may already have deleted or replaced. Compile
+// and smoke-test a separate dist directory, then promote it only immediately
+// before the supervised restart while the previous artifact remains
+// recoverable.
+assert.match(nextConfig, /distDir: process\.env\.QY_ROAM_DIST_DIR \|\| '\.next'/);
+assert.ok(tsconfig.include?.includes('.next-release/types/**/*.ts'), 'isolated Next build types must be declared without mutating the production checkout');
+assert.match(standalonePackager, /const distDir = process\.env\.QY_ROAM_DIST_DIR \|\| '\.next'/);
+assert.match(standalonePackager, /resolve\(root, distDir, 'standalone'\)/);
+assert.match(deploy, /^RELEASE_DIST_DIR=\.next-release$/m);
+assert.match(deploy, /QY_ROAM_DIST_DIR="\$RELEASE_DIST_DIR" npm run build/);
+assert.match(deploy, /node "\$RELEASE_DIST_DIR\/standalone\/server\.js"/);
+assert.match(deploy, /mv "\$RELEASE_DIST_DIR" \.next/);
+assert.ok(
+  deploy.indexOf('QY_ROAM_DIST_DIR="$RELEASE_DIST_DIR" npm run build') < deploy.indexOf('Smoke-testing the production artifact') &&
+    deploy.indexOf('mv "$RELEASE_DIST_DIR" .next') > deploy.indexOf('Built QY Roam artifact is missing required customer security or privacy headers') &&
+    deploy.indexOf('mv "$RELEASE_DIST_DIR" .next') < deploy.indexOf('cutover_attempted=1'),
+  'the isolated artifact must be built and verified before promotion at cutover',
+);
 // The isolated artifact test cannot reproduce a production-port conflict or
 // every systemd-only failure. Preserve the previously serving artifact until
-// live readiness succeeds. Because `next build` replaces `.next`, every
-// failure after the snapshot (including build, smoke, and config checks before
-// cutover) must restore that restartable artifact.
+// live readiness succeeds. Once the verified staging artifact is promoted,
+// every cutover failure must restore that restartable snapshot.
 assert.match(deploy, /mktemp -d \/tmp\/qyroam-release-rollback/);
 assert.match(deploy, /cp -a \.next "\$rollback_dir\/previous-next"/);
 assert.match(deploy, /restore_previous_artifact\(\)/);
@@ -44,10 +64,10 @@ assert.match(deploy, /cp -a "\$rollback_dir\/previous-next" \.next/);
 assert.match(deploy, /release_snapshot_cleanup_enabled=0/);
 assert.match(deploy, /retained recovery snapshot at \$rollback_dir\/previous-next/);
 assert.match(deploy, /handle_release_exit\(\)/);
-assert.match(deploy, /status.*-ne 0.*release_verified.*-ne 1.*previous_artifact_available.*-eq 1/);
+assert.match(deploy, /status.*-ne 0.*release_verified.*-ne 1.*artifact_promotion_started.*-eq 1.*previous_artifact_available.*-eq 1/);
 assert.ok(
   deploy.indexOf("trap 'handle_release_exit") < deploy.indexOf('npm run check:esim-pricing'),
-  'automatic artifact restoration must be armed before any build preflight can fail',
+  'isolated artifact cleanup must be armed before any build preflight can fail',
 );
 assert.match(deploy, /cutover_attempted=1\nif ! systemctl restart/);
 assert.match(deploy, /if \[\[ "\$cutover_attempted" -eq 0 \]\]; then/);
@@ -74,7 +94,7 @@ assert.ok(
 // readiness response before replacing the live process. This catches a
 // partial production migration/configuration before customer traffic moves
 // to the freshly built process.
-assert.match(deploy, /node \.next\/standalone\/server\.js/);
+assert.match(deploy, /node "\$RELEASE_DIST_DIR\/standalone\/server\.js"/);
 assert.match(deploy, /HOSTNAME=127\.0\.0\.1 PORT="\$smoke_port"/);
 assert.match(deploy, /http:\/\/127\.0\.0\.1:\$\{smoke_port\}\/api\/health/);
 assert.match(deploy, /smoke_health_header=/);
@@ -83,9 +103,9 @@ assert.match(deploy, /curl --header "@\$smoke_health_header" --fail --silent --s
 assert.match(deploy, /result\.launchReady!==true\|\|result\.service!=='qy-roam'/);
 assert.match(deploy, /Built QY Roam artifact failed its isolated startup smoke test/);
 assert.match(standalonePackager, /resolve\(root, 'public'\)/);
-assert.match(standalonePackager, /resolve\(root, '\.next\/static'\)/);
+assert.match(standalonePackager, /resolve\(root, distDir, 'static'\)/);
 assert.match(standalonePackager, /resolve\(standalone, 'public'\)/);
-assert.match(standalonePackager, /resolve\(standalone, '\.next\/static'\)/);
+assert.match(standalonePackager, /resolve\(standalone, distDir, 'static'\)/);
 assert.match(deploy, /verify_sales_page_assets\(\)/);
 assert.match(deploy, /for sales_page in \/ \/esim/);
 assert.match(deploy, /unique\.some\(asset=>asset\.split/);

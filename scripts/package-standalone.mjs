@@ -2,10 +2,14 @@ import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
-const standalone = resolve(root, '.next/standalone');
+const distDir = process.env.QY_ROAM_DIST_DIR || '.next';
+if (!/^\.next(?:-[a-z0-9-]+)?$/.test(distDir)) {
+  throw new Error('QY_ROAM_DIST_DIR must be a repository-local Next.js build directory');
+}
+const standalone = resolve(root, distDir, 'standalone');
 const sources = [
   { source: resolve(root, 'public'), destination: resolve(standalone, 'public') },
-  { source: resolve(root, '.next/static'), destination: resolve(standalone, '.next/static') },
+  { source: resolve(root, distDir, 'static'), destination: resolve(standalone, distDir, 'static') },
 ];
 
 if (!existsSync(resolve(standalone, 'server.js'))) {

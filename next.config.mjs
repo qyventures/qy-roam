@@ -12,6 +12,10 @@ const scriptSources = [
 
 const nextConfig = {
   output: 'standalone',
+  // Production deployment builds beside the currently serving `.next`
+  // artifact, then swaps the fully smoke-tested release into place at the
+  // restart boundary. Keep ordinary local builds on Next's default directory.
+  distDir: process.env.QY_ROAM_DIST_DIR || '.next',
   poweredByHeader: false,
   compress: true,
   async headers() {

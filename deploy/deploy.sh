@@ -13,6 +13,11 @@ NGINX_CONFIG_PATH="${NGINX_CONFIG_PATH:-/etc/nginx/sites-available/qyroam}"
 # slow-but-healthy probe can return its authoritative result instead of being
 # mistaken for a failed release and triggering rollback.
 READINESS_CURL_TIMEOUT_SECONDS=12
+# Build away from the artifact that the live Next.js process is still serving.
+# Next clears its dist directory during compilation; pointing it at `.next`
+# here would create a customer-visible missing/mixed asset window before the
+# release has passed smoke tests or reached the controlled restart boundary.
+RELEASE_DIST_DIR=.next-release
 
 cd "$APP_DIR"
 
@@ -71,12 +76,16 @@ previous_artifact_available=0
 release_snapshot_cleanup_enabled=1
 release_verified=0
 cutover_attempted=0
+artifact_promotion_started=0
 if [[ -f .next/standalone/server.js ]]; then
   cp -a .next "$rollback_dir/previous-next"
   previous_artifact_available=1
 fi
 
 cleanup_release_snapshot() {
+  # This directory is never the live service target. Remove a failed or
+  # already-promoted staging build without touching the active `.next` tree.
+  rm -rf -- "$APP_DIR/$RELEASE_DIST_DIR"
   if [[ "$release_snapshot_cleanup_enabled" -eq 1 ]]; then
     rm -rf "$rollback_dir"
   fi
@@ -156,17 +165,16 @@ restore_previous_artifact() {
 handle_release_exit() {
   local status="$1"
   trap - EXIT
-  if [[ "$status" -ne 0 && "$release_verified" -ne 1 && "$previous_artifact_available" -eq 1 ]]; then
+  if [[ "$status" -ne 0 && "$release_verified" -ne 1 && "$artifact_promotion_started" -eq 1 && "$previous_artifact_available" -eq 1 ]]; then
     restore_previous_artifact || true
   fi
   cleanup_release_snapshot
   exit "$status"
 }
 
-# From this point onward `next build` may replace the artifact used by the
-# currently serving process. Any failed preflight, build, smoke test, or
-# infrastructure verification must put the restartable previous artifact back
-# on disk, even when live cutover has not happened yet.
+# From this point onward a failure must clean up its isolated build. The live
+# artifact remains untouched until the explicit promotion boundary below, so
+# preflight and smoke-test failures do not disturb the serving process.
 trap 'handle_release_exit "$?"' EXIT
 
 echo "[5/11] Building"
@@ -184,7 +192,7 @@ npm run check:wifi-pricing
 npm run check:operations-schema
 npm run check:deploy-safety
 npm run test:order-integrity
-npm run build
+QY_ROAM_DIST_DIR="$RELEASE_DIST_DIR" npm run build
 
 # Response headers are part of the customer-order boundary, not merely static
 # configuration. Verify the exact built server and, after cutover, the public
@@ -250,7 +258,7 @@ cleanup_smoke() {
   rm -f "$smoke_log" "$smoke_health_header"
 }
 trap 'status=$?; cleanup_smoke; handle_release_exit "$status"' EXIT
-HOSTNAME=127.0.0.1 PORT="$smoke_port" node .next/standalone/server.js >"$smoke_log" 2>&1 &
+HOSTNAME=127.0.0.1 PORT="$smoke_port" node "$RELEASE_DIST_DIR/standalone/server.js" >"$smoke_log" 2>&1 &
 smoke_pid=$!
 smoke_ready=0
 for attempt in {1..15}; do
@@ -362,6 +370,19 @@ if [[ -n "$effective_drop_ins" ]]; then
 fi
 
 echo "[10/11] Restarting service"
+# Promote only the artifact that passed the isolated readiness, asset, and
+# response-header checks. Renaming within the checkout filesystem prevents the
+# live process from observing Next's incremental build output; the old tree
+# stays available both in memory and in the protected rollback snapshot until
+# the replacement is verified through public TLS.
+artifact_promotion_started=1
+if [[ -e .next ]]; then
+  mv .next "$rollback_dir/replaced-live-next"
+fi
+if ! mv "$RELEASE_DIST_DIR" .next; then
+  echo "Unable to promote the smoke-tested QY Roam artifact" >&2
+  exit 1
+fi
 cutover_attempted=1
 if ! systemctl restart "$SERVICE_NAME"; then
   echo "QY Roam service restart failed" >&2
