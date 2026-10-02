@@ -3,7 +3,7 @@ import { ESIM_PLANS } from '../../lib/esimPlans';
 
 export const metadata: Metadata = {
   title: 'Travel eSIM Singapore | Japan, Taiwan, USA & Europe',
-  description: 'Buy QY Roam travel eSIMs online before you fly. QR-code setup, Singapore support and launch pricing benchmarked 15% below verified comparable Changi Recommends public prices.',
+  description: 'Explore QY Roam travel eSIM options with QR-code setup and Singapore support. Current online availability and pricing are shown on the eSIM page.',
   alternates: { canonical: '/esim' },
   openGraph: {
     type: 'website',

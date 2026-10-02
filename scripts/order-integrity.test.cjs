@@ -122,7 +122,9 @@ test('eSIM launch pricing expires at the approved Singapore campaign boundary', 
   assert.match(esimCheckoutRoute, /status: 503/);
   assert.match(esimCheckoutRoute, /'Cache-Control': 'no-store'/);
   assert.match(esimPage, /disabled=\{busy \|\| !promoActive\}/);
+  assert.match(esimPage, /\{promoActive && <p className="muted">Effective price:/);
   assert.match(esimPage, /\{promoActive && <div className="esim-price-row">/);
+  assert.doesNotMatch(esimLayout, /launch pricing benchmarked 15% below/);
 });
 
 test('privileged Supabase requests use one canonical hosted-project configuration boundary', () => {
