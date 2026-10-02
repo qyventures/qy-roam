@@ -7,6 +7,8 @@ import { isIP } from 'node:net';
 export const CHECKOUT_RATE_LIMIT_WINDOW_MS = 60_000;
 export const CHECKOUT_RATE_LIMIT_MAX_ATTEMPTS = 12;
 export const CHECKOUT_RATE_LIMIT_MAX_CLIENTS = 5_000;
+export const CHECKOUT_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS = 120;
+export const AVAILABILITY_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS = 300;
 
 type Attempt = { count: number; reset: number };
 
@@ -80,5 +82,36 @@ export function createCheckoutAttemptLimiter(
     }
     current.count += 1;
     return current.count > maxAttempts;
+  };
+}
+
+// Per-client throttling protects ordinary shoppers from one noisy neighbour,
+// but it cannot cap aggregate provider work when a caller rotates addresses.
+// Keep a second, allocation-free fixed window at each expensive public route.
+// This is deliberately an instance-local overload guard (the production
+// service runs one standalone process); an edge/WAF can still enforce a wider
+// deployment-level policy if the service is scaled horizontally later.
+export function createGlobalAttemptLimiter(
+  windowMs = CHECKOUT_RATE_LIMIT_WINDOW_MS,
+  maxAttempts = CHECKOUT_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS,
+) {
+  const boundedWindowMs = Number.isSafeInteger(windowMs) && windowMs > 0
+    ? windowMs
+    : CHECKOUT_RATE_LIMIT_WINDOW_MS;
+  const boundedMaxAttempts = Number.isSafeInteger(maxAttempts) && maxAttempts > 0
+    ? maxAttempts
+    : 1;
+  let count = 0;
+  let reset = 0;
+
+  return (now = Date.now()) => {
+    if (!Number.isFinite(now)) now = Date.now();
+    if (reset <= now) {
+      count = 1;
+      reset = now + boundedWindowMs;
+      return false;
+    }
+    count += 1;
+    return count > boundedMaxAttempts;
   };
 }

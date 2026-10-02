@@ -7,7 +7,7 @@ import { hasOrderIntegritySigningConfig, QY_ROAM_PROVENANCE_METADATA_KEY, signed
 import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '../../../lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
-import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
+import { createCheckoutAttemptLimiter, createGlobalAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { metaAttributionFromRequest } from '@/lib/metaAttribution';
 import { checkoutAttemptExpiresAt } from '@/lib/checkoutExpiry';
 import { checkoutSiteOrigin } from '@/lib/siteOrigin';
@@ -25,6 +25,7 @@ const CHECKOUT_BODY_TIMEOUT_MS = 15_000;
 // the selection, pricing and operational readiness checks ran. The client
 // already treats an expired idempotent session as a recoverable fresh attempt.
 const limited = createCheckoutAttemptLimiter();
+const globallyLimited = createGlobalAttemptLimiter();
 
 // Stripe idempotency keys are intentionally durable. If a caller reuses a
 // checkout request id for a different plan, Stripe returns the first session
@@ -53,7 +54,7 @@ function matchesRequestedEsim(session: Stripe.Checkout.Session, requestId: strin
 
 export async function POST(req: Request) {
   try {
-    if (limited(req)) return NextResponse.json({ error: 'Too many checkout attempts. Please try again shortly.' }, { status: 429, headers: { 'Retry-After': '60' } });
+    if (limited(req) || globallyLimited()) return NextResponse.json({ error: 'Too many checkout attempts. Please try again shortly.' }, { status: 429, headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' } });
     if (!isJsonRequestContentType(req.headers.get('content-type'))) {
       return NextResponse.json({ error: 'Expected JSON request.' }, { status: 415 });
     }

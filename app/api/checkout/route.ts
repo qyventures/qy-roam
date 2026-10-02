@@ -11,7 +11,7 @@ import { operationalIsoDate, operationalIsoDateAfter } from '../../../lib/operat
 import { hasRequiredFulfilmentEmailConfig, hasRequiredPaymentSchema, hasRequiredPocketWifiFulfilmentSchema, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '../../../lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
-import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
+import { createCheckoutAttemptLimiter, createGlobalAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { metaAttributionFromRequest } from '@/lib/metaAttribution';
 import { checkoutAttemptExpiresAt, MAX_STRIPE_HOLD_SCAN_PAGES, STRIPE_HOLD_SCAN_WINDOW_SECONDS } from '@/lib/checkoutExpiry';
 import { checkoutSiteOrigin } from '@/lib/siteOrigin';
@@ -24,6 +24,7 @@ export const runtime = 'nodejs';
 const MAX_BODY_BYTES=4096;
 const CHECKOUT_BODY_TIMEOUT_MS=15_000;
 const limited=createCheckoutAttemptLimiter();
+const globallyLimited=createGlobalAttemptLimiter();
 
 type RequestedPocketWifi = {
   country:string; start:string; end:string; days:number; daily:number;
@@ -175,7 +176,7 @@ async function linkReservationToSession(supabase:NonNullable<ReturnType<typeof g
 
 export async function POST(req: Request) {
  try {
-  if(limited(req)) return NextResponse.json({error:'Too many checkout attempts. Please try again shortly.'},{status:429,headers:{'Retry-After':'60'}});
+  if(limited(req)||globallyLimited()) return NextResponse.json({error:'Too many checkout attempts. Please try again shortly.'},{status:429,headers:{'Cache-Control':'no-store','Retry-After':'60'}});
   if(!isJsonRequestContentType(req.headers.get('content-type'))) return NextResponse.json({error:'Expected JSON request.'},{status:415});
   // Match the readiness guard, which permits harmless deployment whitespace.
   // Passing the untrimmed secret to Stripe would otherwise make health look

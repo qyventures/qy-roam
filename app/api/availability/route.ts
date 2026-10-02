@@ -14,7 +14,7 @@ import {
   hasRequiredStripeWebhookConfig,
 } from '@/lib/productionReadiness';
 import { CHECKOUT_WEBHOOK_HANDOFF_GRACE_MS, MAX_STRIPE_HOLD_SCAN_PAGES, STRIPE_HOLD_SCAN_WINDOW_SECONDS } from '@/lib/checkoutExpiry';
-import { createCheckoutAttemptLimiter } from '@/lib/checkoutRateLimit';
+import { AVAILABILITY_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS, createCheckoutAttemptLimiter, createGlobalAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
 import { exactNonnegativeCount } from '@/lib/exactCount';
@@ -27,6 +27,7 @@ export const dynamic = 'force-dynamic';
 // deliberately separate from the stricter checkout limiter because checking
 // a date range is safe to repeat a little more often than opening payment.
 const limited = createCheckoutAttemptLimiter(60_000, 30);
+const globallyLimited = createGlobalAttemptLimiter(60_000, AVAILABILITY_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS);
 // Supabase/PostgREST applies a per-response row ceiling. A single response is
 // not a safe capacity authority: a larger fleet can legitimately have more
 // than that many unexpired, overlapping reservations across a long (up to
@@ -256,7 +257,7 @@ export async function GET(req: NextRequest) {
   const start = parseExactIsoDate(req.nextUrl.searchParams.get('start'));
   const end = parseExactIsoDate(req.nextUrl.searchParams.get('end'));
   if (!start || !end || end < start) return NextResponse.json({ available: false, error: 'Valid start and end dates are required.' }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
-  if (limited(req)) {
+  if (limited(req) || globallyLimited()) {
     return NextResponse.json({ available: false, error: 'Too many availability checks. Please try again shortly.' }, {
       status: 429,
       headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' },

@@ -35,7 +35,7 @@ const { validStripeCheckoutSessionId } = require('../lib/stripeSessionId.ts');
 const { validStripeEventCreated, validStripePaymentEventCreated, STRIPE_EVENT_CREATED_MIN_SECONDS, STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS } = require('../lib/stripeEventCreated.ts');
 const { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesEvent, stripeWebhookEventEnvelope } = require('../lib/stripeWebhookObject.ts');
 const { isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError, InvalidRequestBodyLimitError, MAX_REQUEST_BODY_CHUNKS } = require('../lib/requestBody.ts');
-const { checkoutClientKey, createCheckoutAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
+const { checkoutClientKey, createCheckoutAttemptLimiter, createGlobalAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { adminAuthClientKey, createFailedAdminAuthLimiter } = require('../lib/adminAuthRateLimit.ts');
 const { ADMIN_MUTATION_HEADER, ADMIN_MUTATION_HEADER_VALUE, adminMutationHeaders } = require('../lib/adminMutation.ts');
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = require('../lib/stripeCheckoutConfig.ts');
@@ -1437,6 +1437,28 @@ test('admin order transitions bound and validate their JSON request bodies', () 
   assert.doesNotMatch(adminOrderRoute, /await req\.json\(\)/);
 });
 
+test('provider-backed public routes retain an aggregate overload ceiling across rotating clients', () => {
+  const limit = createGlobalAttemptLimiter(1_000, 3);
+  assert.equal(limit(100), false);
+  assert.equal(limit(101), false);
+  assert.equal(limit(102), false);
+  assert.equal(limit(103), true);
+  assert.equal(limit(1_100), false);
+
+  // Invalid internal settings must fail conservatively without creating an
+  // unlimited window. This helper allocates no per-client state.
+  const conservative = createGlobalAttemptLimiter(0, 0);
+  assert.equal(conservative(100), false);
+  assert.equal(conservative(101), true);
+
+  for (const source of [wifiCheckoutRoute, esimCheckoutRoute]) {
+    assert.match(source, /const globallyLimited\s*=\s*createGlobalAttemptLimiter\(\)/);
+    assert.match(source, /limited\(req\)\s*\|\|\s*globallyLimited\(\)/);
+  }
+  assert.match(availabilityRoute, /AVAILABILITY_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS/);
+  assert.match(availabilityRoute, /limited\(req\)\s*\|\|\s*globallyLimited\(\)/);
+});
+
 test('checkout attempt rate limiting keeps per-client limits while bounding unique client state', () => {
   const limit = createCheckoutAttemptLimiter(1_000, 2, 3);
   const requestFor = (ip) => new Request('https://qyroam.test/api/checkout', { headers: { 'x-real-ip': ip } });
@@ -2157,7 +2179,7 @@ test('Pocket WiFi availability does not promise stock when checkout cannot safel
 });
 
 test('Pocket WiFi availability bounds public Stripe and database capacity scans', () => {
-  assert.match(availabilityRoute, /import \{ createCheckoutAttemptLimiter \} from '@\/lib\/checkoutRateLimit';/);
+  assert.match(availabilityRoute, /createCheckoutAttemptLimiter, createGlobalAttemptLimiter \} from '@\/lib\/checkoutRateLimit';/);
   assert.match(availabilityRoute, /const limited = createCheckoutAttemptLimiter\(60_000, 30\)/);
   // PostgREST caps a response page. Availability must scan the same complete
   // reservation set that the checkout RPC counts, or fail closed once its
@@ -2174,7 +2196,7 @@ test('Pocket WiFi availability bounds public Stripe and database capacity scans'
   assert.doesNotMatch(availabilityRoute, /\.range\(from, from \+ RESERVATION_SCAN_PAGE_SIZE - 1\)/);
   assert.match(availabilityRoute, /Pocket WiFi reservation scan exceeded its safe page limit/);
   assert.match(availabilityRoute, /activeReservations\(supabase, start, end, reservationCutoff\)/);
-  assert.match(availabilityRoute, /if \(limited\(req\)\)/);
+  assert.match(availabilityRoute, /if \(limited\(req\) \|\| globallyLimited\(\)\)/);
   assert.match(availabilityRoute, /Too many availability checks/);
   assert.match(availabilityRoute, /status: 429/);
   assert.match(availabilityRoute, /'Retry-After': '60'/);
