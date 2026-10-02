@@ -39,6 +39,23 @@ function digitalDeliveryReference(value: unknown, existing: string | null) {
   return normalizeDigitalDeliveryReference(value);
 }
 
+function cancellationReason(value: unknown) {
+  if (typeof value !== 'string') return '';
+  const reason = value.trim();
+  if (reason.length < 5 || reason.length > 500 || /[\u0000-\u001f\u007f]/.test(reason)) return '';
+  return reason;
+}
+
+function notesWithCancellationReason(existing: unknown, reason: string) {
+  const evidence = `Cancellation reason: ${reason}`;
+  const previous = typeof existing === 'string' ? existing.trim() : '';
+  if (!previous) return evidence;
+  // The order ledger bounds notes at 1,000 characters. Keep the new audit
+  // evidence complete and retain as much earlier context as the field allows.
+  const retained = previous.slice(0, Math.max(0, 1000 - evidence.length - 1)).trimEnd();
+  return retained ? `${retained}\n${evidence}` : evidence;
+}
+
 function pocketWifiTransitionError(message: string) {
   // PostgREST can attach SQL, proxy, or connection context to an RPC error.
   // This route is a browser-facing operations boundary, so expose only the
@@ -90,7 +107,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const id = Number(params.id);
   if (!Number.isSafeInteger(id) || id < 1) return NextResponse.json({ error: 'Invalid order id' }, { status: 400 });
 
-  const existing = await supabase.from('orders').select('product_type,payment_status,fulfilment_status,dispatched_at,returned_at,courier_tracking,return_tracking,digital_delivery_reference').eq('id', id).maybeSingle();
+  const existing = await supabase.from('orders').select('product_type,payment_status,fulfilment_status,dispatched_at,returned_at,courier_tracking,return_tracking,digital_delivery_reference,notes').eq('id', id).maybeSingle();
   if (existing.error) return NextResponse.json({ error: 'Unable to load order' }, { status: 500 });
   if (!existing.data) return NextResponse.json({ error: 'Order not found' }, { status: 404 });
   if (!validFulfilmentStatus(existing.data.product_type, status)) return NextResponse.json({ error: 'Invalid fulfilment status for this order' }, { status: 400 });
@@ -105,6 +122,11 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const returnTracking = trackingValue(body.return_tracking, existing.data.return_tracking);
   const deliveryReference = digitalDeliveryReference(body.digital_delivery_reference, existing.data.digital_delivery_reference);
   const returnDisposition = typeof body.return_disposition === 'string' ? body.return_disposition.trim().toLowerCase() : '';
+  const cancelReason = cancellationReason(body.cancellation_reason);
+  if (status === 'cancelled' && existing.data.fulfilment_status !== 'cancelled' && !cancelReason) {
+    return NextResponse.json({ error: 'Enter a cancellation reason of 5–500 characters so the paid order can be reconciled.' }, { status: 400 });
+  }
+  const cancellationNotes = cancelReason ? notesWithCancellationReason(existing.data.notes, cancelReason) : null;
   // Courier and receipt references are custody evidence, not editable order
   // notes. Once the corresponding physical boundary has been crossed, a
   // later lifecycle save must not replace the evidence staff used to hand
@@ -163,7 +185,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       p_next_status: status,
       p_courier_tracking: typeof body.courier_tracking === 'string' ? courierTracking : null,
       p_return_tracking: typeof body.return_tracking === 'string' ? returnTracking : null,
-      p_notes: typeof body.notes === 'string' ? body.notes.slice(0, 1000) : null,
+      p_notes: cancellationNotes || (typeof body.notes === 'string' ? body.notes.slice(0, 1000) : null),
       p_inventory_item_id: selectedInventoryItemId,
       p_return_disposition: returnDisposition,
     });
@@ -189,6 +211,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   if (typeof body.courier_tracking === 'string') patch.courier_tracking = courierTracking || null;
   if (typeof body.return_tracking === 'string') patch.return_tracking = returnTracking || null;
   if (typeof body.notes === 'string') patch.notes = body.notes.slice(0, 1000);
+  if (cancellationNotes) patch.notes = cancellationNotes;
   if (status === 'dispatched' && !existing.data.dispatched_at) patch.dispatched_at = new Date().toISOString();
   if (status === 'returned' && !existing.data.returned_at) patch.returned_at = new Date().toISOString();
 

@@ -2347,6 +2347,16 @@ test('fulfilment notification recovery cannot revive completed or cancelled orde
   assert.equal(fulfilmentNotificationActionable('esim', 'cancelled'), false);
 });
 
+test('paid order cancellation requires durable reconciliation evidence', () => {
+  assert.match(adminOrderRoute, /cancellationReason\(body\.cancellation_reason\)/);
+  assert.match(adminOrderRoute, /Enter a cancellation reason of 5–500 characters/);
+  assert.match(adminOrderRoute, /Cancellation reason: \$\{reason\}/);
+  assert.match(adminOrderActions, /Cancellation reason \/ refund or replacement reference/);
+  assert.match(adminOrderActions, /Cancelling fulfilment does not itself refund the payment/);
+  assert.match(schema, /create trigger qy_require_paid_order_cancellation_reason/);
+  assert.match(schema, /paid order cancellation reason is required/);
+});
+
 test('admin fulfilment attention and controls exclude orders without confirmed payment', () => {
   // Delayed payment methods create a durable awaiting-payment row. It remains
   // visible for reconciliation, but must not become a staff dispatch/eSIM

@@ -271,6 +271,32 @@ create trigger qy_enforce_esim_fulfilment_transition
 before insert or update of product_type, fulfilment_status on public.orders
 for each row execute function public.qy_enforce_esim_fulfilment_transition();
 
+-- Cancelling fulfilment does not reverse an immutable paid transaction. Keep
+-- an operator-authored reason in the durable order ledger so refunds and
+-- replacements can be reconciled later. Enforce this at the database edge as
+-- well as in the admin UI/API because service-role scripts can bypass both.
+create or replace function public.qy_require_paid_order_cancellation_reason()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public
+as $$
+begin
+  if old.payment_status = 'paid'
+    and old.fulfilment_status <> 'cancelled'
+    and new.fulfilment_status = 'cancelled'
+    and coalesce(new.notes, '') !~ '(^|\n)Cancellation reason: .{5,500}$' then
+    raise exception 'paid order cancellation reason is required';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists qy_require_paid_order_cancellation_reason on public.orders;
+create trigger qy_require_paid_order_cancellation_reason
+before update of fulfilment_status, notes on public.orders
+for each row execute function public.qy_require_paid_order_cancellation_reason();
+
 -- The admin API and webhook each validate the lifecycle they write, but the
 -- service role is also used for migrations and operational recovery. Keep the
 -- product/status boundary in the database so a direct write cannot turn an

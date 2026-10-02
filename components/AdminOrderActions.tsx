@@ -16,6 +16,7 @@ export default function AdminOrderActions({ id, initialStatus, paymentStatus, pr
   // this unset until staff consciously decide what inspection found instead
   // of silently treating an omitted field as a restock instruction.
   const [returnDisposition, setReturnDisposition] = useState('');
+  const [cancellationReason, setCancellationReason] = useState('');
   const [inventoryItem, setInventoryItem] = useState(inventoryItemId ? String(inventoryItemId) : '');
   const [saving, setSaving] = useState(false);
   const [retrying, setRetrying] = useState(false);
@@ -39,7 +40,11 @@ export default function AdminOrderActions({ id, initialStatus, paymentStatus, pr
       if (isEsim && status === 'fulfilled' && !deliveryReference.trim()) {
         throw new Error('Enter a provider order ID or secure delivery/email log reference before marking this eSIM order fulfilled. Do not enter the QR code.');
       }
+      if (status === 'cancelled' && cancellationReason.trim().length < 5) {
+        throw new Error('Enter a cancellation reason of at least 5 characters for reconciliation.');
+      }
       const body: Record<string, string> = { status };
+      if (status === 'cancelled') body.cancellation_reason = cancellationReason;
       if (!isEsim) {
         body.courier_tracking = courier;
         body.return_tracking = returned;
@@ -103,6 +108,7 @@ export default function AdminOrderActions({ id, initialStatus, paymentStatus, pr
       </select>
     </>}
     {isEsim && <><input aria-label="eSIM delivery reference" placeholder="Provider order ID or secure delivery/email log reference" value={deliveryReference} onChange={e=>setDeliveryReference(e.target.value)} readOnly={currentStatus === 'fulfilled'} /><small>{currentStatus === 'fulfilled' ? 'Delivery audit references are immutable after fulfilment.' : 'Mark fulfilled only after the QR code / activation instructions have been sent. Record a delivery reference, never the QR code.'}</small></>}
+    {status === 'cancelled' && <><textarea aria-label="Cancellation reason" placeholder="Cancellation reason / refund or replacement reference" minLength={5} maxLength={500} value={cancellationReason} onChange={e=>setCancellationReason(e.target.value)} /><small>Required audit evidence. Cancelling fulfilment does not itself refund the payment; record the refund or replacement reference here.</small></>}
     <button type="button" onClick={save} disabled={saving || statuses.length < 2}>{saving ? 'Saving…' : 'Save'}</button>
     {canRetryNotifications && <button type="button" onClick={retryNotifications} disabled={retrying}>{retrying ? 'Retrying deliveries…' : 'Retry order deliveries'}</button>}
     {message && <small aria-live="polite">{message}</small>}
