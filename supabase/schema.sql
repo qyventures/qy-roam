@@ -359,6 +359,36 @@ alter table public.orders add constraint orders_payment_confirmed_at_requires_pa
   (payment_status is distinct from 'paid' and payment_confirmed_at is null)
 ) not valid;
 
+-- Revenue reporting, CRM recency and Meta Purchase recovery all trust this
+-- timestamp as the moment money was confirmed. The application validates
+-- Stripe event time and protected manual sales use now(), but a service-role
+-- import or repair can bypass both paths. Reject impossible values at the
+-- durable boundary as well. Historical Stripe retries remain valid back to
+-- Stripe's 2010 epoch, while one day of future clock skew matches the
+-- application validator without allowing a far-future order to poison sales
+-- periods indefinitely.
+create or replace function public.qy_validate_order_payment_confirmation_time()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public
+as $$
+begin
+  if new.payment_confirmed_at is not null and (
+    new.payment_confirmed_at < timestamptz '2010-01-01 00:00:00+00' or
+    new.payment_confirmed_at > clock_timestamp() + interval '1 day'
+  ) then
+    raise exception 'invalid order payment confirmation time';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists qy_validate_order_payment_confirmation_time on public.orders;
+create trigger qy_validate_order_payment_confirmation_time
+before insert or update of payment_confirmed_at on public.orders
+for each row execute function public.qy_validate_order_payment_confirmation_time();
+
 -- Checkout and the protected manual-sale flow already require a positive
 -- server-priced amount. Preserve that financial boundary for direct
 -- service-role repairs and imports too: a paid order with a zero, missing, or
@@ -1196,11 +1226,12 @@ as $$
     )) = 2 and
     (select count(*) from pg_trigger where tgrelid = 'public.orders'::regclass and not tgisinternal and tgenabled <> 'D' and tgname in (
       'qy_enforce_paid_order_identity_immutability',
+      'qy_validate_order_payment_confirmation_time',
       'qy_enforce_esim_delivery_reference_immutability',
       'qy_enforce_esim_fulfilment_transition',
       'qy_enforce_pocket_wifi_fulfilment_transition',
       'qy_reconcile_customer_from_paid_order'
-    )) = 5 and
+    )) = 6 and
     (select count(*) from pg_trigger where tgrelid = 'public.stripe_events'::regclass and not tgisinternal and tgenabled <> 'D' and tgname in (
       'qy_enforce_stripe_event_identity_immutability',
       'qy_enforce_stripe_event_lifecycle'
@@ -1823,7 +1854,8 @@ as $$
   -- Version 19 additionally certifies bounded Stripe order identities and
   -- exact, untruncated Pocket WiFi custody-movement correlation. Version 20
   -- also certifies insert-safe Stripe failure/settlement lifecycle checks.
-  select 20;
+  -- Version 21 certifies the durable payment-confirmation timestamp boundary.
+  select 21;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
