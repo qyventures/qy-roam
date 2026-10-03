@@ -3318,6 +3318,17 @@ test('SMTP and Meta delivery settlement retain ownership of their sending leases
   assert.match(webhookRoute, /from\('meta_purchase_deliveries'\)[\s\S]{0,700}\.eq\('status','sending'\)\.eq\('updated_at',now\)/);
 });
 
+test('accepted paid-order deliveries are not immediately requeued when local settlement is ambiguous', () => {
+  // Provider acceptance is an irreversible external side effect. If the
+  // following database update fails, retaining `sending` makes the ambiguity
+  // visible and prevents Stripe's next retry from immediately duplicating an
+  // email or Purchase. Stale-lease recovery remains the deliberate retry path.
+  assert.match(webhookRoute, /let providerAccepted=false;[\s\S]*await sendHumanFulfilmentEmail\(fulfilmentSession\);\s*providerAccepted=true;/);
+  assert.match(webhookRoute, /if\(providerAccepted\) throw error;\s*\/\/ This row is shown to operations staff/);
+  assert.match(webhookRoute, /let providerAccepted=false;[\s\S]*await sendMetaPurchase\(session,Number\(attempt\.data\[0\]\.event_time\)\);\s*providerAccepted=true;/);
+  assert.match(webhookRoute, /if\(providerAccepted\) throw error;\s*\/\/ Meta\/provider errors are durable operator-visible data too/);
+});
+
 test('invalid or implausibly future delivery-lease timestamps are recoverable instead of permanently blocking paid-order retries', () => {
   assert.match(webhookRoute, /const DELIVERY_LEASE_STALE_MS=15\*60_000/);
   assert.match(webhookRoute, /const DELIVERY_LEASE_CLOCK_SKEW_MS=5\*60_000/);

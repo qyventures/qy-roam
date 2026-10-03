@@ -584,8 +584,10 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
   const attempt=await supabase.from('fulfilment_notifications').update({status:'sending',attempts:nextRetryAttempt(notification.attempts,0),last_attempt_at:now,last_error:null,updated_at:now}).eq('stripe_session_id',session.id).eq('status',notification.status)[notification.updated_at?'eq':'is']('updated_at',notification.updated_at||null).select('stripe_session_id');
   if(attempt.error) throw attempt.error;
   if(attempt.data?.length!==1) throw new Error('Fulfilment notification was claimed by another delivery attempt');
+  let providerAccepted=false;
   try{
     await sendHumanFulfilmentEmail(fulfilmentSession);
+    providerAccepted=true;
     // The sending lease can be reclaimed after a timed-out worker. Only its
     // owner may settle it: an older worker must never mark a newer delivery
     // sent (or later reset it to pending in the catch below).
@@ -594,6 +596,13 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
     if(sent.error) throw sent.error;
     if(sent.data?.length!==1) throw new Error('Fulfilment notification delivery lease was lost');
   }catch(error){
+    // Once SMTP/the relay has accepted the deterministic message id, a
+    // database failure while recording `sent` is an ambiguous-success state,
+    // not a provider failure. Keep this attempt's `sending` lease intact so a
+    // fast Stripe retry cannot immediately send a second customer email. The
+    // existing bounded stale-lease recovery remains available if operations
+    // later determines that settlement did not commit.
+    if(providerAccepted) throw error;
     // This row is shown to operations staff. Do not persist arbitrary error
     // text from an SMTP socket, relay, proxy, or runtime: any of those can
     // echo paid-order data or credentials. The helper retains only our own
@@ -646,8 +655,10 @@ export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof
   const attempt=await supabase.from('meta_purchase_deliveries').update({status:'sending',event_time:metaEventTime,attempts:nextRetryAttempt(delivery.attempts,0),last_attempt_at:now,last_error:null,updated_at:now}).eq('stripe_session_id',session.id).eq('status',delivery.status)[delivery.updated_at?'eq':'is']('updated_at',delivery.updated_at||null).select('stripe_session_id,event_time');
   if(attempt.error) throw attempt.error;
   if(attempt.data?.length!==1) throw new Error('Meta purchase delivery was claimed by another attempt');
+  let providerAccepted=false;
   try{
     await sendMetaPurchase(session,Number(attempt.data[0].event_time));
+    providerAccepted=true;
     const sentAt=new Date().toISOString();
     // As with SMTP, do not let a stale CAPI worker settle a lease that a
     // newer retry has reclaimed. Meta's event_id deduplicates the provider
@@ -656,6 +667,11 @@ export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof
     if(sent.error) throw sent.error;
     if(sent.data?.length!==1) throw new Error('Meta purchase delivery lease was lost');
   }catch(error){
+    // A positive Graph API acknowledgement followed by a local settlement
+    // failure is also ambiguous success. Preserve the sending lease instead
+    // of requeueing immediately; Meta's event id still protects the eventual
+    // stale-lease retry, while the ledger accurately signals reconciliation.
+    if(providerAccepted) throw error;
     // Meta/provider errors are durable operator-visible data too. Preserve a
     // safe status code when our own transport produced one, otherwise retain
     // a recovery instruction rather than an arbitrary upstream error string.
