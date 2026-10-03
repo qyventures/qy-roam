@@ -1228,7 +1228,12 @@ as $$
       'checkout_reservations_request_id_check',
       'checkout_reservations_session_id_check'
     )) = 2 and
-    (select count(*) from pg_trigger where tgrelid = 'public.orders'::regclass and not tgisinternal and tgenabled <> 'D' and tgname in (
+    -- PostgreSQL's replica-only trigger mode (`R`) is not disabled, but it
+    -- does not fire for the ordinary service-role writes used by Checkout and
+    -- operations. Treat only origin (`O`) and always (`A`) triggers as active
+    -- so a partial/manual migration cannot make payment readiness pass while
+    -- the paid-order guards are inert in normal application traffic.
+    (select count(*) from pg_trigger where tgrelid = 'public.orders'::regclass and not tgisinternal and tgenabled in ('O', 'A') and tgname in (
       'qy_enforce_paid_order_identity_immutability',
       'qy_validate_order_payment_confirmation_time',
       'qy_enforce_esim_delivery_reference_immutability',
@@ -1236,12 +1241,12 @@ as $$
       'qy_enforce_pocket_wifi_fulfilment_transition',
       'qy_reconcile_customer_from_paid_order'
     )) = 6 and
-    (select count(*) from pg_trigger where tgrelid = 'public.stripe_events'::regclass and not tgisinternal and tgenabled <> 'D' and tgname in (
+    (select count(*) from pg_trigger where tgrelid = 'public.stripe_events'::regclass and not tgisinternal and tgenabled in ('O', 'A') and tgname in (
       'qy_enforce_stripe_event_identity_immutability',
       'qy_enforce_stripe_event_lifecycle'
     )) = 2 and
-    (select count(*) from pg_trigger where tgrelid = 'public.fulfilment_notifications'::regclass and not tgisinternal and tgenabled <> 'D' and tgname = 'qy_enforce_fulfilment_notification_immutability') = 1 and
-    (select count(*) from pg_trigger where tgrelid = 'public.meta_purchase_deliveries'::regclass and not tgisinternal and tgenabled <> 'D' and tgname = 'qy_enforce_meta_purchase_delivery_immutability') = 1;
+    (select count(*) from pg_trigger where tgrelid = 'public.fulfilment_notifications'::regclass and not tgisinternal and tgenabled in ('O', 'A') and tgname = 'qy_enforce_fulfilment_notification_immutability') = 1 and
+    (select count(*) from pg_trigger where tgrelid = 'public.meta_purchase_deliveries'::regclass and not tgisinternal and tgenabled in ('O', 'A') and tgname = 'qy_enforce_meta_purchase_delivery_immutability') = 1;
 $$;
 revoke all on function public.qy_order_integrity_schema_ready() from public;
 grant execute on function public.qy_order_integrity_schema_ready() to service_role;
@@ -1860,8 +1865,10 @@ as $$
   -- also certifies insert-safe Stripe failure/settlement lifecycle checks.
   -- Version 21 certifies the durable payment-confirmation timestamp boundary.
   -- Version 22 additionally certifies exact Singapore postal codes for paid
-  -- Stripe Pocket WiFi delivery records.
-  select 22;
+  -- Stripe Pocket WiFi delivery records. Version 23 certifies that readiness
+  -- rejects replica-only integrity triggers which are inert for application
+  -- writes.
+  select 23;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;

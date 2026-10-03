@@ -174,6 +174,7 @@ const requiredContracts = [
   'create trigger qy_reconcile_customer_from_paid_order',
   'create or replace function public.qy_order_integrity_schema_ready',
   'grant execute on function public.qy_order_integrity_schema_ready() to service_role',
+  "tgenabled in ('O', 'A')",
   'create or replace function public.qy_order_integrity_schema_version',
   'grant execute on function public.qy_order_integrity_schema_version() to service_role',
   'create or replace function public.qy_claim_stripe_event',
