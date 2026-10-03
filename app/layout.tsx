@@ -15,12 +15,12 @@ export const metadata: Metadata = {
     url: 'https://qyroam.com',
     siteName: 'QY Roam',
     title: 'QY Roam | Travel eSIM & Pocket WiFi',
-    description: 'Travel eSIM and pocket WiFi with launch promotions, secure checkout and Singapore-based support.'
+    description: 'Travel eSIM and pocket WiFi information with current online availability, secure checkout and Singapore-based support.'
   },
   twitter: {
     card: 'summary_large_image',
     title: 'QY Roam | Travel eSIM & Pocket WiFi',
-    description: 'Travel eSIM and pocket WiFi with launch promotions, secure checkout and Singapore-based support.'
+    description: 'Travel eSIM and pocket WiFi information with current online availability, secure checkout and Singapore-based support.'
   },
   robots: { index: true, follow: true }
 };

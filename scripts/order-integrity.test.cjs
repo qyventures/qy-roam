@@ -112,6 +112,7 @@ const sitemap = fs.readFileSync(require.resolve('../app/sitemap.ts'), 'utf8');
 const faqPage = fs.readFileSync(require.resolve('../app/faq/page.tsx'), 'utf8');
 const privacyPage = fs.readFileSync(require.resolve('../app/privacy/page.tsx'), 'utf8');
 const termsPage = fs.readFileSync(require.resolve('../app/terms/page.tsx'), 'utf8');
+const rootLayout = fs.readFileSync(require.resolve('../app/layout.tsx'), 'utf8');
 
 const requestId = 'checkout_request_123456';
 
@@ -143,6 +144,14 @@ test('eSIM launch pricing expires at the approved Singapore campaign boundary', 
   assert.match(esimPage, /disabled=\{busy \|\| !promoActive\}/);
   assert.match(esimPage, /\{promoActive && <p className="muted">Effective price:/);
   assert.match(esimPage, /\{promoActive && <div className="esim-price-row">/);
+  // Search metadata and the homepage must share the checkout's approved
+  // offer boundary. In particular, do not keep advertising an in-stock price
+  // or an immediately purchasable option after checkout has paused sales.
+  assert.match(homePage, /const esimOfferActive = esimPromoIsActive\(\)/);
+  assert.match(homePage, /esimOfferActive \? 'Digital travel option' : 'Online ordering paused'/);
+  assert.match(esimLayout, /export const dynamic = 'force-dynamic'/);
+  assert.match(esimLayout, /offers: offerActive \? \{/);
+  assert.doesNotMatch(rootLayout, /with launch promotions/);
   assert.doesNotMatch(esimLayout, /launch pricing benchmarked 15% below/);
 });
 
