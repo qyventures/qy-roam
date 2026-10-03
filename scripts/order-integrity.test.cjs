@@ -60,6 +60,7 @@ const { stripeCheckoutEventStateIssue } = require('../lib/stripeCheckoutEventSta
 const { contentLengthMatches, declaredContentLength } = require('../lib/contentLength.ts');
 const { paidFulfilmentDetailsIssue } = require('../lib/paidFulfilmentDetails.ts');
 const { exactNonnegativeCount } = require('../lib/exactCount.ts');
+const { custodyReferenceIssue, normalizeCustodyReference, MAX_CUSTODY_REFERENCE_LENGTH } = require('../lib/custodyReference.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { hasOrderIntegritySecret, hasOrderIntegritySigningConfig, signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -113,6 +114,24 @@ const privacyPage = fs.readFileSync(require.resolve('../app/privacy/page.tsx'), 
 const termsPage = fs.readFileSync(require.resolve('../app/terms/page.tsx'), 'utf8');
 
 const requestId = 'checkout_request_123456';
+
+test('Pocket WiFi custody references remain exact, single-line audit evidence', () => {
+  assert.equal(normalizeCustodyReference('  SG-RETURN-123  '), 'SG-RETURN-123');
+  assert.equal(custodyReferenceIssue('SG-RETURN-123'), null);
+  assert.match(custodyReferenceIssue('line-one\nline-two'), /control characters/);
+  assert.match(custodyReferenceIssue(`R${'1'.repeat(MAX_CUSTODY_REFERENCE_LENGTH)}`), /200 characters or fewer/);
+
+  // Reject unsafe evidence instead of truncating it into a different tracking
+  // identity, and keep the database transaction as the final authority for
+  // callers other than the current admin browser.
+  assert.doesNotMatch(adminOrderRoute, /value\.trim\(\)\.slice\(0, 200\)/);
+  assert.match(adminOrderRoute, /custodyReferenceIssue\(courierTracking\)/);
+  assert.match(adminOrderRoute, /custodyReferenceIssue\(returnTracking\)/);
+  assert.match(schema, /length\(trim\(p_courier_tracking\)\) > 200/);
+  assert.match(schema, /trim\(p_courier_tracking\) ~ '\[\[:cntrl:\]\]'/);
+  assert.match(schema, /length\(trim\(p_return_tracking\)\) > 200/);
+  assert.match(schema, /trim\(p_return_tracking\) ~ '\[\[:cntrl:\]\]'/);
+});
 
 test('eSIM launch pricing expires at the approved Singapore campaign boundary', () => {
   assert.equal(esimPromoIsActive(new Date('2026-09-30T15:59:59.000Z')), true);

@@ -11,6 +11,7 @@ import { hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
 import { digitalDeliveryReferenceIssue, normalizeDigitalDeliveryReference } from '@/lib/digitalDeliveryReference';
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
 import { validStripeEventCreated } from '@/lib/stripeEventCreated';
+import { custodyReferenceIssue, normalizeCustodyReference } from '@/lib/custodyReference';
 
 export const runtime = 'nodejs';
 
@@ -26,8 +27,8 @@ function trackingValue(value: unknown, existing: string | null) {
   // tracking field, but treat whitespace as absent. A physical dispatch or
   // return without a reference cannot be reliably followed up by operations
   // or the customer.
-  if (typeof value !== 'string') return (existing || '').trim();
-  return value.trim().slice(0, 200);
+  if (typeof value !== 'string') return normalizeCustodyReference(existing);
+  return normalizeCustodyReference(value);
 }
 
 function digitalDeliveryReference(value: unknown, existing: string | null) {
@@ -137,6 +138,14 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   }
   if (existing.data.product_type === 'pocket_wifi' && existing.data.returned_at && typeof body.return_tracking === 'string' && returnTracking !== trackingValue(undefined, existing.data.return_tracking)) {
     return NextResponse.json({ error: 'The return receipt reference is immutable after a Pocket WiFi order is received. Record corrections in the order notes.' }, { status: 409 });
+  }
+  if (existing.data.product_type === 'pocket_wifi' && typeof body.courier_tracking === 'string' && courierTracking) {
+    const referenceIssue = custodyReferenceIssue(courierTracking);
+    if (referenceIssue) return NextResponse.json({ error: referenceIssue }, { status: 400 });
+  }
+  if (existing.data.product_type === 'pocket_wifi' && typeof body.return_tracking === 'string' && returnTracking) {
+    const referenceIssue = custodyReferenceIssue(returnTracking);
+    if (referenceIssue) return NextResponse.json({ error: referenceIssue }, { status: 400 });
   }
   if (existing.data.product_type === 'esim' && status === 'fulfilled' && !deliveryReference) {
     return NextResponse.json({ error: 'A delivery reference is required before marking an eSIM order fulfilled. Record a provider order ID or secure delivery/email log reference, not the eSIM QR code.' }, { status: 400 });

@@ -2039,6 +2039,9 @@ begin
       raise exception 'Pocket WiFi dispatch evidence exists before the dispatch transition; reconcile the order first';
     end if;
     if nullif(trim(coalesce(p_courier_tracking, '')), '') is null then raise exception 'courier tracking is required before dispatch'; end if;
+    if length(trim(p_courier_tracking)) > 200 or trim(p_courier_tracking) ~ '[[:cntrl:]]' then
+      raise exception 'invalid Pocket WiFi courier tracking reference';
+    end if;
     v_item_id := coalesce(p_inventory_item_id, v_order.inventory_item_id);
     if v_item_id is null then raise exception 'a Pocket WiFi inventory item is required before dispatch'; end if;
     -- Quantity alone is not sufficient evidence that a router may leave the
@@ -2066,6 +2069,9 @@ begin
       raise exception 'Pocket WiFi return evidence exists before the return transition; reconcile the order first';
     end if;
     if nullif(trim(coalesce(p_return_tracking, '')), '') is null then raise exception 'return tracking is required before receipt'; end if;
+    if length(trim(p_return_tracking)) > 200 or trim(p_return_tracking) ~ '[[:cntrl:]]' then
+      raise exception 'invalid Pocket WiFi return tracking reference';
+    end if;
     v_return_disposition := lower(trim(coalesce(p_return_disposition, '')));
     if v_return_disposition not in ('restock', 'quarantine', 'damaged') then raise exception 'invalid Pocket WiFi return disposition'; end if;
     -- Receiving a device increases saleable stock. Never infer that the
