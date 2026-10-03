@@ -3773,7 +3773,7 @@ test('Meta Purchase retries preserve one durable event timestamp for deduplicati
   assert.match(webhookRoute, /async function persistSession\(session:Stripe\.Checkout\.Session,eventType:Stripe\.Event\.Type,eventCreated:number\)/);
   assert.match(schema, /payment_confirmed_at = case when v_paid then coalesce\(orders\.payment_confirmed_at, p_payment_confirmed_at\)/);
   assert.match(webhookRoute, /await sendMetaPurchase\(session,Number\(attempt\.data\[0\]\.event_time\)\)/);
-  assert.match(adminOrderRoute, /select\('stripe_session_id,payment_status,payment_confirmed_at,product_type,fulfilment_status,measurement_consent'\)/);
+  assert.match(adminOrderRoute, /select\('stripe_session_id,payment_status,payment_confirmed_at,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,fulfilment_status,measurement_consent'\)/);
   assert.match(adminOrderRoute, /const metaEventTime=validStripeEventCreated\(confirmedAtSeconds\)/);
   assert.match(adminOrderRoute, /deliverMetaPurchase\(supabase, session, metaEventTime!\)/);
   assert.doesNotMatch(adminOrderRoute, /Math\.floor\(Date\.now\(\) \/ 1000\)/);
@@ -3887,11 +3887,15 @@ test('SMTP fulfilment transport bounds untrusted relay responses', () => {
   assert.match(smtpClient, /reject\(new Error\('SMTP response is too large'\)\);/);
 });
 
-test('admin delivery recovery requires a completed Stripe session and matching persisted product identity', () => {
+test('admin delivery recovery requires a completed Stripe session and its complete durable commercial snapshot', () => {
   assert.match(adminOrderRoute, /if \(session\.id !== sessionId\)/);
   assert.match(adminOrderRoute, /!validation\.valid \|\| session\.status !== 'complete' \|\| session\.payment_status !== 'paid'/);
-  assert.match(adminOrderRoute, /if \(order\.product_type !== validation\.productType\)/);
-  assert.match(adminOrderRoute, /stored order product does not match its signed Stripe session/);
+  assert.match(adminOrderRoute, /amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end/);
+  assert.match(adminOrderRoute, /if \(!durableOrderMatchesPaidSession\(order, session, validation\.productType\)\)/);
+  assert.match(adminOrderRoute, /stored order details do not match its signed Stripe session/);
+  const snapshotCheck = adminOrderRoute.indexOf('if (!durableOrderMatchesPaidSession(order, session, validation.productType))');
+  const deliveryAttempt = adminOrderRoute.indexOf('const deliveries = await Promise.allSettled', snapshotCheck);
+  assert.ok(snapshotCheck >= 0 && deliveryAttempt > snapshotCheck, 'commercial identity must be verified before any recovery delivery');
 });
 
 test('admin Meta recovery rejects corrupt or future payment timestamps', () => {

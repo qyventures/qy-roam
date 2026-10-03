@@ -12,6 +12,7 @@ import { digitalDeliveryReferenceIssue, normalizeDigitalDeliveryReference } from
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
 import { validStripeEventCreated } from '@/lib/stripeEventCreated';
 import { custodyReferenceIssue, normalizeCustodyReference } from '@/lib/custodyReference';
+import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 
 export const runtime = 'nodejs';
 
@@ -263,7 +264,7 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   try {
     const { data: order, error } = await supabase
       .from('orders')
-      .select('stripe_session_id,payment_status,payment_confirmed_at,product_type,fulfilment_status,measurement_consent')
+      .select('stripe_session_id,payment_status,payment_confirmed_at,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,fulfilment_status,measurement_consent')
       .eq('id', id)
       .maybeSingle();
     if (error) throw error;
@@ -300,15 +301,16 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
       return NextResponse.json({ error: 'The linked Stripe session is not a valid paid QY Roam order' }, { status: 409 });
     }
 
-    // The Stripe Session is the authority for payment and the signed product
-    // snapshot, while the database row is the authority for its operational
-    // lifecycle. Recovery must only join those two records when their product
-    // identity agrees. Otherwise a manually repaired/corrupt row could make a
-    // valid eSIM session send a Pocket WiFi fulfilment alert (or vice versa).
-    // Do not "repair" this implicitly: it needs an operator to reconcile the
-    // affected paid order before any external side effect is retried.
-    if (order.product_type !== validation.productType) {
-      return NextResponse.json({ error: 'The stored order product does not match its signed Stripe session. Reconcile the order before retrying deliveries.' }, { status: 409 });
+    // The Stripe Session is the authority for payment and the signed
+    // commercial snapshot, while the database row is the authority for its
+    // operational lifecycle. Recovery must prove the complete durable order
+    // identity before joining those records for an external side effect. A
+    // product-type-only check can attach a valid paid Session to a damaged or
+    // incorrectly repaired row for another same-product order, retrying the
+    // wrong plan, digital entitlement, amount, destination, or rental dates.
+    // Do not repair that mismatch implicitly: operations must reconcile it.
+    if (!durableOrderMatchesPaidSession(order, session, validation.productType)) {
+      return NextResponse.json({ error: 'The stored order details do not match its signed Stripe session. Reconcile the order before retrying deliveries.' }, { status: 409 });
     }
 
     // A fulfilment alert asks staff to send a device or digital entitlement.
