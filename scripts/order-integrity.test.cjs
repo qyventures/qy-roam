@@ -1336,7 +1336,7 @@ test('booking status requires a durable paid order before showing fulfilment pro
   // or unavailable order snapshot must not be rendered as the normal queued
   // fulfilment state.
   assert.match(bookingPage, /const orderLookupFailed = !supabase \|\| Boolean\(orderResult\?\.error\)/);
-  assert.match(bookingPage, /select\('payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,fulfilment_status,/);
+  assert.match(bookingPage, /select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,fulfilment_status,/);
   assert.match(bookingPage, /const orderPersisted = durableOrderMatchesPaidSession\(storedOrder, session, productType\)/);
   assert.match(bookingPage, /paid && !orderLifecycleValid/);
   assert.match(bookingPage, /orderLookupFailed \? 'temporarily unable to verify' : 'still finalising'/);
@@ -1350,7 +1350,7 @@ test('success confirmation does not imply fulfilment is durable before the paid 
   assert.match(successPage, /getSupabaseAdmin/);
   assert.match(successPage, /let orderPersisted = false/);
   assert.match(successPage, /let orderLookupFailed = false/);
-  assert.match(successPage, /select\('payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end'\)/);
+  assert.match(successPage, /select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end'\)/);
   assert.match(successPage, /orderPersisted = durableOrderMatchesPaidSession\(orderResult\.data, session, productType\)/);
   assert.match(successPage, /orderPersisted \? 'Order confirmed' : 'Payment confirmed'/);
   assert.match(successPage, /Please do not place a second order/);
@@ -4896,6 +4896,7 @@ test('Pocket WiFi availability fails closed when its exact committed-order count
 
 test('customer confirmation trusts only the durable order snapshot matching Stripe', () => {
   const esimSession = {
+    id: 'cs_live_paidEsimSnapshot123',
     mode: 'payment',
     status: 'complete',
     payment_status: 'paid',
@@ -4909,6 +4910,7 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
     },
   };
   const esimOrder = {
+    stripe_session_id: esimSession.id,
     payment_status: 'paid',
     product_type: 'esim',
     amount_sgd: '12.90',
@@ -4946,6 +4948,16 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
       'esim',
     ), false);
   }
+  assert.equal(durableOrderMatchesPaidSession(
+    { ...esimOrder, stripe_session_id: 'cs_live_differentOrder456' },
+    esimSession,
+    'esim',
+  ), false);
+  assert.equal(durableOrderMatchesPaidSession(
+    esimOrder,
+    { ...esimSession, id: 'not-a-checkout-session' },
+    'esim',
+  ), false);
   // Sessions opened during the data-allowance metadata rollout are accepted
   // against a current catalogue plan. Webhook persistence fills that same
   // catalogue entitlement, so confirmation must not leave a genuine paid
@@ -4993,6 +5005,7 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
   }
 
   const wifiSession = {
+    id: 'cs_live_paidWifiSnapshot123',
     mode: 'payment',
     status: 'complete',
     payment_status: 'paid',
@@ -5006,6 +5019,7 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
     },
   };
   const wifiOrder = {
+    stripe_session_id: wifiSession.id,
     payment_status: 'paid',
     product_type: 'pocket_wifi',
     amount_sgd: 5.52,
@@ -5025,7 +5039,7 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
 
   for (const page of [successPage, bookingPage]) {
     assert.match(page, /durableOrderMatchesPaidSession\(/);
-    assert.match(page, /payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end/);
+    assert.match(page, /stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end/);
   }
   assert.match(successPage, /<MetaPurchase sessionId=\{sessionId\} orderPersisted=\{orderPersisted\}/);
   assert.match(bookingPage, /const order = orderLifecycleValid \? storedOrder : null/);

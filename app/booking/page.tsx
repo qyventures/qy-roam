@@ -81,7 +81,7 @@ export default async function BookingPage({ searchParams }: Props) {
     const orderResult = supabase
       ? await supabase
           .from('orders')
-          .select('payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,fulfilment_status,courier_tracking,return_tracking,dispatched_at,returned_at')
+          .select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,fulfilment_status,courier_tracking,return_tracking,dispatched_at,returned_at')
           .eq('stripe_session_id', sessionId)
           .maybeSingle()
       : null;

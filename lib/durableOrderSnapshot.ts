@@ -1,8 +1,10 @@
 import type Stripe from 'stripe';
 import type { QyRoamProductType } from './qyRoamSession';
 import { getEsimPlan } from './esimPlans';
+import { validStripeCheckoutSessionId } from './stripeSessionId';
 
 export type DurableOrderSnapshot = {
+  stripe_session_id?: unknown;
   payment_status?: unknown;
   product_type?: unknown;
   amount_sgd?: unknown;
@@ -50,7 +52,9 @@ export function durableOrderMatchesPaidSession(
   // QY Roam fulfilment or customer confirmation. This is especially important
   // for admin recovery, where a successful match can trigger external email
   // and analytics side effects.
-  if (!order || order.payment_status !== 'paid' || order.product_type !== productType ||
+  const sessionId = validStripeCheckoutSessionId(session.id);
+  if (!order || !sessionId || order.stripe_session_id !== sessionId ||
+    order.payment_status !== 'paid' || order.product_type !== productType ||
     session.mode !== 'payment' || session.status !== 'complete' || session.payment_status !== 'paid' ||
     session.currency?.toLowerCase() !== 'sgd' ||
     typeof session.amount_total !== 'number' || !Number.isSafeInteger(session.amount_total) || session.amount_total <= 0 ||
