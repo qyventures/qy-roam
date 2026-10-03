@@ -216,6 +216,12 @@ test('eSIM launch pricing expires at the approved Singapore campaign boundary', 
   assert.match(esimPage, /disabled=\{busy \|\| !promoActive\}/);
   assert.match(esimPage, /\{promoActive && <p className="muted">Effective price:/);
   assert.match(esimPage, /\{promoActive && <div className="esim-price-row">/);
+  // When the approved offer is inactive, the informational page must not
+  // retain a contradictory self-link or tell visitors to begin a purchase.
+  // Keep a live conversion path to support without implying online stock.
+  assert.match(esimPage, /\{promoActive \? 'Buy online' : 'Check availability'\}/);
+  assert.match(esimPage, /href=\{promoActive \? '#esim-plans' : 'https:\/\/wa\.me\/6580327183'\}/);
+  assert.match(esimPage, /\{promoActive \? 'Shop eSIM' : 'Ask about eSIM availability'\}/);
   // Search metadata and the homepage must share the checkout's approved
   // offer boundary. In particular, do not keep advertising an in-stock price
   // or an immediately purchasable option after checkout has paused sales.
