@@ -307,6 +307,25 @@ test('storefront checkout responses cannot redirect through malformed runtime da
     paymentFailed: false,
   });
   assert.equal(parseCustomerCheckoutResponse({ completed: true, sessionId: 'cs_test_safe' }, true).completedSessionId, 'cs_test_safe');
+  // A malformed success must never rotate the durable attempt identity. The
+  // server may already have created a payable Session before returning it;
+  // trusting an error-shaped 2xx response would permit the next click to use
+  // a new idempotency key and create a duplicate payment opportunity.
+  assert.deepEqual(parseCustomerCheckoutResponse({
+    error: 'Session expired.',
+    checkoutExpired: true,
+    checkoutRequestConflict: true,
+    paymentFailed: true,
+  }, true), {
+    checkoutUrl: null,
+    completedSessionId: null,
+    error: null,
+    checkoutExpired: false,
+    checkoutRequestConflict: false,
+    paymentFailed: false,
+  });
+  assert.equal(parseCustomerCheckoutResponse({ url: stripeUrl, checkoutExpired: true }, true).checkoutExpired, false);
+  assert.equal(parseCustomerCheckoutResponse({ completed: true, sessionId: 'cs_test_safe', paymentFailed: true }, true).paymentFailed, false);
   for (const [payload, responseOk] of [
     [{ url: 'javascript:alert(1)' }, true],
     [{ url: stripeUrl }, false],

@@ -39,14 +39,25 @@ export function parseCustomerCheckoutResponse(value: unknown, responseOk: boolea
     ? validStripeCheckoutSessionId(input.sessionId)
     : null;
 
-  // A response must select one redirect capability. Treat contradictory data
-  // as malformed instead of choosing whichever field happened to be checked
-  // first in a component.
-  if (checkoutUrl && completedSessionId) return empty;
+  if (responseOk) {
+    // A successful checkout response must select exactly one validated
+    // redirect capability. In particular, never honour retry-rotation flags
+    // from a malformed HTTP 2xx payload: discarding the browser's durable
+    // Stripe idempotency key after the server may have created a Session can
+    // turn a response-shape regression into a second payable Session.
+    if (Boolean(checkoutUrl) === Boolean(completedSessionId)) return empty;
+    return {
+      ...empty,
+      checkoutUrl,
+      completedSessionId,
+    };
+  }
 
+  // Only an explicit non-success response can declare that the server has
+  // proved this attempt safe to replace. Ordinary dependency and network
+  // failures omit these flags, so callers retain and retry the same key.
   return {
-    checkoutUrl,
-    completedSessionId,
+    ...empty,
     error: safeCustomerError(input.error),
     checkoutExpired: input.checkoutExpired === true,
     checkoutRequestConflict: input.checkoutRequestConflict === true,
