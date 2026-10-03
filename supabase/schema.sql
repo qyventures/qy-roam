@@ -433,7 +433,11 @@ alter table public.orders add constraint orders_paid_stripe_fulfilment_details_c
         jsonb_typeof(shipping_address) = 'object' and
         shipping_address ->> 'country' = 'SG' and
         nullif(btrim(shipping_address ->> 'line1'), '') is not null and
-        nullif(btrim(shipping_address ->> 'postal_code'), '') is not null
+        -- Match the webhook's courier-routing boundary exactly. A merely
+        -- non-empty value can make a privileged repair look deliverable even
+        -- though Singapore postcodes are six digits and the application
+        -- would reject the same paid order before persistence.
+        coalesce(btrim(shipping_address ->> 'postal_code') ~ '^[0-9]{6}$', false)
       )
     )
   )
@@ -1855,7 +1859,9 @@ as $$
   -- exact, untruncated Pocket WiFi custody-movement correlation. Version 20
   -- also certifies insert-safe Stripe failure/settlement lifecycle checks.
   -- Version 21 certifies the durable payment-confirmation timestamp boundary.
-  select 21;
+  -- Version 22 additionally certifies exact Singapore postal codes for paid
+  -- Stripe Pocket WiFi delivery records.
+  select 22;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;

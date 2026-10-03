@@ -184,6 +184,7 @@ const requiredContracts = [
   'stripe_events_failure_timestamp_check',
   'stripe_events_processed_failure_check',
   'orders_session_id_format_check',
+  "coalesce(btrim(shipping_address ->> 'postal_code') ~ '^[0-9]{6}$', false)",
   'create trigger qy_validate_order_payment_confirmation_time',
   "after insert or update of payment_status, customer_name, email, phone, amount_sgd on public.orders",
   "new.payment_status <> 'paid'",
