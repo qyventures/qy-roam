@@ -4187,6 +4187,10 @@ test('Stripe webhook rejects encoded payloads before reading or signature verifi
 });
 
 test('Stripe webhook bounds third-party delivery responses as well as request time', () => {
+  const responseReader = webhookRoute.slice(
+    webhookRoute.indexOf('async function readDeliveryResponseBody'),
+    webhookRoute.indexOf('async function postJsonWithTimeout'),
+  );
   assert.match(webhookRoute, /const MAX_DELIVERY_RESPONSE_BODY_BYTES=64 \* 1024/);
   assert.match(webhookRoute, /async function readDeliveryResponseBody\(response: Response, deadline: Promise<never>\)/);
   assert.match(webhookRoute, /declaredContentLength\(response\.headers\.get\('content-length'\),MAX_DELIVERY_RESPONSE_BODY_BYTES\)/);
@@ -4199,6 +4203,10 @@ test('Stripe webhook bounds third-party delivery responses as well as request ti
   assert.match(webhookRoute, /const response=await Promise\.race\(\[[\s\S]{0,500}fetch\(url,[\s\S]{0,500}deadline,[\s\S]{0,100}\]\)/);
   assert.match(webhookRoute, /await readDeliveryResponseBody\(response,deadline\)/);
   assert.doesNotMatch(webhookRoute, /const responseBody=await response\.text\(\)/);
+  // Completion must leave the reader itself. An accidental enclosing loop
+  // would restart after `done` and spin on the closed stream, hanging a paid
+  // order after Meta or the SMTP relay had already replied successfully.
+  assert.equal(responseReader.match(/for \(;;\)/g)?.length, 1);
 });
 
 test('paid-order delivery endpoints are fail-closed and never follow credential-bearing redirects', () => {
