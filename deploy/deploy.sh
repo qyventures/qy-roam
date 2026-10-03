@@ -266,7 +266,7 @@ for attempt in {1..15}; do
     break
   fi
   if curl --header "@$smoke_health_header" --fail --silent --show-error --max-time "$READINESS_CURL_TIMEOUT_SECONDS" "http://127.0.0.1:${smoke_port}/api/health" |
-     node -e "let body='';process.stdin.on('data',chunk=>body+=chunk).on('end',()=>{const result=JSON.parse(body);if(result.launchReady!==true||result.service!=='qy-roam')process.exit(1)})"; then
+     node -e "let body='';process.stdin.on('data',chunk=>body+=chunk).on('end',()=>{const result=JSON.parse(body);if(result.launchReady!==true||result.salesReady!==true||result.service!=='qy-roam')process.exit(1)})"; then
     smoke_ready=1
     break
   fi
@@ -401,7 +401,7 @@ printf 'Authorization: Bearer %s\n' "$health_check_token" > "$health_header"
 ready=0
 for attempt in {1..15}; do
   if curl --header "@$health_header" --fail --silent --show-error --max-time "$READINESS_CURL_TIMEOUT_SECONDS" "$HEALTH_URL" > "$health_output" &&
-     node -e "const fs=require('fs');const result=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(result.launchReady!==true)process.exit(1)" "$health_output"; then
+     node -e "const fs=require('fs');const result=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(result.launchReady!==true||result.salesReady!==true||result.service!=='qy-roam')process.exit(1)" "$health_output"; then
     ready=1
     break
   fi
@@ -437,7 +437,7 @@ fi
 # different server despite the loopback --resolve entry.
 public_curl=(curl --noproxy '*' --resolve qyroam.com:443:127.0.0.1 --fail --silent --show-error --max-time "$READINESS_CURL_TIMEOUT_SECONDS")
 if ! "${public_curl[@]}" --header "@$health_header" "$PUBLIC_ORIGIN/api/health" |
-   node -e "let body='';process.stdin.on('data',chunk=>body+=chunk).on('end',()=>{const result=JSON.parse(body);if(result.launchReady!==true||result.service!=='qy-roam')process.exit(1)})"; then
+   node -e "let body='';process.stdin.on('data',chunk=>body+=chunk).on('end',()=>{const result=JSON.parse(body);if(result.launchReady!==true||result.salesReady!==true||result.service!=='qy-roam')process.exit(1)})"; then
   echo "QY Roam public TLS ingress did not reach the launch-ready service" >&2
   exit 1
 fi

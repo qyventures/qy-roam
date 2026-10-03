@@ -96,6 +96,13 @@ export async function GET(req: Request) {
       Boolean(pocketWifiFulfilmentSchema) && checks.inventory,
   };
   const checkoutReady = Object.values(checkoutChecks).every(Boolean);
+  // A release can intentionally pause one product (for example, when an
+  // approved promotional eSIM catalogue expires), but it is not sales-ready
+  // if every public checkout is unavailable. Keep this separate from the
+  // all-products `checkoutReady` and paid-acquisition gates so a safe organic
+  // Pocket WiFi release remains possible while deployment automation can
+  // still reject a configuration that leaves customers with nothing to buy.
+  const salesReady = launchReady && Object.values(checkoutChecks).some(Boolean);
   const paidAcquisitionReady = launchReady && checkoutReady && Object.values(paidAcquisitionChecks).every(Boolean);
 
   const missing = Object.entries(checks).filter(([, configured]) => !configured).map(([name]) => name);
@@ -113,6 +120,7 @@ export async function GET(req: Request) {
     // supervision.
     ok: launchReady,
     launchReady,
+    salesReady,
     checkoutReady,
     paidAcquisitionReady,
     service: 'qy-roam',

@@ -108,6 +108,7 @@ const launchPage = fs.readFileSync(require.resolve('../app/admin/launch/page.tsx
 const middleware = fs.readFileSync(require.resolve('../middleware.ts'), 'utf8');
 const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
 const nextConfig = fs.readFileSync(require.resolve('../next.config.mjs'), 'utf8');
+const deployScript = fs.readFileSync(require.resolve('../deploy/deploy.sh'), 'utf8');
 const supabaseAdmin = fs.readFileSync(require.resolve('../lib/supabaseAdmin.ts'), 'utf8');
 const robots = fs.readFileSync(require.resolve('../app/robots.ts'), 'utf8');
 const sitemap = fs.readFileSync(require.resolve('../app/sitemap.ts'), 'utf8');
@@ -3328,11 +3329,19 @@ test('authenticated health readiness fails when any order-critical dependency is
   assert.match(healthRoute, /pocketWifi: commonCheckoutReady && Boolean\(paymentSchema\) &&/);
   assert.match(healthRoute, /Boolean\(pocketWifiFulfilmentSchema\) && checks\.inventory/);
   assert.match(healthRoute, /const checkoutReady = Object\.values\(checkoutChecks\)\.every\(Boolean\)/);
+  assert.match(healthRoute, /const salesReady = launchReady && Object\.values\(checkoutChecks\)\.some\(Boolean\)/);
   assert.match(healthRoute, /const paidAcquisitionReady = launchReady && checkoutReady && Object\.values\(paidAcquisitionChecks\)\.every\(Boolean\)/);
   assert.match(healthRoute, /checkoutChecks,/);
   assert.match(healthRoute, /checkoutMissing,/);
   assert.match(healthRoute, /ok: launchReady/);
+  assert.match(healthRoute, /salesReady,/);
   assert.match(healthRoute, /status: launchReady \? 200 : 503/);
+  // Release verification must reject a fully configured but commercially
+  // unavailable storefront. Rollback intentionally retains the older
+  // launchReady-only check so the immediately previous artifact remains
+  // recoverable across this health-contract addition.
+  assert.equal((deployScript.match(/result\.salesReady!==true/g) || []).length, 3);
+  assert.match(deployScript, /result\.launchReady!==true\|\|result\.service!=='qy-roam'/);
   assert.doesNotMatch(healthRoute, /const coreReady/);
   // Checkout redirects customers to the server-created Stripe-hosted Session
   // URL and never uses Stripe.js. A stale or absent browser publishable key
