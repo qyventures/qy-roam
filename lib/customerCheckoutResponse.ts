@@ -22,7 +22,7 @@ function safeCustomerError(value: unknown) {
 // turn a checkout click into an arbitrary browser navigation. Only successful
 // responses can carry a payment or confirmation capability, and each one is
 // validated at the same canonical boundary used by the server.
-export function parseCustomerCheckoutResponse(value: unknown, responseOk: boolean): CustomerCheckoutResponse {
+export function parseCustomerCheckoutResponse(value: unknown, responseStatus: number): CustomerCheckoutResponse {
   const empty: CustomerCheckoutResponse = {
     checkoutUrl: null,
     completedSessionId: null,
@@ -32,8 +32,10 @@ export function parseCustomerCheckoutResponse(value: unknown, responseOk: boolea
     paymentFailed: false,
   };
   if (!value || typeof value !== 'object' || Array.isArray(value)) return empty;
+  if (!Number.isSafeInteger(responseStatus) || responseStatus < 100 || responseStatus > 599) return empty;
 
   const input = value as Record<string, unknown>;
+  const responseOk = responseStatus >= 200 && responseStatus < 300;
   const checkoutUrl = responseOk ? safeStripeCheckoutUrl(input.url) : null;
   const completedSessionId = responseOk && input.completed === true
     ? validStripeCheckoutSessionId(input.sessionId)
@@ -53,14 +55,17 @@ export function parseCustomerCheckoutResponse(value: unknown, responseOk: boolea
     };
   }
 
-  // Only an explicit non-success response can declare that the server has
-  // proved this attempt safe to replace. Ordinary dependency and network
-  // failures omit these flags, so callers retain and retry the same key.
+  // Only the route's deliberate conflict response can declare that the
+  // server has proved this attempt safe to replace. A proxy, stale service
+  // worker, or future generic 4xx/5xx response must not be able to copy one
+  // of these fields into its body and make the next click create a second
+  // payable Session under a fresh Stripe idempotency key.
+  const mayReplaceAttempt = responseStatus === 409;
   return {
     ...empty,
     error: safeCustomerError(input.error),
-    checkoutExpired: input.checkoutExpired === true,
-    checkoutRequestConflict: input.checkoutRequestConflict === true,
-    paymentFailed: input.paymentFailed === true,
+    checkoutExpired: mayReplaceAttempt && input.checkoutExpired === true,
+    checkoutRequestConflict: mayReplaceAttempt && input.checkoutRequestConflict === true,
+    paymentFailed: mayReplaceAttempt && input.paymentFailed === true,
   };
 }

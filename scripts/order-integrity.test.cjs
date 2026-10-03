@@ -298,7 +298,7 @@ test('customer checkout redirects accept only Stripe-hosted payment capabilities
 
 test('storefront checkout responses cannot redirect through malformed runtime data', () => {
   const stripeUrl = 'https://checkout.stripe.com/c/pay/cs_test_safe#fidkdWxOYHwnPyd1blpxYHZxWjA0';
-  assert.deepEqual(parseCustomerCheckoutResponse({ url: stripeUrl }, true), {
+  assert.deepEqual(parseCustomerCheckoutResponse({ url: stripeUrl }, 200), {
     checkoutUrl: stripeUrl,
     completedSessionId: null,
     error: null,
@@ -306,7 +306,7 @@ test('storefront checkout responses cannot redirect through malformed runtime da
     checkoutRequestConflict: false,
     paymentFailed: false,
   });
-  assert.equal(parseCustomerCheckoutResponse({ completed: true, sessionId: 'cs_test_safe' }, true).completedSessionId, 'cs_test_safe');
+  assert.equal(parseCustomerCheckoutResponse({ completed: true, sessionId: 'cs_test_safe' }, 200).completedSessionId, 'cs_test_safe');
   // A malformed success must never rotate the durable attempt identity. The
   // server may already have created a payable Session before returning it;
   // trusting an error-shaped 2xx response would permit the next click to use
@@ -316,7 +316,7 @@ test('storefront checkout responses cannot redirect through malformed runtime da
     checkoutExpired: true,
     checkoutRequestConflict: true,
     paymentFailed: true,
-  }, true), {
+  }, 200), {
     checkoutUrl: null,
     completedSessionId: null,
     error: null,
@@ -324,29 +324,54 @@ test('storefront checkout responses cannot redirect through malformed runtime da
     checkoutRequestConflict: false,
     paymentFailed: false,
   });
-  assert.equal(parseCustomerCheckoutResponse({ url: stripeUrl, checkoutExpired: true }, true).checkoutExpired, false);
-  assert.equal(parseCustomerCheckoutResponse({ completed: true, sessionId: 'cs_test_safe', paymentFailed: true }, true).paymentFailed, false);
-  for (const [payload, responseOk] of [
-    [{ url: 'javascript:alert(1)' }, true],
-    [{ url: stripeUrl }, false],
-    [{ completed: true, sessionId: '../admin' }, true],
-    [{ completed: true, sessionId: 'cs_test_safe' }, false],
-    [{ url: stripeUrl, completed: true, sessionId: 'cs_test_safe' }, true],
-    [null, true],
-    [['not', 'an', 'object'], true],
+  assert.equal(parseCustomerCheckoutResponse({ url: stripeUrl, checkoutExpired: true }, 200).checkoutExpired, false);
+  assert.equal(parseCustomerCheckoutResponse({ completed: true, sessionId: 'cs_test_safe', paymentFailed: true }, 200).paymentFailed, false);
+  for (const [payload, responseStatus] of [
+    [{ url: 'javascript:alert(1)' }, 200],
+    [{ url: stripeUrl }, 503],
+    [{ completed: true, sessionId: '../admin' }, 200],
+    [{ completed: true, sessionId: 'cs_test_safe' }, 409],
+    [{ url: stripeUrl, completed: true, sessionId: 'cs_test_safe' }, 200],
+    [null, 200],
+    [['not', 'an', 'object'], 200],
   ]) {
-    const parsed = parseCustomerCheckoutResponse(payload, responseOk);
+    const parsed = parseCustomerCheckoutResponse(payload, responseStatus);
     assert.equal(parsed.checkoutUrl, null);
     assert.equal(parsed.completedSessionId, null);
   }
-  const failure = parseCustomerCheckoutResponse({ error: 'Payment pending.', paymentFailed: true, checkoutExpired: 'true' }, false);
+  const failure = parseCustomerCheckoutResponse({ error: 'Payment pending.', paymentFailed: true, checkoutExpired: 'true' }, 409);
   assert.equal(failure.error, 'Payment pending.');
   assert.equal(failure.paymentFailed, true);
   assert.equal(failure.checkoutExpired, false);
-  assert.equal(parseCustomerCheckoutResponse({ error: 'bad\nheader' }, false).error, null);
+  assert.equal(parseCustomerCheckoutResponse({ error: 'bad\nheader' }, 409).error, null);
+
+  // Generic failures may surface safe customer copy, but cannot rotate the
+  // idempotency key even when an intermediary copies conflict-shaped fields.
+  for (const responseStatus of [400, 401, 403, 404, 408, 429, 500, 502, 503, 504]) {
+    const parsed = parseCustomerCheckoutResponse({
+      error: 'Please retry.',
+      checkoutExpired: true,
+      checkoutRequestConflict: true,
+      paymentFailed: true,
+    }, responseStatus);
+    assert.equal(parsed.error, 'Please retry.');
+    assert.equal(parsed.checkoutExpired, false);
+    assert.equal(parsed.checkoutRequestConflict, false);
+    assert.equal(parsed.paymentFailed, false);
+  }
+  for (const responseStatus of [NaN, 0, 99, 600, 200.5]) {
+    assert.deepEqual(parseCustomerCheckoutResponse({ error: 'Please retry.', paymentFailed: true }, responseStatus), {
+      checkoutUrl: null,
+      completedSessionId: null,
+      error: null,
+      checkoutExpired: false,
+      checkoutRequestConflict: false,
+      paymentFailed: false,
+    });
+  }
 
   for (const page of [homePage, esimPage]) {
-    assert.match(page, /parseCustomerCheckoutResponse\(payload, res\.ok\)/);
+    assert.match(page, /parseCustomerCheckoutResponse\(payload, res\.status\)/);
     assert.match(page, /if \(data\.checkoutUrl\) window\.location\.href = data\.checkoutUrl/);
     assert.match(page, /else if \(data\.completedSessionId\) window\.location\.href = `\/success\?session_id=\$\{encodeURIComponent\(data\.completedSessionId\)\}`/);
     assert.doesNotMatch(page, /if \(data\.url\) window\.location\.href = data\.url/);

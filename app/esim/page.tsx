@@ -44,7 +44,7 @@ export default function EsimPage() {
         body: JSON.stringify({ planId, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: activeCheckoutAttempt.current.requestId, checkoutAttemptCreatedAt: activeCheckoutAttempt.current.createdAt })
       });
       const payload: unknown = await res.json();
-      const data = parseCustomerCheckoutResponse(payload, res.ok);
+      const data = parseCustomerCheckoutResponse(payload, res.status);
       if (data.checkoutUrl) window.location.href = data.checkoutUrl;
       else if (data.completedSessionId) window.location.href = `/success?session_id=${encodeURIComponent(data.completedSessionId)}`;
       else {
