@@ -60,11 +60,14 @@ alter table public.orders add column if not exists notes text;
 -- This column is also the join key for webhook recovery and delivery ledgers;
 -- accepting an arbitrary service-role value can create an apparently paid
 -- order that neither Stripe recovery nor manual-sale idempotency can safely
--- reconcile. NOT VALID preserves visibility of historical imports while
+-- reconcile. Keep Stripe identities on the same 255-character ceiling as the
+-- application validator so a privileged writer cannot create an oversized
+-- provider key that customer recovery can never retrieve. NOT VALID preserves
+-- visibility of historical imports while
 -- protecting every new or changed identity immediately.
 alter table public.orders drop constraint if exists orders_session_id_format_check;
 alter table public.orders add constraint orders_session_id_format_check check (
-  stripe_session_id ~ '^cs_(test|live)_[A-Za-z0-9]+$' or
+  (length(stripe_session_id) <= 255 and stripe_session_id ~ '^cs_(test|live)_[A-Za-z0-9]+$') or
   stripe_session_id ~ '^manual_[a-f0-9]{48}$'
 ) not valid;
 
@@ -602,7 +605,7 @@ begin
       where inventory_item_id = new.inventory_item_id
         and movement_type = 'dispatch'
         and quantity = -1
-        and reference = left(new.stripe_session_id, 120)
+        and reference = new.stripe_session_id
     ) then
     raise exception 'Pocket WiFi dispatch requires a matching inventory movement';
   end if;
@@ -622,7 +625,7 @@ begin
       where inventory_item_id = new.inventory_item_id
         and movement_type = v_expected_return_movement
         and quantity = v_expected_return_quantity
-        and reference = left(new.stripe_session_id, 120)
+        and reference = new.stripe_session_id
     ) then
       raise exception 'Pocket WiFi return requires a matching inventory movement';
     end if;
@@ -642,7 +645,7 @@ begin
       where inventory_item_id = new.inventory_item_id
         and movement_type = 'dispatch'
         and quantity = -1
-        and reference = left(new.stripe_session_id, 120)
+        and reference = new.stripe_session_id
     ) then
     raise exception 'Pocket WiFi custody requires a matching dispatch inventory movement';
   end if;
@@ -661,7 +664,7 @@ begin
       where inventory_item_id = new.inventory_item_id
         and movement_type = v_expected_return_movement
         and quantity = v_expected_return_quantity
-        and reference = left(new.stripe_session_id, 120)
+        and reference = new.stripe_session_id
     ) then
       raise exception 'Pocket WiFi completed custody requires a matching return inventory movement';
     end if;
@@ -1218,7 +1221,10 @@ alter table public.checkout_reservations add constraint checkout_reservations_re
 ) not valid;
 alter table public.checkout_reservations drop constraint if exists checkout_reservations_session_id_check;
 alter table public.checkout_reservations add constraint checkout_reservations_session_id_check check (
-  stripe_session_id is null or stripe_session_id ~ '^cs_(test|live)_[A-Za-z0-9]+$'
+  stripe_session_id is null or (
+    length(stripe_session_id) <= 255 and
+    stripe_session_id ~ '^cs_(test|live)_[A-Za-z0-9]+$'
+  )
 ) not valid;
 alter table public.checkout_reservations enable row level security;
 
@@ -1567,7 +1573,7 @@ begin
   -- constraint: the latter also permits protected manual Pocket WiFi sale
   -- references, which must never be accepted as an eSIM entitlement id by a
   -- service-role recovery script or future worker.
-  if p_stripe_session_id !~ '^cs_(test|live)_[A-Za-z0-9]+$' then raise exception 'invalid Stripe session id'; end if;
+  if length(p_stripe_session_id) > 255 or p_stripe_session_id !~ '^cs_(test|live)_[A-Za-z0-9]+$' then raise exception 'invalid Stripe session id'; end if;
   if p_payment_status not in ('paid', 'unpaid') then raise exception 'unsupported Stripe payment status'; end if;
   if p_payment_failed and p_payment_status <> 'unpaid' then raise exception 'failed payment must be unpaid'; end if;
   if v_paid and p_payment_confirmed_at is null then raise exception 'paid Stripe order requires a payment confirmation time'; end if;
@@ -1674,7 +1680,7 @@ declare
   v_fulfilment text;
 begin
   if coalesce(length(trim(p_stripe_session_id)), 0) = 0 then raise exception 'Stripe session id is required'; end if;
-  if p_stripe_session_id !~ '^cs_(test|live)_[A-Za-z0-9]+$' then raise exception 'invalid Stripe session id'; end if;
+  if length(p_stripe_session_id) > 255 or p_stripe_session_id !~ '^cs_(test|live)_[A-Za-z0-9]+$' then raise exception 'invalid Stripe session id'; end if;
   if p_checkout_request_id is null or p_checkout_request_id !~ '^[A-Za-z0-9_-]{16,80}$' then raise exception 'invalid checkout request id'; end if;
   -- Keep the privileged persistence boundary aligned with the application
   -- validator. This RPC is deliberately callable only by service_role, but a
@@ -1798,7 +1804,9 @@ as $$
   -- its operator-authored reconciliation reason through a later notes update.
   -- Earlier versions also certify product-specific evidence boundaries,
   -- monotonic delivery retry counts and claim-owned attempt timestamps.
-  select 18;
+  -- Version 19 additionally certifies bounded Stripe order identities and
+  -- exact, untruncated Pocket WiFi custody-movement correlation.
+  select 19;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
@@ -2132,7 +2140,7 @@ begin
     if v_item.quantity_on_hand < 1 then raise exception 'selected Pocket WiFi inventory item is out of stock'; end if;
     update public.inventory_items set quantity_on_hand = quantity_on_hand - 1, updated_at = v_now where id = v_item_id;
     insert into public.inventory_movements (inventory_item_id, movement_type, quantity, reference, notes)
-    values (v_item_id, 'dispatch', -1, left(v_order.stripe_session_id, 120), nullif(left(trim(coalesce(p_courier_tracking, '')), 1000), ''));
+    values (v_item_id, 'dispatch', -1, v_order.stripe_session_id, nullif(left(trim(coalesce(p_courier_tracking, '')), 1000), ''));
   elsif p_next_status = 'returned' and p_expected_status <> 'returned' then
     if v_order.returned_at is not null then
       raise exception 'Pocket WiFi return evidence exists before the return transition; reconcile the order first';
@@ -2175,7 +2183,7 @@ begin
       v_item_id,
       case v_return_disposition when 'restock' then 'return' when 'damaged' then 'return_damaged' else 'return_quarantined' end,
       case when v_return_disposition = 'restock' then 1 else 0 end,
-      left(v_order.stripe_session_id, 120),
+      v_order.stripe_session_id,
       nullif(left(trim(coalesce(p_return_tracking, '')), 1000), '')
     );
   end if;
