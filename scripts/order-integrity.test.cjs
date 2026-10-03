@@ -1788,7 +1788,9 @@ test('eSIM checkout never redirects a reused idempotency key to another plan', (
   assert.match(esimCheckoutRoute, /session\.metadata\?\.plan_id === plan\.id/);
   assert.match(esimCheckoutRoute, /session\.metadata\?\.checkout_amount_cents === String\(Math\.max\(50, Math\.round\(plan\.qyPriceSgd \* 100\)\)\)/);
   assert.match(esimCheckoutRoute, /checkoutRequestConflict: true/);
-  assert.match(esimCheckoutRoute, /if \(!matchesRequestedEsim\(session, requestId, plan\)\)/);
+  assert.match(esimCheckoutRoute, /session\.expires_at === expiresAt/);
+  assert.match(esimCheckoutRoute, /if \(!matchesRequestedEsim\(session, requestId, plan, expiresAt\)\)/);
+  assert.match(esimCheckoutRoute, /if \(!matchesRequestedEsim\(currentSession, requestId, plan, expiresAt\)\)/);
   assert.match(esimPage, /data\.checkoutExpired \|\| data\.checkoutRequestConflict/);
   assert.match(esimCheckoutRoute, /checkout_amount_cents: String\(amount\)/);
 });
@@ -2381,6 +2383,8 @@ test('Pocket WiFi checkout retries bind the complete server-priced booking', () 
   assert.match(wifiCheckoutRoute, /session\.metadata\?\.promo_code===requested\.promoCode/);
   assert.match(wifiCheckoutRoute, /session\.metadata\?\.courier_fee_sgd===\(requested\.courierFee\/100\)\.toFixed\(2\)/);
   assert.match(wifiCheckoutRoute, /session\.metadata\?\.checkout_amount_cents===String\(expectedAmount\)/);
+  assert.match(wifiCheckoutRoute, /session\.expires_at===requested\.expiresAtSeconds/);
+  assert.match(wifiCheckoutRoute, /expiresAtSeconds\};/);
   assert.match(wifiCheckoutRoute, /const sameBooking=matchesRequestedPocketWifi\(session,requestId,requested\)/);
   assert.match(wifiCheckoutRoute, /checkoutRequestConflict:true/);
   assert.match(homePage, /data\.checkoutExpired \|\| data\.checkoutRequestConflict/);

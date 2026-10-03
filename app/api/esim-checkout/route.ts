@@ -32,7 +32,7 @@ const globallyLimited = createGlobalAttemptLimiter();
 // checkout request id for a different plan, Stripe returns the first session
 // instead of creating a new one. Never redirect a customer to that earlier
 // (but otherwise valid) purchase.
-function matchesRequestedEsim(session: Stripe.Checkout.Session, requestId: string, plan: NonNullable<ReturnType<typeof getEsimPlan>>) {
+function matchesRequestedEsim(session: Stripe.Checkout.Session, requestId: string, plan: NonNullable<ReturnType<typeof getEsimPlan>>, expiresAt: number) {
   return session.mode === 'payment' &&
     session.metadata?.source === 'qyroam.com' &&
     session.metadata?.product_type === 'esim' &&
@@ -50,7 +50,10 @@ function matchesRequestedEsim(session: Stripe.Checkout.Session, requestId: strin
     // for payment even though the webhook would correctly reject it later.
     session.metadata?.checkout_amount_cents === String(Math.max(50, Math.round(plan.qyPriceSgd * 100))) &&
     session.currency?.toLowerCase() === 'sgd' &&
-    session.amount_total === Math.max(50, Math.round(plan.qyPriceSgd * 100));
+    session.amount_total === Math.max(50, Math.round(plan.qyPriceSgd * 100)) &&
+    // Keep an idempotently recovered payment capability on the same bounded
+    // window that was approved before the readiness checks began.
+    session.expires_at === expiresAt;
 }
 
 export async function POST(req: Request) {
@@ -207,7 +210,7 @@ export async function POST(req: Request) {
         headers: { 'Cache-Control': 'no-store', 'Retry-After': '10' },
       });
     }
-    if (!matchesRequestedEsim(session, requestId, plan)) {
+    if (!matchesRequestedEsim(session, requestId, plan, expiresAt)) {
       // Do not update provenance on a session that belongs to a different
       // selection. The client will create a new idempotency key on its next
       // deliberate checkout attempt.
@@ -249,7 +252,7 @@ export async function POST(req: Request) {
         headers: { 'Cache-Control': 'no-store', 'Retry-After': '10' },
       });
     }
-    if (!matchesRequestedEsim(currentSession, requestId, plan)) {
+    if (!matchesRequestedEsim(currentSession, requestId, plan, expiresAt)) {
       return NextResponse.json({ error: 'This checkout attempt belongs to a different eSIM plan. Please try again.', checkoutRequestConflict: true }, {
         status: 409,
         headers: { 'Cache-Control': 'no-store' }

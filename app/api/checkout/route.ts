@@ -30,6 +30,7 @@ const globallyLimited=createGlobalAttemptLimiter();
 type RequestedPocketWifi = {
   country:string; start:string; end:string; days:number; daily:number;
   rentalBeforePromo:number; promoCode:string; promoDiscount:number; courierFee:number;
+  expiresAtSeconds:number;
 };
 
 // Stripe idempotency keys intentionally outlive a Checkout Session. A retry
@@ -58,7 +59,11 @@ function matchesRequestedPocketWifi(session:Stripe.Checkout.Session,requestId:st
     // Stripe cannot be re-signed and exposed when its amount field happens
     // to still match the requested booking.
     session.metadata?.checkout_amount_cents===String(expectedAmount) &&
-    session.currency?.toLowerCase()==='sgd' && session.amount_total===expectedAmount;
+    session.currency?.toLowerCase()==='sgd' && session.amount_total===expectedAmount &&
+    // The database reservation expires at this exact browser-attempt
+    // boundary. A Stripe URL that remained payable for longer could outlive
+    // its stock hold and sell the same physical router twice.
+    session.expires_at===requested.expiresAtSeconds;
 }
 
 async function activeStripeHolds(stripe:Stripe,stripeKey:string,start:string,end:string,requestId:string|null,requested:RequestedPocketWifi) {
@@ -234,7 +239,7 @@ export async function POST(req: Request) {
   const promo=applyPromoCents(rentalBeforePromo, body.promoCode);
   const rentalAmount=promo.amountCents;
   const courierFee=config.courierFeeCents;
-  const requested={country,start,end,days,daily,rentalBeforePromo,promoCode:promo.promoCode,promoDiscount:promo.discountCents,courierFee};
+  const requested={country,start,end,days,daily,rentalBeforePromo,promoCode:promo.promoCode,promoDiscount:promo.discountCents,courierFee,expiresAtSeconds};
   const holdState=await activeStripeHolds(stripe,key,start,end,requestId,requested);
   if(holdState.requestConflict) return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.',checkoutRequestConflict:true},{status:409,headers:{'Cache-Control':'no-store'}});
   const supabase=getSupabaseAdmin();
