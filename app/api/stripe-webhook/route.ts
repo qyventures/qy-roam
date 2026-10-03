@@ -21,7 +21,7 @@ import { metaPurchaseEventSourceUrl } from '@/lib/siteOrigin';
 import { fulfilmentRelayAcknowledged } from '@/lib/deliveryAcknowledgement';
 import { safeProviderDeliveryFailure, safeWebhookProcessingFailure } from '@/lib/deliveryFailure';
 import { nextRetryAttempt } from '@/lib/retryAttempt';
-import { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesEvent, stripeWebhookEventEnvelope } from '@/lib/stripeWebhookObject';
+import { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesEvent, stripeWebhookCheckoutSessionMatchesSnapshot, stripeWebhookEventEnvelope } from '@/lib/stripeWebhookObject';
 import { metaCapiPurchaseAcknowledged } from '@/lib/metaCapiAcknowledgement';
 import { stripeCheckoutEventStateIssue, type QyRoamCheckoutEventType } from '@/lib/stripeCheckoutEventState';
 import { contentLengthMatches, declaredContentLength } from '@/lib/contentLength';
@@ -883,7 +883,7 @@ export async function POST(req:Request){
   // integration defect must never let a different Session (or a different
   // Stripe mode) inherit this event's authority and reach persistence or
   // fulfilment side effects.
-  if(session.id!==eventSessionId||session.livemode!==event.livemode){
+  if(!stripeWebhookCheckoutSessionMatchesSnapshot(eventSession,session)){
     console.error('stripe_webhook_session_identity_mismatch',{
       eventId:stripeEventId,
       eventSessionId,

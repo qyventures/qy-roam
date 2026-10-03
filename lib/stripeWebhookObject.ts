@@ -28,10 +28,25 @@ export function stripeWebhookEventEnvelope(value: unknown): Stripe.Event | null 
 }
 
 export function stripeWebhookCheckoutSession(value: unknown): Stripe.Checkout.Session | null {
-  if (!plainRecord(value) || value.object !== 'checkout.session' || typeof value.id !== 'string' || typeof value.livemode !== 'boolean') {
+  if (!plainRecord(value) || value.object !== 'checkout.session' || typeof value.id !== 'string' ||
+    typeof value.livemode !== 'boolean' || typeof value.created !== 'number' ||
+    !Number.isSafeInteger(value.created) || value.created <= 0) {
     return null;
   }
   return value as unknown as Stripe.Checkout.Session;
+}
+
+// A fresh API read supplies current customer and payment fields, but it must
+// still describe the exact immutable Checkout Session named by the signed
+// webhook snapshot. The creation epoch is also the chronology anchor used to
+// reject payment or expiry events that predate their Session.
+export function stripeWebhookCheckoutSessionMatchesSnapshot(
+  signedSession: Stripe.Checkout.Session,
+  refreshedSession: Stripe.Checkout.Session,
+) {
+  return refreshedSession.id === signedSession.id &&
+    refreshedSession.livemode === signedSession.livemode &&
+    refreshedSession.created === signedSession.created;
 }
 
 // Stripe's Event envelope and its embedded object both carry `livemode`.

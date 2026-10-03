@@ -33,7 +33,7 @@ const { allowedFulfilmentStatuses, fulfilmentNotificationActionable, validFulfil
 const { MAX_POCKET_WIFI_INVENTORY, operationalConfig } = require('../lib/operationalConfig.ts');
 const { validStripeCheckoutSessionId } = require('../lib/stripeSessionId.ts');
 const { validStripeEventCreated, validStripePaymentEventCreated, STRIPE_EVENT_CREATED_MIN_SECONDS, STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS } = require('../lib/stripeEventCreated.ts');
-const { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesEvent, stripeWebhookEventEnvelope } = require('../lib/stripeWebhookObject.ts');
+const { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesEvent, stripeWebhookCheckoutSessionMatchesSnapshot, stripeWebhookEventEnvelope } = require('../lib/stripeWebhookObject.ts');
 const { isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError, InvalidRequestBodyLimitError, MAX_REQUEST_BODY_CHUNKS } = require('../lib/requestBody.ts');
 const { checkoutClientKey, createCheckoutAttemptLimiter, createGlobalAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { adminAuthClientKey, createFailedAdminAuthLimiter } = require('../lib/adminAuthRateLimit.ts');
@@ -569,11 +569,14 @@ test('Stripe webhook recovery records do not persist arbitrary upstream error te
 });
 
 test('webhook Checkout Session objects are structurally bounded before source metadata is trusted', () => {
-  const session = { object: 'checkout.session', id: 'cs_test_webhook_object', livemode: false, metadata: { source: 'qyroam.com' } };
+  const session = { object: 'checkout.session', id: 'cs_test_webhook_object', livemode: false, created: 1_700_000_000, metadata: { source: 'qyroam.com' } };
   assert.equal(stripeWebhookCheckoutSession(session), session);
   assert.equal(stripeWebhookCheckoutSession(null), null);
   assert.equal(stripeWebhookCheckoutSession([]), null);
-  assert.equal(stripeWebhookCheckoutSession({ object: 'checkout.session', id: 'cs_test_webhook_object', livemode: 'false' }), null);
+  assert.equal(stripeWebhookCheckoutSession({ ...session, livemode: 'false' }), null);
+  assert.equal(stripeWebhookCheckoutSession({ ...session, created: undefined }), null);
+  assert.equal(stripeWebhookCheckoutSession({ ...session, created: 1.5 }), null);
+  assert.equal(stripeWebhookCheckoutSession({ ...session, created: 0 }), null);
   assert.equal(stripeWebhookCheckoutSession({ object: 'payment_intent', id: 'cs_test_webhook_object', livemode: false }), null);
   assert.equal(hasQyRoamWebhookSource(session.metadata), true);
   assert.equal(hasQyRoamWebhookSource(null), false);
@@ -608,7 +611,7 @@ test('webhook event and embedded Checkout Session must agree on Stripe mode befo
     created: 1_700_000_000,
     data: { object: {} },
   };
-  const liveSession = { object: 'checkout.session', id: 'cs_live_mode_binding', livemode: true };
+  const liveSession = { object: 'checkout.session', id: 'cs_live_mode_binding', livemode: true, created: 1_700_000_000 };
   const testSession = { ...liveSession, id: 'cs_test_mode_binding', livemode: false };
   assert.equal(stripeWebhookCheckoutSessionMatchesEvent(event, liveSession), true);
   assert.equal(stripeWebhookCheckoutSessionMatchesEvent(event, testSession), false);
@@ -619,6 +622,20 @@ test('webhook event and embedded Checkout Session must agree on Stripe mode befo
   assert.ok(modeCheck >= 0 && modeCheck < sourceCheck, 'embedded mode must be bound before the source marker is trusted');
   assert.ok(modeCheck < claim, 'embedded mode mismatch must be rejected before the durable event claim');
   assert.match(webhookRoute, /stripe_webhook_checkout_session_mode_mismatch/);
+});
+
+test('refreshed Checkout Sessions retain the signed immutable creation identity', () => {
+  const signed = { object: 'checkout.session', id: 'cs_test_snapshot_binding', livemode: false, created: 1_700_000_000 };
+  assert.equal(stripeWebhookCheckoutSessionMatchesSnapshot(signed, { ...signed }), true);
+  assert.equal(stripeWebhookCheckoutSessionMatchesSnapshot(signed, { ...signed, id: 'cs_test_other' }), false);
+  assert.equal(stripeWebhookCheckoutSessionMatchesSnapshot(signed, { ...signed, livemode: true }), false);
+  assert.equal(stripeWebhookCheckoutSessionMatchesSnapshot(signed, { ...signed, created: signed.created + 1 }), false);
+
+  const refresh = webhookRoute.indexOf('refreshedSession=await stripe.checkout.sessions.retrieve(eventSessionId)');
+  const identity = webhookRoute.indexOf('stripeWebhookCheckoutSessionMatchesSnapshot(eventSession,session)', refresh);
+  const chronology = webhookRoute.indexOf('validStripePaymentEventCreated(event.created,session.created)', identity);
+  assert.ok(identity > refresh, 'the fresh API object must be bound to the signed Session snapshot');
+  assert.ok(chronology > identity, 'event chronology must use creation time only after snapshot identity is established');
 });
 
 test('lookalike payment sessions are ignored before persistence and durable event claims', () => {
@@ -3787,11 +3804,11 @@ test('Stripe terminal events refresh the Checkout Session before persisting or d
   const sessionIdBoundary = processing.indexOf('const eventSessionId=validStripeCheckoutSessionId(eventSession.id)');
   const refresh = processing.indexOf('refreshedSession=await stripe.checkout.sessions.retrieve(eventSessionId)');
   const refreshedObjectBoundary = processing.indexOf('const session=stripeWebhookCheckoutSession(refreshedSession)');
-  const identityBoundary = processing.indexOf('if(session.id!==eventSessionId||session.livemode!==event.livemode)');
+  const identityBoundary = processing.indexOf('if(!stripeWebhookCheckoutSessionMatchesSnapshot(eventSession,session))');
   const eventState = processing.indexOf('const eventStateIssue=stripeCheckoutEventStateIssue(event.type as QyRoamCheckoutEventType,eventStateSession)');
   assert.ok(sourceBoundary >= 0 && sessionIdBoundary > sourceBoundary && refresh > sessionIdBoundary, 'only QY Roam events with a valid bounded Session id should cause a Stripe Session refresh');
   assert.ok(refreshedObjectBoundary > refresh, 'the refreshed Stripe response must be validated before its fields are read');
-  assert.ok(identityBoundary > refreshedObjectBoundary, 'the refreshed Session must match the signed event identity and mode');
+  assert.ok(identityBoundary > refreshedObjectBoundary, 'the refreshed Session must match the signed event identity, mode, and creation epoch');
   assert.ok(eventState > identityBoundary, 'terminal-state validation must occur after the refreshed Session identity boundary');
   assert.match(processing, /stripe_webhook_invalid_session_id/);
   assert.match(processing, /stripe_webhook_session_retrieve_error/);
