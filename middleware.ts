@@ -11,6 +11,33 @@ const MAX_BASIC_AUTH_HEADER_LENGTH = 8_192;
 const MAX_BASIC_AUTH_DECODED_LENGTH = 4_096;
 const failedAdminAuthLimited = createFailedAdminAuthLimiter();
 
+// The success and booking pages retrieve a Stripe Checkout Session and can
+// also query the paid-order ledger. Unlike API checkout rate limits, this
+// boundary must run before a server component is rendered; otherwise even a
+// rejected page has already consumed provider work. Keep the limiter
+// allocation-free so rotating clients cannot turn its bookkeeping into a
+// second denial-of-service vector. This is an instance-local overload guard,
+// matching the standalone single-process production deployment.
+export const CONFIRMATION_RATE_LIMIT_WINDOW_MS = 60_000;
+export const CONFIRMATION_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS = 180;
+let confirmationRequestCount = 0;
+let confirmationWindowResetAt = 0;
+
+function confirmationGloballyLimited(now = Date.now()) {
+  if (!Number.isFinite(now)) now = Date.now();
+  if (confirmationWindowResetAt <= now) {
+    confirmationRequestCount = 1;
+    confirmationWindowResetAt = now + CONFIRMATION_RATE_LIMIT_WINDOW_MS;
+    return false;
+  }
+  confirmationRequestCount += 1;
+  return confirmationRequestCount > CONFIRMATION_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS;
+}
+
+function isConfirmationLookup(pathname: string) {
+  return pathname === '/success' || pathname === '/booking';
+}
+
 function safeEqual(a: string, b: string) {
   const maxLength = Math.max(a.length, b.length);
   let diff = a.length ^ b.length;
@@ -71,6 +98,24 @@ function isTrustedAdminMutation(req: NextRequest) {
 }
 
 export function middleware(req: NextRequest) {
+  if (isConfirmationLookup(req.nextUrl.pathname)) {
+    if (confirmationGloballyLimited()) {
+      return new NextResponse('Order confirmation is busy. Please try again shortly.', {
+        status: 429,
+        headers: {
+          'Cache-Control': 'no-store, max-age=0, private',
+          'Retry-After': String(Math.ceil(CONFIRMATION_RATE_LIMIT_WINDOW_MS / 1000)),
+          'X-Robots-Tag': 'noindex, nofollow, nosnippet',
+          // Both routes carry an unguessable Checkout Session reference in
+          // the query string. Preserve their normal no-referrer boundary on
+          // overload responses as well as successful renders.
+          'Referrer-Policy': 'no-referrer',
+        },
+      });
+    }
+    return NextResponse.next();
+  }
+
   if (!req.nextUrl.pathname.startsWith('/admin') && !req.nextUrl.pathname.startsWith('/api/admin')) {
     return NextResponse.next();
   }
@@ -126,4 +171,4 @@ export function middleware(req: NextRequest) {
   });
 }
 
-export const config = { matcher: ['/admin/:path*', '/api/admin/:path*'] };
+export const config = { matcher: ['/admin/:path*', '/api/admin/:path*', '/success', '/booking'] };

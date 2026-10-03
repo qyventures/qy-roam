@@ -1506,6 +1506,15 @@ test('provider-backed public routes retain an aggregate overload ceiling across 
   assert.match(availabilityRoute, /limited\(req\)\s*\|\|\s*globallyLimited\(\)/);
 });
 
+test('customer confirmation lookups are throttled before provider-backed server rendering', () => {
+  assert.match(middleware, /CONFIRMATION_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS\s*=\s*180/);
+  assert.match(middleware, /pathname === '\/success' \|\| pathname === '\/booking'/);
+  assert.match(middleware, /if \(confirmationGloballyLimited\(\)\)[\s\S]*?status: 429/);
+  assert.match(middleware, /'Cache-Control': 'no-store, max-age=0, private'/);
+  assert.match(middleware, /'Referrer-Policy': 'no-referrer'/);
+  assert.match(middleware, /matcher: \['\/admin\/:path\*', '\/api\/admin\/:path\*', '\/success', '\/booking'\]/);
+});
+
 test('checkout attempt rate limiting keeps per-client limits while bounding unique client state', () => {
   const limit = createCheckoutAttemptLimiter(1_000, 2, 3);
   const requestFor = (ip) => new Request('https://qyroam.test/api/checkout', { headers: { 'x-real-ip': ip } });
