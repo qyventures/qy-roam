@@ -17,6 +17,7 @@ import { checkoutAttemptExpiresAt, MAX_STRIPE_HOLD_SCAN_PAGES, STRIPE_HOLD_SCAN_
 import { checkoutSiteOrigin } from '@/lib/siteOrigin';
 import { pocketWifiRentalCents } from '@/lib/pocketWifiPricing';
 import { safeStripeCheckoutUrl } from '@/lib/stripeCheckoutUrl';
+import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
 import { stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhookObject';
 
@@ -294,9 +295,9 @@ export async function POST(req: Request) {
       // The signed terminal webhook normally removes this hold. Keep it linked
       // if order persistence is still catching up, or remove only this exact
       // session's hold once the paid order is durable.
-      const order=await supabase.from('orders').select('payment_status').eq('stripe_session_id',existing.id).maybeSingle();
+      const order=await supabase.from('orders').select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end').eq('stripe_session_id',existing.id).maybeSingle();
       if(order.error) throw order.error;
-      if(order.data?.payment_status==='paid'){
+      if(durableOrderMatchesPaidSession(order.data,existing,'pocket_wifi')){
         const released=await supabase.from('checkout_reservations').delete()
           .eq('checkout_request_id',requestId)
           .eq('stripe_session_id',existing.id);
@@ -460,9 +461,13 @@ export async function POST(req: Request) {
   // order. If persistence is still catching up, link the reservation first so
   // the terminal webhook can release it once it records the paid booking.
   if(currentSession.status==='complete'&&currentSession.payment_status==='paid'){
-    const order=await supabase.from('orders').select('payment_status').eq('stripe_session_id',currentSession.id).maybeSingle();
+    const order=await supabase.from('orders').select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end').eq('stripe_session_id',currentSession.id).maybeSingle();
     if(order.error) throw order.error;
-    if(order.data?.payment_status==='paid'){
+    // Only an exact durable commercial snapshot can turn an idempotent
+    // checkout replay into a completed-order response. A mismatched imported
+    // or repaired row must remain on the safe reconciliation path instead of
+    // contradicting the stricter success and booking pages.
+    if(durableOrderMatchesPaidSession(order.data,currentSession,'pocket_wifi')){
       // The normal terminal webhook releases this hold. A lost response can
       // make this replay observe the paid order after persistence but before
       // that cleanup finished. Release only the reservation bound to this

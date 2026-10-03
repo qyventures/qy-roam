@@ -2007,7 +2007,7 @@ test('eSIM paid checkout recovery waits for the durable paid order ledger', () =
   const paidBranch = esimCheckoutRoute.indexOf("if (currentSession.status === 'complete' && currentSession.payment_status === 'paid')");
   const completedResponse = esimCheckoutRoute.indexOf('{ completed: true, sessionId: currentSession.id }', paidBranch);
   const orderLookup = esimCheckoutRoute.indexOf(".eq('stripe_session_id', currentSession.id)", paidBranch);
-  const paidOrderGuard = esimCheckoutRoute.indexOf("order.data?.payment_status !== 'paid'", paidBranch);
+  const paidOrderGuard = esimCheckoutRoute.indexOf("!durableOrderMatchesPaidSession(order.data, currentSession, 'esim')", paidBranch);
   assert.ok(paidBranch > -1 && orderLookup > paidBranch && paidOrderGuard > orderLookup && completedResponse > paidOrderGuard,
     'eSIM recovery must verify the durable paid order before reporting completion');
   assert.match(esimCheckoutRoute.slice(paidBranch, completedResponse), /paymentPending: true/);
@@ -2597,12 +2597,12 @@ test('Pocket WiFi paid checkout recovery waits for the durable paid order ledger
   const createEnd = wifiCheckoutRoute.indexOf("if(currentSession.status==='expired')", createStart);
   const createBranch = wifiCheckoutRoute.slice(createStart, createEnd);
 
-  for (const [name, branch, sessionId] of [
-    ['open-session replay', replayBranch, 'existing.id'],
-    ['idempotent create replay', createBranch, 'currentSession.id'],
+  for (const [name, branch, sessionId, sessionObject] of [
+    ['open-session replay', replayBranch, 'existing.id', 'existing'],
+    ['idempotent create replay', createBranch, 'currentSession.id', 'currentSession'],
   ]) {
     const orderLookup = branch.indexOf(`.eq('stripe_session_id',${sessionId})`);
-    const durableGuard = branch.indexOf("order.data?.payment_status==='paid'");
+    const durableGuard = branch.indexOf(`durableOrderMatchesPaidSession(order.data,${sessionObject},'pocket_wifi')`);
     const pendingResponse = branch.indexOf('paymentPending:true');
     const completedResponse = branch.indexOf('completed:true');
     assert.ok(orderLookup > -1 && durableGuard > orderLookup && pendingResponse > durableGuard && completedResponse > pendingResponse,
@@ -2642,7 +2642,8 @@ test('paid Pocket WiFi checkout replays release only their own linked hold', () 
   // A response can be lost after the webhook persists payment but before it
   // removes the temporary reservation. The idempotent replay must clear that
   // stale hold promptly, without releasing another session's reservation.
-  assert.match(wifiCheckoutRoute, /if\(order\.data\?\.payment_status==='paid'\)\{[\s\S]*?\.eq\('checkout_request_id',requestId\)\s*\.eq\('stripe_session_id',currentSession\.id\)/);
+  assert.match(wifiCheckoutRoute, /if\(durableOrderMatchesPaidSession\(order\.data,currentSession,'pocket_wifi'\)\)\{[\s\S]*?\.eq\('checkout_request_id',requestId\)\s*\.eq\('stripe_session_id',currentSession\.id\)/);
+  assert.match(wifiCheckoutRoute, /if\(durableOrderMatchesPaidSession\(order\.data,existing,'pocket_wifi'\)\)\{[\s\S]*?\.eq\('checkout_request_id',requestId\)\s*\.eq\('stripe_session_id',existing\.id\)/);
 });
 
 test('Pocket WiFi payment URLs require a durable matching reservation link', () => {
@@ -5114,4 +5115,20 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
   }
   assert.match(successPage, /<MetaPurchase sessionId=\{sessionId\} orderPersisted=\{orderPersisted\}/);
   assert.match(bookingPage, /const order = orderLifecycleValid \? storedOrder : null/);
+});
+
+test('paid checkout replays require the same exact durable commercial snapshot as confirmation', () => {
+  for (const route of [esimCheckoutRoute, wifiCheckoutRoute]) {
+    assert.match(route, /import \{ durableOrderMatchesPaidSession \} from '@\/lib\/durableOrderSnapshot';/);
+    assert.match(route, /select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end'\)/);
+  }
+  assert.match(esimCheckoutRoute, /!durableOrderMatchesPaidSession\(order\.data, currentSession, 'esim'\)/);
+  assert.match(wifiCheckoutRoute, /durableOrderMatchesPaidSession\(order\.data,currentSession,'pocket_wifi'\)/);
+
+  // A boolean paid flag is not sufficient: the customer-facing completed
+  // response must stay behind the shared Stripe-to-order snapshot join.
+  const esimPaidReplay = esimCheckoutRoute.slice(esimCheckoutRoute.indexOf("currentSession.status === 'complete' && currentSession.payment_status === 'paid'"));
+  const wifiPaidReplay = wifiCheckoutRoute.slice(wifiCheckoutRoute.indexOf("currentSession.status==='complete'&&currentSession.payment_status==='paid'"));
+  assert.doesNotMatch(esimPaidReplay.slice(0, esimPaidReplay.indexOf('completed: true')), /order\.data\?\.payment_status\s*!==\s*'paid'/);
+  assert.doesNotMatch(wifiPaidReplay.slice(0, wifiPaidReplay.indexOf('completed:true')), /order\.data\?\.payment_status\s*===\s*'paid'/);
 });

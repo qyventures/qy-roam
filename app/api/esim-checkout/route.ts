@@ -13,6 +13,7 @@ import { checkoutAttemptExpiresAt } from '@/lib/checkoutExpiry';
 import { checkoutSiteOrigin } from '@/lib/siteOrigin';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { safeStripeCheckoutUrl } from '@/lib/stripeCheckoutUrl';
+import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
 import { stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhookObject';
 
@@ -283,11 +284,15 @@ export async function POST(req: Request) {
       if (!supabase) throw new Error('Order persistence unavailable');
       const order = await supabase
         .from('orders')
-        .select('payment_status')
+        .select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end')
         .eq('stripe_session_id', currentSession.id)
         .maybeSingle();
       if (order.error) throw order.error;
-      if (order.data?.payment_status !== 'paid') {
+      // A row keyed by this Session is not enough to prove that the paid
+      // commercial snapshot became durable. Imports and service-role repairs
+      // can create an internally valid but mismatched row; use the same exact
+      // join as the customer confirmation pages before reporting completion.
+      if (!durableOrderMatchesPaidSession(order.data, currentSession, 'esim')) {
         return NextResponse.json({ error: 'Your payment is confirmed and your order is still being recorded. Please wait a moment and try again.', paymentPending: true }, {
           status: 409,
           headers: { 'Cache-Control': 'no-store', 'Retry-After': '3' },
