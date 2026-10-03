@@ -1,5 +1,6 @@
 import type Stripe from 'stripe';
 import type { QyRoamProductType } from './qyRoamSession';
+import { getEsimPlan } from './esimPlans';
 
 export type DurableOrderSnapshot = {
   payment_status?: unknown;
@@ -51,8 +52,17 @@ export function durableOrderMatchesPaidSession(
   }
 
   if (productType === 'esim') {
+    // Checkout Sessions created during the rollout of data-allowance
+    // snapshots can legitimately omit this metadata field. The webhook uses
+    // the then-current catalogue plan as the entitlement source for exactly
+    // those validated sessions, so customer confirmation must reconcile
+    // against the same value. A retired plan cannot take this fallback path:
+    // validateQyRoamSession requires retired Sessions to carry their complete
+    // signed historical entitlement snapshot.
+    const expectedDataAllowance = session.metadata?.data_allowance ??
+      getEsimPlan(session.metadata?.plan_id)?.data ?? null;
     return order.plan_id === (session.metadata?.plan_id || null) &&
-      order.data_allowance === (session.metadata?.data_allowance || null);
+      order.data_allowance === expectedDataAllowance;
   }
 
   return order.travel_start === (session.metadata?.start || null) &&

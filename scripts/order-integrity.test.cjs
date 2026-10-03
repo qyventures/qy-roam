@@ -4925,6 +4925,40 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
     { ...esimSession, amount_total: 481 },
     'esim',
   ), true);
+  // Sessions opened during the data-allowance metadata rollout are accepted
+  // against a current catalogue plan. Webhook persistence fills that same
+  // catalogue entitlement, so confirmation must not leave a genuine paid
+  // order permanently stuck at "finalising" merely because the older Stripe
+  // Session has no allowance snapshot.
+  const currentPlan = ESIM_PLANS[0];
+  assert.ok(currentPlan);
+  const legacyEsimSession = {
+    ...esimSession,
+    metadata: {
+      ...esimSession.metadata,
+      plan_id: currentPlan.id,
+      plan_name: `${currentPlan.destination} · ${currentPlan.days} days`,
+      country: currentPlan.destination,
+    },
+  };
+  delete legacyEsimSession.metadata.data_allowance;
+  const legacyEsimOrder = {
+    ...esimOrder,
+    plan_id: currentPlan.id,
+    plan_name: `${currentPlan.destination} · ${currentPlan.days} days`,
+    data_allowance: currentPlan.data,
+    country: currentPlan.destination,
+  };
+  assert.equal(durableOrderMatchesPaidSession(
+    legacyEsimOrder,
+    legacyEsimSession,
+    'esim',
+  ), true);
+  assert.equal(durableOrderMatchesPaidSession(
+    { ...legacyEsimOrder, data_allowance: 'Different data package' },
+    legacyEsimSession,
+    'esim',
+  ), false);
   for (const patch of [
     { payment_status: 'unpaid' },
     { product_type: 'pocket_wifi' },
