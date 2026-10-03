@@ -304,7 +304,7 @@ test('durable orders accept only canonical Stripe or protected manual-sale ident
     'checkout readiness must reject a deployed schema missing the order identity boundary',
   );
   assert.match(adminOpsRoute, /`manual_\$\{crypto\.createHash\('sha256'\)\.update\(reference\)\.digest\('hex'\)\.slice\(0, 48\)\}`/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 13/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 14/);
 });
 
 test('manual sales cannot create permanent unpaid Pocket WiFi capacity holds', () => {
@@ -335,7 +335,7 @@ test('Pocket WiFi reservation authority validates its complete capacity snapshot
   assert.match(schema, /hold_id is null or hold_id !~ '\^\[A-Za-z0-9_\-\]\{16,80\}\$'/);
   assert.match(schema, /cardinality\(p_stripe_hold_request_ids\) <> \(\s*select count\(distinct hold_id\)/);
   assert.match(schema, /v_existing\.expires_at <> p_expires_at/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 13/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 14/);
 });
 
 test('Pocket WiFi deployment inventory cannot exceed the database reservation boundary', () => {
@@ -1807,11 +1807,11 @@ test('post-payment readiness checks every webhook-persisted delivery field and p
 test('checkout readiness rejects an older order-integrity schema with matching object names', () => {
   // The compatibility marker covers function bodies and privilege boundaries
   // that object-presence probes cannot distinguish during a rolling deploy.
-  assert.match(productionReadiness, /const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 13/);
+  assert.match(productionReadiness, /const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 14/);
   assert.match(productionReadiness, /database\.rpc\('qy_order_integrity_schema_version', \{\}\)\.abortSignal\(signal\)/);
   assert.match(productionReadiness, /versionProbe\.data !== REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION/);
   assert.match(productionReadiness, /if \(!await hasCurrentOrderIntegritySchema\(database, signal\)\) return false/);
-  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 13;/);
+  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 14;/);
   assert.match(schema, /grant execute on function public\.qy_order_integrity_schema_version\(\) to service_role/);
   assert.ok(
     schema.indexOf('create or replace function public.qy_order_integrity_schema_version') >
@@ -2583,8 +2583,13 @@ test('manual sales use one retry-safe payment or sales reference instead of mint
   assert.match(adminOpsRoute, /createHash\('sha256'\)/);
   assert.match(adminOpsRoute, /This payment or sales reference already belongs to different order details/);
   assert.doesNotMatch(adminOpsRoute, /Math\.random\(\)\.toString\(36\)/);
-  assert.match(schema, /if found and p_stripe_session_id like 'manual_%' then/);
-  assert.match(schema, /manual order reference already belongs to different order details/);
+  const manualWifiPersistence = schema.slice(
+    schema.indexOf('create or replace function public.qy_create_manual_pocket_wifi_order'),
+    schema.indexOf('revoke all on function public.qy_create_manual_pocket_wifi_order'),
+  );
+  assert.match(manualWifiPersistence, /where stripe_session_id = p_stripe_session_id\s+for update;/);
+  assert.match(manualWifiPersistence, /if found then[\s\S]*manual order reference already belongs to different order details/);
+  assert.match(manualWifiPersistence, /return v_order;/);
 });
 
 test('manual eSIM orders retain the same safe email delivery boundary as Checkout', () => {
@@ -2735,8 +2740,8 @@ test('service-role clients cannot erase the paid-order idempotency audit trail',
     schema,
     /revoke delete, truncate\s+on table public\.orders, public\.stripe_events,\s+public\.fulfilment_notifications, public\.meta_purchase_deliveries\s+from service_role;/,
   );
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 13/);
-  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 13;/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 14/);
+  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 14;/);
 });
 
 test('eSIM entitlement snapshots stay bounded and printable at the database boundary', () => {
@@ -2749,14 +2754,32 @@ test('eSIM entitlement snapshots stay bounded and printable at the database boun
   assert.match(schema, /if coalesce\(length\(p_plan_name\), 0\) not between 1 and 200[\s\S]*?raise exception 'invalid eSIM plan name'/);
   assert.match(schema, /if coalesce\(length\(p_data_allowance\), 0\) not between 1 and 200[\s\S]*?raise exception 'invalid eSIM data allowance'/);
   assert.match(schema, /if coalesce\(length\(p_country\), 0\) not between 1 and 100[\s\S]*?raise exception 'invalid eSIM destination'/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 13/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 14/);
+});
+
+test('Stripe order persistence RPCs cannot accept manual identities or cross product types', () => {
+  const esimPersistence = schema.slice(
+    schema.indexOf('create or replace function public.qy_persist_stripe_esim_order'),
+    schema.indexOf('revoke all on function public.qy_persist_stripe_esim_order'),
+  );
+  const wifiPersistence = schema.slice(
+    schema.indexOf('create or replace function public.qy_persist_stripe_pocket_wifi_order'),
+    schema.indexOf('revoke all on function public.qy_persist_stripe_pocket_wifi_order'),
+  );
+  const canonicalStripeIdentity = /p_stripe_session_id !~ '\^cs_\(test\|live\)_\[A-Za-z0-9\]\+\$' then raise exception 'invalid Stripe session id'/;
+
+  assert.match(esimPersistence, canonicalStripeIdentity);
+  assert.match(wifiPersistence, canonicalStripeIdentity);
+  assert.match(esimPersistence, /v_order\.product_type <> 'esim'[\s\S]*raise exception 'stored order product does not match eSIM checkout'/);
+  assert.match(wifiPersistence, /v_order\.product_type <> 'pocket_wifi'[\s\S]*raise exception 'stored order product does not match Pocket WiFi checkout'/);
+  assert.doesNotMatch(wifiPersistence, /p_stripe_session_id like 'manual_%'/);
 });
 
 test('every paid eSIM order requires a database-enforced delivery email', () => {
   assert.match(schema, /orders_paid_esim_delivery_email_check/);
   assert.match(schema, /orders_paid_esim_delivery_email_check check \([\s\S]*?payment_status is distinct from 'paid' or[\s\S]*?product_type <> 'esim' or[\s\S]*?email is not null and[\s\S]*?email = btrim\(email\) and[\s\S]*?length\(email\) <= 254 and[\s\S]*?email ~ '\^\[\^\[:space:\]@\]\+@\[\^\[:space:\]@\]\+\\\.\[\^\[:space:\]@\]\+\$'/);
   assert.match(adminOpsRoute, /product === 'esim' && !isSafeSmtpMailbox\(row\.email \|\| undefined\)/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 13/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 14/);
 });
 
 test('paid-order measurement consent cannot be broadened after checkout', () => {

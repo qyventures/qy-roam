@@ -1488,6 +1488,12 @@ declare
   v_fulfilment text;
 begin
   if coalesce(length(trim(p_stripe_session_id)), 0) = 0 then raise exception 'Stripe session id is required'; end if;
+  -- This RPC is exclusively for Stripe-authenticated digital orders. Keep
+  -- the provider identity boundary here as well as in the webhook and orders
+  -- constraint: the latter also permits protected manual Pocket WiFi sale
+  -- references, which must never be accepted as an eSIM entitlement id by a
+  -- service-role recovery script or future worker.
+  if p_stripe_session_id !~ '^cs_(test|live)_[A-Za-z0-9]+$' then raise exception 'invalid Stripe session id'; end if;
   if p_payment_status not in ('paid', 'unpaid') then raise exception 'unsupported Stripe payment status'; end if;
   if p_payment_failed and p_payment_status <> 'unpaid' then raise exception 'failed payment must be unpaid'; end if;
   if v_paid and p_payment_confirmed_at is null then raise exception 'paid Stripe order requires a payment confirmation time'; end if;
@@ -1612,24 +1618,12 @@ begin
   perform pg_advisory_xact_lock(hashtext('qy_roam_pocket_wifi_checkout'));
   select * into v_order from public.orders where stripe_session_id = p_stripe_session_id for update;
 
-  -- Offline sales use a deterministic, hashed internal id derived from the
-  -- operator's payment/sales reference. Treat a retry of the same sale as an
-  -- idempotent read, never as permission to rewrite a paid rental or reserve
-  -- a second overlapping router. Different details under one reference need
-  -- explicit operational reconciliation instead of an implicit overwrite.
-  if found and p_stripe_session_id like 'manual_%' then
-    if v_order.payment_status is distinct from p_payment_status
-      or v_order.customer_name is distinct from p_customer_name
-      or v_order.email is distinct from p_email
-      or v_order.phone is distinct from p_phone
-      or v_order.amount_sgd is distinct from p_amount_sgd
-      or v_order.plan_name is distinct from p_plan_name
-      or v_order.country is distinct from p_country
-      or v_order.travel_start is distinct from p_travel_start
-      or v_order.travel_end is distinct from p_travel_end then
-      raise exception 'manual order reference already belongs to different order details';
-    end if;
-    return v_order;
+  -- A Checkout Session identifies exactly one product. Although the public
+  -- webhook validates signed product metadata, keep this invariant inside
+  -- the privileged write transaction too: a recovery script must not be able
+  -- to reuse an existing eSIM Session as a Pocket WiFi capacity commitment.
+  if found and v_order.product_type <> 'pocket_wifi' then
+    raise exception 'stored order product does not match Pocket WiFi checkout';
   end if;
 
   -- An out-of-order failed event must never downgrade an already-paid order.
@@ -1726,10 +1720,9 @@ immutable
 security definer
 set search_path = pg_catalog
 as $$
-  -- Version 13 certifies both the immutable audit boundaries and the
-  -- reservation handoff rule, plus the shared 10,000-unit capacity ceiling
-  -- on public reservations and protected manual Pocket WiFi sales.
-  select 13;
+  -- Version 14 additionally certifies that both Stripe persistence RPCs
+  -- enforce canonical Checkout identities and cannot cross product types.
+  select 14;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
