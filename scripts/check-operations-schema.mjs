@@ -18,7 +18,7 @@ assert.equal(applicationSchemaVersion, databaseSchemaVersion, 'Application and d
 // This guard runs without production database credentials, so it cannot ask
 // PostgreSQL to compile the migration. Still reject common damaging classes
 // of hand-edited PL/pgSQL breakage before deployment: an unterminated
-// dollar-quoted function body, an unbalanced IF/END IF block, and unmatched
+// dollar-quoted function body, unbalanced control-flow blocks, and unmatched
 // parentheses. Presence-only checks below would otherwise pass these and leave
 // a clean Supabase install failing partway through schema application.
 export function validatePlpgsqlStructure(sql) {
@@ -35,12 +35,17 @@ export function validatePlpgsqlStructure(sql) {
     blocks.push({
       prefix: sql.slice(Math.max(0, opening.start - 300), opening.start),
       body: sql.slice(opening.bodyStart, closingAt),
+      // PostgreSQL accepts function attributes on either side of AS. Retain
+      // the bounded text after the body so `AS $$...$$ LANGUAGE plpgsql`
+      // receives the same release validation as this schema's current
+      // `LANGUAGE plpgsql AS $$...$$` convention.
+      suffix: sql.slice(closingAt + opening.delimiter.length, closingAt + opening.delimiter.length + 300),
     });
     dollarDelimiter.lastIndex = closingAt + opening.delimiter.length;
   }
 
-  for (const { prefix, body } of blocks) {
-    if (!/language\s+plpgsql/i.test(prefix)) continue;
+  for (const { prefix, body, suffix } of blocks) {
+    if (!/language\s+plpgsql/i.test(prefix) && !/^\s*language\s+plpgsql\b/i.test(suffix)) continue;
     // Remove text that cannot contain control-flow tokens. PostgreSQL strings
     // escape a quote by doubling it; comments can contain arbitrary examples.
     const code = body
@@ -59,6 +64,18 @@ export function validatePlpgsqlStructure(sql) {
       }
     }
     assert.equal(depth, 0, 'PL/pgSQL function contains an IF without a matching END IF');
+
+    const loopTokens = code.match(/\bend\s+loop\b|\bloop\b/gi) || [];
+    depth = 0;
+    for (const token of loopTokens) {
+      if (/^end/i.test(token)) {
+        depth -= 1;
+        assert.ok(depth >= 0, 'PL/pgSQL function contains END LOOP without a matching LOOP');
+      } else {
+        depth += 1;
+      }
+    }
+    assert.equal(depth, 0, 'PL/pgSQL function contains a LOOP without a matching END LOOP');
 
     // A duplicated condition terminator such as `) then` is not visible to
     // the keyword-only check above. Track parentheses after stripping strings
@@ -103,6 +120,17 @@ assert.throws(
     $$;
   `),
   /unmatched closing parenthesis/,
+);
+assert.throws(
+  () => validatePlpgsqlStructure(`
+    create function public.example() returns void as $$
+    begin
+      loop
+        return;
+    end;
+    $$ language plpgsql;
+  `),
+  /LOOP without a matching END LOOP/,
 );
 
 // PostgreSQL rejects an ON CONFLICT update that assigns the same target

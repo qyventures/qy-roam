@@ -4881,6 +4881,33 @@ test('deployment rejects structurally broken PL/pgSQL before schema application'
   `), /IF without a matching END IF/);
   assert.throws(() => validatePlpgsqlStructure('create function public.example() returns void language plpgsql as $$ begin return; end;'), /Unterminated SQL dollar-quoted block/);
   assert.throws(() => validatePlpgsqlStructure('create function public.example() returns void language plpgsql as $body$ begin return; end; $$;'), /Unterminated SQL dollar-quoted block/);
+  // PostgreSQL permits LANGUAGE after AS. This form must not bypass the
+  // release guard merely because the repository currently prefers the
+  // equivalent pre-body clause order.
+  assert.throws(() => validatePlpgsqlStructure(`
+    create function public.example() returns void as $$
+    begin
+      if true then
+        return;
+    end;
+    $$ language plpgsql;
+  `), /IF without a matching END IF/);
+  assert.throws(() => validatePlpgsqlStructure(`
+    create function public.example() returns void language plpgsql as $$
+    begin
+      loop
+        return;
+    end;
+    $$;
+  `), /LOOP without a matching END LOOP/);
+  assert.throws(() => validatePlpgsqlStructure(`
+    create function public.example() returns void as $$
+    begin
+      end loop;
+      return;
+    end;
+    $$ language plpgsql;
+  `), /END LOOP without a matching LOOP/);
   assert.throws(() => validatePlpgsqlStructure(`
     create function public.example() returns trigger language plpgsql as $$
     begin
