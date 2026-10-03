@@ -297,6 +297,18 @@ create trigger qy_require_paid_order_cancellation_reason
 before update of fulfilment_status, notes on public.orders
 for each row execute function public.qy_require_paid_order_cancellation_reason();
 
+-- The transition trigger above requires reconciliation evidence when a paid
+-- order first becomes cancelled. Preserve that evidence afterward too: a
+-- later service-role notes update must not erase the reason while leaving the
+-- financial order in its cancelled state. NOT VALID leaves historical
+-- exceptions visible while protecting every newly inserted or updated row.
+alter table public.orders drop constraint if exists orders_paid_cancellation_reason_check;
+alter table public.orders add constraint orders_paid_cancellation_reason_check check (
+  payment_status is distinct from 'paid' or
+  fulfilment_status <> 'cancelled' or
+  coalesce(notes, '') ~ '(^|\n)Cancellation reason: [^[:cntrl:]]{5,500}$'
+) not valid;
+
 -- The admin API and webhook each validate the lifecycle they write, but the
 -- service role is also used for migrations and operational recovery. Keep the
 -- product/status boundary in the database so a direct write cannot turn an
@@ -1131,10 +1143,11 @@ as $$
       'orders_paid_amount_positive_check',
       'orders_paid_stripe_fulfilment_details_check',
       'orders_paid_esim_delivery_email_check',
+      'orders_paid_cancellation_reason_check',
       'orders_pocket_wifi_dispatch_evidence_check',
       'orders_pocket_wifi_return_evidence_check',
       'orders_session_id_format_check'
-    )) = 15 and
+    )) = 16 and
     (select count(*) from pg_constraint where conrelid = 'public.stripe_events'::regclass and conname in (
       'stripe_events_attempts_check',
       'stripe_events_event_id_check',
@@ -1781,11 +1794,11 @@ immutable
 security definer
 set search_path = pg_catalog
 as $$
-  -- Version 17 additionally certifies that a closed eSIM retains the same
-  -- mandatory, immutable delivery evidence as the fulfilled hand-off state.
+  -- Version 18 additionally certifies that a paid cancellation cannot lose
+  -- its operator-authored reconciliation reason through a later notes update.
   -- Earlier versions also certify product-specific evidence boundaries,
   -- monotonic delivery retry counts and claim-owned attempt timestamps.
-  select 17;
+  select 18;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
