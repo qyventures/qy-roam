@@ -712,6 +712,14 @@ export async function POST(req:Request){
   if(!hasIdentityContentEncoding(req.headers.get('content-encoding'))) {
     return webhookJson({error:'Unsupported webhook content encoding'},{status:415});
   }
+  // Reject requests that cannot possibly be authenticated before reserving
+  // the fixed 1 MB payload buffer or waiting on a slow request body. Signature
+  // verification still happens only after reading the exact raw bytes, but a
+  // missing, oversized, or control-character-bearing header has no valid
+  // Stripe interpretation and must not be able to occupy a webhook worker for
+  // the full body deadline.
+  const stripeSignature=validStripeSignatureHeader(req.headers.get('stripe-signature'));
+  if(!stripeSignature) return webhookJson({error:'Invalid signature'},{status:400});
   const stripe=createStripeClient(key); let event:Stripe.Event;
   let payload:Buffer;
   try { payload=await readStripeWebhookBody(req); }
@@ -720,8 +728,6 @@ export async function POST(req:Request){
     if (error instanceof StripeWebhookBodyTimeoutError) return webhookJson({error:'Webhook payload timed out'},{status:408});
     return webhookJson({error:'Invalid webhook payload'},{status:400});
   }
-  const stripeSignature=validStripeSignatureHeader(req.headers.get('stripe-signature'));
-  if(!stripeSignature) return webhookJson({error:'Invalid signature'},{status:400});
   try{event=stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret);}catch{return webhookJson({error:'Invalid signature'},{status:400});}
   const webhookEvent=stripeWebhookEventEnvelope(event);
   if(!webhookEvent) {

@@ -3978,6 +3978,17 @@ test('Stripe webhook bounds raw payload memory before signature verification', (
   assert.ok(signatureValidation >= 0 && signatureCheck > signatureValidation, 'Stripe signature header must be bounded before verification');
 });
 
+test('Stripe webhook rejects unusable signature headers before reading request bodies', () => {
+  const signatureBoundary = webhookRoute.indexOf("const stripeSignature=validStripeSignatureHeader(req.headers.get('stripe-signature'))");
+  const bodyRead = webhookRoute.indexOf('payload=await readStripeWebhookBody(req)');
+  const signatureVerification = webhookRoute.indexOf('stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret)');
+
+  assert.ok(signatureBoundary > -1);
+  assert.ok(bodyRead > signatureBoundary);
+  assert.ok(signatureVerification > bodyRead);
+  assert.match(webhookRoute, /if\(!stripeSignature\) return webhookJson\(\{error:'Invalid signature'\},\{status:400\}\)/);
+});
+
 test('Stripe webhook rejects encoded payloads before reading or signature verification', () => {
   // The bounded reader compares Content-Length with the exact bytes supplied
   // to Stripe's signature verifier. Compression makes that relationship
