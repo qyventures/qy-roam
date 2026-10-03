@@ -60,10 +60,23 @@ export function parseCustomerCheckoutResponse(value: unknown, responseStatus: nu
   // worker, or future generic 4xx/5xx response must not be able to copy one
   // of these fields into its body and make the next click create a second
   // payable Session under a fresh Stripe idempotency key.
-  const mayReplaceAttempt = responseStatus === 409;
+  const error = safeCustomerError(input.error);
+  const requestedReplacementReasons = [
+    input.checkoutExpired === true,
+    input.checkoutRequestConflict === true,
+    input.paymentFailed === true,
+  ];
+  // These states are mutually exclusive outcomes of one server-side
+  // reconciliation. Require exactly one deliberate reason and the bounded
+  // customer-facing explanation emitted with it before discarding the
+  // browser's durable Stripe idempotency key. A malformed/stale 409 that
+  // combines flags (or carries only a flag) must remain safely retryable with
+  // the original attempt instead of opening a second payable Session.
+  const mayReplaceAttempt = responseStatus === 409 && Boolean(error) &&
+    requestedReplacementReasons.filter(Boolean).length === 1;
   return {
     ...empty,
-    error: safeCustomerError(input.error),
+    error,
     checkoutExpired: mayReplaceAttempt && input.checkoutExpired === true,
     checkoutRequestConflict: mayReplaceAttempt && input.checkoutRequestConflict === true,
     paymentFailed: mayReplaceAttempt && input.paymentFailed === true,

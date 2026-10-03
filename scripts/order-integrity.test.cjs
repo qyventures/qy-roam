@@ -351,6 +351,21 @@ test('storefront checkout responses cannot redirect through malformed runtime da
   assert.equal(failure.checkoutExpired, false);
   assert.equal(parseCustomerCheckoutResponse({ error: 'bad\nheader' }, 409).error, null);
 
+  // A request id is the durable Stripe idempotency boundary. Never rotate it
+  // from an incoherent conflict payload, even when the transport status alone
+  // looks like one of the checkout route's deliberate recovery responses.
+  for (const malformedConflict of [
+    { checkoutExpired: true },
+    { error: 'Conflicting recovery state.', checkoutExpired: true, paymentFailed: true },
+    { error: 'Conflicting recovery state.', checkoutExpired: true, checkoutRequestConflict: true },
+    { error: 'Conflicting recovery state.', checkoutRequestConflict: true, paymentFailed: true },
+  ]) {
+    const parsed = parseCustomerCheckoutResponse(malformedConflict, 409);
+    assert.equal(parsed.checkoutExpired, false);
+    assert.equal(parsed.checkoutRequestConflict, false);
+    assert.equal(parsed.paymentFailed, false);
+  }
+
   // Generic failures may surface safe customer copy, but cannot rotate the
   // idempotency key even when an intermediary copies conflict-shaped fields.
   for (const responseStatus of [400, 401, 403, 404, 408, 429, 500, 502, 503, 504]) {
