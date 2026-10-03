@@ -63,6 +63,7 @@ const { exactNonnegativeCount } = require('../lib/exactCount.ts');
 const { custodyReferenceIssue, normalizeCustodyReference, MAX_CUSTODY_REFERENCE_LENGTH } = require('../lib/custodyReference.ts');
 const { durableOrderMatchesPaidSession } = require('../lib/durableOrderSnapshot.ts');
 const { exactStripeClaimToken } = require('../lib/stripeClaimToken.ts');
+const { parsePocketWifiAvailability } = require('../lib/pocketWifiAvailability.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { hasOrderIntegritySecret, hasOrderIntegritySigningConfig, isCanonicalStripeMetadata, signedQyRoamProvenance, validQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -1329,10 +1330,32 @@ test('operations departure and return exceptions use Singapore date boundaries',
 test('Pocket WiFi availability publishes only validated public booking terms for checkout UX', () => {
   assert.match(availabilityRoute, /const bookingTerms = \{\s*minDeliveryLeadDays: minLeadDays,\s*courierFeeSgd: config\.courierFeeCents \/ 100,/s);
   assert.match(availabilityRoute, /available: remaining > 0, remaining, inventoryMode: 'live', temporaryHolds: stripeHolds\.holds, \.\.\.bookingTerms/);
-  assert.match(homePage, /function validLeadDays\(value: unknown\)/);
-  assert.match(homePage, /function validCourierFee\(value: unknown\)/);
+  assert.match(homePage, /parsePocketWifiAvailability\(payload, res\.ok\)/);
   assert.match(homePage, /const payableTotal = sgdFromCents\(promo\.amountCents \+ courierFeeCents\);/);
   assert.match(homePage, /Total due today: S\$\{payableTotal\.toFixed\(2\)\}/);
+});
+
+test('Pocket WiFi payment UI requires a complete and coherent live availability quote', () => {
+  const live = { available: true, remaining: 2, inventoryMode: 'live', minDeliveryLeadDays: 2, courierFeeSgd: 8.5 };
+  assert.deepEqual(parsePocketWifiAvailability(live, true), {
+    available: true, remaining: 2, minDeliveryLeadDays: 2, courierFeeSgd: 8.5,
+  });
+  assert.equal(parsePocketWifiAvailability({ ...live, courierFeeSgd: 1.15 }, true)?.courierFeeSgd, 1.15);
+  for (const malformed of [
+    { ...live, available: 'yes' },
+    { ...live, remaining: 0 },
+    { ...live, remaining: 1.5 },
+    { ...live, remaining: 10_001 },
+    { ...live, inventoryMode: 'unavailable' },
+    { ...live, minDeliveryLeadDays: undefined },
+    { ...live, courierFeeSgd: 8.501 },
+  ]) assert.equal(parsePocketWifiAvailability(malformed, true), null);
+
+  assert.deepEqual(parsePocketWifiAvailability({ available: false, error: 'Sold out.' }, false), {
+    available: false, error: 'Sold out.',
+  });
+  assert.equal(parsePocketWifiAvailability({ available: false, minDeliveryLeadDays: 3 }, false), null);
+  assert.equal(parsePocketWifiAvailability(null, true), null);
 });
 
 test('Pocket WiFi checkout renders live availability terms before opening Stripe Checkout', () => {
@@ -1361,8 +1384,9 @@ test('only the latest Pocket WiFi availability request owns booking terms and lo
   // lead time, availability, or clear the newer request's loading indicator.
   assert.match(homePage, /const requestNumber = \+\+availabilityRequest\.current;/);
   assert.match(homePage, /requestNumber === availabilityRequest\.current && selectedBooking\.current\.country === checkedCountry/);
-  assert.match(homePage, /if \(configuredLeadDays !== undefined\) setDeliveryLeadDays\(configuredLeadDays\);/);
-  assert.match(homePage, /if \(configuredCourierFee !== undefined\) setCourierFeeSgd\(configuredCourierFee\);/);
+  assert.match(homePage, /if \(data\?\.minDeliveryLeadDays !== undefined && data\.courierFeeSgd !== undefined\) \{/);
+  assert.match(homePage, /setDeliveryLeadDays\(data\.minDeliveryLeadDays\);/);
+  assert.match(homePage, /setCourierFeeSgd\(data\.courierFeeSgd\);/);
   assert.match(homePage, /if \(requestNumber === availabilityRequest\.current\) setChecking\(false\);/);
 });
 

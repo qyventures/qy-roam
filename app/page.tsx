@@ -9,28 +9,16 @@ import { operationalIsoDateAfter } from '../lib/operationalDate';
 import { checkoutAttempt, clearCheckoutAttempt, type CheckoutAttempt } from '../lib/checkoutAttempt';
 import { fetchCustomerRequest } from '../lib/clientRequest';
 import { esimPromoIsActive } from '../lib/esimPlans';
+import { parsePocketWifiAvailability, type PocketWifiAvailability } from '../lib/pocketWifiAvailability';
 
 const plans = WIFI_PLANS;
 
 const DEFAULT_DELIVERY_LEAD_DAYS = 2;
-type Availability = {
-  available: boolean;
-  remaining?: number;
-  error?: string;
-  minDeliveryLeadDays?: number;
-  courierFeeSgd?: number;
+type Availability = PocketWifiAvailability & {
   checkedCountry?: string;
   checkedStart?: string;
   checkedEnd?: string;
 };
-
-function validLeadDays(value: unknown) {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 365 ? value : undefined;
-}
-
-function validCourierFee(value: unknown) {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 10_000 ? value : undefined;
-}
 
 function daysBetween(start: string, end: string) {
   if (!start || !end) return 1;
@@ -108,18 +96,19 @@ export default function Home() {
     setChecking(true); setAvailability(null); setCheckoutError('');
     try {
       const res = await fetchCustomerRequest(`/api/availability?start=${encodeURIComponent(checkedStart)}&end=${encodeURIComponent(checkedEnd)}`, { cache: 'no-store' });
-      const data = (await res.json()) as Availability;
+      const payload: unknown = await res.json();
       // Availability is also the public source of operational booking terms.
-      // Validate the response before using it in the browser; Checkout still
-      // recalculates every amount and date rule independently on the server.
-      const configuredLeadDays = validLeadDays(data.minDeliveryLeadDays);
-      const configuredCourierFee = validCourierFee(data.courierFeeSgd);
-      const result = res.ok
+      // Require a complete live response before enabling payment; Checkout
+      // still recalculates every amount and date rule independently.
+      const data = parsePocketWifiAvailability(payload, res.ok);
+      const result: Availability = data
         ? { ...data, checkedCountry, checkedStart, checkedEnd }
-        : { available: false, error: data.error || 'Unable to check availability.', checkedCountry, checkedStart, checkedEnd };
+        : { available: false, error: 'Unable to check availability.', checkedCountry, checkedStart, checkedEnd };
       if (requestNumber === availabilityRequest.current && selectedBooking.current.country === checkedCountry && selectedBooking.current.start === checkedStart && selectedBooking.current.end === checkedEnd) {
-        if (configuredLeadDays !== undefined) setDeliveryLeadDays(configuredLeadDays);
-        if (configuredCourierFee !== undefined) setCourierFeeSgd(configuredCourierFee);
+        if (data?.minDeliveryLeadDays !== undefined && data.courierFeeSgd !== undefined) {
+          setDeliveryLeadDays(data.minDeliveryLeadDays);
+          setCourierFeeSgd(data.courierFeeSgd);
+        }
         setAvailability(result);
       }
       return result;
