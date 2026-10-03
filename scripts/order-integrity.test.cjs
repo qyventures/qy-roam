@@ -610,10 +610,12 @@ test('lookalike payment sessions are ignored before persistence and durable even
   // Roam. Reject copied metadata before even constructing the Supabase client
   // so unrelated Stripe products cannot create false recovery exceptions.
   const sourceCheck = webhookRoute.indexOf('hasQyRoamWebhookSource(eventSession.metadata)');
-  const provenanceCheck = webhookRoute.indexOf('validQyRoamProvenance(eventSession.id,eventSession.metadata)');
+  const sessionIdCheck = webhookRoute.indexOf('const eventSessionId=validStripeCheckoutSessionId(eventSession.id)');
+  const provenanceCheck = webhookRoute.indexOf('validQyRoamProvenance(eventSessionId,eventSession.metadata)');
   const persistence = webhookRoute.indexOf('const supabase=getSupabaseAdmin()', sourceCheck);
   const claim = webhookRoute.indexOf('claimOnce(supabase,eventClaimId,event.type,eventSessionId)');
-  assert.ok(sourceCheck >= 0 && provenanceCheck > sourceCheck, 'provenance must follow shared-account routing');
+  assert.ok(sourceCheck >= 0 && sessionIdCheck > sourceCheck, 'Session identity validation must follow shared-account routing');
+  assert.ok(sessionIdCheck < provenanceCheck, 'the bounded canonical Session id must be the provenance HMAC input');
   assert.ok(provenanceCheck < persistence, 'untrusted sessions must be ignored before persistence is required');
   assert.ok(provenanceCheck < claim, 'untrusted sessions must be ignored before a durable event claim');
   assert.match(webhookRoute, /stripe_webhook_untrusted_checkout_session/);

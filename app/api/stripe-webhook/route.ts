@@ -798,6 +798,17 @@ export async function POST(req:Request){
   // order, sending fulfilment email, or filling this app's idempotency ledger.
   // Both QY Roam checkout routes set this server-controlled marker.
   if(!hasQyRoamWebhookSource(eventSession.metadata)) return webhookJson({received:true,ignored:true});
+  // The Session id is both an HMAC input and, for trusted events, an outbound
+  // Stripe API path / durable ledger identity. Bound it before provenance
+  // verification so even a signed but structurally unexpected event cannot
+  // make cryptographic work scale with an arbitrary identifier. Keep this
+  // ahead of persistence setup as well: an invalid provider object is a
+  // permanent client error, not a database-readiness failure.
+  const eventSessionId=validStripeCheckoutSessionId(eventSession.id);
+  if(!eventSessionId){
+    console.error('stripe_webhook_invalid_session_id',{eventId:stripeEventId});
+    return webhookJson({error:'Invalid Checkout Session identifier'},{status:400});
+  }
   // `source=qyroam.com` is only a routing hint: staff or another integration
   // in a shared Stripe account can copy public metadata onto an unrelated
   // Checkout Session. Require the server-issued, Session-id-bound HMAC before
@@ -806,21 +817,11 @@ export async function POST(req:Request){
   // durable retry ledger with false operational exceptions. The refreshed
   // Session is validated again below before any order or side effect, so a
   // genuine event remains protected from later metadata drift as well.
-  if(!validQyRoamProvenance(eventSession.id,eventSession.metadata)) {
+  if(!validQyRoamProvenance(eventSessionId,eventSession.metadata)) {
     console.error('stripe_webhook_untrusted_checkout_session');
     return webhookJson({received:true,ignored:true});
   }
   const supabase=getSupabaseAdmin(); if(!supabase) return webhookJson({error:'Persistence unavailable'},{status:503});
-  // The event is Stripe-signed, but retain the same bounded identifier
-  // boundary used by customer-facing recovery pages before an SDK call or a
-  // durable ledger write. This protects the worker from an unexpected API
-  // version/object shape and prevents an invalid event object from becoming a
-  // retrying operational record with an unbounded identifier.
-  const eventSessionId=validStripeCheckoutSessionId(eventSession.id);
-  if(!eventSessionId){
-    console.error('stripe_webhook_invalid_session_id',{eventId:stripeEventId});
-    return webhookJson({error:'Invalid Checkout Session identifier'},{status:400});
-  }
   // Claim fulfilment-bearing events before the outbound Stripe refresh. If
   // that dependency is unavailable until Stripe exhausts its delivery retry
   // window, operations still need a durable record identifying the affected
