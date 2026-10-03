@@ -772,6 +772,18 @@ export async function POST(req:Request){
   // order, sending fulfilment email, or filling this app's idempotency ledger.
   // Both QY Roam checkout routes set this server-controlled marker.
   if(!hasQyRoamWebhookSource(eventSession.metadata)) return webhookJson({received:true,ignored:true});
+  // `source=qyroam.com` is only a routing hint: staff or another integration
+  // in a shared Stripe account can copy public metadata onto an unrelated
+  // Checkout Session. Require the server-issued, Session-id-bound HMAC before
+  // acquiring persistence or an event claim. Without this boundary a
+  // lookalike payment event cannot create an order, but it can still fill the
+  // durable retry ledger with false operational exceptions. The refreshed
+  // Session is validated again below before any order or side effect, so a
+  // genuine event remains protected from later metadata drift as well.
+  if(!validQyRoamProvenance(eventSession.id,eventSession.metadata)) {
+    console.error('stripe_webhook_untrusted_checkout_session');
+    return webhookJson({received:true,ignored:true});
+  }
   const supabase=getSupabaseAdmin(); if(!supabase) return webhookJson({error:'Persistence unavailable'},{status:503});
   // The event is Stripe-signed, but retain the same bounded identifier
   // boundary used by customer-facing recovery pages before an SDK call or a
