@@ -14,6 +14,7 @@ import { checkoutSiteOrigin } from '@/lib/siteOrigin';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { safeStripeCheckoutUrl } from '@/lib/stripeCheckoutUrl';
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
+import { stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhookObject';
 
 export const runtime = 'nodejs';
 
@@ -234,7 +235,7 @@ export async function POST(req: Request) {
     // This fresh object can expose either a paid-order confirmation or a live
     // payment URL. Bind it to the idempotent create result before trusting any
     // metadata, status, provenance, or URL on it.
-    if (currentSession.id !== createdSessionId) {
+    if (!stripeWebhookCheckoutSessionMatchesSnapshot(session, currentSession)) {
       console.error('esim_checkout_session_identity_mismatch', { expectedSessionId: createdSessionId, retrievedSessionId: currentSession.id });
       return NextResponse.json({ error: 'Secure checkout confirmation is temporarily unavailable. Please try again shortly.' }, {
         status: 503,

@@ -18,6 +18,7 @@ import { checkoutSiteOrigin } from '@/lib/siteOrigin';
 import { pocketWifiRentalCents } from '@/lib/pocketWifiPricing';
 import { safeStripeCheckoutUrl } from '@/lib/stripeCheckoutUrl';
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
+import { stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhookObject';
 
 export const runtime = 'nodejs';
 
@@ -72,6 +73,7 @@ async function activeStripeHolds(stripe:Stripe,stripeKey:string,start:string,end
   const requestIds:string[]=[];
   let existingUrl:string|null=null;
   let existingSessionId:string|null=null;
+  let existingSessionSnapshot:Pick<Stripe.Checkout.Session,'id'|'livemode'|'created'>|null=null;
   let requestConflict=false;
   // Every still-valid QY Roam Checkout Session is an inventory hold. Scan the
   // complete hold window within the shared, fail-closed page ceiling below:
@@ -129,6 +131,7 @@ async function activeStripeHolds(stripe:Stripe,stripeKey:string,start:string,end
         const sameBooking=matchesRequestedPocketWifi(session,requestId,requested);
         existingUrl=sameBooking?session.url:null;
         existingSessionId=sameBooking?sessionId:null;
+        existingSessionSnapshot=sameBooking?{id:sessionId,livemode:session.livemode,created:session.created}:null;
         requestConflict=!sameBooking;
         // This Session is already represented by the caller's reservation,
         // so it must not consume capacity twice. Still finish the bounded
@@ -155,7 +158,7 @@ async function activeStripeHolds(stripe:Stripe,stripeKey:string,start:string,end
     // Every row was validated above, including the final pagination cursor.
     startingAfter=validStripeCheckoutSessionId(sessions.data[sessions.data.length-1].id)!;
   }
-  return {holds,requestIds,existingUrl,existingSessionId,requestConflict};
+  return {holds,requestIds,existingUrl,existingSessionId,existingSessionSnapshot,requestConflict};
 }
 
 // A Stripe Checkout URL is only safe to expose once its durable inventory hold
@@ -236,7 +239,7 @@ export async function POST(req: Request) {
   if(holdState.requestConflict) return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.',checkoutRequestConflict:true},{status:409,headers:{'Cache-Control':'no-store'}});
   const supabase=getSupabaseAdmin();
   if(!supabase) return NextResponse.json({error:'Live reservation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
-  if(holdState.existingUrl&&holdState.existingSessionId){
+  if(holdState.existingUrl&&holdState.existingSessionId&&holdState.existingSessionSnapshot){
     // A retry can find a session created just before a process interruption.
     // Retrieve it again because payment or expiry can race the preceding list
     // call. The fresh state, not the URL snapshot from that list, determines
@@ -244,7 +247,7 @@ export async function POST(req: Request) {
     let existing=await stripe.checkout.sessions.retrieve(holdState.existingSessionId);
     // This object can release a reservation, confirm a paid order, or expose a
     // payment URL. Require it to remain bound to the exact hold selected above.
-    if(existing.id!==holdState.existingSessionId){
+    if(!stripeWebhookCheckoutSessionMatchesSnapshot(holdState.existingSessionSnapshot,existing)){
       console.error('checkout_session_identity_mismatch',{expectedSessionId:holdState.existingSessionId,retrievedSessionId:existing.id});
       return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
     }
@@ -267,7 +270,7 @@ export async function POST(req: Request) {
       // above: that stale object must never release stock, confirm payment,
       // or expose a payable URL.
       const updated=await stripe.checkout.sessions.update(existing.id,{metadata:{[QY_ROAM_PROVENANCE_METADATA_KEY]:provenance}});
-      if(updated.id!==existing.id||
+      if(!stripeWebhookCheckoutSessionMatchesSnapshot(existing,updated)||
         !stripeEventMatchesConfiguredMode(key,updated.livemode)||
         !matchesRequestedPocketWifi(updated,requestId,requested)){
         console.error('checkout_recovered_session_mismatch',{expectedSessionId:existing.id});
@@ -426,7 +429,7 @@ export async function POST(req: Request) {
   const currentSession=await stripe.checkout.sessions.retrieve(createdSessionId);
   // Keep the fresh response bound to the idempotent create result before it
   // can confirm payment, mutate this booking's reservation, or expose a URL.
-  if(currentSession.id!==createdSessionId){
+  if(!stripeWebhookCheckoutSessionMatchesSnapshot(session,currentSession)){
     console.error('checkout_session_identity_mismatch',{expectedSessionId:createdSessionId,retrievedSessionId:currentSession.id});
     return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
   }

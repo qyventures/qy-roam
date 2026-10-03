@@ -630,6 +630,7 @@ test('refreshed Checkout Sessions retain the signed immutable creation identity'
   assert.equal(stripeWebhookCheckoutSessionMatchesSnapshot(signed, { ...signed, id: 'cs_test_other' }), false);
   assert.equal(stripeWebhookCheckoutSessionMatchesSnapshot(signed, { ...signed, livemode: true }), false);
   assert.equal(stripeWebhookCheckoutSessionMatchesSnapshot(signed, { ...signed, created: signed.created + 1 }), false);
+  assert.equal(stripeWebhookCheckoutSessionMatchesSnapshot({ ...signed, created: undefined }, { ...signed, created: undefined }), false);
 
   const refresh = webhookRoute.indexOf('refreshedSession=await stripe.checkout.sessions.retrieve(eventSessionId)');
   const identity = webhookRoute.indexOf('stripeWebhookCheckoutSessionMatchesSnapshot(eventSession,session)', refresh);
@@ -1801,25 +1802,25 @@ test('eSIM paid checkout recovery waits for the durable paid order ledger', () =
   assert.match(esimCheckoutRoute.slice(paidBranch, completedResponse), /'Retry-After': '3'/);
 });
 
-test('checkout recovery binds every fresh Stripe response to the requested Session id', () => {
+test('checkout recovery binds every fresh Stripe response to its immutable Session snapshot', () => {
   // A fresh retrieve supplies status and customer data, but only the requested
   // Session may confirm payment, mutate a reservation, or return a payment URL.
-  assert.match(esimCheckoutRoute, /currentSession\.id !== createdSessionId/);
+  assert.match(esimCheckoutRoute, /stripeWebhookCheckoutSessionMatchesSnapshot\(session, currentSession\)/);
   assert.match(esimCheckoutRoute, /esim_checkout_session_identity_mismatch/);
   assert.ok(
-    esimCheckoutRoute.indexOf('currentSession.id !== createdSessionId') <
+    esimCheckoutRoute.indexOf('stripeWebhookCheckoutSessionMatchesSnapshot(session, currentSession)') <
       esimCheckoutRoute.indexOf("if (!stripeEventMatchesConfiguredMode(key, currentSession.livemode))"),
     'eSIM response identity must be checked before its mode, metadata, status, or URL',
   );
 
-  assert.match(wifiCheckoutRoute, /existing\.id!==holdState\.existingSessionId/);
-  assert.match(wifiCheckoutRoute, /currentSession\.id!==createdSessionId/);
+  assert.match(wifiCheckoutRoute, /stripeWebhookCheckoutSessionMatchesSnapshot\(holdState\.existingSessionSnapshot,existing\)/);
+  assert.match(wifiCheckoutRoute, /stripeWebhookCheckoutSessionMatchesSnapshot\(session,currentSession\)/);
   const existingRead = wifiCheckoutRoute.indexOf('let existing=await stripe.checkout.sessions.retrieve(holdState.existingSessionId)');
-  const existingIdentity = wifiCheckoutRoute.indexOf('existing.id!==holdState.existingSessionId', existingRead);
+  const existingIdentity = wifiCheckoutRoute.indexOf('stripeWebhookCheckoutSessionMatchesSnapshot(holdState.existingSessionSnapshot,existing)', existingRead);
   const existingUrl = wifiCheckoutRoute.indexOf('{url:existingCheckoutUrl}', existingRead);
   assert.ok(existingRead >= 0 && existingIdentity > existingRead && existingIdentity < existingUrl);
   const currentRead = wifiCheckoutRoute.indexOf('const currentSession=await stripe.checkout.sessions.retrieve(createdSessionId)');
-  const currentIdentity = wifiCheckoutRoute.indexOf('currentSession.id!==createdSessionId', currentRead);
+  const currentIdentity = wifiCheckoutRoute.indexOf('stripeWebhookCheckoutSessionMatchesSnapshot(session,currentSession)', currentRead);
   const currentUrl = wifiCheckoutRoute.indexOf('{url:checkoutUrl}', currentRead);
   assert.ok(currentRead >= 0 && currentIdentity > currentRead && currentIdentity < currentUrl);
 });
@@ -2361,7 +2362,7 @@ test('Pocket WiFi create recovery uses fresh Stripe state and confirms provenanc
 });
 
 test('Pocket WiFi paid checkout recovery waits for the durable paid order ledger', () => {
-  const replayStart = wifiCheckoutRoute.indexOf('if(holdState.existingUrl&&holdState.existingSessionId)');
+  const replayStart = wifiCheckoutRoute.indexOf('if(holdState.existingUrl&&holdState.existingSessionId&&holdState.existingSessionSnapshot)');
   const replayEnd = wifiCheckoutRoute.indexOf('const expiresAt=', replayStart);
   const replayBranch = wifiCheckoutRoute.slice(replayStart, replayEnd);
   const createStart = wifiCheckoutRoute.indexOf("if(currentSession.status==='complete'&&currentSession.payment_status==='paid')", replayEnd);
@@ -2389,8 +2390,8 @@ test('Pocket WiFi open-session retries honor the freshly retrieved Stripe state'
   // returned without checking the retrieved session status.
   assert.match(wifiCheckoutRoute, /let existing=await stripe\.checkout\.sessions\.retrieve\(holdState\.existingSessionId\)/);
   const replayBranch = wifiCheckoutRoute.slice(
-    wifiCheckoutRoute.indexOf('if(holdState.existingUrl&&holdState.existingSessionId)'),
-    wifiCheckoutRoute.indexOf('const expiresAt=', wifiCheckoutRoute.indexOf('if(holdState.existingUrl&&holdState.existingSessionId)')),
+    wifiCheckoutRoute.indexOf('if(holdState.existingUrl&&holdState.existingSessionId&&holdState.existingSessionSnapshot)'),
+    wifiCheckoutRoute.indexOf('const expiresAt=', wifiCheckoutRoute.indexOf('if(holdState.existingUrl&&holdState.existingSessionId&&holdState.existingSessionSnapshot)')),
   );
   assert.match(replayBranch, /matchesRequestedPocketWifi\(existing,requestId,requested\)/);
   const provenanceUpdate = replayBranch.indexOf('const updated=await stripe.checkout.sessions.update');
@@ -2398,7 +2399,7 @@ test('Pocket WiFi open-session retries honor the freshly retrieved Stripe state'
   const firstStateDecision = replayBranch.indexOf("if(existing.status==='complete'&&existing.payment_status==='paid')");
   assert.ok(provenanceUpdate > -1 && provenanceGuard > provenanceUpdate, 'recovered Stripe metadata must be validated');
   assert.ok(firstStateDecision > provenanceGuard, 'provenance must be confirmed before payment, inventory, or redirect decisions');
-  assert.match(replayBranch, /updated\.id!==existing\.id/);
+  assert.match(replayBranch, /stripeWebhookCheckoutSessionMatchesSnapshot\(existing,updated\)/);
   assert.match(replayBranch, /stripeEventMatchesConfiguredMode\(key,updated\.livemode\)/);
   assert.match(replayBranch, /matchesRequestedPocketWifi\(updated,requestId,requested\)/);
   assert.match(replayBranch, /existing=updated/);
@@ -2629,7 +2630,7 @@ test('Pocket WiFi idempotent recovery completes the inventory hold scan', () => 
   assert.match(ownSessionBranch, /existingSessionId=sameBooking\?sessionId:null/);
   assert.match(ownSessionBranch, /continue;/);
   assert.doesNotMatch(ownSessionBranch, /return\s+\{/);
-  assert.match(scan, /return \{holds,requestIds,existingUrl,existingSessionId,requestConflict\};/);
+  assert.match(scan, /return \{holds,requestIds,existingUrl,existingSessionId,existingSessionSnapshot,requestConflict\};/);
 });
 
 test('Pocket WiFi hold scans fail closed on an empty Stripe continuation page', () => {

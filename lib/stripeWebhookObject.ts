@@ -41,10 +41,22 @@ export function stripeWebhookCheckoutSession(value: unknown): Stripe.Checkout.Se
 // webhook snapshot. The creation epoch is also the chronology anchor used to
 // reject payment or expiry events that predate their Session.
 export function stripeWebhookCheckoutSessionMatchesSnapshot(
-  signedSession: Stripe.Checkout.Session,
-  refreshedSession: Stripe.Checkout.Session,
+  signedSession: Pick<Stripe.Checkout.Session, 'id' | 'livemode' | 'created'>,
+  refreshedSession: Pick<Stripe.Checkout.Session, 'id' | 'livemode' | 'created'>,
 ) {
-  return refreshedSession.id === signedSession.id &&
+  // This helper is also used at checkout API boundaries, where SDK return
+  // types are compile-time promises rather than runtime validation. Do not
+  // let two equally malformed snapshots (for example, both missing their
+  // creation epoch) compare as the same Stripe capability.
+  return typeof signedSession.id === 'string' &&
+    typeof refreshedSession.id === 'string' &&
+    typeof signedSession.livemode === 'boolean' &&
+    typeof refreshedSession.livemode === 'boolean' &&
+    Number.isSafeInteger(signedSession.created) &&
+    signedSession.created > 0 &&
+    Number.isSafeInteger(refreshedSession.created) &&
+    refreshedSession.created > 0 &&
+    refreshedSession.id === signedSession.id &&
     refreshedSession.livemode === signedSession.livemode &&
     refreshedSession.created === signedSession.created;
 }
