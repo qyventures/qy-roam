@@ -77,6 +77,31 @@ export function validatePlpgsqlStructure(sql) {
     }
     assert.equal(depth, 0, 'PL/pgSQL function contains a LOOP without a matching END LOOP');
 
+    // IF/LOOP counts alone cannot see a missing function-level END, a broken
+    // nested BEGIN block, or a CASE expression closed in the wrong order.
+    // Track the complete block stack so a migration cannot pass this offline
+    // gate with locally balanced keywords that PostgreSQL will still reject.
+    // SQL CASE expressions use bare END, while procedural CASE may use END
+    // CASE; a bare END can therefore close only the current CASE or BEGIN.
+    const blockTokens = code.match(/\bend\s+(?:if|loop|case)\b|\b(?:begin|if|loop|case|end)\b/gi) || [];
+    const blocks = [];
+    for (const rawToken of blockTokens) {
+      const token = rawToken.toLowerCase().replace(/\s+/g, ' ');
+      if (token === 'begin' || token === 'if' || token === 'loop' || token === 'case') {
+        blocks.push(token);
+        continue;
+      }
+      const expected = token === 'end' ? null : token.slice(4);
+      const opening = blocks.pop();
+      assert.ok(opening, `PL/pgSQL function contains ${token.toUpperCase()} without an opening block`);
+      if (expected) {
+        assert.equal(opening, expected, `PL/pgSQL function closes ${opening.toUpperCase()} with ${token.toUpperCase()}`);
+      } else {
+        assert.ok(opening === 'begin' || opening === 'case', `PL/pgSQL function closes ${opening.toUpperCase()} with bare END`);
+      }
+    }
+    assert.deepEqual(blocks, [], `PL/pgSQL function contains an unclosed ${blocks.at(-1)?.toUpperCase()} block`);
+
     // A duplicated condition terminator such as `) then` is not visible to
     // the keyword-only check above. Track parentheses after stripping strings
     // and comments so malformed trigger expressions cannot pass the offline
@@ -131,6 +156,25 @@ assert.throws(
     $$ language plpgsql;
   `),
   /LOOP without a matching END LOOP/,
+);
+assert.throws(
+  () => validatePlpgsqlStructure(`
+    create function public.example() returns void language plpgsql as $$
+    begin
+      return;
+    $$;
+  `),
+  /unclosed BEGIN block/,
+);
+assert.throws(
+  () => validatePlpgsqlStructure(`
+    create function public.example() returns integer language plpgsql as $$
+    begin
+      return case when true then 1 else 0;
+    end;
+    $$;
+  `),
+  /closes CASE with bare END|unclosed BEGIN block/,
 );
 
 // PostgreSQL rejects an ON CONFLICT update that assigns the same target

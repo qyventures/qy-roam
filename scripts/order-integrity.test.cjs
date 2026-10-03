@@ -4909,6 +4909,29 @@ test('deployment rejects structurally broken PL/pgSQL before schema application'
     $$ language plpgsql;
   `), /END LOOP without a matching LOOP/);
   assert.throws(() => validatePlpgsqlStructure(`
+    create function public.example() returns void language plpgsql as $$
+    begin
+      return;
+    $$;
+  `), /unclosed BEGIN block/);
+  assert.throws(() => validatePlpgsqlStructure(`
+    create function public.example() returns void language plpgsql as $$
+    begin
+      if true then
+        begin
+          return;
+        end if;
+      end;
+    $$;
+  `), /closes BEGIN with END IF/);
+  assert.throws(() => validatePlpgsqlStructure(`
+    create function public.example() returns integer language plpgsql as $$
+    begin
+      return case when true then 1 else 0;
+    end;
+    $$;
+  `), /closes CASE with bare END|unclosed BEGIN block/);
+  assert.throws(() => validatePlpgsqlStructure(`
     create function public.example() returns trigger language plpgsql as $$
     begin
       if new.value is not null and (new.value > 0) then
