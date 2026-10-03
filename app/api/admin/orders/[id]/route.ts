@@ -10,7 +10,7 @@ import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
 import { digitalDeliveryReferenceIssue, normalizeDigitalDeliveryReference } from '@/lib/digitalDeliveryReference';
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
-import { validStripeEventCreated } from '@/lib/stripeEventCreated';
+import { validStripePaymentEventCreated } from '@/lib/stripeEventCreated';
 import { custodyReferenceIssue, normalizeCustodyReference } from '@/lib/custodyReference';
 import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 
@@ -352,14 +352,20 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     // attempt failed before it created the Meta row, use the first signed
     // payment-confirmation time persisted by the webhook. Session creation
     // remains a stable fallback only for legacy orders.
-    const confirmedAtMs=order.payment_confirmed_at ? new Date(order.payment_confirmed_at).getTime() : Number.NaN;
+    const hasPaymentConfirmedAt=order.payment_confirmed_at!==null&&order.payment_confirmed_at!==undefined;
+    const confirmedAtMs=typeof order.payment_confirmed_at==='string'
+      ? new Date(order.payment_confirmed_at).getTime()
+      : Number.NaN;
     const confirmedAtSeconds=Number.isFinite(confirmedAtMs) ? Math.floor(confirmedAtMs/1000) : null;
     // Apply the webhook's timestamp boundary to manual recovery too. A
-    // damaged/imported payment timestamp must not create a far-future Meta
-    // Purchase, and an invalid Stripe fallback must not become a permanent
-    // poison value in the durable delivery ledger.
-    const metaEventTime=validStripeEventCreated(confirmedAtSeconds)
-      ?? validStripeEventCreated(session.created);
+    // damaged/imported payment timestamp must not create a pre-Checkout or
+    // far-future Meta Purchase. Only a genuinely absent timestamp may use the
+    // Session creation time for a legacy order; an explicitly stored but
+    // invalid value is an operational conflict that must be reconciled rather
+    // than silently rewritten during delivery recovery.
+    const metaEventTime=hasPaymentConfirmedAt
+      ? validStripePaymentEventCreated(confirmedAtSeconds,session.created)
+      : validStripePaymentEventCreated(session.created,session.created);
     if (retryMeta && !metaEventTime) {
       return NextResponse.json({ error: 'The payment timestamp is invalid. Reconcile the order before retrying analytics delivery.' }, { status: 409 });
     }

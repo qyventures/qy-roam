@@ -4108,7 +4108,7 @@ test('Meta Purchase retries preserve one durable event timestamp for deduplicati
   assert.match(schema, /payment_confirmed_at = case when v_paid then coalesce\(orders\.payment_confirmed_at, p_payment_confirmed_at\)/);
   assert.match(webhookRoute, /await sendMetaPurchase\(session,Number\(attempt\.data\[0\]\.event_time\)\)/);
   assert.match(adminOrderRoute, /select\('stripe_session_id,payment_status,payment_confirmed_at,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,fulfilment_status,measurement_consent'\)/);
-  assert.match(adminOrderRoute, /const metaEventTime=validStripeEventCreated\(confirmedAtSeconds\)/);
+  assert.match(adminOrderRoute, /const metaEventTime=hasPaymentConfirmedAt\s*\? validStripePaymentEventCreated\(confirmedAtSeconds,session\.created\)\s*:\s*validStripePaymentEventCreated\(session\.created,session\.created\)/);
   assert.match(adminOrderRoute, /deliverMetaPurchase\(supabase, session, metaEventTime!\)/);
   assert.doesNotMatch(adminOrderRoute, /Math\.floor\(Date\.now\(\) \/ 1000\)/);
 });
@@ -4232,9 +4232,12 @@ test('admin delivery recovery requires a completed Stripe session and its comple
   assert.ok(snapshotCheck >= 0 && deliveryAttempt > snapshotCheck, 'commercial identity must be verified before any recovery delivery');
 });
 
-test('admin Meta recovery rejects corrupt or future payment timestamps', () => {
-  assert.match(adminOrderRoute, /validStripeEventCreated\(confirmedAtSeconds\)/);
-  assert.match(adminOrderRoute, /validStripeEventCreated\(session\.created\)/);
+test('admin Meta recovery rejects corrupt, pre-Checkout, or future payment timestamps', () => {
+  assert.match(adminOrderRoute, /import \{ validStripePaymentEventCreated \} from '@\/lib\/stripeEventCreated';/);
+  assert.match(adminOrderRoute, /const hasPaymentConfirmedAt=order\.payment_confirmed_at!==null&&order\.payment_confirmed_at!==undefined/);
+  assert.match(adminOrderRoute, /validStripePaymentEventCreated\(confirmedAtSeconds,session\.created\)/);
+  assert.match(adminOrderRoute, /validStripePaymentEventCreated\(session\.created,session\.created\)/);
+  assert.doesNotMatch(adminOrderRoute, /validStripeEventCreated\(/);
   assert.match(adminOrderRoute, /if \(retryMeta && !metaEventTime\)/);
   assert.match(adminOrderRoute, /Reconcile the order before retrying analytics delivery/);
 });
