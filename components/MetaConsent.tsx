@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { metaMeasurementConsent, setMetaMeasurementConsent } from '@/lib/metaClient';
 import { metaPixelId } from '@/lib/runtimeConfig';
@@ -26,7 +27,6 @@ function loadPixel(pixelId: string) {
   document.head.appendChild(script);
   f('consent', 'grant');
   f('init', pixelId);
-  f('track', 'PageView');
 }
 
 function revokePixel() {
@@ -37,6 +37,7 @@ function revokePixel() {
 }
 
 export default function MetaConsent() {
+  const pathname = usePathname();
   const [choice, setChoice] = useState<Consent | null>(null);
   const [ready, setReady] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -52,14 +53,22 @@ export default function MetaConsent() {
     // explicit, tab-local preference.
     setChoice(saved);
     setReady(true);
-    if (saved === 'accepted' && pixelId) loadPixel(pixelId);
-  }, [pixelId]);
+  }, []);
+
+  useEffect(() => {
+    if (choice !== 'accepted' || !pixelId) return;
+    // App Router links do not reload the root layout, so firing PageView only
+    // while bootstrapping fbevents.js loses every consented client-side page
+    // transition. Queue one view for the initial path and each later path;
+    // loadPixel is idempotent and restores consent after a revoke/re-grant.
+    loadPixel(pixelId);
+    window.fbq?.('track', 'PageView');
+  }, [choice, pathname, pixelId]);
 
   function choose(value: Consent) {
     setMetaMeasurementConsent(value);
     setChoice(value);
     setSettingsOpen(false);
-    if (value === 'accepted' && pixelId) loadPixel(pixelId);
     if (value === 'essential') revokePixel();
   }
 

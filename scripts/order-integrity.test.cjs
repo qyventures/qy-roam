@@ -117,6 +117,18 @@ const privacyPage = fs.readFileSync(require.resolve('../app/privacy/page.tsx'), 
 const termsPage = fs.readFileSync(require.resolve('../app/terms/page.tsx'), 'utf8');
 const rootLayout = fs.readFileSync(require.resolve('../app/layout.tsx'), 'utf8');
 
+test('consented Meta PageView measurement follows App Router navigation', () => {
+  assert.match(metaConsent, /usePathname/);
+  assert.match(metaConsent, /const pathname = usePathname\(\)/);
+  assert.match(metaConsent, /window\.fbq\?\.\('track', 'PageView'\)/);
+  assert.match(metaConsent, /\[choice, pathname, pixelId\]/);
+  // Pixel bootstrap must not also emit a view: the route-aware effect owns
+  // both the initial path and later client-side paths, avoiding a duplicate
+  // initial PageView when a returning visitor has already consented.
+  const loadPixelBody = metaConsent.match(/function loadPixel[\s\S]*?\n}\n/)?.[0] || '';
+  assert.doesNotMatch(loadPixelBody, /['"]PageView['"]/);
+});
+
 const requestId = 'checkout_request_123456';
 
 test('Stripe claim ownership preserves the database microsecond token exactly', () => {
