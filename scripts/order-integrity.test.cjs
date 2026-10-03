@@ -143,10 +143,13 @@ test('checkout provenance accepts only bounded canonical Stripe metadata', () =>
 
   for (const malformed of [
     [],
+    new Date(),
     { ...signed, source: 7 },
     { ...signed, ['x'.repeat(41)]: 'value' },
     { ...signed, unsafe: 'x'.repeat(501) },
     { ...signed, 'nested[key]': 'value' },
+    Object.defineProperty({}, 'source', { get: () => 'qyroam.com', enumerable: true }),
+    Object.assign({ source: 'qyroam.com' }, { [Symbol('hidden')]: 'value' }),
     Object.fromEntries(Array.from({ length: 51 }, (_, index) => [`key_${index}`, 'value'])),
   ]) {
     assert.equal(isCanonicalStripeMetadata(malformed), false);
@@ -156,6 +159,14 @@ test('checkout provenance accepts only bounded canonical Stripe metadata', () =>
     () => signedQyRoamProvenance(sessionId, { unsafe: 'x'.repeat(501) }),
     /not canonical Stripe metadata/,
   );
+  assert.throws(
+    () => signedQyRoamProvenance(sessionId, Object.fromEntries(Array.from({ length: 50 }, (_, index) => [`key_${index}`, 'value']))),
+    /no capacity for provenance/,
+  );
+  const fullSignedMetadata = Object.fromEntries(Array.from({ length: 49 }, (_, index) => [`key_${index}`, 'value']));
+  fullSignedMetadata.qyroam_provenance = signedQyRoamProvenance(sessionId, fullSignedMetadata);
+  assert.equal(Object.keys(fullSignedMetadata).length, 50);
+  assert.equal(validQyRoamProvenance(sessionId, fullSignedMetadata), true);
 });
 
 const requestId = 'checkout_request_123456';

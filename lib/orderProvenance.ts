@@ -15,11 +15,16 @@ const MAX_STRIPE_METADATA_VALUE_LENGTH = 500;
 // downstream order validators do not understand.
 export function isCanonicalStripeMetadata(value: unknown): value is Record<string, string> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const entries = Object.entries(value);
-  return entries.length <= MAX_STRIPE_METADATA_FIELDS && entries.every(([key, fieldValue]) =>
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  if (Object.getOwnPropertySymbols(value).length > 0) return false;
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const entries = Object.entries(descriptors);
+  return entries.length <= MAX_STRIPE_METADATA_FIELDS && entries.every(([key, descriptor]) =>
     key.length >= 1 && key.length <= MAX_STRIPE_METADATA_KEY_LENGTH &&
     !key.includes('[') && !key.includes(']') &&
-    typeof fieldValue === 'string' && fieldValue.length <= MAX_STRIPE_METADATA_VALUE_LENGTH
+    'value' in descriptor &&
+    typeof descriptor.value === 'string' && descriptor.value.length <= MAX_STRIPE_METADATA_VALUE_LENGTH
   );
 }
 
@@ -84,6 +89,13 @@ export function signedQyRoamProvenance(sessionId: string, metadata: Record<strin
   const signingSecret = activeSecret();
   if (!signingSecret) throw new Error('ORDER_INTEGRITY_SECRET is not configured');
   if (!isCanonicalStripeMetadata(metadata)) throw new Error('Checkout metadata is not canonical Stripe metadata');
+  // The signature is stored as one more Stripe metadata field. Refuse to sign
+  // an unsigned map that has already consumed all 50 fields: Stripe would
+  // reject the update, while the create response would look locally signed
+  // but could never become a webhook-verifiable Checkout Session.
+  if (!(METADATA_KEY in metadata) && Object.keys(metadata).length >= MAX_STRIPE_METADATA_FIELDS) {
+    throw new Error('Checkout metadata has no capacity for provenance');
+  }
   const digest = provenanceDigest(sessionId, metadata, signingSecret);
   return `${VERSION}.${digest}`;
 }
