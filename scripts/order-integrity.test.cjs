@@ -1318,7 +1318,7 @@ test('bounded request readers do not retain one allocation per fragmented chunk'
   };
   assert.equal(await readLimitedRequestText(fragments, 1024, 100), '{"ok":true}');
   assert.match(fs.readFileSync(require.resolve('../lib/requestBody.ts'), 'utf8'), /const body = Buffer\.allocUnsafe\(maxBytes\)/);
-  assert.match(webhookRoute, /const body = Buffer\.allocUnsafe\(MAX_STRIPE_WEBHOOK_BODY_BYTES\)/);
+  assert.match(webhookRoute, /const body = Buffer\.allocUnsafe\(storageBytes\)/);
   assert.match(webhookRoute, /const body=Buffer\.allocUnsafe\(MAX_DELIVERY_RESPONSE_BODY_BYTES\)/);
   assert.doesNotMatch(webhookRoute, /const chunks: Uint8Array\[\] = \[\]/);
 });
@@ -3962,6 +3962,9 @@ test('Stripe webhook bounds raw payload memory before signature verification', (
   assert.match(webhookRoute, /class StripeWebhookBodyTimeoutError extends Error/);
   assert.match(webhookRoute, /async function readStripeWebhookBody\(req: Request\): Promise<Buffer>/);
   assert.match(webhookRoute, /declaredContentLength\(req\.headers\.get\('content-length'\),MAX_STRIPE_WEBHOOK_BODY_BYTES\)/);
+  assert.match(webhookRoute, /const storageBytes = contentLength \?\? MAX_STRIPE_WEBHOOK_BODY_BYTES/);
+  assert.match(webhookRoute, /Buffer\.allocUnsafe\(storageBytes\)/);
+  assert.match(webhookRoute, /if \(total > storageBytes\)[\s\S]{0,300}InvalidStripeWebhookBodyLengthError/);
   assert.match(webhookRoute, /contentLengthMatches\(contentLength,total\)/);
   assert.match(webhookRoute, /InvalidStripeWebhookBodyLengthError/);
   assert.match(webhookRoute, /total > MAX_STRIPE_WEBHOOK_BODY_BYTES/);
@@ -3976,6 +3979,14 @@ test('Stripe webhook bounds raw payload memory before signature verification', (
   const signatureValidation = webhookRoute.indexOf("const stripeSignature=validStripeSignatureHeader(req.headers.get('stripe-signature'))");
   const signatureCheck = webhookRoute.indexOf('stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret)');
   assert.ok(signatureValidation >= 0 && signatureCheck > signatureValidation, 'Stripe signature header must be bounded before verification');
+});
+
+test('Stripe webhook rejects non-JSON payloads before reading request bodies', () => {
+  assert.match(webhookRoute, /import \{ isJsonRequestContentType \} from '@\/lib\/requestBody'/);
+  const mediaTypeBoundary = webhookRoute.indexOf("if(!isJsonRequestContentType(req.headers.get('content-type'))) ");
+  const bodyRead = webhookRoute.indexOf('payload=await readStripeWebhookBody(req)');
+  assert.ok(mediaTypeBoundary > -1 && bodyRead > mediaTypeBoundary);
+  assert.match(webhookRoute, /Expected JSON webhook payload'\},\{status:415\}/);
 });
 
 test('Stripe webhook rejects unusable signature headers before reading request bodies', () => {

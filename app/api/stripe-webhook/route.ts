@@ -26,6 +26,7 @@ import { metaCapiPurchaseAcknowledged } from '@/lib/metaCapiAcknowledgement';
 import { stripeCheckoutEventStateIssue, type QyRoamCheckoutEventType } from '@/lib/stripeCheckoutEventState';
 import { contentLengthMatches, declaredContentLength } from '@/lib/contentLength';
 import { paidFulfilmentDetailsIssue } from '@/lib/paidFulfilmentDetails';
+import { isJsonRequestContentType } from '@/lib/requestBody';
 
 export const runtime = 'nodejs';
 
@@ -88,10 +89,14 @@ async function readStripeWebhookBody(req: Request): Promise<Buffer> {
     return Buffer.alloc(0);
   }
   const reader = req.body.getReader();
-  // Reserve the known maximum once so stored payload memory cannot grow with
-  // fragmentation. The independent chunk ceiling below also bounds the
-  // amount of read/promise work before this public payload is authenticated.
-  const body = Buffer.allocUnsafe(MAX_STRIPE_WEBHOOK_BODY_BYTES);
+  // A canonical Content-Length has already been bounded above. Most Stripe
+  // events are only a few KiB, so reserve exactly that declared size instead
+  // of charging every concurrent delivery the full 1 MB safety ceiling.
+  // Chunked requests still receive the fixed maximum; in both cases one
+  // contiguous allocation prevents fragmented input from multiplying stored
+  // payload memory. The independent chunk ceiling below bounds read work.
+  const storageBytes = contentLength ?? MAX_STRIPE_WEBHOOK_BODY_BYTES;
+  const body = Buffer.allocUnsafe(storageBytes);
   let total = 0;
   let chunks = 0;
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -123,6 +128,14 @@ async function readStripeWebhookBody(req: Request): Promise<Buffer> {
         // defeat this public endpoint's body-size resource bound.
         void reader.cancel().catch(() => undefined);
         throw new RangeError('Stripe webhook payload is too large');
+      }
+      // When Content-Length is present, reject an overrun before Buffer#set.
+      // Besides keeping the allocation exact, this preserves the intended
+      // malformed-length response rather than leaking a runtime RangeError
+      // from the copy operation and misclassifying it as an oversized body.
+      if (total > storageBytes) {
+        void reader.cancel().catch(() => undefined);
+        throw new InvalidStripeWebhookBodyLengthError('Stripe webhook body length does not match Content-Length');
       }
       body.set(value, total - value.byteLength);
     }
@@ -708,6 +721,13 @@ export async function POST(req:Request){
   // a service dependency failure.
   if(!hasRequiredStripeCheckoutConfig()||!hasRequiredStripeWebhookConfig()||!hasOrderIntegritySigningConfig()||!key||!webhookSecret) {
     return webhookJson({error:'Webhook configuration incomplete'},{status:503});
+  }
+  // Stripe signs JSON Checkout event bytes. A different media type cannot be
+  // a legitimate delivery to this endpoint, so reject it before allocating a
+  // payload buffer or letting a slow body occupy a worker. Parameters such as
+  // `charset=utf-8` remain accepted by the shared exact-media-type parser.
+  if(!isJsonRequestContentType(req.headers.get('content-type'))) {
+    return webhookJson({error:'Expected JSON webhook payload'},{status:415});
   }
   if(!hasIdentityContentEncoding(req.headers.get('content-encoding'))) {
     return webhookJson({error:'Unsupported webhook content encoding'},{status:415});
