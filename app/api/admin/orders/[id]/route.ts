@@ -125,6 +125,20 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const deliveryReference = digitalDeliveryReference(body.digital_delivery_reference, existing.data.digital_delivery_reference);
   const returnDisposition = typeof body.return_disposition === 'string' ? body.return_disposition.trim().toLowerCase() : '';
   const cancelReason = cancellationReason(body.cancellation_reason);
+  // Product-specific evidence must not leak across fulfilment workflows. A
+  // stale or hand-authored admin client can submit fields that the current UI
+  // does not render; accepting router custody data on an eSIM would make the
+  // order look physically dispatched/returned to reports and future tooling.
+  // Keep the API boundary explicit and let the database constraint below act
+  // as the final backstop for service-role writes.
+  if (existing.data.product_type === 'esim' && [
+    'inventory_item_id',
+    'courier_tracking',
+    'return_tracking',
+    'return_disposition',
+  ].some((field) => Object.prototype.hasOwnProperty.call(body, field))) {
+    return NextResponse.json({ error: 'Physical inventory and courier fields are not valid for an eSIM order' }, { status: 400 });
+  }
   if (status === 'cancelled' && existing.data.fulfilment_status !== 'cancelled' && !cancelReason) {
     return NextResponse.json({ error: 'Enter a cancellation reason of 5–500 characters so the paid order can be reconciled.' }, { status: 400 });
   }
@@ -218,8 +232,6 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     updated_at: new Date().toISOString(),
   };
   if (typeof body.digital_delivery_reference === 'string') patch.digital_delivery_reference = deliveryReference || null;
-  if (typeof body.courier_tracking === 'string') patch.courier_tracking = courierTracking || null;
-  if (typeof body.return_tracking === 'string') patch.return_tracking = returnTracking || null;
   if (typeof body.notes === 'string') patch.notes = body.notes.slice(0, 1000);
   if (cancellationNotes) patch.notes = cancellationNotes;
   if (status === 'dispatched' && !existing.data.dispatched_at) patch.dispatched_at = new Date().toISOString();

@@ -441,6 +441,30 @@ alter table public.inventory_items enable row level security;
 alter table public.orders add column if not exists inventory_item_id bigint references public.inventory_items(id) on delete restrict;
 create index if not exists orders_inventory_item_idx on public.orders(inventory_item_id);
 
+-- Digital entitlement evidence and physical custody evidence are mutually
+-- exclusive. The application routes keep these fields separate, but direct
+-- service-role repairs and stale admin clients can otherwise attach courier,
+-- return, or inventory state to an eSIM (or an eSIM delivery pointer to a
+-- router). Such a row is ambiguous to fulfilment, inventory, and customer
+-- support even when its status itself is valid. Preserve historical rows for
+-- reconciliation while enforcing the product shape on every new or changed
+-- order. This follows the additive inventory_item_id migration so clean
+-- installs can resolve every referenced column.
+alter table public.orders drop constraint if exists orders_product_fulfilment_evidence_check;
+alter table public.orders add constraint orders_product_fulfilment_evidence_check check (
+  (
+    product_type <> 'esim' or (
+      inventory_item_id is null and
+      courier_tracking is null and
+      return_tracking is null and
+      return_disposition is null and
+      dispatched_at is null and
+      returned_at is null
+    )
+  ) and
+  (product_type <> 'pocket_wifi' or digital_delivery_reference is null)
+) not valid;
+
 -- Dispatch and receipt are the physical inventory boundaries. The protected
 -- admin RPC records these fields atomically with each stock movement, but the
 -- service role is also used by operational recovery and imports. Keep a
@@ -1101,6 +1125,7 @@ as $$
       'orders_digital_delivery_reference_safe_check',
       'orders_esim_fulfilled_delivery_reference_required_check',
       'orders_product_fulfilment_status_check',
+      'orders_product_fulfilment_evidence_check',
       'orders_fulfilment_requires_paid_payment_check',
       'orders_payment_confirmed_at_requires_paid_payment_check',
       'orders_paid_amount_positive_check',
@@ -1109,7 +1134,7 @@ as $$
       'orders_pocket_wifi_dispatch_evidence_check',
       'orders_pocket_wifi_return_evidence_check',
       'orders_session_id_format_check'
-    )) = 14 and
+    )) = 15 and
     (select count(*) from pg_constraint where conrelid = 'public.stripe_events'::regclass and conname in (
       'stripe_events_attempts_check',
       'stripe_events_event_id_check',
@@ -1756,9 +1781,10 @@ immutable
 security definer
 set search_path = pg_catalog
 as $$
-  -- Version 15 additionally certifies that delivery retry counts are
-  -- monotonic and attempt timestamps can only be written by a sending claim.
-  select 15;
+  -- Version 16 additionally certifies that digital and physical fulfilment
+  -- evidence cannot cross product boundaries. Earlier versions also certify
+  -- monotonic delivery retry counts and claim-owned attempt timestamps.
+  select 16;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
