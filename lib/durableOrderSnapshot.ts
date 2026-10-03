@@ -44,8 +44,17 @@ export function durableOrderMatchesPaidSession(
   session: Stripe.Checkout.Session,
   productType: QyRoamProductType,
 ) {
+  // Keep this shared join safe without relying on every caller to repeat the
+  // Stripe payment-state boundary first. The database row can say `paid`, but
+  // only a completed, paid, one-time SGD Checkout Session is authority for a
+  // QY Roam fulfilment or customer confirmation. This is especially important
+  // for admin recovery, where a successful match can trigger external email
+  // and analytics side effects.
   if (!order || order.payment_status !== 'paid' || order.product_type !== productType ||
-    !Number.isSafeInteger(session.amount_total) || sgdCents(order.amount_sgd) !== session.amount_total ||
+    session.mode !== 'payment' || session.status !== 'complete' || session.payment_status !== 'paid' ||
+    session.currency?.toLowerCase() !== 'sgd' ||
+    typeof session.amount_total !== 'number' || !Number.isSafeInteger(session.amount_total) || session.amount_total <= 0 ||
+    sgdCents(order.amount_sgd) !== session.amount_total ||
     order.plan_name !== (session.metadata?.plan_name || null) ||
     order.country !== (session.metadata?.country || null)) {
     return false;

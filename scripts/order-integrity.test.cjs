@@ -4896,6 +4896,10 @@ test('Pocket WiFi availability fails closed when its exact committed-order count
 
 test('customer confirmation trusts only the durable order snapshot matching Stripe', () => {
   const esimSession = {
+    mode: 'payment',
+    status: 'complete',
+    payment_status: 'paid',
+    currency: 'sgd',
     amount_total: 1290,
     metadata: {
       plan_id: 'jp-7d',
@@ -4925,6 +4929,23 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
     { ...esimSession, amount_total: 481 },
     'esim',
   ), true);
+  // The matcher is reused by customer confirmation and admin delivery
+  // recovery. It must prove Stripe's payment state itself rather than depend
+  // on every present and future caller performing the same precondition.
+  for (const sessionPatch of [
+    { mode: 'subscription' },
+    { status: 'open' },
+    { payment_status: 'unpaid' },
+    { currency: 'usd' },
+    { currency: null },
+    { amount_total: 0 },
+  ]) {
+    assert.equal(durableOrderMatchesPaidSession(
+      { ...esimOrder, ...(sessionPatch.amount_total === 0 ? { amount_sgd: 0 } : {}) },
+      { ...esimSession, ...sessionPatch },
+      'esim',
+    ), false);
+  }
   // Sessions opened during the data-allowance metadata rollout are accepted
   // against a current catalogue plan. Webhook persistence fills that same
   // catalogue entitlement, so confirmation must not leave a genuine paid
@@ -4972,6 +4993,10 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
   }
 
   const wifiSession = {
+    mode: 'payment',
+    status: 'complete',
+    payment_status: 'paid',
+    currency: 'sgd',
     amount_total: 552,
     metadata: {
       plan_name: 'Japan Pocket WiFi',
