@@ -974,6 +974,13 @@ begin
   if old.status = 'sent' and new is distinct from old then
     raise exception 'sent delivery ledger record is immutable';
   end if;
+  if new.attempts < old.attempts then
+    raise exception 'delivery ledger attempts cannot decrease';
+  end if;
+  if new.last_attempt_at is distinct from old.last_attempt_at
+    and new.status <> 'sending' then
+    raise exception 'delivery attempt time can change only while claiming a send';
+  end if;
   if not (
     new.status = old.status or
     (old.status = 'pending' and new.status = 'sending') or
@@ -1015,6 +1022,13 @@ begin
   end if;
   if old.status = 'sent' and new is distinct from old then
     raise exception 'sent delivery ledger record is immutable';
+  end if;
+  if new.attempts < old.attempts then
+    raise exception 'delivery ledger attempts cannot decrease';
+  end if;
+  if new.last_attempt_at is distinct from old.last_attempt_at
+    and new.status <> 'sending' then
+    raise exception 'delivery attempt time can change only while claiming a send';
   end if;
   if not (
     new.status = old.status or
@@ -1742,9 +1756,9 @@ immutable
 security definer
 set search_path = pg_catalog
 as $$
-  -- Version 14 additionally certifies that both Stripe persistence RPCs
-  -- enforce canonical Checkout identities and cannot cross product types.
-  select 14;
+  -- Version 15 additionally certifies that delivery retry counts are
+  -- monotonic and attempt timestamps can only be written by a sending claim.
+  select 15;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
