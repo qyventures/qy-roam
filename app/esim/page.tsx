@@ -5,6 +5,7 @@ import { ESIM_PLANS, ESIM_PROMO, esimPromoIsActive } from '../../lib/esimPlans';
 import { metaAttribution, metaMeasurementAllowed, trackMeta } from '../../lib/metaClient';
 import { checkoutAttempt, clearCheckoutAttempt, type CheckoutAttempt } from '../../lib/checkoutAttempt';
 import { fetchCustomerRequest } from '../../lib/clientRequest';
+import { parseCustomerCheckoutResponse } from '../../lib/customerCheckoutResponse';
 
 export default function EsimPage() {
   const [planId, setPlanId] = useState<string>(ESIM_PLANS[0].id);
@@ -42,9 +43,10 @@ export default function EsimPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ planId, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: activeCheckoutAttempt.current.requestId, checkoutAttemptCreatedAt: activeCheckoutAttempt.current.createdAt })
       });
-      const data = await res.json();
-      if (data.url) window.location.href = data.url;
-      else if (data.completed && typeof data.sessionId === 'string') window.location.href = `/success?session_id=${encodeURIComponent(data.sessionId)}`;
+      const payload: unknown = await res.json();
+      const data = parseCustomerCheckoutResponse(payload, res.ok);
+      if (data.checkoutUrl) window.location.href = data.checkoutUrl;
+      else if (data.completedSessionId) window.location.href = `/success?session_id=${encodeURIComponent(data.completedSessionId)}`;
       else {
         // Do not rotate an idempotency key on a transient failure, since Stripe
         // may already have created the session. An explicit expiry or a

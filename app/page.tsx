@@ -10,6 +10,7 @@ import { checkoutAttempt, clearCheckoutAttempt, type CheckoutAttempt } from '../
 import { fetchCustomerRequest } from '../lib/clientRequest';
 import { esimPromoIsActive } from '../lib/esimPlans';
 import { parsePocketWifiAvailability, type PocketWifiAvailability } from '../lib/pocketWifiAvailability';
+import { parseCustomerCheckoutResponse } from '../lib/customerCheckoutResponse';
 
 const plans = WIFI_PLANS;
 
@@ -166,9 +167,10 @@ export default function Home() {
     setCheckingOut(true);
     try {
       const res = await fetchCustomerRequest('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ country, start, end, promoCode, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: activeCheckoutAttempt.current.requestId, checkoutAttemptCreatedAt: activeCheckoutAttempt.current.createdAt }) });
-      const data = await res.json();
-      if (data.url) window.location.href = data.url;
-      else if (data.completed && typeof data.sessionId === 'string') window.location.href = `/success?session_id=${encodeURIComponent(data.sessionId)}`;
+      const payload: unknown = await res.json();
+      const data = parseCustomerCheckoutResponse(payload, res.ok);
+      if (data.checkoutUrl) window.location.href = data.checkoutUrl;
+      else if (data.completedSessionId) window.location.href = `/success?session_id=${encodeURIComponent(data.completedSessionId)}`;
       else {
         // Keep the idempotency key after ordinary failures: the server may have
         // created a session before a network response was lost. Rotate it only

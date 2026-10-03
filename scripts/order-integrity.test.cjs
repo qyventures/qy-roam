@@ -64,6 +64,7 @@ const { custodyReferenceIssue, normalizeCustodyReference, MAX_CUSTODY_REFERENCE_
 const { durableOrderMatchesPaidSession } = require('../lib/durableOrderSnapshot.ts');
 const { exactStripeClaimToken } = require('../lib/stripeClaimToken.ts');
 const { parsePocketWifiAvailability } = require('../lib/pocketWifiAvailability.ts');
+const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutResponse.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { hasOrderIntegritySecret, hasOrderIntegritySigningConfig, isCanonicalStripeMetadata, signedQyRoamProvenance, validQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -293,6 +294,44 @@ test('customer checkout redirects accept only Stripe-hosted payment capabilities
   assert.match(wifiCheckoutRoute, /const existingCheckoutUrl=safeStripeCheckoutUrl\(existing\.url\)/);
   assert.match(wifiCheckoutRoute, /const checkoutUrl=safeStripeCheckoutUrl\(currentSession\.url\)/);
   assert.doesNotMatch(wifiCheckoutRoute, /\{url:(?:existing|currentSession)\.url\}/);
+});
+
+test('storefront checkout responses cannot redirect through malformed runtime data', () => {
+  const stripeUrl = 'https://checkout.stripe.com/c/pay/cs_test_safe#fidkdWxOYHwnPyd1blpxYHZxWjA0';
+  assert.deepEqual(parseCustomerCheckoutResponse({ url: stripeUrl }, true), {
+    checkoutUrl: stripeUrl,
+    completedSessionId: null,
+    error: null,
+    checkoutExpired: false,
+    checkoutRequestConflict: false,
+    paymentFailed: false,
+  });
+  assert.equal(parseCustomerCheckoutResponse({ completed: true, sessionId: 'cs_test_safe' }, true).completedSessionId, 'cs_test_safe');
+  for (const [payload, responseOk] of [
+    [{ url: 'javascript:alert(1)' }, true],
+    [{ url: stripeUrl }, false],
+    [{ completed: true, sessionId: '../admin' }, true],
+    [{ completed: true, sessionId: 'cs_test_safe' }, false],
+    [{ url: stripeUrl, completed: true, sessionId: 'cs_test_safe' }, true],
+    [null, true],
+    [['not', 'an', 'object'], true],
+  ]) {
+    const parsed = parseCustomerCheckoutResponse(payload, responseOk);
+    assert.equal(parsed.checkoutUrl, null);
+    assert.equal(parsed.completedSessionId, null);
+  }
+  const failure = parseCustomerCheckoutResponse({ error: 'Payment pending.', paymentFailed: true, checkoutExpired: 'true' }, false);
+  assert.equal(failure.error, 'Payment pending.');
+  assert.equal(failure.paymentFailed, true);
+  assert.equal(failure.checkoutExpired, false);
+  assert.equal(parseCustomerCheckoutResponse({ error: 'bad\nheader' }, false).error, null);
+
+  for (const page of [homePage, esimPage]) {
+    assert.match(page, /parseCustomerCheckoutResponse\(payload, res\.ok\)/);
+    assert.match(page, /if \(data\.checkoutUrl\) window\.location\.href = data\.checkoutUrl/);
+    assert.match(page, /else if \(data\.completedSessionId\) window\.location\.href = `\/success\?session_id=\$\{encodeURIComponent\(data\.completedSessionId\)\}`/);
+    assert.doesNotMatch(page, /if \(data\.url\) window\.location\.href = data\.url/);
+  }
 });
 
 test('checkout attempt identity survives reloads without becoming permanently stale', () => {
@@ -2463,8 +2502,8 @@ test('idempotent checkout replays recover paid orders without a second payment a
   assert.match(esimCheckoutRoute, /currentSession\.status === 'complete' && currentSession\.payment_status === 'paid'/);
   assert.match(esimCheckoutRoute, /\{ completed: true, sessionId: currentSession\.id \}/);
   assert.match(esimCheckoutRoute, /paymentPending: true/);
-  assert.match(homePage, /data\.completed && typeof data\.sessionId === 'string'/);
-  assert.match(esimPage, /data\.completed && typeof data\.sessionId === 'string'/);
+  assert.match(homePage, /else if \(data\.completedSessionId\) window\.location\.href/);
+  assert.match(esimPage, /else if \(data\.completedSessionId\) window\.location\.href/);
 });
 
 test('Pocket WiFi create recovery uses fresh Stripe state and confirms provenance before exposing checkout', () => {
