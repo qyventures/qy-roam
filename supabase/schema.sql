@@ -190,7 +190,7 @@ alter table public.orders add constraint orders_digital_delivery_reference_safe_
 -- reviewable while enforcing the rule for all new and changed rows.
 alter table public.orders drop constraint if exists orders_esim_fulfilled_delivery_reference_required_check;
 alter table public.orders add constraint orders_esim_fulfilled_delivery_reference_required_check check (
-  product_type <> 'esim' or fulfilment_status <> 'fulfilled' or (
+  product_type <> 'esim' or fulfilment_status not in ('fulfilled', 'closed') or (
     digital_delivery_reference is not null and btrim(digital_delivery_reference) <> ''
   )
 ) not valid;
@@ -207,7 +207,7 @@ security invoker
 set search_path = public
 as $$
 begin
-  if old.product_type = 'esim' and old.fulfilment_status = 'fulfilled'
+  if old.product_type = 'esim' and old.fulfilment_status in ('fulfilled', 'closed')
     and new.digital_delivery_reference is distinct from old.digital_delivery_reference then
     raise exception 'eSIM delivery reference is immutable after fulfilment';
   end if;
@@ -1781,10 +1781,11 @@ immutable
 security definer
 set search_path = pg_catalog
 as $$
-  -- Version 16 additionally certifies that digital and physical fulfilment
-  -- evidence cannot cross product boundaries. Earlier versions also certify
+  -- Version 17 additionally certifies that a closed eSIM retains the same
+  -- mandatory, immutable delivery evidence as the fulfilled hand-off state.
+  -- Earlier versions also certify product-specific evidence boundaries,
   -- monotonic delivery retry counts and claim-owned attempt timestamps.
-  select 16;
+  select 17;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;

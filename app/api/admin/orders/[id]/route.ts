@@ -172,8 +172,8 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     // remain stable so later edits cannot hide the actual delivery record or
     // replace it with a credential. Corrections belong in the support/refund
     // record, not in this fulfilment ledger.
-    if (existing.data.fulfilment_status === 'fulfilled' && deliveryReference !== normalizeDigitalDeliveryReference(existing.data.digital_delivery_reference)) {
-      return NextResponse.json({ error: 'The delivery reference is immutable after an eSIM order is fulfilled. Record any correction in the support/refund log.' }, { status: 409 });
+    if (['fulfilled', 'closed'].includes(existing.data.fulfilment_status) && deliveryReference !== normalizeDigitalDeliveryReference(existing.data.digital_delivery_reference)) {
+      return NextResponse.json({ error: 'The delivery reference is immutable after an eSIM order is fulfilled or closed. Record any correction in the support/refund log.' }, { status: 409 });
     }
   }
   if (existing.data.product_type === 'esim' && status === 'fulfilled') {
