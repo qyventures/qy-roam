@@ -181,6 +181,8 @@ const requiredContracts = [
   'stripe_events_event_id_check',
   'stripe_events_session_id_check',
   'stripe_events_event_type_check',
+  'stripe_events_failure_timestamp_check',
+  'stripe_events_processed_failure_check',
   'orders_session_id_format_check',
   "after insert or update of payment_status, customer_name, email, phone, amount_sgd on public.orders",
   "new.payment_status <> 'paid'",

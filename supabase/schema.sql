@@ -744,6 +744,20 @@ alter table public.stripe_events add constraint stripe_events_event_type_check c
     'checkout.session.expired'
   )
 ) not valid;
+-- A recovery job can insert into this service-role ledger directly, so the
+-- update trigger below is not sufficient on its own. Keep failure evidence
+-- coherent on INSERT as well: a diagnostic without a timestamp is not
+-- actionable, and a row cannot be both permanently processed and failed.
+-- NOT VALID preserves historical exceptions for operator reconciliation
+-- while enforcing the lifecycle for every new or changed record.
+alter table public.stripe_events drop constraint if exists stripe_events_failure_timestamp_check;
+alter table public.stripe_events add constraint stripe_events_failure_timestamp_check check (
+  last_error is null or last_failed_at is not null
+) not valid;
+alter table public.stripe_events drop constraint if exists stripe_events_processed_failure_check;
+alter table public.stripe_events add constraint stripe_events_processed_failure_check check (
+  processed_at is null or last_error is null
+) not valid;
 alter table public.stripe_events enable row level security;
 
 -- Stripe's event id is the durable idempotency identity. The webhook checks
@@ -1155,8 +1169,10 @@ as $$
       'stripe_events_attempts_check',
       'stripe_events_event_id_check',
       'stripe_events_session_id_check',
-      'stripe_events_event_type_check'
-    )) = 4 and
+      'stripe_events_event_type_check',
+      'stripe_events_failure_timestamp_check',
+      'stripe_events_processed_failure_check'
+    )) = 6 and
     (select count(*) from pg_constraint where conrelid = 'public.fulfilment_notifications'::regclass and conname in (
       'fulfilment_notifications_status_check',
       'fulfilment_notifications_attempts_check',
@@ -1805,8 +1821,9 @@ as $$
   -- Earlier versions also certify product-specific evidence boundaries,
   -- monotonic delivery retry counts and claim-owned attempt timestamps.
   -- Version 19 additionally certifies bounded Stripe order identities and
-  -- exact, untruncated Pocket WiFi custody-movement correlation.
-  select 19;
+  -- exact, untruncated Pocket WiFi custody-movement correlation. Version 20
+  -- also certifies insert-safe Stripe failure/settlement lifecycle checks.
+  select 20;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
