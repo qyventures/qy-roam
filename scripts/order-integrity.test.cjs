@@ -335,9 +335,15 @@ test('storefront checkout responses cannot redirect through malformed runtime da
   for (const [payload, responseStatus] of [
     [{ url: 'javascript:alert(1)' }, 200],
     [{ url: stripeUrl }, 503],
+    [{ url: stripeUrl }, 201],
+    [{ url: stripeUrl }, 206],
     [{ completed: true, sessionId: '../admin' }, 200],
     [{ completed: true, sessionId: 'cs_test_safe' }, 409],
     [{ url: stripeUrl, completed: true, sessionId: 'cs_test_safe' }, 200],
+    [{ url: stripeUrl, completed: true, sessionId: '../admin' }, 200],
+    [{ url: 'javascript:alert(1)', completed: true, sessionId: 'cs_test_safe' }, 200],
+    [{ url: stripeUrl, sessionId: '../admin' }, 200],
+    [{ completed: true, sessionId: 'cs_test_safe', url: null }, 200],
     [null, 200],
     [['not', 'an', 'object'], 200],
   ]) {

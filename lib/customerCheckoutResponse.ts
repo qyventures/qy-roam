@@ -35,7 +35,10 @@ export function parseCustomerCheckoutResponse(value: unknown, responseStatus: nu
   if (!Number.isSafeInteger(responseStatus) || responseStatus < 100 || responseStatus > 599) return empty;
 
   const input = value as Record<string, unknown>;
-  const responseOk = responseStatus >= 200 && responseStatus < 300;
+  // Both checkout routes deliberately return 200 for their only two success
+  // envelopes. Do not treat redirects, partial-content responses, or another
+  // future 2xx shape as authority to navigate away from the storefront.
+  const responseOk = responseStatus === 200;
   const checkoutUrl = responseOk ? safeStripeCheckoutUrl(input.url) : null;
   const completedSessionId = responseOk && input.completed === true
     ? validStripeCheckoutSessionId(input.sessionId)
@@ -47,7 +50,16 @@ export function parseCustomerCheckoutResponse(value: unknown, responseStatus: nu
     // from a malformed HTTP 2xx payload: discarding the browser's durable
     // Stripe idempotency key after the server may have created a Session can
     // turn a response-shape regression into a second payable Session.
-    if (Boolean(checkoutUrl) === Boolean(completedSessionId)) return empty;
+    // Validate the raw branch markers as well as the resulting capability.
+    // Otherwise `{ url: valid, completed: true, sessionId: malformed }`
+    // silently degrades into a URL response even though the server claimed
+    // two mutually exclusive outcomes. The inverse ambiguity is equally
+    // unsafe. Fail closed and retain the current idempotency key.
+    const claimsCheckoutUrl = Object.prototype.hasOwnProperty.call(input, 'url');
+    const claimsCompletedSession = input.completed === true ||
+      Object.prototype.hasOwnProperty.call(input, 'sessionId');
+    if (claimsCheckoutUrl === claimsCompletedSession ||
+      Boolean(checkoutUrl) === Boolean(completedSessionId)) return empty;
     return {
       ...empty,
       checkoutUrl,
