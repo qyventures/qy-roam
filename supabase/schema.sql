@@ -472,6 +472,28 @@ alter table public.orders add constraint orders_pocket_wifi_return_evidence_chec
   )
 ) not valid;
 
+-- Custody references become immutable once their physical boundary is
+-- crossed, so accepting a malformed value is not repairable through the
+-- normal workflow. The admin route and transition RPC apply this same shape,
+-- but keep it at the table boundary as well for service-role imports and
+-- operational repairs. NOT VALID preserves any historical exception for
+-- reconciliation while protecting every new or changed Pocket WiFi order.
+alter table public.orders drop constraint if exists orders_pocket_wifi_custody_reference_shape_check;
+alter table public.orders add constraint orders_pocket_wifi_custody_reference_shape_check check (
+  product_type <> 'pocket_wifi' or (
+    (courier_tracking is null or (
+      length(courier_tracking) between 1 and 200 and
+      courier_tracking = btrim(courier_tracking) and
+      courier_tracking !~ '[[:cntrl:]]'
+    )) and
+    (return_tracking is null or (
+      length(return_tracking) between 1 and 200 and
+      return_tracking = btrim(return_tracking) and
+      return_tracking !~ '[[:cntrl:]]'
+    ))
+  )
+) not valid;
+
 -- Pocket WiFi custody is just as irreversible as digital fulfilment, but its
 -- state graph was previously enforced only by the admin API and transition
 -- RPC. A service-role repair or future worker could therefore jump directly
@@ -2131,7 +2153,7 @@ language sql
 immutable
 security definer
 set search_path = pg_catalog
-as $$ select 4; $$;
+as $$ select 5; $$;
 revoke all on function public.qy_pocket_wifi_fulfilment_schema_version() from public;
 grant execute on function public.qy_pocket_wifi_fulfilment_schema_version() to service_role;
 

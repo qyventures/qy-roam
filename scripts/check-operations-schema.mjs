@@ -165,6 +165,7 @@ const requiredContracts = [
   'create or replace function public.qy_transition_pocket_wifi_order',
   "and status = 'available'",
   'selected Pocket WiFi inventory item is not available for dispatch',
+  'orders_pocket_wifi_custody_reference_shape_check',
   'create or replace function public.qy_create_manual_pocket_wifi_order',
   'create or replace function public.qy_create_inventory_item',
   'create table if not exists public.customers',
