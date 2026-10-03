@@ -1339,7 +1339,7 @@ test('Pocket WiFi checkout renders live availability terms before opening Stripe
   // The availability endpoint is also the public source for delivery lead
   // time and courier pricing. A first click must not redirect to payment in
   // the same render pass that receives a revised total.
-  assert.match(homePage, /if \(!currentAvailability\?\.available \|\| currentAvailability\.checkedStart !== start \|\| currentAvailability\.checkedEnd !== end\) \{[\s\S]*?currentAvailability = await checkAvailability\(\);[\s\S]*?if \(currentAvailability\.available && selectedDates\.current\.start === currentAvailability\.checkedStart && selectedDates\.current\.end === currentAvailability\.checkedEnd\) \{[\s\S]*?setCheckoutError\('Availability confirmed\. Please review the updated total, then select Reserve\.'\);[\s\S]*?checkoutInFlight\.current = false;[\s\S]*?return;/);
+  assert.match(homePage, /if \(!currentAvailability\?\.available \|\| currentAvailability\.checkedCountry !== country \|\| currentAvailability\.checkedStart !== start \|\| currentAvailability\.checkedEnd !== end\) \{[\s\S]*?currentAvailability = await checkAvailability\(\);[\s\S]*?if \(currentAvailability\.available && selectedBooking\.current\.country === currentAvailability\.checkedCountry && selectedBooking\.current\.start === currentAvailability\.checkedStart && selectedBooking\.current\.end === currentAvailability\.checkedEnd\) \{[\s\S]*?setCheckoutError\('Availability confirmed\. Please review the updated total, then select Reserve\.'\);[\s\S]*?checkoutInFlight\.current = false;[\s\S]*?return;/);
 });
 
 test('Pocket WiFi availability remains bound to the exact dates that were checked', () => {
@@ -1348,11 +1348,22 @@ test('Pocket WiFi availability remains bound to the exact dates that were checke
   // before showing availability or enabling the payment action.
   assert.match(homePage, /const checkedStart = start;\s*const checkedEnd = end;/);
   assert.match(homePage, /start=\$\{encodeURIComponent\(checkedStart\)\}&end=\$\{encodeURIComponent\(checkedEnd\)\}/);
-  assert.match(homePage, /\{ \.\.\.data, checkedStart, checkedEnd \}/);
-  assert.match(homePage, /selectedDates\.current = \{ start, end \}/);
-  assert.match(homePage, /if \(selectedDates\.current\.start === checkedStart && selectedDates\.current\.end === checkedEnd\) setAvailability\(result\)/);
-  assert.match(homePage, /const availabilityMatchesSelection = availability\?\.checkedStart === start && availability\?\.checkedEnd === end;/);
+  assert.match(homePage, /\{ \.\.\.data, checkedCountry, checkedStart, checkedEnd \}/);
+  assert.match(homePage, /selectedBooking\.current = \{ country, start, end \}/);
+  assert.match(homePage, /selectedBooking\.current\.country === checkedCountry && selectedBooking\.current\.start === checkedStart && selectedBooking\.current\.end === checkedEnd/);
+  assert.match(homePage, /const availabilityMatchesSelection = availability\?\.checkedCountry === country && availability\?\.checkedStart === start && availability\?\.checkedEnd === end;/);
   assert.match(homePage, /availabilityMatchesSelection && availability\?\.available \? `Reserve for S\$\$\{payableTotal\.toFixed\(2\)\}` : 'Check availability'/);
+});
+
+test('only the latest Pocket WiFi availability request owns booking terms and loading state', () => {
+  // Mobile users can submit again while an earlier provider-backed request is
+  // still resolving. An old response must not replace newer courier pricing,
+  // lead time, availability, or clear the newer request's loading indicator.
+  assert.match(homePage, /const requestNumber = \+\+availabilityRequest\.current;/);
+  assert.match(homePage, /requestNumber === availabilityRequest\.current && selectedBooking\.current\.country === checkedCountry/);
+  assert.match(homePage, /if \(configuredLeadDays !== undefined\) setDeliveryLeadDays\(configuredLeadDays\);/);
+  assert.match(homePage, /if \(configuredCourierFee !== undefined\) setCourierFeeSgd\(configuredCourierFee\);/);
+  assert.match(homePage, /if \(requestNumber === availabilityRequest\.current\) setChecking\(false\);/);
 });
 
 test('checkout request ids use the same production boundary everywhere', () => {

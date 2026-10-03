@@ -19,6 +19,7 @@ type Availability = {
   error?: string;
   minDeliveryLeadDays?: number;
   courierFeeSgd?: number;
+  checkedCountry?: string;
   checkedStart?: string;
   checkedEnd?: string;
 };
@@ -63,8 +64,9 @@ export default function Home() {
   const [checkoutError, setCheckoutError] = useState('');
   const activeCheckoutAttempt = useRef<CheckoutAttempt | null>(null);
   const checkoutInFlight = useRef(false);
-  const selectedDates = useRef({ start, end });
-  selectedDates.current = { start, end };
+  const availabilityRequest = useRef(0);
+  const selectedBooking = useRef({ country, start, end });
+  selectedBooking.current = { country, start, end };
   const plan = useMemo(() => plans.find(p => p.country === country) || plans[0], [country]);
   const datesValid = Boolean(start && end && start >= earliestStart && end >= start);
   const days = daysBetween(start, end);
@@ -84,7 +86,7 @@ export default function Home() {
   // shopper can edit either date while the provider-backed request is still
   // in flight, so never let that stale response enable checkout or describe
   // the newly selected dates as available.
-  const availabilityMatchesSelection = availability?.checkedStart === start && availability?.checkedEnd === end;
+  const availabilityMatchesSelection = availability?.checkedCountry === country && availability?.checkedStart === start && availability?.checkedEnd === end;
 
   function validateDates() {
     if (!start || !end) return 'Choose both travel dates.';
@@ -99,6 +101,8 @@ export default function Home() {
       const result = { available: false, error: validationError };
       setAvailability(result); setCheckoutError(validationError); return result;
     }
+    const requestNumber = ++availabilityRequest.current;
+    const checkedCountry = country;
     const checkedStart = start;
     const checkedEnd = end;
     setChecking(true); setAvailability(null); setCheckoutError('');
@@ -110,18 +114,24 @@ export default function Home() {
       // recalculates every amount and date rule independently on the server.
       const configuredLeadDays = validLeadDays(data.minDeliveryLeadDays);
       const configuredCourierFee = validCourierFee(data.courierFeeSgd);
-      if (configuredLeadDays !== undefined) setDeliveryLeadDays(configuredLeadDays);
-      if (configuredCourierFee !== undefined) setCourierFeeSgd(configuredCourierFee);
       const result = res.ok
-        ? { ...data, checkedStart, checkedEnd }
-        : { available: false, error: data.error || 'Unable to check availability.', checkedStart, checkedEnd };
-      if (selectedDates.current.start === checkedStart && selectedDates.current.end === checkedEnd) setAvailability(result);
+        ? { ...data, checkedCountry, checkedStart, checkedEnd }
+        : { available: false, error: data.error || 'Unable to check availability.', checkedCountry, checkedStart, checkedEnd };
+      if (requestNumber === availabilityRequest.current && selectedBooking.current.country === checkedCountry && selectedBooking.current.start === checkedStart && selectedBooking.current.end === checkedEnd) {
+        if (configuredLeadDays !== undefined) setDeliveryLeadDays(configuredLeadDays);
+        if (configuredCourierFee !== undefined) setCourierFeeSgd(configuredCourierFee);
+        setAvailability(result);
+      }
       return result;
     } catch {
-      const result = { available: false, error: 'Unable to check availability. Please try again.', checkedStart, checkedEnd };
-      if (selectedDates.current.start === checkedStart && selectedDates.current.end === checkedEnd) setAvailability(result);
+      const result = { available: false, error: 'Unable to check availability. Please try again.', checkedCountry, checkedStart, checkedEnd };
+      if (requestNumber === availabilityRequest.current && selectedBooking.current.country === checkedCountry && selectedBooking.current.start === checkedStart && selectedBooking.current.end === checkedEnd) setAvailability(result);
       return result;
-    } finally { setChecking(false); }
+    } finally {
+      // An older request can finish after a newer one starts. It does not own
+      // the shared loading state or payment-facing booking terms.
+      if (requestNumber === availabilityRequest.current) setChecking(false);
+    }
   }
 
   async function search(e: FormEvent) { e.preventDefault(); setSearched(true); await checkAvailability(); document.getElementById('plans')?.scrollIntoView({ behavior: 'smooth' }); }
@@ -133,7 +143,7 @@ export default function Home() {
     const validationError = validateDates();
     if (validationError) { setCheckoutError(validationError); checkoutInFlight.current = false; return; }
     let currentAvailability = availability;
-    if (!currentAvailability?.available || currentAvailability.checkedStart !== start || currentAvailability.checkedEnd !== end) {
+    if (!currentAvailability?.available || currentAvailability.checkedCountry !== country || currentAvailability.checkedStart !== start || currentAvailability.checkedEnd !== end) {
       currentAvailability = await checkAvailability();
       // Availability also returns the live courier fee and delivery lead time.
       // Do not send a shopper directly to Stripe on the same click that first
@@ -141,7 +151,7 @@ export default function Home() {
       // that flow could make a newly configured courier charge a surprise.
       // The next explicit action uses this checked availability snapshot;
       // Checkout still recalculates and validates the amount on the server.
-      if (currentAvailability.available && selectedDates.current.start === currentAvailability.checkedStart && selectedDates.current.end === currentAvailability.checkedEnd) {
+      if (currentAvailability.available && selectedBooking.current.country === currentAvailability.checkedCountry && selectedBooking.current.start === currentAvailability.checkedStart && selectedBooking.current.end === currentAvailability.checkedEnd) {
         setCheckoutError('Availability confirmed. Please review the updated total, then select Reserve.');
       }
       checkoutInFlight.current = false;
