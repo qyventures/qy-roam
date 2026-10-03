@@ -1140,7 +1140,7 @@ test('booking status requires a durable paid order before showing fulfilment pro
   assert.match(bookingPage, /const orderLookupFailed = !supabase \|\| Boolean\(orderResult\?\.error\)/);
   assert.match(bookingPage, /select\('payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,fulfilment_status,/);
   assert.match(bookingPage, /const orderPersisted = durableOrderMatchesPaidSession\(storedOrder, session, productType\)/);
-  assert.match(bookingPage, /paid && !orderPersisted/);
+  assert.match(bookingPage, /paid && !orderLifecycleValid/);
   assert.match(bookingPage, /orderLookupFailed \? 'temporarily unable to verify' : 'still finalising'/);
   assert.match(bookingPage, /Please do not place a second order/);
 });
@@ -1182,11 +1182,24 @@ test('customer confirmation views distinguish expired Checkout Sessions from del
 });
 
 test('customer booking status does not present terminal orders as awaiting fulfilment', () => {
+  assert.match(bookingPage, /fulfilled: 'eSIM fulfilled'/);
   assert.match(bookingPage, /fulfilment === 'cancelled'/);
   assert.match(bookingPage, /This order has been cancelled in our fulfilment system/);
   assert.match(bookingPage, /fulfilment === 'fulfilled' \|\| fulfilment === 'closed'/);
   assert.match(bookingPage, /fulfilment === 'returned' \|\| fulfilment === 'closed'/);
   assert.match(bookingPage, /This rental no longer requires delivery or return action/);
+});
+
+test('customer booking status fails closed on malformed operational lifecycle data', () => {
+  assert.match(bookingPage, /validFulfilmentStatus\(productType, storedOrder\.fulfilment_status\)/);
+  assert.match(bookingPage, /const order = orderLifecycleValid \? storedOrder : null/);
+  assert.match(bookingPage, /paid && !orderLifecycleValid/);
+  assert.match(bookingPage, /normalizeCustodyReference\(order\.courier_tracking\)/);
+  assert.match(bookingPage, /!custodyReferenceIssue\(safeCourierTracking\)/);
+  assert.match(bookingPage, /normalizeCustodyReference\(order\.return_tracking\)/);
+  assert.match(bookingPage, /!custodyReferenceIssue\(safeReturnTracking\)/);
+  assert.doesNotMatch(bookingPage, /\{order\?\.courier_tracking &&/);
+  assert.doesNotMatch(bookingPage, /\{order\?\.return_tracking &&/);
 });
 
 test('checkout validation rejects normalized and malformed calendar dates', () => {
@@ -4602,5 +4615,5 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
     assert.match(page, /payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end/);
   }
   assert.match(successPage, /<MetaPurchase sessionId=\{sessionId\} orderPersisted=\{orderPersisted\}/);
-  assert.match(bookingPage, /const order = orderPersisted \? storedOrder : null/);
+  assert.match(bookingPage, /const order = orderLifecycleValid \? storedOrder : null/);
 });

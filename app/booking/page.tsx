@@ -1,13 +1,14 @@
 import type { Metadata } from 'next';
 import { createStripeClient } from '@/lib/stripeClient';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
-import { initialFulfilmentStatus } from '@/lib/orderLifecycle';
+import { initialFulfilmentStatus, validFulfilmentStatus } from '@/lib/orderLifecycle';
 import { validateQyRoamSession } from '@/lib/qyRoamSession';
 import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
 import { POCKET_WIFI_RETURN_GRACE_DAYS } from '@/lib/pocketWifiReturns';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
+import { custodyReferenceIssue, normalizeCustodyReference } from '@/lib/custodyReference';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,6 +25,7 @@ const statusLabels: Record<string, string> = {
   awaiting_payment: 'Awaiting payment confirmation',
   payment_failed: 'Payment failed',
   awaiting_fulfilment: 'Paid — eSIM fulfilment in progress',
+  fulfilled: 'eSIM fulfilled',
   paid: 'Paid — preparing your order',
   packing: 'Preparing your order',
   dispatched: 'Dispatched for delivery',
@@ -98,11 +100,19 @@ export default async function BookingPage({ searchParams }: Props) {
     // customer first opens this page. Only a paid order snapshot proves the
     // fulfilment queue has durably received the purchase.
     const orderPersisted = durableOrderMatchesPaidSession(storedOrder, session, productType);
+    // The commercial snapshot proves which paid order this is, but lifecycle
+    // fields can still have been imported or repaired independently through a
+    // service-role client. Do not turn an unknown state into the reassuring
+    // fallback "Order confirmed": fail closed until operations repairs the
+    // row, just as this page does for a mismatched paid-order snapshot.
+    const orderLifecycleValid = orderPersisted &&
+      typeof storedOrder?.fulfilment_status === 'string' &&
+      validFulfilmentStatus(productType, storedOrder.fulfilment_status);
     // Never display lifecycle or tracking data from a row whose commercial
     // identity does not match the signed Checkout snapshot. Treat it like an
     // order still needing reconciliation, while Stripe remains authoritative
     // for the customer's already-completed payment.
-    const order = orderPersisted ? storedOrder : null;
+    const order = orderLifecycleValid ? storedOrder : null;
 
     const fulfilment = order?.fulfilment_status || initialFulfilmentStatus(productType, session.payment_status);
     const destination = session.metadata?.country || 'your destination';
@@ -116,6 +126,22 @@ export default async function BookingPage({ searchParams }: Props) {
     // Stripe object cannot be shown to a customer as a confirmed order.
     const paid = session.status === 'complete' && session.payment_status === 'paid';
     const checkoutExpired = session.status === 'expired';
+    // Custody references are customer-visible operational evidence. Preserve
+    // the same compact single-line boundary enforced by the admin workflow so
+    // legacy or direct service-role data cannot inject control characters or
+    // an unbounded value into the confirmation UI.
+    const safeCourierTracking = typeof order?.courier_tracking === 'string'
+      ? normalizeCustodyReference(order.courier_tracking)
+      : '';
+    const courierTracking = safeCourierTracking && !custodyReferenceIssue(safeCourierTracking)
+      ? safeCourierTracking
+      : '';
+    const safeReturnTracking = typeof order?.return_tracking === 'string'
+      ? normalizeCustodyReference(order.return_tracking)
+      : '';
+    const returnTracking = safeReturnTracking && !custodyReferenceIssue(safeReturnTracking)
+      ? safeReturnTracking
+      : '';
 
     return (
       <main className="wrap section legal">
@@ -125,7 +151,7 @@ export default async function BookingPage({ searchParams }: Props) {
 
         {checkoutExpired ? (
           <p>No payment was completed for this session. Return to the plans page to start a new secure checkout.</p>
-        ) : paid && !orderPersisted ? (
+        ) : paid && !orderLifecycleValid ? (
           <div role="alert">
             <p><strong>Your payment is confirmed.</strong> We’re {orderLookupFailed ? 'temporarily unable to verify' : 'still finalising'} the order record, so fulfilment details are not available just yet.</p>
             <p>Please do not place a second order. Refresh this page shortly; if this message remains, contact us at <a href="tel:+6580327183"><strong>+65 8032 7183</strong></a> and quote your checkout confirmation.</p>
@@ -148,8 +174,8 @@ export default async function BookingPage({ searchParams }: Props) {
               ) : (
                 <p>Your payment is confirmed. We’ll use the Singapore delivery details from checkout to fulfil your order.</p>
               )}
-              {order?.courier_tracking && <p><strong>Delivery tracking:</strong> {order.courier_tracking}</p>}
-              {order?.return_tracking && <p><strong>Return tracking:</strong> {order.return_tracking}</p>}
+              {courierTracking && <p><strong>Delivery tracking:</strong> {courierTracking}</p>}
+              {returnTracking && <p><strong>Return tracking:</strong> {returnTracking}</p>}
               {fulfilment === 'return_due' && <p>Please hand the complete device kit to the return courier within {POCKET_WIFI_RETURN_GRACE_DAYS} calendar days after your rental ends and keep the tracking receipt until QY Roam confirms receipt.</p>}
             </>
           )
