@@ -3432,6 +3432,11 @@ test('admin order visibility fails loudly instead of presenting a database failu
   assert.match(adminPage, /const failedPanels = \[/);
   assert.match(adminPage, /Operational data is currently unavailable:/);
   assert.match(adminPage, /Do not treat empty panels as no orders/);
+  assert.match(adminPage, /const ordersUnavailable = Boolean\(result\.error\)/);
+  assert.match(adminPage, /ordersUnavailable \? <p role="status"><strong>Sales and order metrics are unavailable/);
+  assert.match(adminPage, /\{!ordersUnavailable && <>[\s\S]*?WiFi dispatch exceptions[\s\S]*?Meta CAPI exceptions[\s\S]*?<\/>\}/);
+  assert.match(adminPage, /ordersUnavailable \? <p><strong>Orders are unavailable\.<\/strong>[\s\S]*?: supabase && orders\.length === 0 && <p>No orders yet\.<\/p>/);
+  assert.match(adminPage, /ordersUnavailable && <p><strong>Customer order history is unavailable/);
 });
 
 test('admin reporting screens do not present failed database reads as empty operational data', () => {

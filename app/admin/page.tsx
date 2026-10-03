@@ -169,6 +169,11 @@ export default async function AdminPage() {
     metaDeliveryResult.error && 'Meta delivery status',
     stripeEventResult.error && 'Stripe webhook failures',
   ].filter(Boolean) as string[];
+  // A failed read must never collapse into plausible-looking zero revenue or
+  // empty fulfilment queues. Independent ledgers can remain visible, but all
+  // order-derived views must distinguish "unavailable" from a healthy empty
+  // account.
+  const ordersUnavailable = Boolean(result.error);
   const truncatedPanels = [
     result.truncated && 'orders',
     inventoryResult.truncated && 'Pocket WiFi inventory',
@@ -249,24 +254,27 @@ export default async function AdminPage() {
       </nav>
 
       <section id="dashboard">
-        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(190px,1fr))',gap:14}}>
+        {ordersUnavailable ? <p role="status"><strong>Sales and order metrics are unavailable until the orders query succeeds.</strong></p> : <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(190px,1fr))',gap:14}}>
           <div style={cardStyle}><small>Paid revenue</small><div style={metricStyle}>{money(revenue)}</div><small>{paid.length} paid orders</small></div>
           <div style={cardStyle}><small>Revenue · last 30 days</small><div style={metricStyle}>{money(revenue30)}</div><small>rolling 30-day sales</small></div>
           <div style={cardStyle}><small>Active paid orders</small><div style={metricStyle}>{active.length}</div><small>safe to track for fulfilment</small></div>
           <div style={cardStyle}><small>Customers</small><div style={metricStyle}>{customers.length}</div><small>{repeatCustomers.length} repeat customers</small></div>
           <div style={cardStyle}><small>eSIM revenue</small><div style={metricStyle}>{money(esimRevenue)}</div><small>{paid.filter(isEsim).length} paid orders</small></div>
           <div style={cardStyle}><small>Pocket WiFi revenue</small><div style={metricStyle}>{money(wifiRevenue)}</div><small>{paid.filter((o:any)=>!isEsim(o)).length} paid orders</small></div>
-        </div>
+        </div>}
       </section>
 
       <section id="fulfilment" style={{marginTop:28}}>
         <h2>Fulfilment attention</h2>
+        {ordersUnavailable && <p role="status"><strong>Order-derived fulfilment queues are unavailable.</strong> Use the independent Stripe webhook exception panel below while the order ledger connection is restored.</p>}
         <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:14}}>
-          <div style={cardStyle}><small>WiFi dispatch exceptions</small><div style={metricStyle}>{wifiDispatchExceptions.length}</div><small>departing within 2 days / unresolved</small></div>
-          <div style={cardStyle}><small>eSIM fulfilment exceptions</small><div style={metricStyle}>{esimExceptions.length}</div><small>departing within 2 days / unresolved</small></div>
-          <div style={cardStyle}><small>Overdue WiFi returns</small><div style={metricStyle}>{returnExceptions.length}</div><small>more than {POCKET_WIFI_RETURN_GRACE_DAYS} days past trip end</small></div>
-          <div style={cardStyle}><small>Ops email exceptions</small><div style={metricStyle}>{notificationExceptions.length}</div><small>paid Stripe-order notifications not confirmed sent</small></div>
-          <div style={cardStyle}><small>Meta CAPI exceptions</small><div style={metricStyle}>{metaDeliveryExceptions.length}</div><small>consented purchases not confirmed delivered</small></div>
+          {!ordersUnavailable && <>
+            <div style={cardStyle}><small>WiFi dispatch exceptions</small><div style={metricStyle}>{wifiDispatchExceptions.length}</div><small>departing within 2 days / unresolved</small></div>
+            <div style={cardStyle}><small>eSIM fulfilment exceptions</small><div style={metricStyle}>{esimExceptions.length}</div><small>departing within 2 days / unresolved</small></div>
+            <div style={cardStyle}><small>Overdue WiFi returns</small><div style={metricStyle}>{returnExceptions.length}</div><small>more than {POCKET_WIFI_RETURN_GRACE_DAYS} days past trip end</small></div>
+            <div style={cardStyle}><small>Ops email exceptions</small><div style={metricStyle}>{notificationExceptions.length}</div><small>paid Stripe-order notifications not confirmed sent</small></div>
+            <div style={cardStyle}><small>Meta CAPI exceptions</small><div style={metricStyle}>{metaDeliveryExceptions.length}</div><small>consented purchases not confirmed delivered</small></div>
+          </>}
           <div style={cardStyle}><small>Stripe webhook exceptions</small><div style={metricStyle}>{webhookFailures.length}</div><small>failed or abandoned events awaiting a signed retry</small></div>
         </div>
         {webhookFailures.length > 0 && <div role="alert" style={{...cardStyle,borderColor:'#dc2626',background:'#fef2f2',marginTop:14}}>
@@ -291,7 +299,7 @@ export default async function AdminPage() {
 
     <section id="orders" style={{marginTop:34}}>
       <h2>Orders</h2>
-      {supabase && orders.length === 0 && <p>No orders yet.</p>}
+      {ordersUnavailable ? <p><strong>Orders are unavailable.</strong> Restore the database/schema connection and refresh; this is not an empty order ledger.</p> : supabase && orders.length === 0 && <p>No orders yet.</p>}
       {orders.length > 0 && <div style={{overflowX:'auto',...cardStyle,padding:0}}><table style={{width:'100%',borderCollapse:'collapse',minWidth:1040}}>
         <thead><tr style={{background:'#f8fafc'}}><th align="left" style={{padding:'12px 10px'}}>Order</th><th align="left">Customer</th><th align="left">Product / trip</th><th align="left">Payment</th><th align="left">Amount</th><th align="left">Ops email</th><th align="left">Meta CAPI</th><th align="left">Fulfilment</th></tr></thead>
         <tbody>{orders.map((o:any)=>{
@@ -324,6 +332,7 @@ export default async function AdminPage() {
     <section id="customers" style={{marginTop:34}}>
       <h2>Customer CRM</h2>
       <p style={{color:'#64748b'}}>Customer history is aggregated from paid orders. This is the first CRM layer; lead stages, notes, tasks and WhatsApp history can be added next.</p>
+      {ordersUnavailable && <p><strong>Customer order history is unavailable until the orders query succeeds.</strong></p>}
       {customers.length > 0 && <div style={{overflowX:'auto',...cardStyle,padding:0}}><table style={{width:'100%',borderCollapse:'collapse',minWidth:760}}>
         <thead><tr style={{background:'#f8fafc'}}><th align="left" style={{padding:'12px 10px'}}>Customer</th><th align="left">Products</th><th align="left">Orders</th><th align="left">Lifetime value</th><th align="left">Last purchase</th></tr></thead>
         <tbody>{customers.slice(0,200).map((c:any,idx:number)=><tr key={`${c.email || c.phone || c.name}-${idx}`} style={{borderTop:'1px solid #e5e8ed'}}>
