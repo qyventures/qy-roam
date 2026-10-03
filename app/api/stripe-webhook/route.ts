@@ -27,6 +27,7 @@ import { stripeCheckoutEventStateIssue, type QyRoamCheckoutEventType } from '@/l
 import { contentLengthMatches, declaredContentLength } from '@/lib/contentLength';
 import { paidFulfilmentDetailsIssue } from '@/lib/paidFulfilmentDetails';
 import { isJsonRequestContentType } from '@/lib/requestBody';
+import { exactStripeClaimToken } from '@/lib/stripeClaimToken';
 
 export const runtime = 'nodejs';
 
@@ -463,8 +464,13 @@ async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string
   const result=Array.isArray(claimed.data)?claimed.data[0]:claimed.data;
   if(result?.claim_status==='processed') return {status:'processed'};
   if(result?.claim_status==='in_progress') return {status:'in_progress'};
-  if(result?.claim_status==='claimed'&&result.claim_started_at){
-    return {status:'claimed',processingStartedAt:new Date(result.claim_started_at).toISOString()};
+  if(result?.claim_status==='claimed'){
+    // This database timestamp is an ownership token, not a display date.
+    // Postgres can return microseconds that JavaScript Date would truncate to
+    // milliseconds; normalising it would make every later equality predicate
+    // miss the claim that this worker actually owns.
+    const processingStartedAt=exactStripeClaimToken(result.claim_started_at);
+    if(processingStartedAt) return {status:'claimed',processingStartedAt};
   }
   throw new Error('Stripe event claim returned an invalid result');
 }

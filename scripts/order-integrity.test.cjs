@@ -62,6 +62,7 @@ const { paidFulfilmentDetailsIssue } = require('../lib/paidFulfilmentDetails.ts'
 const { exactNonnegativeCount } = require('../lib/exactCount.ts');
 const { custodyReferenceIssue, normalizeCustodyReference, MAX_CUSTODY_REFERENCE_LENGTH } = require('../lib/custodyReference.ts');
 const { durableOrderMatchesPaidSession } = require('../lib/durableOrderSnapshot.ts');
+const { exactStripeClaimToken } = require('../lib/stripeClaimToken.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { hasOrderIntegritySecret, hasOrderIntegritySigningConfig, signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -116,6 +117,21 @@ const termsPage = fs.readFileSync(require.resolve('../app/terms/page.tsx'), 'utf
 const rootLayout = fs.readFileSync(require.resolve('../app/layout.tsx'), 'utf8');
 
 const requestId = 'checkout_request_123456';
+
+test('Stripe claim ownership preserves the database microsecond token exactly', () => {
+  const databaseToken = '2026-10-03T07:50:54.123456+00:00';
+  assert.equal(exactStripeClaimToken(databaseToken), databaseToken);
+  // Demonstrate why converting this compare-and-swap token through Date is
+  // unsafe: JavaScript silently discards the final three fractional digits.
+  assert.equal(new Date(databaseToken).toISOString(), '2026-10-03T07:50:54.123Z');
+  assert.equal(exactStripeClaimToken(' 2026-10-03T07:50:54.123456+00:00'), null);
+  assert.equal(exactStripeClaimToken('2026-10-03T07:50:54.123456'), null);
+  assert.equal(exactStripeClaimToken('not-a-timestamp'), null);
+
+  assert.match(webhookRoute, /exactStripeClaimToken\(result\.claim_started_at\)/);
+  assert.doesNotMatch(webhookRoute, /new Date\(result\.claim_started_at\)\.toISOString\(\)/);
+  assert.match(webhookRoute, /\.eq\('processing_started_at',processingStartedAt\)/);
+});
 
 test('Pocket WiFi custody references remain exact, single-line audit evidence', () => {
   assert.equal(normalizeCustodyReference('  SG-RETURN-123  '), 'SG-RETURN-123');
