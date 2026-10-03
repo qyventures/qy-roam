@@ -61,6 +61,7 @@ const { contentLengthMatches, declaredContentLength } = require('../lib/contentL
 const { paidFulfilmentDetailsIssue } = require('../lib/paidFulfilmentDetails.ts');
 const { exactNonnegativeCount } = require('../lib/exactCount.ts');
 const { custodyReferenceIssue, normalizeCustodyReference, MAX_CUSTODY_REFERENCE_LENGTH } = require('../lib/custodyReference.ts');
+const { durableOrderMatchesPaidSession } = require('../lib/durableOrderSnapshot.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { hasOrderIntegritySecret, hasOrderIntegritySigningConfig, signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -1135,8 +1136,8 @@ test('booking status requires a durable paid order before showing fulfilment pro
   // or unavailable order snapshot must not be rendered as the normal queued
   // fulfilment state.
   assert.match(bookingPage, /const orderLookupFailed = !supabase \|\| Boolean\(orderResult\?\.error\)/);
-  assert.match(bookingPage, /select\('payment_status,fulfilment_status,/);
-  assert.match(bookingPage, /const orderPersisted = order\?\.payment_status === 'paid'/);
+  assert.match(bookingPage, /select\('payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,fulfilment_status,/);
+  assert.match(bookingPage, /const orderPersisted = durableOrderMatchesPaidSession\(storedOrder, session, productType\)/);
   assert.match(bookingPage, /paid && !orderPersisted/);
   assert.match(bookingPage, /orderLookupFailed \? 'temporarily unable to verify' : 'still finalising'/);
   assert.match(bookingPage, /Please do not place a second order/);
@@ -1149,8 +1150,8 @@ test('success confirmation does not imply fulfilment is durable before the paid 
   assert.match(successPage, /getSupabaseAdmin/);
   assert.match(successPage, /let orderPersisted = false/);
   assert.match(successPage, /let orderLookupFailed = false/);
-  assert.match(successPage, /select\('payment_status'\)/);
-  assert.match(successPage, /orderPersisted = orderResult\.data\?\.payment_status === 'paid'/);
+  assert.match(successPage, /select\('payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end'\)/);
+  assert.match(successPage, /orderPersisted = durableOrderMatchesPaidSession\(orderResult\.data, session, productType\)/);
   assert.match(successPage, /orderPersisted \? 'Order confirmed' : 'Payment confirmed'/);
   assert.match(successPage, /Please do not place a second order/);
   assert.match(successPage, /orderLookupFailed \? 'temporarily unable to verify' : 'finalising'/);
@@ -4488,4 +4489,71 @@ test('Pocket WiFi availability fails closed when its exact committed-order count
   assert.match(availabilityRoute, /const committedOrders = exactNonnegativeCount\(orders\.count, 'Committed Pocket WiFi order count'\)/);
   assert.match(availabilityRoute, /committed: committedOrders \+ unlinkedReservations/);
   assert.doesNotMatch(availabilityRoute, /orders\.count \|\| 0/);
+});
+
+test('customer confirmation trusts only the durable order snapshot matching Stripe', () => {
+  const esimSession = {
+    amount_total: 1290,
+    metadata: {
+      plan_id: 'jp-7d',
+      plan_name: 'Japan · 7 days',
+      data_allowance: '10 GB',
+      country: 'Japan',
+    },
+  };
+  const esimOrder = {
+    payment_status: 'paid',
+    product_type: 'esim',
+    amount_sgd: '12.90',
+    plan_id: 'jp-7d',
+    plan_name: 'Japan · 7 days',
+    data_allowance: '10 GB',
+    country: 'Japan',
+    travel_start: null,
+    travel_end: null,
+  };
+  assert.equal(durableOrderMatchesPaidSession(esimOrder, esimSession, 'esim'), true);
+  for (const patch of [
+    { payment_status: 'unpaid' },
+    { product_type: 'pocket_wifi' },
+    { amount_sgd: '12.91' },
+    { plan_id: 'jp-15d' },
+    { plan_name: 'Japan · 15 days' },
+    { data_allowance: '5 GB' },
+    { country: 'South Korea' },
+  ]) {
+    assert.equal(durableOrderMatchesPaidSession({ ...esimOrder, ...patch }, esimSession, 'esim'), false);
+  }
+
+  const wifiSession = {
+    amount_total: 552,
+    metadata: {
+      plan_name: 'Japan Pocket WiFi',
+      country: 'Japan',
+      start: '2026-10-10',
+      end: '2026-10-12',
+    },
+  };
+  const wifiOrder = {
+    payment_status: 'paid',
+    product_type: 'pocket_wifi',
+    amount_sgd: 5.52,
+    plan_id: null,
+    plan_name: 'Japan Pocket WiFi',
+    data_allowance: null,
+    country: 'Japan',
+    travel_start: '2026-10-10',
+    travel_end: '2026-10-12',
+  };
+  assert.equal(durableOrderMatchesPaidSession(wifiOrder, wifiSession, 'pocket_wifi'), true);
+  assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, travel_end: '2026-10-13' }, wifiSession, 'pocket_wifi'), false);
+  assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, amount_sgd: 'not-money' }, wifiSession, 'pocket_wifi'), false);
+  assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, amount_sgd: 5.521 }, wifiSession, 'pocket_wifi'), false);
+
+  for (const page of [successPage, bookingPage]) {
+    assert.match(page, /durableOrderMatchesPaidSession\(/);
+    assert.match(page, /payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end/);
+  }
+  assert.match(successPage, /<MetaPurchase sessionId=\{sessionId\} orderPersisted=\{orderPersisted\}/);
+  assert.match(bookingPage, /const order = orderPersisted \? storedOrder : null/);
 });

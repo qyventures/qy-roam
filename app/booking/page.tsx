@@ -7,6 +7,7 @@ import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
 import { POCKET_WIFI_RETURN_GRACE_DAYS } from '@/lib/pocketWifiReturns';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
+import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 
 export const dynamic = 'force-dynamic';
 
@@ -78,7 +79,7 @@ export default async function BookingPage({ searchParams }: Props) {
     const orderResult = supabase
       ? await supabase
           .from('orders')
-          .select('payment_status,fulfilment_status,courier_tracking,return_tracking,dispatched_at,returned_at')
+          .select('payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,fulfilment_status,courier_tracking,return_tracking,dispatched_at,returned_at')
           .eq('stripe_session_id', sessionId)
           .maybeSingle()
       : null;
@@ -91,12 +92,17 @@ export default async function BookingPage({ searchParams }: Props) {
     // finalising a paid order. Do not present the latter as a reassuring
     // normal state when this server could not query the ledger at all.
     const orderLookupFailed = !supabase || Boolean(orderResult?.error);
-    const order = orderResult?.data;
+    const storedOrder = orderResult?.data;
     // A provisional row can be created for a delayed payment method before
     // Stripe confirms it, and the paid webhook can still be retrying when the
     // customer first opens this page. Only a paid order snapshot proves the
     // fulfilment queue has durably received the purchase.
-    const orderPersisted = order?.payment_status === 'paid';
+    const orderPersisted = durableOrderMatchesPaidSession(storedOrder, session, productType);
+    // Never display lifecycle or tracking data from a row whose commercial
+    // identity does not match the signed Checkout snapshot. Treat it like an
+    // order still needing reconciliation, while Stripe remains authoritative
+    // for the customer's already-completed payment.
+    const order = orderPersisted ? storedOrder : null;
 
     const fulfilment = order?.fulfilment_status || initialFulfilmentStatus(productType, session.payment_status);
     const destination = session.metadata?.country || 'your destination';

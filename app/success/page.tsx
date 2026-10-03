@@ -6,6 +6,7 @@ import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import OrderConfirmationRefresh from '@/components/OrderConfirmationRefresh';
+import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 
 export const dynamic = 'force-dynamic';
 export const metadata = {
@@ -83,13 +84,13 @@ export default async function SuccessPage({ searchParams }: Props) {
         } else {
           const orderResult = await supabase
             .from('orders')
-            .select('payment_status')
+            .select('payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end')
             .eq('stripe_session_id', session.id)
             .maybeSingle();
           // A previously received asynchronous-completion event can have
           // created an awaiting-payment row. The success page must wait for
           // the paid snapshot, not merely any row for this Checkout Session.
-          orderPersisted = orderResult.data?.payment_status === 'paid';
+          orderPersisted = durableOrderMatchesPaidSession(orderResult.data, session, productType);
           orderLookupFailed = Boolean(orderResult.error);
         }
       }
