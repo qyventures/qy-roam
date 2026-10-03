@@ -4,15 +4,13 @@ import { operationalConfig } from '@/lib/operationalConfig';
 import { hasOrderIntegritySigningConfig } from '@/lib/orderProvenance';
 import { ESIM_PROMO, esimPromoIsActive } from '@/lib/esimPlans';
 import { LAUNCH_PROMO, promoIsActive } from '@/lib/promotions';
+import { isProductionQyRoamOrigin } from '@/lib/siteOrigin';
 
 export const dynamic = 'force-dynamic';
 
 const card={border:'1px solid #e4e8ef',borderRadius:16,padding:18,background:'#fff'} as const;
 function Row({label,ok,note}:{label:string,ok:boolean,note:string}){return <div style={{display:'grid',gridTemplateColumns:'minmax(180px,1fr) 100px minmax(240px,2fr)',gap:12,padding:'12px 0',borderTop:'1px solid #eef1f5',alignItems:'center'}}><strong>{label}</strong><span style={{fontWeight:800}}>{ok?'✓ Ready':'⚠ Blocked'}</span><span style={{color:'#64748b'}}>{note}</span></div>}
 
-function isProductionSiteUrl(value?:string){
- try{const url=new URL(value||'');return url.protocol==='https:'&&['qyroam.com','www.qyroam.com'].includes(url.hostname);}catch{return false;}
-}
 export default async function LaunchPage(){
  const [stripeApi, esimOrderDbOk, paymentDbOk, pocketWifiFulfilmentDbOk, operationsDbOk]=await Promise.all([hasRequiredStripeApiAccess(),hasRequiredEsimOrderSchema(),hasRequiredPaymentSchema(),hasRequiredPocketWifiFulfilmentSchema(),hasRequiredOperationsSchema()]);
  const config=operationalConfig();
@@ -27,7 +25,11 @@ export default async function LaunchPage(){
  // unsafe/partial token must not turn this launch control green while paid
  // Purchases are silently skipped or cannot be recovered.
  const metaCapi=hasRequiredMetaCapiPurchaseConfig();
- const site=isProductionSiteUrl(process.env.NEXT_PUBLIC_SITE_URL);
+ // Keep operator visibility on the exact origin boundary enforced by
+ // checkout and authenticated health. A duplicated hostname-only check can
+ // otherwise accept embedded credentials or a non-standard port and show a
+ // green launch control while the customer payment route fails closed.
+ const site=isProductionQyRoamOrigin(process.env.NEXT_PUBLIC_SITE_URL);
  const orderIntegrity=hasOrderIntegritySigningConfig();
  const esimOfferActive=esimPromoIsActive();
  const wifiPromoActive=promoIsActive();

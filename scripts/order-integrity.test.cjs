@@ -3207,7 +3207,8 @@ test('launch control reports the same checkout prerequisites that protect real o
   // The launch dashboard is an operational decision surface. It must not show
   // a green storefront state based only on a Stripe key and partial schema
   // probe while either public checkout route would reject a customer.
-  assert.match(launchPage, /function isProductionSiteUrl/);
+  assert.match(launchPage, /isProductionQyRoamOrigin\(process\.env\.NEXT_PUBLIC_SITE_URL\)/);
+  assert.doesNotMatch(launchPage, /function isProductionSiteUrl/);
   assert.doesNotMatch(launchPage, /function hasLiveStripeSecret/);
   assert.match(launchPage, /hasRequiredStripeCheckoutConfig/);
   assert.match(launchPage, /hasRequiredStripeWebhookConfig\(\)/);
@@ -4409,6 +4410,8 @@ test('Stripe Checkout redirects fail closed unless production uses a canonical Q
     assert.doesNotMatch(route, /function siteOrigin\(/);
   }
   assert.match(healthRoute, /isProductionQyRoamOrigin\(process\.env\.NEXT_PUBLIC_SITE_URL\)/);
+  assert.match(launchPage, /isProductionQyRoamOrigin\(process\.env\.NEXT_PUBLIC_SITE_URL\)/);
+  assert.doesNotMatch(launchPage, /function isProductionSiteUrl/);
 });
 
 test('Meta Purchase source URLs remain canonical after deployment configuration drift', () => {
