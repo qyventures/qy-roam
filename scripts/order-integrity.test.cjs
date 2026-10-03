@@ -3771,8 +3771,8 @@ test('Stripe expiry events validate signed chronology before releasing inventory
     'expiry chronology must be validated before inventory is released',
   );
   assert.ok(
-    expiryBranch.indexOf('expiryClaimStartedAt=claim.processingStartedAt') <
-      expiryBranch.indexOf('validStripePaymentEventCreated(event.created,session.created)'),
+    webhookRoute.indexOf('claimStartedAt=claim.processingStartedAt') <
+      webhookRoute.indexOf('validStripePaymentEventCreated(event.created,session.created)', webhookRoute.indexOf("if(event.type==='checkout.session.expired')")),
     'malformed signed expiry events must remain visible in the durable recovery ledger',
   );
 });
@@ -3830,20 +3830,16 @@ test('Stripe terminal events refresh the Checkout Session before persisting or d
   assert.match(processing, /Retrieved Checkout Session does not match webhook event/);
 });
 
-test('fulfilment-bearing Stripe events are durably claimed before the outbound Session refresh', () => {
+test('trusted Stripe terminal events are durably claimed before the outbound Session refresh', () => {
   const claimPosition = webhookRoute.indexOf("claimOnce(supabase,eventClaimId,event.type,eventSessionId)");
   const retrievePosition = webhookRoute.indexOf('stripe.checkout.sessions.retrieve(eventSessionId)');
   assert.ok(claimPosition >= 0 && claimPosition < retrievePosition);
   assert.match(webhookRoute, /stripe_webhook_session_retrieve_error[\s\S]*recordEventFailure\(supabase,eventClaimId,claimStartedAt,error\)/);
   assert.match(webhookRoute, /stripe_webhook_invalid_retrieved_session[\s\S]*recordEventFailure\(supabase,eventClaimId,claimStartedAt,new Error\('Stripe returned an invalid Checkout Session object'\)\)/);
   assert.match(webhookRoute, /stripe_webhook_session_identity_mismatch[\s\S]*recordEventFailure\(supabase,eventClaimId,claimStartedAt,new Error\('Retrieved Checkout Session does not match webhook event'\)\)/);
-  // Inventory-release events retain their stricter provenance-before-claim
-  // ordering so sessions from another product in a shared account cannot
-  // pollute QY Roam's operational recovery ledger.
-  const expiryBranch = webhookRoute.indexOf("if(event.type==='checkout.session.expired'){");
-  const expiryProvenance = webhookRoute.indexOf('if(!validQyRoamProvenance(session.id,session.metadata))', expiryBranch);
-  const expiryClaim = webhookRoute.indexOf('claimOnce(supabase,expiryEventClaimId,event.type,session.id)', expiryBranch);
-  assert.ok(expiryProvenance >= 0 && expiryProvenance < expiryClaim);
+  const signedProvenance = webhookRoute.indexOf('if(!validQyRoamProvenance(eventSessionId,eventSession.metadata))');
+  assert.ok(signedProvenance >= 0 && signedProvenance < claimPosition, 'shared-account lookalikes must be rejected before any terminal event is claimed');
+  assert.doesNotMatch(webhookRoute, /event\.type!=='checkout\.session\.expired'/);
 });
 
 test('retried completion events cannot steal a later asynchronous payment timestamp', () => {
@@ -4381,21 +4377,19 @@ test('expired authenticated Pocket WiFi sessions promptly release only their mat
   assert.match(webhookRoute, /await releaseExpiredPocketWifiReservation\(supabase,session\)/);
 });
 
-test('expired lookalike sessions are ignored before claiming the webhook event', () => {
+test('expired lookalike sessions are ignored before claiming while trusted refresh drift stays recoverable', () => {
   // The source marker is public metadata and the Stripe account may be shared.
   // Require the server-issued HMAC before an expiry event can consume the
   // durable event ledger, release inventory, or mutate a provisional order.
-  const expiryBranch = webhookRoute.slice(
-    webhookRoute.indexOf("if(event.type==='checkout.session.expired')"),
-    webhookRoute.indexOf("if(!claimStartedAt) throw new Error('Stripe event claim was not acquired')"),
-  );
-  const provenanceGuard = expiryBranch.indexOf('if(!validQyRoamProvenance(session.id,session.metadata))');
-  const eventClaim = expiryBranch.indexOf('await claimOnce(supabase,expiryEventClaimId,event.type,session.id)');
-  assert.notEqual(provenanceGuard, -1);
+  const signedProvenanceGuard = webhookRoute.indexOf('if(!validQyRoamProvenance(eventSessionId,eventSession.metadata))');
+  const eventClaim = webhookRoute.indexOf('await claimOnce(supabase,eventClaimId,event.type,eventSessionId)');
+  assert.notEqual(signedProvenanceGuard, -1);
   assert.notEqual(eventClaim, -1);
-  assert.ok(provenanceGuard < eventClaim);
+  assert.ok(signedProvenanceGuard < eventClaim);
+  const expiryBranch = webhookRoute.slice(webhookRoute.indexOf("if(event.type==='checkout.session.expired')"));
   assert.match(expiryBranch, /stripe_webhook_expiry_integrity_error/);
-  assert.match(expiryBranch, /return webhookJson\(\{received:true,ignored:true\}\)/);
+  assert.match(expiryBranch, /recordEventFailure\(supabase,eventClaimId,claimStartedAt,error\)/);
+  assert.match(expiryBranch, /return webhookJson\(\{error:'Processing failed'\},\{status:500\}\)/);
 });
 
 test('expired checkout sessions close only their provisional pending orders', () => {
