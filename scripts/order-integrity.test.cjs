@@ -1339,7 +1339,20 @@ test('Pocket WiFi checkout renders live availability terms before opening Stripe
   // The availability endpoint is also the public source for delivery lead
   // time and courier pricing. A first click must not redirect to payment in
   // the same render pass that receives a revised total.
-  assert.match(homePage, /if \(!currentAvailability\?\.available\) \{[\s\S]*?currentAvailability = await checkAvailability\(\);[\s\S]*?if \(currentAvailability\.available\) \{[\s\S]*?setCheckoutError\('Availability confirmed\. Please review the updated total, then select Reserve\.'\);[\s\S]*?checkoutInFlight\.current = false;[\s\S]*?return;/);
+  assert.match(homePage, /if \(!currentAvailability\?\.available \|\| currentAvailability\.checkedStart !== start \|\| currentAvailability\.checkedEnd !== end\) \{[\s\S]*?currentAvailability = await checkAvailability\(\);[\s\S]*?if \(currentAvailability\.available && selectedDates\.current\.start === currentAvailability\.checkedStart && selectedDates\.current\.end === currentAvailability\.checkedEnd\) \{[\s\S]*?setCheckoutError\('Availability confirmed\. Please review the updated total, then select Reserve\.'\);[\s\S]*?checkoutInFlight\.current = false;[\s\S]*?return;/);
+});
+
+test('Pocket WiFi availability remains bound to the exact dates that were checked', () => {
+  // Inputs remain editable while the provider-backed request is in flight.
+  // Capture the request window and require it to match the current selection
+  // before showing availability or enabling the payment action.
+  assert.match(homePage, /const checkedStart = start;\s*const checkedEnd = end;/);
+  assert.match(homePage, /start=\$\{encodeURIComponent\(checkedStart\)\}&end=\$\{encodeURIComponent\(checkedEnd\)\}/);
+  assert.match(homePage, /\{ \.\.\.data, checkedStart, checkedEnd \}/);
+  assert.match(homePage, /selectedDates\.current = \{ start, end \}/);
+  assert.match(homePage, /if \(selectedDates\.current\.start === checkedStart && selectedDates\.current\.end === checkedEnd\) setAvailability\(result\)/);
+  assert.match(homePage, /const availabilityMatchesSelection = availability\?\.checkedStart === start && availability\?\.checkedEnd === end;/);
+  assert.match(homePage, /availabilityMatchesSelection && availability\?\.available \? `Reserve for S\$\$\{payableTotal\.toFixed\(2\)\}` : 'Check availability'/);
 });
 
 test('checkout request ids use the same production boundary everywhere', () => {

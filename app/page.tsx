@@ -19,6 +19,8 @@ type Availability = {
   error?: string;
   minDeliveryLeadDays?: number;
   courierFeeSgd?: number;
+  checkedStart?: string;
+  checkedEnd?: string;
 };
 
 function validLeadDays(value: unknown) {
@@ -61,6 +63,8 @@ export default function Home() {
   const [checkoutError, setCheckoutError] = useState('');
   const activeCheckoutAttempt = useRef<CheckoutAttempt | null>(null);
   const checkoutInFlight = useRef(false);
+  const selectedDates = useRef({ start, end });
+  selectedDates.current = { start, end };
   const plan = useMemo(() => plans.find(p => p.country === country) || plans[0], [country]);
   const datesValid = Boolean(start && end && start >= earliestStart && end >= start);
   const days = daysBetween(start, end);
@@ -76,6 +80,11 @@ export default function Home() {
   const courierFeeCents = Math.round(courierFeeSgd * 100);
   const payableTotal = sgdFromCents(promo.amountCents + courierFeeCents);
   const minimumApplied = rentalCents === 1_000 && plan.daily * days * 100 < 1_000;
+  // An availability response is a promise for one exact travel window. A
+  // shopper can edit either date while the provider-backed request is still
+  // in flight, so never let that stale response enable checkout or describe
+  // the newly selected dates as available.
+  const availabilityMatchesSelection = availability?.checkedStart === start && availability?.checkedEnd === end;
 
   function validateDates() {
     if (!start || !end) return 'Choose both travel dates.';
@@ -90,9 +99,11 @@ export default function Home() {
       const result = { available: false, error: validationError };
       setAvailability(result); setCheckoutError(validationError); return result;
     }
+    const checkedStart = start;
+    const checkedEnd = end;
     setChecking(true); setAvailability(null); setCheckoutError('');
     try {
-      const res = await fetchCustomerRequest(`/api/availability?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`, { cache: 'no-store' });
+      const res = await fetchCustomerRequest(`/api/availability?start=${encodeURIComponent(checkedStart)}&end=${encodeURIComponent(checkedEnd)}`, { cache: 'no-store' });
       const data = (await res.json()) as Availability;
       // Availability is also the public source of operational booking terms.
       // Validate the response before using it in the browser; Checkout still
@@ -101,11 +112,15 @@ export default function Home() {
       const configuredCourierFee = validCourierFee(data.courierFeeSgd);
       if (configuredLeadDays !== undefined) setDeliveryLeadDays(configuredLeadDays);
       if (configuredCourierFee !== undefined) setCourierFeeSgd(configuredCourierFee);
-      const result = res.ok ? data : { available: false, error: data.error || 'Unable to check availability.' };
-      setAvailability(result); return result;
+      const result = res.ok
+        ? { ...data, checkedStart, checkedEnd }
+        : { available: false, error: data.error || 'Unable to check availability.', checkedStart, checkedEnd };
+      if (selectedDates.current.start === checkedStart && selectedDates.current.end === checkedEnd) setAvailability(result);
+      return result;
     } catch {
-      const result = { available: false, error: 'Unable to check availability. Please try again.' };
-      setAvailability(result); return result;
+      const result = { available: false, error: 'Unable to check availability. Please try again.', checkedStart, checkedEnd };
+      if (selectedDates.current.start === checkedStart && selectedDates.current.end === checkedEnd) setAvailability(result);
+      return result;
     } finally { setChecking(false); }
   }
 
@@ -118,7 +133,7 @@ export default function Home() {
     const validationError = validateDates();
     if (validationError) { setCheckoutError(validationError); checkoutInFlight.current = false; return; }
     let currentAvailability = availability;
-    if (!currentAvailability?.available) {
+    if (!currentAvailability?.available || currentAvailability.checkedStart !== start || currentAvailability.checkedEnd !== end) {
       currentAvailability = await checkAvailability();
       // Availability also returns the live courier fee and delivery lead time.
       // Do not send a shopper directly to Stripe on the same click that first
@@ -126,7 +141,7 @@ export default function Home() {
       // that flow could make a newly configured courier charge a surprise.
       // The next explicit action uses this checked availability snapshot;
       // Checkout still recalculates and validates the amount on the server.
-      if (currentAvailability.available) {
+      if (currentAvailability.available && selectedDates.current.start === currentAvailability.checkedStart && selectedDates.current.end === currentAvailability.checkedEnd) {
         setCheckoutError('Availability confirmed. Please review the updated total, then select Reserve.');
       }
       checkoutInFlight.current = false;
@@ -174,7 +189,7 @@ export default function Home() {
   return <main>
     {launchPromoActive && <section className="promo-banner"><div className="wrap promo-inner"><div><span className="promo-kicker">{LAUNCH_PROMO.label}</span><strong>{LAUNCH_PROMO.headline}</strong><span>Use code <b>{LAUNCH_PROMO.code}</b> · valid through 30 Sep 2026</span></div><a href="#plans" className="promo-cta">Book now</a></div></section>}
     <section className="hero"><div className="wrap hero-grid"><div><span className="eyebrow">Travel connectivity for every trip</span><h1>Stay connected overseas without the roaming bill.</h1><p className="lead">{esimOfferActive ? 'Choose a travel eSIM for your phone or Pocket WiFi to share across multiple devices.' : 'Book Pocket WiFi to share across multiple devices. Online eSIM ordering is temporarily paused while availability and pricing are reviewed.'}</p><div className="product-switch"><a className="product-choice" href="/esim"><span className="pill">Travel eSIM</span><strong>{esimOfferActive ? 'Digital travel option' : 'Online ordering paused'}</strong><small>{esimOfferActive ? 'No collection or return. Pick a plan and receive fulfilment after payment.' : 'View plan information or contact our Singapore support team for current availability.'}</small><b>{esimOfferActive ? 'View eSIM plans →' : 'View current status →'}</b></a><a className="product-choice featured-choice" href="#plans"><span className="pill">Pocket WiFi</span><strong>Share across devices</strong><small>Delivered before departure and returned after your trip.</small><b>Check Pocket WiFi →</b></a></div><div className="trust-row"><span>eSIM & Pocket WiFi</span><span>Singapore-based support</span><span>Secure online checkout</span></div></div><form className="search-card" onSubmit={search}><h2>Pocket WiFi availability</h2><label>Destination<select value={country} onChange={e => { setCountry(e.target.value); setAvailability(null); setCheckoutError(''); }}>{plans.map(p => <option key={p.code}>{p.country}</option>)}</select></label><div className="date-grid"><label>Start date<input type="date" min={earliestStart} value={start} onChange={e => { setStart(e.target.value); if (end < e.target.value) setEnd(e.target.value); setAvailability(null); setCheckoutError(''); }} /></label><label>End date<input type="date" min={start || earliestStart} value={end} onChange={e => { setEnd(e.target.value); setAvailability(null); setCheckoutError(''); }} /></label></div><label>Promo code<input value={promoCode} onChange={e => setPromoCode(e.target.value.toUpperCase())} placeholder="Enter promo code" /></label>{promoActive && <div className="promo-applied">✓ {LAUNCH_PROMO.code} applied — {LAUNCH_PROMO.percent}% off rental</div>}<button type="submit" className="primary" disabled={checking || !datesValid}>{checking ? 'Checking availability…' : 'Check price & availability'}</button><small>Book at least {deliveryLeadDays} day{deliveryLeadDays === 1 ? '' : 's'} before departure. SGD pricing · S$10 minimum booking before promotion.</small></form></div></section>
-    <section className="wrap section" id="plans"><div className="section-head"><div><span className="eyebrow">Simple daily pricing</span><h2>{searched ? `${country} Pocket WiFi` : 'Popular destinations'}</h2></div><p>Clear daily rates with the rental total calculated from your selected travel dates.</p></div><div className="plan-card featured"><div><span className="pill">Pocket WiFi</span><h3>{country}</h3><p>{plan.data} · {plan.note}</p><p className="muted">Rental: {days} day{days !== 1 ? 's' : ''} × S${plan.daily.toFixed(2)}{minimumApplied ? ' · S$10 minimum booking applies' : ''}</p>{promoActive && <p className="promo-line">Launch promo: {LAUNCH_PROMO.percent}% off with {LAUNCH_PROMO.code}</p>}{searched && availability?.available && <p className="muted">✓ Available for your dates{typeof availability.remaining === 'number' ? ` · ${availability.remaining} unit${availability.remaining === 1 ? '' : 's'} remaining` : ''}</p>}{searched && availability && !availability.available && <p className="muted">{availability.error || 'Sold out for these dates. Choose different dates or contact +65 8032 7183.'}</p>}{checkoutError && <p className="muted">{checkoutError}</p>}</div><div className="price"><span>S$</span>{plan.daily.toFixed(2)}<small>/day</small>{promoActive && <><p className="old-total">Before promo: S${baseSubtotal.toFixed(2)}</p><p className="discount-total">Save S${promoDiscount.toFixed(2)}</p></>}<p>Rental total: S${subtotal.toFixed(2)}</p>{courierFeeSgd > 0 && <p>Courier fee: S${courierFeeSgd.toFixed(2)}</p>}<p><strong>Total due today: S${payableTotal.toFixed(2)}</strong></p><button className="primary" onClick={checkout} disabled={checking || checkingOut || !datesValid}>{checking ? 'Checking…' : checkingOut ? 'Opening secure checkout…' : availability?.available ? `Reserve for S$${payableTotal.toFixed(2)}` : 'Check availability'}</button><small>Live booking terms are checked before payment.</small></div></div></section>
+    <section className="wrap section" id="plans"><div className="section-head"><div><span className="eyebrow">Simple daily pricing</span><h2>{searched ? `${country} Pocket WiFi` : 'Popular destinations'}</h2></div><p>Clear daily rates with the rental total calculated from your selected travel dates.</p></div><div className="plan-card featured"><div><span className="pill">Pocket WiFi</span><h3>{country}</h3><p>{plan.data} · {plan.note}</p><p className="muted">Rental: {days} day{days !== 1 ? 's' : ''} × S${plan.daily.toFixed(2)}{minimumApplied ? ' · S$10 minimum booking applies' : ''}</p>{promoActive && <p className="promo-line">Launch promo: {LAUNCH_PROMO.percent}% off with {LAUNCH_PROMO.code}</p>}{searched && availabilityMatchesSelection && availability?.available && <p className="muted">✓ Available for your dates{typeof availability.remaining === 'number' ? ` · ${availability.remaining} unit${availability.remaining === 1 ? '' : 's'} remaining` : ''}</p>}{searched && availabilityMatchesSelection && availability && !availability.available && <p className="muted">{availability.error || 'Sold out for these dates. Choose different dates or contact +65 8032 7183.'}</p>}{checkoutError && <p className="muted">{checkoutError}</p>}</div><div className="price"><span>S$</span>{plan.daily.toFixed(2)}<small>/day</small>{promoActive && <><p className="old-total">Before promo: S${baseSubtotal.toFixed(2)}</p><p className="discount-total">Save S${promoDiscount.toFixed(2)}</p></>}<p>Rental total: S${subtotal.toFixed(2)}</p>{courierFeeSgd > 0 && <p>Courier fee: S${courierFeeSgd.toFixed(2)}</p>}<p><strong>Total due today: S${payableTotal.toFixed(2)}</strong></p><button className="primary" onClick={checkout} disabled={checking || checkingOut || !datesValid}>{checking ? 'Checking…' : checkingOut ? 'Opening secure checkout…' : availabilityMatchesSelection && availability?.available ? `Reserve for S$${payableTotal.toFixed(2)}` : 'Check availability'}</button><small>Live booking terms are checked before payment.</small></div></div></section>
     <section className="soft"><div className="wrap section"><div className="section-head"><div><span className="eyebrow">Why travellers choose QY Roam</span><h2>Easy to book. Easy to use. Easy to return.</h2></div><p>Clear pricing, simple booking, Singapore-based support and straightforward fulfilment from checkout through return.</p></div><div className="steps"><article><h3>Easy booking</h3><p>Choose your destination and dates, check live availability, and reserve online.</p></article><article><h3>Share across devices</h3><p>Connect phones, tablets and laptops to one Pocket WiFi during your trip.</p></article><article><h3>Local support</h3><p>Singapore-based support at +65 8032 7183 before, during and after your rental.</p></article><article><h3>No surprise rental pricing</h3><p>See your rental total and promotion before payment. Courier charges are disclosed at checkout.</p></article></div></div></section>
     {launchPromoActive && <section className="wrap section promo-section"><div className="promo-panel"><div><span className="eyebrow">Latest promotion</span><h2>Launch Special: save 10%</h2><p>Use <strong>QY10</strong> on any eligible Pocket WiFi rental through 30 September 2026. The discount applies to the rental component; courier charges, if any, are excluded.</p></div><a className="primary promo-panel-button" href="#plans">Claim 10% off</a></div></section>}
     <section className="soft" id="how"><div className="wrap section"><span className="eyebrow">Door-to-door convenience</span><h2>Four simple steps</h2><div className="steps"><article><b>1</b><h3>Book online</h3><p>Choose destination and dates, then pay securely by card or PayNow where available.</p></article><article><b>2</b><h3>Receive before departure</h3><p>We courier the Pocket WiFi to your Singapore delivery address.</p></article><article><b>3</b><h3>Travel connected</h3><p>Switch it on and connect your phones, tablets or laptops.</p></article><article><b>4</b><h3>Return after your trip</h3><p>Pack the complete kit and follow the supplied courier return instructions.</p></article></div></div></section>
