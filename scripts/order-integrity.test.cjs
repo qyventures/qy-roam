@@ -4881,6 +4881,27 @@ test('deployment rejects structurally broken PL/pgSQL before schema application'
   `), /IF without a matching END IF/);
   assert.throws(() => validatePlpgsqlStructure('create function public.example() returns void language plpgsql as $$ begin return; end;'), /Unterminated SQL dollar-quoted block/);
   assert.throws(() => validatePlpgsqlStructure('create function public.example() returns void language plpgsql as $body$ begin return; end; $$;'), /Unterminated SQL dollar-quoted block/);
+  assert.throws(() => validatePlpgsqlStructure(`
+    create function public.example() returns trigger language plpgsql as $$
+    begin
+      if new.value is not null and (new.value > 0) then
+      ) then
+        return new;
+      end if;
+      return old;
+    end;
+    $$;
+  `), /unmatched closing parenthesis/);
+  assert.throws(() => validatePlpgsqlStructure(`
+    create function public.example() returns trigger language plpgsql as $$
+    begin
+      if (new.value > 0 then
+        return new;
+      end if;
+      return old;
+    end;
+    $$;
+  `), /unmatched opening parenthesis/);
 });
 
 test('Pocket WiFi availability fails closed when its exact committed-order count is missing or malformed', () => {

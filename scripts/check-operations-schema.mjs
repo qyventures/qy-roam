@@ -16,11 +16,11 @@ assert.ok(databaseSchemaVersion, 'Missing database order-integrity schema versio
 assert.equal(applicationSchemaVersion, databaseSchemaVersion, 'Application and database order-integrity schema versions must match');
 
 // This guard runs without production database credentials, so it cannot ask
-// PostgreSQL to compile the migration. Still reject the two most damaging
-// classes of hand-edited PL/pgSQL breakage before deployment: an unterminated
-// dollar-quoted function body and an unbalanced IF/END IF block. Presence-only
-// checks below would otherwise pass both and leave a clean Supabase install
-// failing partway through schema application.
+// PostgreSQL to compile the migration. Still reject common damaging classes
+// of hand-edited PL/pgSQL breakage before deployment: an unterminated
+// dollar-quoted function body, an unbalanced IF/END IF block, and unmatched
+// parentheses. Presence-only checks below would otherwise pass these and leave
+// a clean Supabase install failing partway through schema application.
 export function validatePlpgsqlStructure(sql) {
   const dollarDelimiter = /\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$/g;
   const blocks = [];
@@ -59,10 +59,51 @@ export function validatePlpgsqlStructure(sql) {
       }
     }
     assert.equal(depth, 0, 'PL/pgSQL function contains an IF without a matching END IF');
+
+    // A duplicated condition terminator such as `) then` is not visible to
+    // the keyword-only check above. Track parentheses after stripping strings
+    // and comments so malformed trigger expressions cannot pass the offline
+    // release guard merely because their IF and END IF tokens still balance.
+    let parenthesisDepth = 0;
+    for (const character of code) {
+      if (character === '(') parenthesisDepth += 1;
+      if (character === ')') {
+        parenthesisDepth -= 1;
+        assert.ok(parenthesisDepth >= 0, 'PL/pgSQL function contains an unmatched closing parenthesis');
+      }
+    }
+    assert.equal(parenthesisDepth, 0, 'PL/pgSQL function contains an unmatched opening parenthesis');
   }
 }
 
 validatePlpgsqlStructure(schema);
+
+// Keep both halves of the lightweight parser covered in the release command
+// itself; the broader integrity suite also exercises these exported guards.
+validatePlpgsqlStructure(`
+  create function public.example() returns trigger language plpgsql as $$
+  begin
+    if new.value is not null and (new.value > 0 or new.value = -1) then
+      return new;
+    end if;
+    return old;
+  end;
+  $$;
+`);
+assert.throws(
+  () => validatePlpgsqlStructure(`
+    create function public.example() returns trigger language plpgsql as $$
+    begin
+      if new.value is not null and (new.value > 0) then
+      ) then
+        return new;
+      end if;
+      return old;
+    end;
+    $$;
+  `),
+  /unmatched closing parenthesis/,
+);
 
 // PostgreSQL rejects an ON CONFLICT update that assigns the same target
 // column twice. This is easy to introduce while editing the long, safety-
