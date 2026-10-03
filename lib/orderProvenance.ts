@@ -4,6 +4,24 @@ const VERSION = 'v2';
 const METADATA_KEY = 'qyroam_provenance';
 const MIN_SIGNING_SECRET_LENGTH = 32;
 const MAX_SIGNING_SECRET_LENGTH = 4_096;
+const MAX_STRIPE_METADATA_FIELDS = 50;
+const MAX_STRIPE_METADATA_KEY_LENGTH = 40;
+const MAX_STRIPE_METADATA_VALUE_LENGTH = 500;
+
+// Stripe metadata is a bounded string-to-string map. SDK types express that
+// shape at compile time, but webhook and API responses are runtime data. Keep
+// malformed values out of HMAC serialization so provenance verification stays
+// a small, deterministic payment boundary and cannot authenticate a shape the
+// downstream order validators do not understand.
+export function isCanonicalStripeMetadata(value: unknown): value is Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const entries = Object.entries(value);
+  return entries.length <= MAX_STRIPE_METADATA_FIELDS && entries.every(([key, fieldValue]) =>
+    key.length >= 1 && key.length <= MAX_STRIPE_METADATA_KEY_LENGTH &&
+    !key.includes('[') && !key.includes(']') &&
+    typeof fieldValue === 'string' && fieldValue.length <= MAX_STRIPE_METADATA_VALUE_LENGTH
+  );
+}
 
 // These values are used as HMAC keys at the payment boundary. Keep the
 // configuration check shared by checkout, webhook verification and release
@@ -65,6 +83,7 @@ function payload(sessionId: string, metadata: Record<string, string>) {
 export function signedQyRoamProvenance(sessionId: string, metadata: Record<string, string>) {
   const signingSecret = activeSecret();
   if (!signingSecret) throw new Error('ORDER_INTEGRITY_SECRET is not configured');
+  if (!isCanonicalStripeMetadata(metadata)) throw new Error('Checkout metadata is not canonical Stripe metadata');
   const digest = provenanceDigest(sessionId, metadata, signingSecret);
   return `${VERSION}.${digest}`;
 }
@@ -74,7 +93,7 @@ function provenanceDigest(sessionId: string, metadata: Record<string, string>, s
 }
 
 export function validQyRoamProvenance(sessionId: string, metadata?: Record<string, string> | null) {
-  if (!metadata) return false;
+  if (!isCanonicalStripeMetadata(metadata)) return false;
   const provided = metadata[METADATA_KEY];
   const match = provided && /^(v2)\.([a-f0-9]{64})$/.exec(provided);
   if (!match) return false;

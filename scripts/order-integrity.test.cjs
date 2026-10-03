@@ -65,7 +65,7 @@ const { durableOrderMatchesPaidSession } = require('../lib/durableOrderSnapshot.
 const { exactStripeClaimToken } = require('../lib/stripeClaimToken.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
-const { hasOrderIntegritySecret, hasOrderIntegritySigningConfig, signedQyRoamProvenance } = require('../lib/orderProvenance.ts');
+const { hasOrderIntegritySecret, hasOrderIntegritySigningConfig, isCanonicalStripeMetadata, signedQyRoamProvenance, validQyRoamProvenance } = require('../lib/orderProvenance.ts');
 
 // The success page, booking-status page, and Stripe webhook must all use this
 // same validator rather than trusting the QY Roam source marker by itself.
@@ -127,6 +127,35 @@ test('consented Meta PageView measurement follows App Router navigation', () => 
   // initial PageView when a returning visitor has already consented.
   const loadPixelBody = metaConsent.match(/function loadPixel[\s\S]*?\n}\n/)?.[0] || '';
   assert.doesNotMatch(loadPixelBody, /['"]PageView['"]/);
+});
+
+test('checkout provenance accepts only bounded canonical Stripe metadata', () => {
+  const sessionId = 'cs_test_canonicalMetadata123';
+  const metadata = {
+    source: 'qyroam.com',
+    product_type: 'esim',
+    checkout_request_id: 'canonical-request-123',
+  };
+  const provenance = signedQyRoamProvenance(sessionId, metadata);
+  const signed = { ...metadata, qyroam_provenance: provenance };
+  assert.equal(isCanonicalStripeMetadata(signed), true);
+  assert.equal(validQyRoamProvenance(sessionId, signed), true);
+
+  for (const malformed of [
+    [],
+    { ...signed, source: 7 },
+    { ...signed, ['x'.repeat(41)]: 'value' },
+    { ...signed, unsafe: 'x'.repeat(501) },
+    { ...signed, 'nested[key]': 'value' },
+    Object.fromEntries(Array.from({ length: 51 }, (_, index) => [`key_${index}`, 'value'])),
+  ]) {
+    assert.equal(isCanonicalStripeMetadata(malformed), false);
+    assert.equal(validQyRoamProvenance(sessionId, malformed), false);
+  }
+  assert.throws(
+    () => signedQyRoamProvenance(sessionId, { unsafe: 'x'.repeat(501) }),
+    /not canonical Stripe metadata/,
+  );
 });
 
 const requestId = 'checkout_request_123456';
