@@ -14,14 +14,22 @@ export type DurableOrderSnapshot = {
 };
 
 function sgdCents(value: unknown) {
-  if (typeof value === 'string' && !/^\d+(?:\.\d{1,2})?$/.test(value)) return null;
   if (typeof value !== 'number' && typeof value !== 'string') return null;
-  const amount = Number(value);
-  const cents = amount * 100;
-  // Do not round malformed database values into agreement with Stripe. The
-  // orders column is numeric(10,2), so a genuine stored amount has exact-cent
-  // precision even when PostgREST returns it as a JSON number.
-  return Number.isFinite(amount) && amount >= 0 && Number.isSafeInteger(cents) ? cents : null;
+  if (typeof value === 'number' && (!Number.isFinite(value) || value < 0)) return null;
+
+  // PostgREST may expose PostgreSQL numeric values as either JSON strings or
+  // numbers. Converting a valid number with multiplication is not safe here:
+  // for example, 4.81 * 100 is 480.99999999999994 in JavaScript. Parse its
+  // shortest decimal representation instead, while still rejecting values
+  // with sub-cent precision rather than rounding them into agreement with
+  // Stripe.
+  const decimal = typeof value === 'number' ? value.toString() : value;
+  const match = decimal.match(/^(\d{1,8})(?:\.(\d{1,2}))?$/);
+  if (!match) return null;
+  const whole = Number(match[1]);
+  const fraction = Number((match[2] || '').padEnd(2, '0'));
+  const cents = whole * 100 + fraction;
+  return Number.isSafeInteger(cents) ? cents : null;
 }
 
 /**

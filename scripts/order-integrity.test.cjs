@@ -4916,6 +4916,15 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
     travel_end: null,
   };
   assert.equal(durableOrderMatchesPaidSession(esimOrder, esimSession, 'esim'), true);
+  // Supabase/PostgREST can return a PostgreSQL numeric as a JSON number.
+  // These exact-cent prices are not integral after binary floating-point
+  // multiplication, but must still reconcile to their Stripe cent totals.
+  assert.equal(durableOrderMatchesPaidSession({ ...esimOrder, amount_sgd: 12.9 }, esimSession, 'esim'), true);
+  assert.equal(durableOrderMatchesPaidSession(
+    { ...esimOrder, amount_sgd: 4.81 },
+    { ...esimSession, amount_total: 481 },
+    'esim',
+  ), true);
   for (const patch of [
     { payment_status: 'unpaid' },
     { product_type: 'pocket_wifi' },
@@ -4952,6 +4961,8 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
   assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, travel_end: '2026-10-13' }, wifiSession, 'pocket_wifi'), false);
   assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, amount_sgd: 'not-money' }, wifiSession, 'pocket_wifi'), false);
   assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, amount_sgd: 5.521 }, wifiSession, 'pocket_wifi'), false);
+  assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, amount_sgd: '5.520' }, wifiSession, 'pocket_wifi'), false);
+  assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, amount_sgd: 1e21 }, wifiSession, 'pocket_wifi'), false);
 
   for (const page of [successPage, bookingPage]) {
     assert.match(page, /durableOrderMatchesPaidSession\(/);
