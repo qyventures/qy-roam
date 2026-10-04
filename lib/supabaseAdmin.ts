@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { declaredContentLength } from './contentLength';
+import { contentLengthMatches, declaredContentLength } from './contentLength';
 
 // PostgREST requests otherwise inherit the platform fetch timeout, which can
 // be several minutes (or unlimited). Supabase backs checkout reservations,
@@ -118,8 +118,9 @@ export async function fetchSupabaseWithTimeout(
     throw error;
   }
 
+  let contentLength: number | null;
   try {
-    declaredContentLength(response.headers.get('content-length'), maximumResponseBytes);
+    contentLength = declaredContentLength(response.headers.get('content-length'), maximumResponseBytes);
   } catch {
     cleanup();
     void response.body?.cancel().catch(() => undefined);
@@ -131,8 +132,17 @@ export async function fetchSupabaseWithTimeout(
   // deadline here would let a proxy that stalls after its headers pin an
   // order-critical worker indefinitely. Wrap the body and retain the same
   // abort signal until it is fully consumed or cancelled.
+  // Fetch implementations generally expose a decoded body while preserving
+  // the encoded Content-Length. Only require an exact byte count when no
+  // content coding is present; the decoded stream remains protected by the
+  // independent maximum below in either case.
+  const contentEncoding = response.headers.get('content-encoding')?.trim().toLowerCase();
+  const exactLengthExpected = !contentEncoding || contentEncoding === 'identity';
   if (!response.body) {
     cleanup();
+    if (exactLengthExpected && !contentLengthMatches(contentLength, 0)) {
+      throw new Error('Supabase response body is incomplete');
+    }
     return response;
   }
 
@@ -145,6 +155,10 @@ export async function fetchSupabaseWithTimeout(
         const chunk = await Promise.race([reader.read(), deadline]);
         if (chunk.done) {
           cleanup();
+          if (exactLengthExpected && !contentLengthMatches(contentLength, responseBytes)) {
+            streamController.error(new Error('Supabase response body is incomplete'));
+            return;
+          }
           streamController.close();
           return;
         }

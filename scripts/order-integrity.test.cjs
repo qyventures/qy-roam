@@ -4581,6 +4581,36 @@ test('Supabase order-critical requests use a bounded shared transport', async ()
     global.fetch = originalFetch;
   }
 
+  // For an uncompressed PostgREST response, Content-Length is part of the
+  // transport integrity boundary. Reject both truncation and an undeclared
+  // suffix before a caller can treat the body as authoritative order data.
+  for (const [declaredLength, body] of [['20', '{"ok":true}'], ['2', '{"ok":true}']]) {
+    global.fetch = async () => new Response(body, {
+      status: 200,
+      headers: { 'content-length': declaredLength, 'content-type': 'application/json' },
+    });
+    try {
+      const response = await fetchSupabaseWithTimeout('https://supabase.example/rest/v1/orders', undefined, 100);
+      await assert.rejects(() => response.text(), /Supabase response body is incomplete/);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  }
+
+  // Content-Length describes the encoded representation when a gateway uses
+  // compression, while fetch exposes decoded bytes. Keep the decoded size
+  // ceiling but do not compare those two different representations.
+  global.fetch = async () => new Response('{"ok":true}', {
+    status: 200,
+    headers: { 'content-length': '4', 'content-encoding': 'gzip' },
+  });
+  try {
+    const response = await fetchSupabaseWithTimeout('https://supabase.example/rest/v1/orders', undefined, 100);
+    assert.deepEqual(await response.json(), { ok: true });
+  } finally {
+    global.fetch = originalFetch;
+  }
+
   // Chunked responses have no useful Content-Length. Enforce the same limit
   // while Supabase consumes the stream so an upstream cannot bypass the bound.
   global.fetch = async () => new Response(new ReadableStream({
