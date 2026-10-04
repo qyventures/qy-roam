@@ -6,7 +6,7 @@ import { operationalConfig } from '@/lib/operationalConfig';
 import { InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '@/lib/requestBody';
 import { isSafeSmtpMailbox } from '@/lib/smtp';
 import { getEsimPlan } from '@/lib/esimPlans';
-import crypto from 'crypto';
+import { manualOrderReference, manualOrderSessionId } from '@/lib/manualOrderReference';
 
 export const dynamic = 'force-dynamic';
 
@@ -60,20 +60,6 @@ function optionalTravelDates(body: Record<string, unknown>) {
   const start = parseExactIsoDate(startRaw), end = parseExactIsoDate(endRaw);
   if (!start || !end || end < start) return null;
   return { start: startRaw, end: endRaw };
-}
-
-// Offline sales do not have Stripe's Checkout Session idempotency key.  Bind
-// a retry to a real, operator-visible payment or sales reference instead of
-// minting a fresh random order identity for every POST.  The reference itself
-// remains in the order notes for reconciliation; its deterministic internal
-// key avoids exposing a payment-provider reference as a public-looking ID.
-function manualOrderReference(value: unknown) {
-  const reference = text(value, 120);
-  return /^[A-Za-z0-9][A-Za-z0-9._:/#-]{4,119}$/.test(reference) ? reference : null;
-}
-
-function manualOrderSessionId(reference: string) {
-  return `manual_${crypto.createHash('sha256').update(reference).digest('hex').slice(0, 48)}`;
 }
 
 async function paidOrderGrossForPeriod(db: ReturnType<typeof getSupabaseAdmin>, start: string, end: string) {

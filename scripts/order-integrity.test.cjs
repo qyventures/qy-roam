@@ -65,6 +65,7 @@ const { durableOrderMatchesPaidSession } = require('../lib/durableOrderSnapshot.
 const { exactStripeClaimToken } = require('../lib/stripeClaimToken.ts');
 const { parsePocketWifiAvailability } = require('../lib/pocketWifiAvailability.ts');
 const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutResponse.ts');
+const { MANUAL_ORDER_REFERENCE_MAX_LENGTH, manualOrderReference, manualOrderSessionId } = require('../lib/manualOrderReference.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { hasOrderIntegritySecret, hasOrderIntegritySigningConfig, isCanonicalStripeMetadata, signedQyRoamProvenance, validQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -484,7 +485,7 @@ test('durable orders accept only canonical Stripe or protected manual-sale ident
     /'orders_session_id_format_check'\s*\)\) = 16 and/,
     'checkout readiness must reject a deployed schema missing the order identity boundary',
   );
-  assert.match(adminOpsRoute, /`manual_\$\{crypto\.createHash\('sha256'\)\.update\(reference\)\.digest\('hex'\)\.slice\(0, 48\)\}`/);
+  assert.match(manualOrderSessionId('provider-reference-123'), /^manual_[a-f0-9]{48}$/);
   assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 23/);
 });
 
@@ -2907,9 +2908,8 @@ test('manual orders cannot bypass paid-order lifecycle, pricing, or WiFi capacit
 test('manual sales use one retry-safe payment or sales reference instead of minting duplicate paid orders', () => {
   assert.match(manualOrderForm, /name="order_reference"/);
   assert.match(manualOrderForm, /Payment \/ sales reference/);
-  assert.match(adminOpsRoute, /function manualOrderReference\(value: unknown\)/);
+  assert.match(adminOpsRoute, /import \{ manualOrderReference, manualOrderSessionId \} from '@\/lib\/manualOrderReference';/);
   assert.match(adminOpsRoute, /manualOrderSessionId\(reference\)/);
-  assert.match(adminOpsRoute, /createHash\('sha256'\)/);
   assert.match(adminOpsRoute, /This payment or sales reference already belongs to different order details/);
   assert.doesNotMatch(adminOpsRoute, /Math\.random\(\)\.toString\(36\)/);
   const manualWifiPersistence = schema.slice(
@@ -2919,6 +2919,18 @@ test('manual sales use one retry-safe payment or sales reference instead of mint
   assert.match(manualWifiPersistence, /where stripe_session_id = p_stripe_session_id\s+for update;/);
   assert.match(manualWifiPersistence, /if found then[\s\S]*manual order reference already belongs to different order details/);
   assert.match(manualWifiPersistence, /return v_order;/);
+});
+
+test('manual order idempotency identities reject overlong references instead of truncating them', () => {
+  const longestValid = `R${'1'.repeat(MANUAL_ORDER_REFERENCE_MAX_LENGTH - 1)}`;
+  const overlongA = `${longestValid}A`;
+  const overlongB = `${longestValid}B`;
+
+  assert.equal(manualOrderReference(`  ${longestValid}  `), longestValid);
+  assert.equal(manualOrderReference(overlongA), null);
+  assert.equal(manualOrderReference(overlongB), null);
+  assert.notEqual(manualOrderSessionId(overlongA), manualOrderSessionId(overlongB));
+  assert.doesNotMatch(adminOpsRoute, /manualOrderReference[\s\S]{0,200}text\(value,\s*120\)/);
 });
 
 test('manual eSIM orders retain the same safe email delivery boundary as Checkout', () => {
