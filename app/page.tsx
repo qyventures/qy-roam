@@ -158,9 +158,13 @@ export default function Home() {
     if (measurementConsent) trackMeta('InitiateCheckout', {
       content_name: `${country} Pocket WiFi`,
       content_category: 'Pocket WiFi',
-      content_ids: [plan.code],
+      // Keep the catalogue identity and value identical to the browser/CAPI
+      // Purchase contract. Meta otherwise sees checkout and purchase as two
+      // unrelated products, and a configured courier fee understates the
+      // value entering the funnel compared with the Stripe amount paid.
+      content_ids: [`pocket_wifi:${country}`],
       content_type: 'product',
-      value: Number(subtotal.toFixed(2)),
+      value: Number(payableTotal.toFixed(2)),
       currency: 'SGD',
       num_items: 1
     }, { eventID: `checkout_${activeCheckoutAttempt.current.requestId}` });

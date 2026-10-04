@@ -32,7 +32,9 @@ export default function EsimPage() {
       if (measurementConsent) trackMeta('InitiateCheckout', {
         content_name: `${plan.destination} Travel eSIM`,
         content_category: 'Travel eSIM',
-        content_ids: [plan.id],
+        // Use the same product identity as browser and CAPI Purchase so Meta
+        // can join this checkout start to the eventual conversion.
+        content_ids: [`esim:${plan.id}`],
         content_type: 'product',
         value: Number(plan.qyPriceSgd.toFixed(2)),
         currency: 'SGD',

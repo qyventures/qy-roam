@@ -2061,6 +2061,20 @@ test('browser InitiateCheckout events share the durable Stripe attempt identity 
   assert.match(esimPage, /const fingerprint = JSON\.stringify[\s\S]*?checkoutAttempt\('esim', fingerprint, activeCheckoutAttempt\.current\)[\s\S]*?trackMeta\('InitiateCheckout'/);
 });
 
+test('browser checkout funnel uses the same product identity and paid value as Purchase', () => {
+  // Purchase is emitted by both Pixel and CAPI with these canonical IDs. If
+  // InitiateCheckout uses a country code/plan id without the product prefix,
+  // Meta cannot reliably join the two funnel steps as the same catalogue item.
+  assert.match(homePage, /trackMeta\('InitiateCheckout',[\s\S]*?content_ids: \[`pocket_wifi:\$\{country\}`\],[\s\S]*?value: Number\(payableTotal\.toFixed\(2\)\)/);
+  assert.match(esimPage, /trackMeta\('InitiateCheckout',[\s\S]*?content_ids: \[`esim:\$\{plan\.id\}`\],[\s\S]*?value: Number\(plan\.qyPriceSgd\.toFixed\(2\)\)/);
+  assert.match(successPage, /const contentId = isEsim \? `esim:\$\{planId\}` : `pocket_wifi:\$\{destination\}`/);
+  assert.match(webhookRoute, /const contentId=productType==='esim' \? `esim:\$\{session\.metadata\?\.plan_id\|\|''\}` : `pocket_wifi:\$\{session\.metadata\?\.country\|\|''\}`/);
+  // Pocket WiFi's customer promise and Stripe charge include courier fees;
+  // its checkout-start event must therefore use the same total, not rental
+  // subtotal, whenever operations configures a delivery charge.
+  assert.match(homePage, /const payableTotal = sgdFromCents\(promo\.amountCents \+ courierFeeCents\)/);
+});
+
 test('Pocket WiFi expiry and inventory scans share the Stripe-safe hold window', () => {
   assert.match(wifiCheckoutRoute, /const expiresAtSeconds=checkoutAttemptExpiresAt\(body\.checkoutAttemptCreatedAt\)/);
   assert.match(wifiCheckoutRoute, /expires_at:expiresAtSeconds/);
