@@ -1768,7 +1768,7 @@ test('provider-backed public routes retain an aggregate overload ceiling across 
 test('customer confirmation lookups are throttled before provider-backed server rendering', () => {
   assert.match(middleware, /CONFIRMATION_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS\s*=\s*180/);
   assert.match(middleware, /pathname === '\/success' \|\| pathname === '\/booking'/);
-  assert.match(middleware, /if \(confirmationGloballyLimited\(\)\)[\s\S]*?status: 429/);
+  assert.match(middleware, /if \(isProviderBackedConfirmationLookup\(req\) && confirmationGloballyLimited\(\)\)[\s\S]*?status: 429/);
   assert.match(middleware, /'Cache-Control': 'no-store, max-age=0, private'/);
   assert.match(middleware, /'Referrer-Policy': 'no-referrer'/);
   assert.match(middleware, /matcher: \['\/admin\/:path\*', '\/api\/admin\/:path\*', '\/success', '\/booking'\]/);
@@ -1901,6 +1901,17 @@ test('customer-facing Stripe session lookups accept only one bounded Checkout Se
   // customer page can display payment or fulfilment data.
   assert.match(bookingPage, /if \(session\.id !== sessionId\)/);
   assert.match(successPage, /if \(session\.id !== sessionId\)/);
+});
+
+test('confirmation overload protection counts only provider-backed session lookups', () => {
+  // Missing or malformed references render a local help state and never call
+  // Stripe. They must not be able to consume the shared budget protecting
+  // real customers who return from a completed Checkout Session.
+  assert.match(middleware, /import \{ validStripeCheckoutSessionId \} from '\.\/lib\/stripeSessionId'/);
+  assert.match(middleware, /const sessionIds = req\.nextUrl\.searchParams\.getAll\('session_id'\)/);
+  assert.match(middleware, /sessionIds\.length === 1 && Boolean\(validStripeCheckoutSessionId\(sessionIds\[0\]\)\)/);
+  assert.match(middleware, /if \(isProviderBackedConfirmationLookup\(req\) && confirmationGloballyLimited\(\)\)/);
+  assert.doesNotMatch(middleware, /if \(confirmationGloballyLimited\(\)\)/);
 });
 
 test('Pocket WiFi custody movements retain the complete bounded Stripe order identity', () => {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAdminCredentials, hasRequiredAdminCredentials } from './lib/runtimeConfig';
 import { ADMIN_AUTH_FAILURE_WINDOW_MS, createFailedAdminAuthLimiter } from './lib/adminAuthRateLimit';
 import { ADMIN_MUTATION_HEADER, ADMIN_MUTATION_HEADER_VALUE } from './lib/adminMutation';
+import { validStripeCheckoutSessionId } from './lib/stripeSessionId';
 
 // Reverse proxies normally impose a header limit, but authentication is a
 // public edge of the operations surface and must retain a bounded CPU/memory
@@ -36,6 +37,20 @@ function confirmationGloballyLimited(now = Date.now()) {
 
 function isConfirmationLookup(pathname: string) {
   return pathname === '/success' || pathname === '/booking';
+}
+
+function isProviderBackedConfirmationLookup(req: NextRequest) {
+  if (!isConfirmationLookup(req.nextUrl.pathname)) return false;
+  // The page components reject missing, repeated, malformed, and oversized
+  // Checkout Session references before making a Stripe request. Keep the
+  // shared overload budget on that identical boundary: otherwise a crawler
+  // or attacker can exhaust every real customer's confirmation capacity by
+  // repeatedly opening the bare /success or /booking route while consuming
+  // no provider work at all. URLSearchParams#get returns one string for a
+  // repeated key, so reject duplicates explicitly to match App Router's
+  // string[] validation rather than treating the first value as authority.
+  const sessionIds = req.nextUrl.searchParams.getAll('session_id');
+  return sessionIds.length === 1 && Boolean(validStripeCheckoutSessionId(sessionIds[0]));
 }
 
 function safeEqual(a: string, b: string) {
@@ -99,7 +114,7 @@ function isTrustedAdminMutation(req: NextRequest) {
 
 export function middleware(req: NextRequest) {
   if (isConfirmationLookup(req.nextUrl.pathname)) {
-    if (confirmationGloballyLimited()) {
+    if (isProviderBackedConfirmationLookup(req) && confirmationGloballyLimited()) {
       return new NextResponse('Order confirmation is busy. Please try again shortly.', {
         status: 429,
         headers: {
