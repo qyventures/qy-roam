@@ -4907,7 +4907,7 @@ test('Stripe webhook bounds event identities before logs or durable idempotency 
 });
 
 test('deployment rejects structurally broken PL/pgSQL before schema application', async () => {
-  const { validatePlpgsqlStructure } = await import('./check-operations-schema.mjs');
+  const { validateDuplicateReturningClauses, validatePlpgsqlStructure } = await import('./check-operations-schema.mjs');
   assert.doesNotThrow(() => validatePlpgsqlStructure(`
     create function public.example() returns trigger language plpgsql as $$
     begin
@@ -4927,6 +4927,15 @@ test('deployment rejects structurally broken PL/pgSQL before schema application'
   `), /IF without a matching END IF/);
   assert.throws(() => validatePlpgsqlStructure('create function public.example() returns void language plpgsql as $$ begin return; end;'), /Unterminated SQL dollar-quoted block/);
   assert.throws(() => validatePlpgsqlStructure('create function public.example() returns void language plpgsql as $body$ begin return; end; $$;'), /Unterminated SQL dollar-quoted block/);
+  assert.doesNotThrow(() => validateDuplicateReturningClauses(`
+    insert into example(id) values (1) returning * into first_row;
+    insert into example(id) values (2) returning * into second_row;
+  `));
+  assert.throws(() => validateDuplicateReturningClauses(`
+    insert into example(id) values (1)
+    returning * into saved;
+    returning * into saved;
+  `), /duplicate RETURNING clause/);
   // PostgreSQL permits LANGUAGE after AS. This form must not bypass the
   // release guard merely because the repository currently prefers the
   // equivalent pre-body clause order.

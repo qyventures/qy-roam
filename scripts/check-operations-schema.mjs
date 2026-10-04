@@ -252,6 +252,35 @@ export function validateOnConflictAssignments(sql) {
 
 validateOnConflictAssignments(schema);
 
+// PostgreSQL permits only one RETURNING clause per data-modification
+// statement. A duplicated clause is easy to miss at the end of a long
+// INSERT ... ON CONFLICT upsert and prevents the enclosing function from
+// compiling, potentially leaving a production schema migration half-applied.
+// Catch that specific copy/paste failure offline because this release check
+// intentionally runs without production database credentials.
+export function validateDuplicateReturningClauses(sql) {
+  const withoutComments = sql
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/--[^\r\n]*/g, ' ');
+  assert.doesNotMatch(
+    withoutComments,
+    /\breturning\b[^;]*;\s*returning\b/i,
+    'SQL statement contains a duplicate RETURNING clause',
+  );
+}
+
+validateDuplicateReturningClauses(schema);
+
+// Keep this release guard covered by the command deployment actually runs.
+assert.throws(
+  () => validateDuplicateReturningClauses(`
+    insert into example(id) values (1)
+    returning * into saved;
+    returning * into saved;
+  `),
+  /duplicate RETURNING clause/,
+);
+
 // Keep the guard itself honest: this is a release check, so a parser
 // regression must fail locally instead of silently weakening deployment.
 validateOnConflictAssignments(`
@@ -363,5 +392,5 @@ assert.ok(inventoryTable < manualOrderFunction, 'inventory_items must exist befo
 assert.ok(integritySchemaVersion > pocketWifiPersistenceFunction, 'order-integrity schema version must be written after every paid-order function it certifies');
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure, conflict-update assignments, and clean-install dependency order.`);
+  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
 }
