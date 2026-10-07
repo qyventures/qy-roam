@@ -3539,10 +3539,10 @@ test('admin order visibility fails loudly instead of presenting a database failu
   assert.match(adminPage, /Operational data is currently unavailable:/);
   assert.match(adminPage, /Do not treat empty panels as no orders/);
   assert.match(adminPage, /const ordersUnavailable = Boolean\(result\.error\)/);
-  assert.match(adminPage, /ordersUnavailable \? <p role="status"><strong>Sales and order metrics are unavailable/);
-  assert.match(adminPage, /\{!ordersUnavailable && <>[\s\S]*?WiFi dispatch exceptions[\s\S]*?Meta CAPI exceptions[\s\S]*?<\/>\}/);
-  assert.match(adminPage, /ordersUnavailable \? <p><strong>Orders are unavailable\.<\/strong>[\s\S]*?: supabase && orders\.length === 0 && <p>No orders yet\.<\/p>/);
-  assert.match(adminPage, /ordersUnavailable && <p><strong>Customer order history is unavailable/);
+  assert.match(adminPage, /ordersIncomplete \? <p role="status"><strong>Sales and order metrics are unavailable/);
+  assert.match(adminPage, /\{!fulfilmentSummaryIncomplete && <>[\s\S]*?WiFi dispatch exceptions[\s\S]*?Meta CAPI exceptions[\s\S]*?<\/>\}/);
+  assert.match(adminPage, /ordersUnavailable \? <p><strong>Orders are unavailable\.<\/strong>[\s\S]*?: result\.truncated \? <p role="status">[\s\S]*?: supabase && orders\.length === 0 && <p>No orders yet\.<\/p>/);
+  assert.match(adminPage, /ordersIncomplete && <p><strong>Customer order history is unavailable/);
 });
 
 test('admin reporting screens do not present failed database reads as empty operational data', () => {
@@ -3794,6 +3794,17 @@ test('admin order visibility identifies the specific Meta CAPI delivery needing 
   assert.match(adminPage, /Meta CAPI/);
   assert.match(adminPage, /metaDelivery\?\.last_error/);
   assert.match(adminPage, /Not requested \/ not recorded/);
+});
+
+test('admin aggregates fail closed when bounded order or delivery views are incomplete', () => {
+  assert.match(adminPage, /const ordersIncomplete = ordersUnavailable \|\| result\.truncated/);
+  assert.match(adminPage, /const fulfilmentSummaryIncomplete = ordersIncomplete \|\|/);
+  assert.match(adminPage, /Boolean\(notificationResult\.error\) \|\| notificationResult\.truncated/);
+  assert.match(adminPage, /Boolean\(metaDeliveryResult\.error\) \|\| metaDeliveryResult\.truncated/);
+  assert.match(adminPage, /\{ordersIncomplete \? <p role="status">/);
+  assert.match(adminPage, /\{!fulfilmentSummaryIncomplete && <>/);
+  assert.match(adminPage, /\{!ordersIncomplete && customers\.length > 0/);
+  assert.match(adminPage, /Showing the first \{ADMIN_MAX_ROWS\.toLocaleString\(\)\} orders only/);
 });
 
 test('admin email exceptions include paid Stripe orders missing their notification ledger', () => {
