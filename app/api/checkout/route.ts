@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import type Stripe from 'stripe';
 import { createStripeClient } from '../../../lib/stripeClient';
-import { applyPromoCents, normalisePromoCode } from '../../../lib/promotions';
+import { applyPromoCents, normalisePromoCode, promoIsActive } from '../../../lib/promotions';
 import { getWifiPlan, WIFI_BENCHMARK } from '../../../lib/wifiPlans';
 import { getSupabaseAdmin } from '../../../lib/supabaseAdmin';
 import { parseExactIsoDate, validCheckoutRequestId } from '../../../lib/checkoutValidation';
@@ -405,6 +405,16 @@ export async function POST(req: Request) {
     const released=await supabase.from('checkout_reservations').delete().eq('checkout_request_id',requestId).is('stripe_session_id',null);
     if(released.error) throw released.error;
     return NextResponse.json({error:'This checkout attempt has expired. Please try again to start a new one.',checkoutExpired:true},{status:409,headers:{'Cache-Control':'no-store'}});
+  }
+  // Promotion eligibility was calculated before provider-backed hold scans
+  // and the atomic reservation call. Re-authorise a discounted price at the
+  // final Stripe boundary so a request that crosses the Singapore campaign
+  // cutoff cannot create a new, already-expired promotional payment link.
+  // Only this still-unlinked reservation belongs to the aborted creation.
+  if(promo.discountCents>0&&!promoIsActive()){
+    const released=await supabase.from('checkout_reservations').delete().eq('checkout_request_id',requestId).is('stripe_session_id',null);
+    if(released.error) throw released.error;
+    return NextResponse.json({error:'This promotion has ended. Please refresh to see the current price.',pricingExpired:true},{status:409,headers:{'Cache-Control':'no-store'}});
   }
   let session:Stripe.Checkout.Session;
   try{

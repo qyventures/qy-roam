@@ -307,6 +307,22 @@ test('Pocket WiFi promotion expires consistently across pricing and storefront c
   assert.match(homePage, /\{launchPromoActive && <section className="wrap section promo-section">/);
 });
 
+test('checkout re-authorises promotional prices immediately before Stripe Session creation', () => {
+  const esimCreate = esimCheckoutRoute.indexOf('stripe.checkout.sessions.create({');
+  const esimReadiness = esimCheckoutRoute.indexOf('if (!await hasRequiredEsimOrderSchema())');
+  const esimFinalPromoCheck = esimCheckoutRoute.lastIndexOf('if (!esimPromoIsActive())', esimCreate);
+  assert.ok(esimCreate > -1 && esimReadiness > -1 && esimFinalPromoCheck > esimReadiness && esimFinalPromoCheck < esimCreate);
+  assert.match(esimCheckoutRoute.slice(esimFinalPromoCheck, esimCreate), /pricingExpired: true/);
+
+  const wifiCreate = wifiCheckoutRoute.indexOf('stripe.checkout.sessions.create({');
+  const wifiReservation = wifiCheckoutRoute.indexOf("supabase.rpc('qy_reserve_pocket_wifi'");
+  const wifiFinalPromoCheck = wifiCheckoutRoute.lastIndexOf('if(promo.discountCents>0&&!promoIsActive())', wifiCreate);
+  assert.ok(wifiCreate > -1 && wifiReservation > -1 && wifiFinalPromoCheck > wifiReservation && wifiFinalPromoCheck < wifiCreate);
+  const wifiBoundary = wifiCheckoutRoute.slice(wifiFinalPromoCheck, wifiCreate);
+  assert.match(wifiBoundary, /pricingExpired:true/);
+  assert.match(wifiBoundary, /\.is\('stripe_session_id',null\)/);
+});
+
 test('privileged Supabase requests use one canonical hosted-project configuration boundary', () => {
   assert.equal(canonicalSupabaseProjectUrl(' https://project-ref.supabase.co/ '), 'https://project-ref.supabase.co');
   assert.equal(canonicalSupabaseProjectUrl('http://project-ref.supabase.co'), null);

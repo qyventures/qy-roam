@@ -152,6 +152,17 @@ export async function POST(req: Request) {
       });
     }
 
+    // Schema readiness can involve several bounded database calls. Confirm
+    // the offer is still authorised immediately before asking Stripe to
+    // create a payable Session, so a request crossing the Singapore campaign
+    // cutoff cannot open a newly expired discounted checkout.
+    if (!esimPromoIsActive()) {
+      return NextResponse.json({ error: 'This eSIM offer has ended. Please contact +65 8032 7183 for current availability.', pricingExpired: true }, {
+        status: 409,
+        headers: { 'Cache-Control': 'no-store' },
+      });
+    }
+
     const stripe = createStripeClient(key);
     const origin = checkoutSiteOrigin(req.url);
     const amount = Math.max(50, Math.round(plan.qyPriceSgd * 100));
