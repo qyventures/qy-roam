@@ -25,8 +25,8 @@ const READINESS_PROBE_TIMEOUT_MS = 8_000;
 // probes cannot distinguish an old function body from the current one; this
 // explicit handshake prevents a rolling application deploy from accepting a
 // payment against stale database logic.
-const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 31;
-const REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 7;
+const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 32;
+const REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 8;
 let paymentSchemaReadyUntil = 0;
 let esimOrderSchemaReadyUntil = 0;
 let operationsSchemaReadyUntil = 0;
@@ -436,6 +436,7 @@ async function checkRequiredEsimOrderSchema() {
       const transitionProbe = await database.rpc('qy_transition_esim_order', {
         p_order_id: 0,
         p_expected_status: 'awaiting_fulfilment',
+        p_expected_updated_at: new Date(0).toISOString(),
         p_next_status: 'awaiting_fulfilment',
         p_digital_delivery_reference: null,
         p_notes: null,
@@ -502,6 +503,7 @@ async function checkRequiredPocketWifiFulfilmentSchema() {
         database.rpc('qy_transition_pocket_wifi_order', {
           p_order_id: 0,
           p_expected_status: 'paid',
+          p_expected_updated_at: new Date(0).toISOString(),
           p_next_status: 'paid',
           p_courier_tracking: null,
           p_return_tracking: null,
@@ -585,6 +587,7 @@ async function checkRequiredOperationsSchema() {
         database.rpc('qy_transition_pocket_wifi_order', {
           p_order_id: 0,
           p_expected_status: 'paid',
+          p_expected_updated_at: new Date(0).toISOString(),
           p_next_status: 'paid',
           p_courier_tracking: null,
           p_return_tracking: null,

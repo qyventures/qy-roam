@@ -296,9 +296,11 @@ for each row execute function public.qy_enforce_esim_fulfilment_transition();
 -- Pocket WiFi. Application validation remains useful for immediate feedback;
 -- this function is the service-role authority when concurrent operators or
 -- recovery tools act on the same order.
+drop function if exists public.qy_transition_esim_order(bigint,text,text,text,text);
 create or replace function public.qy_transition_esim_order(
   p_order_id bigint,
   p_expected_status text,
+  p_expected_updated_at timestamptz,
   p_next_status text,
   p_digital_delivery_reference text,
   p_notes text
@@ -319,6 +321,13 @@ begin
     raise exception 'only paid eSIM orders can be transitioned here';
   end if;
   if v_order.fulfilment_status is distinct from p_expected_status then
+    raise exception 'order changed since it was loaded';
+  end if;
+  -- Status alone is not a sufficient optimistic lock: another operator can
+  -- save notes or custody/delivery evidence without changing the lifecycle.
+  -- Preserve the exact database timestamp supplied by the rendered admin row
+  -- so a stale tab cannot silently overwrite that intervening work.
+  if p_expected_updated_at is null or v_order.updated_at is distinct from p_expected_updated_at then
     raise exception 'order changed since it was loaded';
   end if;
   if p_notes is not null and (length(p_notes) > 1000 or position(chr(0) in p_notes) > 0) then
@@ -351,8 +360,8 @@ begin
   return v_order;
 end;
 $$;
-revoke all on function public.qy_transition_esim_order(bigint,text,text,text,text) from public;
-grant execute on function public.qy_transition_esim_order(bigint,text,text,text,text) to service_role;
+revoke all on function public.qy_transition_esim_order(bigint,text,timestamptz,text,text,text) from public;
+grant execute on function public.qy_transition_esim_order(bigint,text,timestamptz,text,text,text) to service_role;
 
 -- Cancelling fulfilment does not reverse an immutable paid transaction. Keep
 -- an operator-authored reason in the durable order ledger so refunds and
@@ -2163,7 +2172,9 @@ as $$
   -- newly written durable order payment state. Version 31 certifies that all
   -- privileged order entry points reject fractional cents and values outside
   -- the numeric(10,2) ledger range before PostgreSQL can round or overflow.
-  select 31;
+  -- Version 32 additionally certifies exact optimistic version checks for
+  -- concurrent admin eSIM fulfilment updates.
+  select 32;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
@@ -2414,9 +2425,11 @@ grant execute on function public.qy_set_inventory_status(bigint,text,text,text) 
 -- PostgREST resolves RPCs by named arguments, and retaining both versions
 -- could let an older caller bypass the return-disposition boundary.
 drop function if exists public.qy_transition_pocket_wifi_order(bigint,text,text,text,text,text,bigint);
+drop function if exists public.qy_transition_pocket_wifi_order(bigint,text,text,text,text,text,bigint,text);
 create or replace function public.qy_transition_pocket_wifi_order(
   p_order_id bigint,
   p_expected_status text,
+  p_expected_updated_at timestamptz,
   p_next_status text,
   p_courier_tracking text,
   p_return_tracking text,
@@ -2445,6 +2458,9 @@ begin
     raise exception 'only paid Pocket WiFi orders can be transitioned here';
   end if;
   if v_order.fulfilment_status <> p_expected_status then
+    raise exception 'order changed since it was loaded';
+  end if;
+  if p_expected_updated_at is null or v_order.updated_at is distinct from p_expected_updated_at then
     raise exception 'order changed since it was loaded';
   end if;
   -- Operational notes are audit evidence. Application callers reject an
@@ -2580,8 +2596,8 @@ begin
   return v_order;
 end;
 $$;
-revoke all on function public.qy_transition_pocket_wifi_order(bigint,text,text,text,text,text,bigint,text) from public;
-grant execute on function public.qy_transition_pocket_wifi_order(bigint,text,text,text,text,text,bigint,text) to service_role;
+revoke all on function public.qy_transition_pocket_wifi_order(bigint,text,timestamptz,text,text,text,text,bigint,text) from public;
+grant execute on function public.qy_transition_pocket_wifi_order(bigint,text,timestamptz,text,text,text,text,bigint,text) to service_role;
 
 -- Presence/signature probes cannot distinguish older inventory RPC bodies.
 -- Checkout requires this version before selling a physical rental because a
@@ -2594,7 +2610,7 @@ security definer
 set search_path = pg_catalog
 -- Version 7 additionally certifies that a damaged/quarantined return from an
 -- aggregate stock row does not hide the other saleable routers in that row.
-as $$ select 7; $$;
+as $$ select 8; $$;
 revoke all on function public.qy_pocket_wifi_fulfilment_schema_version() from public;
 grant execute on function public.qy_pocket_wifi_fulfilment_schema_version() to service_role;
 

@@ -126,8 +126,10 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   }
 
   const status = String(body.status || '');
+  const expectedUpdatedAt = typeof body.expected_updated_at === 'string' ? body.expected_updated_at : '';
   const id = Number(params.id);
   if (!Number.isSafeInteger(id) || id < 1) return NextResponse.json({ error: 'Invalid order id' }, { status: 400 });
+  if (!expectedUpdatedAt || !Number.isFinite(Date.parse(expectedUpdatedAt))) return NextResponse.json({ error: 'Invalid order version. Refresh before updating it.' }, { status: 400 });
 
   const existing = await supabase.from('orders').select('product_type,payment_status,fulfilment_status,dispatched_at,returned_at,courier_tracking,return_tracking,digital_delivery_reference,notes').eq('id', id).maybeSingle();
   if (existing.error) return NextResponse.json({ error: 'Unable to load order' }, { status: 500 });
@@ -238,6 +240,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     const { data, error } = await supabase.rpc('qy_transition_pocket_wifi_order', {
       p_order_id: id,
       p_expected_status: existing.data.fulfilment_status,
+      p_expected_updated_at: expectedUpdatedAt,
       p_next_status: status,
       p_courier_tracking: typeof body.courier_tracking === 'string' ? courierTracking : null,
       p_return_tracking: typeof body.return_tracking === 'string' ? returnTracking : null,
@@ -256,7 +259,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     }
     const order = Array.isArray(data) ? data[0] : data;
     if (!order?.id) return NextResponse.json({ error: 'Unable to update order' }, { status: 500 });
-    return NextResponse.json({ id: order.id, fulfilment_status: order.fulfilment_status }, { headers: { 'Cache-Control': 'no-store' } });
+    return NextResponse.json({ id: order.id, fulfilment_status: order.fulfilment_status, updated_at: order.updated_at }, { headers: { 'Cache-Control': 'no-store' } });
   }
 
   // A digital hand-off is irreversible. Bind the paid-order check, expected
@@ -264,6 +267,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const { data, error } = await supabase.rpc('qy_transition_esim_order', {
     p_order_id: id,
     p_expected_status: existing.data.fulfilment_status,
+    p_expected_updated_at: expectedUpdatedAt,
     p_next_status: status,
     p_digital_delivery_reference: typeof body.digital_delivery_reference === 'string' ? deliveryReference || null : null,
     p_notes: cancellationNotes || submittedNotes,
@@ -276,7 +280,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   }
   const order = Array.isArray(data) ? data[0] : data;
   if (!order?.id) return NextResponse.json({ error: 'Unable to update order' }, { status: 500 });
-  return NextResponse.json({ id: order.id, fulfilment_status: order.fulfilment_status }, { headers: { 'Cache-Control': 'no-store' } });
+  return NextResponse.json({ id: order.id, fulfilment_status: order.fulfilment_status, updated_at: order.updated_at }, { headers: { 'Cache-Control': 'no-store' } });
 }
 
 // Stripe retries delivery failures for a finite window. This protected recovery

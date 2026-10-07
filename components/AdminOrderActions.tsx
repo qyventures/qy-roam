@@ -4,9 +4,10 @@ import { useState } from 'react';
 import { allowedFulfilmentStatuses } from '@/lib/orderLifecycle';
 import { adminMutationHeaders } from '@/lib/adminMutation';
 
-export default function AdminOrderActions({ id, initialStatus, paymentStatus, productType = 'pocket_wifi', courierTracking = '', returnTracking = '', digitalDeliveryReference = '', inventoryItemId = null, inventoryItems = [], canRetryNotifications = false }: { id: number; initialStatus: string; paymentStatus: string | null; productType?: string | null; courierTracking?: string | null; returnTracking?: string | null; digitalDeliveryReference?: string | null; inventoryItemId?: number | null; inventoryItems?: { id: number; name: string; sku: string; quantity_on_hand: number; status: string }[]; canRetryNotifications?: boolean }) {
+export default function AdminOrderActions({ id, initialStatus, initialUpdatedAt, paymentStatus, productType = 'pocket_wifi', courierTracking = '', returnTracking = '', digitalDeliveryReference = '', inventoryItemId = null, inventoryItems = [], canRetryNotifications = false }: { id: number; initialStatus: string; initialUpdatedAt: string; paymentStatus: string | null; productType?: string | null; courierTracking?: string | null; returnTracking?: string | null; digitalDeliveryReference?: string | null; inventoryItemId?: number | null; inventoryItems?: { id: number; name: string; sku: string; quantity_on_hand: number; status: string }[]; canRetryNotifications?: boolean }) {
   const isEsim = productType === 'esim';
   const [currentStatus, setCurrentStatus] = useState(initialStatus);
+  const [expectedUpdatedAt, setExpectedUpdatedAt] = useState(initialUpdatedAt);
   const [status, setStatus] = useState(initialStatus);
   const statuses = allowedFulfilmentStatuses(productType, currentStatus);
   const [courier, setCourier] = useState(courierTracking || '');
@@ -43,7 +44,7 @@ export default function AdminOrderActions({ id, initialStatus, paymentStatus, pr
       if (status === 'cancelled' && cancellationReason.trim().length < 5) {
         throw new Error('Enter a cancellation reason of at least 5 characters for reconciliation.');
       }
-      const body: Record<string, string> = { status };
+      const body: Record<string, string> = { status, expected_updated_at: expectedUpdatedAt };
       if (status === 'cancelled') body.cancellation_reason = cancellationReason;
       if (!isEsim) {
         body.courier_tracking = courier;
@@ -57,10 +58,11 @@ export default function AdminOrderActions({ id, initialStatus, paymentStatus, pr
         if (deliveryReference.trim()) body.digital_delivery_reference = deliveryReference;
       }
       const res = await fetch(`/api/admin/orders/${id}`, { method: 'PATCH', headers: adminMutationHeaders(true), body: JSON.stringify(body) });
-      const result = await res.json().catch(() => null) as { fulfilment_status?: string; error?: string } | null;
+      const result = await res.json().catch(() => null) as { fulfilment_status?: string; updated_at?: string; error?: string } | null;
       if (!res.ok) throw new Error(result?.error || 'Update failed');
-      if (!result?.fulfilment_status) throw new Error('Invalid update response');
+      if (!result?.fulfilment_status || !result.updated_at) throw new Error('Invalid update response');
       setCurrentStatus(result.fulfilment_status);
+      setExpectedUpdatedAt(result.updated_at);
       setStatus(result.fulfilment_status);
       setMessage('Saved');
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Could not save'); }
