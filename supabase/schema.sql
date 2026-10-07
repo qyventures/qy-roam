@@ -305,6 +305,9 @@ begin
   if v_order.fulfilment_status is distinct from p_expected_status then
     raise exception 'order changed since it was loaded';
   end if;
+  if p_notes is not null and (length(p_notes) > 1000 or position(chr(0) in p_notes) > 0) then
+    raise exception 'invalid order notes';
+  end if;
   if not (
     p_next_status = v_order.fulfilment_status or
     (v_order.fulfilment_status = 'awaiting_fulfilment' and p_next_status in ('fulfilled', 'cancelled')) or
@@ -2418,6 +2421,13 @@ begin
   if v_order.fulfilment_status <> p_expected_status then
     raise exception 'order changed since it was loaded';
   end if;
+  -- Operational notes are audit evidence. Application callers reject an
+  -- overlong value, and this privileged database boundary must do the same
+  -- for repair scripts and future clients instead of silently retaining only
+  -- a prefix that the operator did not submit.
+  if p_notes is not null and (length(p_notes) > 1000 or position(chr(0) in p_notes) > 0) then
+    raise exception 'invalid order notes';
+  end if;
 
   if not (
     p_next_status = p_expected_status or
@@ -2521,7 +2531,7 @@ begin
     courier_tracking = case when p_courier_tracking is null then courier_tracking else nullif(left(trim(p_courier_tracking), 200), '') end,
     return_tracking = case when p_return_tracking is null then return_tracking else nullif(left(trim(p_return_tracking), 200), '') end,
     return_disposition = case when p_next_status = 'returned' and p_expected_status <> 'returned' then v_return_disposition else return_disposition end,
-    notes = case when p_notes is null then notes else left(p_notes, 1000) end,
+    notes = case when p_notes is null then notes else p_notes end,
     inventory_item_id = coalesce(v_order.inventory_item_id, case when p_next_status = 'dispatched' then p_inventory_item_id end),
     dispatched_at = case when p_next_status = 'dispatched' and p_expected_status <> 'dispatched' then v_now else dispatched_at end,
     returned_at = case when p_next_status = 'returned' and p_expected_status <> 'returned' then v_now else returned_at end,

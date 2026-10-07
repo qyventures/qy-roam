@@ -22,6 +22,7 @@ export const runtime = 'nodejs';
 // worker before the request is rejected.
 const MAX_ADMIN_ORDER_BODY_BYTES = 8_192;
 const ADMIN_ORDER_BODY_TIMEOUT_MS = 15_000;
+const MAX_ORDER_NOTES_LENGTH = 1_000;
 
 function trackingValue(value: unknown, existing: string | null) {
   // Keep an already-recorded reference when an older admin client submits no
@@ -144,6 +145,18 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const deliveryReference = digitalDeliveryReference(body.digital_delivery_reference, existing.data.digital_delivery_reference);
   const returnDisposition = typeof body.return_disposition === 'string' ? body.return_disposition.trim().toLowerCase() : '';
   const cancelReason = cancellationReason(body.cancellation_reason);
+  // Notes are operational audit evidence. Never silently save only a prefix:
+  // an older/custom admin client may submit this field even though the current
+  // compact UI only adds structured cancellation evidence. Reject an invalid
+  // value before either atomic transition RPC so the operator knows that the
+  // complete note was not recorded.
+  let submittedNotes: string | null = null;
+  if (Object.prototype.hasOwnProperty.call(body, 'notes')) {
+    if (typeof body.notes !== 'string' || body.notes.length > MAX_ORDER_NOTES_LENGTH || /\u0000/.test(body.notes)) {
+      return NextResponse.json({ error: `Order notes must be text of ${MAX_ORDER_NOTES_LENGTH.toLocaleString()} characters or fewer and cannot contain null characters.` }, { status: 400 });
+    }
+    submittedNotes = body.notes;
+  }
   // Product-specific evidence must not leak across fulfilment workflows. A
   // stale or hand-authored admin client can submit fields that the current UI
   // does not render; accepting router custody data on an eSIM would make the
@@ -228,7 +241,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       p_next_status: status,
       p_courier_tracking: typeof body.courier_tracking === 'string' ? courierTracking : null,
       p_return_tracking: typeof body.return_tracking === 'string' ? returnTracking : null,
-      p_notes: cancellationNotes || (typeof body.notes === 'string' ? body.notes.slice(0, 1000) : null),
+      p_notes: cancellationNotes || submittedNotes,
       p_inventory_item_id: selectedInventoryItemId,
       p_return_disposition: returnDisposition,
     });
@@ -253,7 +266,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     p_expected_status: existing.data.fulfilment_status,
     p_next_status: status,
     p_digital_delivery_reference: typeof body.digital_delivery_reference === 'string' ? deliveryReference || null : null,
-    p_notes: cancellationNotes || (typeof body.notes === 'string' ? body.notes.slice(0, 1000) : null),
+    p_notes: cancellationNotes || submittedNotes,
   });
   if (error) {
     const transitionError = esimTransitionError(error.message || '');
