@@ -1948,7 +1948,7 @@ test('checkout provider responses are bounded before their Session ids become AP
   assert.doesNotMatch(wifiCheckoutRoute.slice(wifiCreate), /sessions\.(?:update|retrieve)\(session\.id/);
 
   assert.match(wifiCheckoutRoute, /const sessionId=validStripeCheckoutSessionId\(session\.id\)/);
-  assert.match(wifiCheckoutRoute, /existingSessionId=sameBooking\?sessionId:null/);
+  assert.match(wifiCheckoutRoute, /existingSessionId=sessionId/);
   assert.match(wifiCheckoutRoute, /startingAfter=validStripeCheckoutSessionId\(sessions\.data\[sessions\.data\.length-1\]\.id\)!/);
   assert.match(availabilityRoute, /const sessionId = validStripeCheckoutSessionId\(session\.id\)/);
   assert.match(availabilityRoute, /startingAfter = validStripeCheckoutSessionId\(sessions\.data\[sessions\.data\.length - 1\]\.id\)!/);
@@ -2883,7 +2883,11 @@ test('Pocket WiFi idempotent recovery completes the inventory hold scan', () => 
     scan.indexOf("if(requestId&&session.metadata?.checkout_request_id===requestId)"),
     scan.indexOf('const holdStart=', scan.indexOf("if(requestId&&session.metadata?.checkout_request_id===requestId)")),
   );
-  assert.match(ownSessionBranch, /existingSessionId=sameBooking\?sessionId:null/);
+  assert.match(ownSessionBranch, /matchingRequestSessions\+=1/);
+  assert.match(ownSessionBranch, /if\(!sameBooking\|\|matchingRequestSessions>1\)/);
+  assert.match(ownSessionBranch, /requestConflict=true/);
+  assert.doesNotMatch(ownSessionBranch, /requestConflict=!sameBooking/);
+  assert.match(ownSessionBranch, /if\(sameBooking&&matchingRequestSessions===1\)/);
   assert.match(ownSessionBranch, /continue;/);
   assert.doesNotMatch(ownSessionBranch, /return\s+\{/);
   assert.match(scan, /return \{holds,requestIds,existingUrl,existingSessionId,existingSessionSnapshot,requestConflict\};/);

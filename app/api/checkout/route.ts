@@ -81,6 +81,7 @@ async function activeStripeHolds(stripe:Stripe,stripeKey:string,start:string,end
   let existingSessionId:string|null=null;
   let existingSessionSnapshot:Pick<Stripe.Checkout.Session,'id'|'livemode'|'created'>|null=null;
   let requestConflict=false;
+  let matchingRequestSessions=0;
   // Every still-valid QY Roam Checkout Session is an inventory hold. Scan the
   // complete hold window within the shared, fail-closed page ceiling below:
   // stopping with a partial count could oversell the final routers. The server
@@ -135,15 +136,31 @@ async function activeStripeHolds(stripe:Stripe,stripeKey:string,start:string,end
       if(session.expires_at<=nowSeconds) continue;
       if(requestId&&session.metadata?.checkout_request_id===requestId){
         const sameBooking=matchesRequestedPocketWifi(session,requestId,requested);
-        existingUrl=sameBooking?session.url:null;
-        existingSessionId=sameBooking?sessionId:null;
-        existingSessionSnapshot=sameBooking?{id:sessionId,livemode:session.livemode,created:session.created}:null;
-        requestConflict=!sameBooking;
-        // This Session is already represented by the caller's reservation,
-        // so it must not consume capacity twice. Still finish the bounded
-        // scan: later pages can contain valid holds whose reservation write is
-        // temporarily absent, and omitting them could oversell the last unit.
-        continue;
+        matchingRequestSessions+=1;
+        // A browser attempt can own exactly one Stripe payment capability.
+        // Keep conflict detection monotonic across every page: a later
+        // matching row must never erase an earlier mismatched or duplicate
+        // Session. Multiple authenticated open Sessions with one request id
+        // are operationally ambiguous even when their booking snapshots are
+        // identical, because only one can be linked to the durable
+        // reservation while either URL could still accept payment.
+        if(!sameBooking||matchingRequestSessions>1){
+          requestConflict=true;
+        }else{
+          existingUrl=session.url;
+          existingSessionId=sessionId;
+          existingSessionSnapshot={id:sessionId,livemode:session.livemode,created:session.created};
+        }
+        if(sameBooking&&matchingRequestSessions===1){
+          // This one unambiguous Session is represented by the caller's
+          // reservation, so it must not consume capacity twice. Still finish
+          // the bounded scan: later pages can reveal duplicate/conflicting
+          // capabilities or holds whose reservation write is absent.
+          continue;
+        }
+        // A conflicting or duplicate capability is not safely represented by
+        // this caller's single reservation. Fall through and count any date
+        // overlap like another Stripe hold, in addition to refusing recovery.
       }
       const holdStart=session.metadata?.start, holdEnd=session.metadata?.end;
       const holdStartDate=parseExactIsoDate(holdStart), holdEndDate=parseExactIsoDate(holdEnd);
