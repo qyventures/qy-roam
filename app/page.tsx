@@ -7,7 +7,7 @@ import { pocketWifiRentalCents, sgdFromCents } from '../lib/pocketWifiPricing';
 import { metaAttribution, metaMeasurementAllowed, trackMeta } from '../lib/metaClient';
 import { operationalIsoDateAfter } from '../lib/operationalDate';
 import { checkoutAttempt, clearCheckoutAttempt, type CheckoutAttempt } from '../lib/checkoutAttempt';
-import { fetchCustomerRequest } from '../lib/clientRequest';
+import { fetchCustomerJson } from '../lib/clientRequest';
 import { esimPromoIsActive } from '../lib/esimPlans';
 import { parsePocketWifiAvailability, type PocketWifiAvailability } from '../lib/pocketWifiAvailability';
 import { parseCustomerCheckoutResponse } from '../lib/customerCheckoutResponse';
@@ -96,8 +96,7 @@ export default function Home() {
     const checkedEnd = end;
     setChecking(true); setAvailability(null); setCheckoutError('');
     try {
-      const res = await fetchCustomerRequest(`/api/availability?start=${encodeURIComponent(checkedStart)}&end=${encodeURIComponent(checkedEnd)}`, { cache: 'no-store' });
-      const payload: unknown = await res.json();
+      const { response: res, value: payload } = await fetchCustomerJson(`/api/availability?start=${encodeURIComponent(checkedStart)}&end=${encodeURIComponent(checkedEnd)}`, { cache: 'no-store' });
       // Availability is also the public source of operational booking terms.
       // Require a complete live response before enabling payment; Checkout
       // still recalculates every amount and date rule independently.
@@ -170,8 +169,7 @@ export default function Home() {
     }, { eventID: `checkout_${activeCheckoutAttempt.current.requestId}` });
     setCheckingOut(true);
     try {
-      const res = await fetchCustomerRequest('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ country, start, end, promoCode, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: activeCheckoutAttempt.current.requestId, checkoutAttemptCreatedAt: activeCheckoutAttempt.current.createdAt }) });
-      const payload: unknown = await res.json();
+      const { response: res, value: payload } = await fetchCustomerJson('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ country, start, end, promoCode, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: activeCheckoutAttempt.current.requestId, checkoutAttemptCreatedAt: activeCheckoutAttempt.current.createdAt }) });
       const data = parseCustomerCheckoutResponse(payload, res.status);
       if (data.checkoutUrl) window.location.href = data.checkoutUrl;
       else if (data.completedSessionId) window.location.href = `/success?session_id=${encodeURIComponent(data.completedSessionId)}`;
