@@ -18,6 +18,12 @@ READINESS_CURL_TIMEOUT_SECONDS=12
 # here would create a customer-visible missing/mixed asset window before the
 # release has passed smoke tests or reached the controlled restart boundary.
 RELEASE_DIST_DIR=.next-release
+# Restore a known-good rollback artifact into a separate tree on the same
+# filesystem as the live `.next` directory. Copying directly into `.next`
+# after moving the failed release away can leave a partial production tree if
+# the copy runs out of space or is interrupted. The staged tree is promoted
+# only after the complete snapshot copy succeeds.
+ROLLBACK_RESTORE_DIST_DIR=.next-rollback-restore
 
 cd "$APP_DIR"
 
@@ -86,6 +92,7 @@ cleanup_release_snapshot() {
   # This directory is never the live service target. Remove a failed or
   # already-promoted staging build without touching the active `.next` tree.
   rm -rf -- "$APP_DIR/$RELEASE_DIST_DIR"
+  rm -rf -- "$APP_DIR/$ROLLBACK_RESTORE_DIST_DIR"
   if [[ "$release_snapshot_cleanup_enabled" -eq 1 ]]; then
     rm -rf "$rollback_dir"
   fi
@@ -98,18 +105,30 @@ restore_previous_artifact() {
   fi
 
   echo "Restoring the previous production artifact" >&2
-  if [[ -e .next ]]; then
-    mv .next "$rollback_dir/failed-next"
+  # Build the complete restore candidate before touching the current service
+  # path. This preserves the failed-but-complete release as a fallback when a
+  # low-disk or I/O failure prevents copying the known-good snapshot.
+  rm -rf -- "$APP_DIR/$ROLLBACK_RESTORE_DIST_DIR"
+  if ! cp -a "$rollback_dir/previous-next" "$APP_DIR/$ROLLBACK_RESTORE_DIST_DIR"; then
+    release_snapshot_cleanup_enabled=0
+    echo "Automatic rollback copy failed; retained recovery snapshot at $rollback_dir/previous-next" >&2
+    return 1
   fi
-  if ! cp -a "$rollback_dir/previous-next" .next; then
-    # Keep the known-good snapshot outside the worktree when storage or
-    # permissions prevent restoration. If possible, put the failed artifact
-    # back so the service path is not left absent while an operator responds.
+  if [[ -e .next ]] && ! mv .next "$rollback_dir/failed-next"; then
+    release_snapshot_cleanup_enabled=0
+    echo "Unable to preserve the failed release before rollback; retained recovery snapshot at $rollback_dir/previous-next" >&2
+    return 1
+  fi
+  if ! mv "$APP_DIR/$ROLLBACK_RESTORE_DIST_DIR" .next; then
+    # The staged candidate and live path share a filesystem, so this rename is
+    # expected to be atomic. If an unexpected filesystem error still occurs,
+    # put the complete failed artifact back instead of leaving the service
+    # path absent while retaining both recovery copies for an operator.
     release_snapshot_cleanup_enabled=0
     if [[ ! -e .next && -e "$rollback_dir/failed-next" ]]; then
       mv "$rollback_dir/failed-next" .next || true
     fi
-    echo "Automatic rollback copy failed; retained recovery snapshot at $rollback_dir/previous-next" >&2
+    echo "Automatic rollback promotion failed; retained recovery snapshot at $rollback_dir/previous-next" >&2
     return 1
   fi
   # Before cutover the old process is still serving from memory. Restore its

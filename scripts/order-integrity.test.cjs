@@ -3710,6 +3710,24 @@ test('authenticated health readiness fails when any order-critical dependency is
   assert.doesNotMatch(healthRoute, /NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY/);
 });
 
+test('deployment stages a complete rollback artifact before replacing the service tree', () => {
+  assert.match(deployScript, /ROLLBACK_RESTORE_DIST_DIR=\.next-rollback-restore/);
+  assert.match(deployScript, /cp -a "\$rollback_dir\/previous-next" "\$APP_DIR\/\$ROLLBACK_RESTORE_DIST_DIR"/);
+
+  const restoreStart = deployScript.indexOf('restore_previous_artifact()');
+  const restoreEnd = deployScript.indexOf('\n}\n\nhandle_release_exit()', restoreStart);
+  assert.notEqual(restoreStart, -1);
+  assert.notEqual(restoreEnd, -1);
+  const restore = deployScript.slice(restoreStart, restoreEnd);
+  const stagedCopy = restore.indexOf('cp -a "$rollback_dir/previous-next" "$APP_DIR/$ROLLBACK_RESTORE_DIST_DIR"');
+  const liveMove = restore.indexOf('mv .next "$rollback_dir/failed-next"');
+  const stagedPromotion = restore.indexOf('mv "$APP_DIR/$ROLLBACK_RESTORE_DIST_DIR" .next');
+  assert.ok(stagedCopy > -1 && liveMove > stagedCopy, 'known-good copy must complete before the live artifact moves');
+  assert.ok(stagedPromotion > liveMove, 'staged rollback must be promoted only after preserving the failed artifact');
+  assert.match(restore, /if \[\[ ! -e \.next && -e "\$rollback_dir\/failed-next" \]\]; then\s+mv "\$rollback_dir\/failed-next" \.next \|\| true/);
+  assert.match(deployScript, /rm -rf -- "\$APP_DIR\/\$ROLLBACK_RESTORE_DIST_DIR"/);
+});
+
 test('inventory visibility distinguishes unavailable data from zero stock and exposes saleable router stock', () => {
   assert.match(inventoryPage, /await Promise\.all\(\[/);
   assert.match(inventoryPage, /const failedPanels=\[itemsResult\.error&&'inventory register',movesResult\.error&&'movement audit trail',reservationsResult\.error&&'checkout reservation register'\]/);

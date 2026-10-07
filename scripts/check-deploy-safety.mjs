@@ -60,7 +60,21 @@ assert.ok(
 assert.match(deploy, /mktemp -d \/tmp\/qyroam-release-rollback/);
 assert.match(deploy, /cp -a \.next "\$rollback_dir\/previous-next"/);
 assert.match(deploy, /restore_previous_artifact\(\)/);
-assert.match(deploy, /cp -a "\$rollback_dir\/previous-next" \.next/);
+assert.match(deploy, /^ROLLBACK_RESTORE_DIST_DIR=\.next-rollback-restore$/m);
+const restoreStart = deploy.indexOf('restore_previous_artifact()');
+const restoreEnd = deploy.indexOf('\n}\n\nhandle_release_exit()', restoreStart);
+assert.notEqual(restoreStart, -1);
+assert.notEqual(restoreEnd, -1);
+const restore = deploy.slice(restoreStart, restoreEnd);
+const stagedRollbackCopy = restore.indexOf('cp -a "$rollback_dir/previous-next" "$APP_DIR/$ROLLBACK_RESTORE_DIST_DIR"');
+const failedArtifactMove = restore.indexOf('mv .next "$rollback_dir/failed-next"');
+const stagedRollbackPromotion = restore.indexOf('mv "$APP_DIR/$ROLLBACK_RESTORE_DIST_DIR" .next');
+assert.ok(
+  stagedRollbackCopy > -1 && failedArtifactMove > stagedRollbackCopy && stagedRollbackPromotion > failedArtifactMove,
+  'rollback must stage the complete known-good artifact before replacing the service tree',
+);
+assert.match(restore, /if \[\[ ! -e \.next && -e "\$rollback_dir\/failed-next" \]\]; then\s+mv "\$rollback_dir\/failed-next" \.next \|\| true/);
+assert.match(deploy, /rm -rf -- "\$APP_DIR\/\$ROLLBACK_RESTORE_DIST_DIR"/);
 assert.match(deploy, /release_snapshot_cleanup_enabled=0/);
 assert.match(deploy, /retained recovery snapshot at \$rollback_dir\/previous-next/);
 assert.match(deploy, /handle_release_exit\(\)/);
