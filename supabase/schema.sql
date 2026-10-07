@@ -1903,6 +1903,90 @@ $$;
 revoke all on function public.qy_persist_stripe_pocket_wifi_order(text,text,text,text,text,numeric,text,text,date,date,text,jsonb,timestamptz,boolean,text) from public;
 grant execute on function public.qy_persist_stripe_pocket_wifi_order(text,text,text,text,text,numeric,text,text,date,date,text,jsonb,timestamptz,boolean,text) to service_role;
 
+-- Manual eSIM sales create a paid digital entitlement. Keep their deterministic
+-- sales-reference retry and first insert in one database transaction, just as
+-- manual Pocket WiFi sales and Stripe webhooks do. An API-side insert followed
+-- by a duplicate lookup leaves the retry result dependent on two separate
+-- requests and lets future callers accidentally weaken the exact entitlement
+-- comparison.
+create or replace function public.qy_create_manual_esim_order(
+  p_stripe_session_id text,
+  p_customer_name text,
+  p_email text,
+  p_phone text,
+  p_amount_sgd numeric,
+  p_plan_id text,
+  p_plan_name text,
+  p_data_allowance text,
+  p_country text,
+  p_travel_start date,
+  p_travel_end date,
+  p_notes text
+)
+returns public.orders
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_order public.orders%rowtype;
+begin
+  if p_stripe_session_id is null or p_stripe_session_id !~ '^manual_[a-f0-9]{48}$' then
+    raise exception 'invalid manual order reference';
+  end if;
+  if p_amount_sgd is null or p_amount_sgd <= 0 then raise exception 'manual order amount must be positive'; end if;
+  if coalesce(length(p_email), 0) not between 3 and 200
+    or p_email <> lower(btrim(p_email))
+    or p_email ~ '[[:cntrl:]]'
+    or p_email !~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$' then
+    raise exception 'manual eSIM order requires a valid customer email';
+  end if;
+  if p_plan_id is null or p_plan_id !~ '^[a-z0-9][a-z0-9-]{1,80}$' then raise exception 'invalid eSIM plan id'; end if;
+  if coalesce(length(p_plan_name), 0) not between 1 and 200 or p_plan_name <> btrim(p_plan_name) or p_plan_name ~ '[[:cntrl:]]' then raise exception 'invalid eSIM plan name'; end if;
+  if coalesce(length(p_data_allowance), 0) not between 1 and 200 or p_data_allowance <> btrim(p_data_allowance) or p_data_allowance ~ '[[:cntrl:]]' then raise exception 'invalid eSIM data allowance'; end if;
+  if coalesce(length(p_country), 0) not between 1 and 100 or p_country <> btrim(p_country) or p_country ~ '[[:cntrl:]]' then raise exception 'invalid eSIM destination'; end if;
+  if (p_travel_start is null) <> (p_travel_end is null)
+    or (p_travel_start is not null and p_travel_end < p_travel_start) then
+    raise exception 'invalid eSIM travel dates';
+  end if;
+
+  -- Serialise one offline payment reference so simultaneous browser retries
+  -- can neither manufacture two entitlements nor observe an intermediate row.
+  perform pg_advisory_xact_lock(hashtext('qy_roam_manual_esim:' || p_stripe_session_id));
+  select * into v_order from public.orders where stripe_session_id = p_stripe_session_id for update;
+  if found then
+    if v_order.product_type <> 'esim'
+      or v_order.payment_status <> 'paid'
+      or v_order.customer_name is distinct from p_customer_name
+      or v_order.email is distinct from p_email
+      or v_order.phone is distinct from p_phone
+      or v_order.amount_sgd is distinct from p_amount_sgd
+      or v_order.plan_id is distinct from p_plan_id
+      or v_order.plan_name is distinct from p_plan_name
+      or v_order.data_allowance is distinct from p_data_allowance
+      or v_order.country is distinct from p_country
+      or v_order.travel_start is distinct from p_travel_start
+      or v_order.travel_end is distinct from p_travel_end then
+      raise exception 'manual order reference already belongs to different order details';
+    end if;
+    return v_order;
+  end if;
+
+  insert into public.orders (
+    stripe_session_id,payment_status,customer_name,email,phone,amount_sgd,
+    product_type,plan_id,plan_name,data_allowance,country,travel_start,travel_end,
+    fulfilment_status,payment_confirmed_at,measurement_consent,notes,updated_at
+  ) values (
+    p_stripe_session_id,'paid',p_customer_name,p_email,p_phone,p_amount_sgd,
+    'esim',p_plan_id,p_plan_name,p_data_allowance,p_country,p_travel_start,p_travel_end,
+    'awaiting_fulfilment',now(),'essential',p_notes,now()
+  ) returning * into v_order;
+  return v_order;
+end;
+$$;
+revoke all on function public.qy_create_manual_esim_order(text,text,text,text,numeric,text,text,text,text,date,date,text) from public;
+grant execute on function public.qy_create_manual_esim_order(text,text,text,text,numeric,text,text,text,text,date,date,text) to service_role;
+
 -- Presence checks cannot tell whether a deployed function or trigger still
 -- has an older body with the same name. The application requires this exact
 -- compatibility version before exposing Stripe Checkout, so applying new app
@@ -1929,8 +2013,9 @@ as $$
   -- Stripe Pocket WiFi delivery records. Version 23 certifies that readiness
   -- rejects replica-only integrity triggers which are inert for application
   -- writes. Version 24 additionally certifies the atomic eSIM delivery
-  -- transition and its service-role-only execution boundary.
-  select 24;
+  -- transition and its service-role-only execution boundary. Version 25
+  -- certifies atomic, exact-idempotency creation for manual paid eSIM sales.
+  select 25;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;

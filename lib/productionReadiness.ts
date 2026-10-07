@@ -25,7 +25,7 @@ const READINESS_PROBE_TIMEOUT_MS = 8_000;
 // probes cannot distinguish an old function body from the current one; this
 // explicit handshake prevents a rolling application deploy from accepting a
 // payment against stale database logic.
-const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 24;
+const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 25;
 const REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 5;
 let paymentSchemaReadyUntil = 0;
 let esimOrderSchemaReadyUntil = 0;
@@ -566,7 +566,7 @@ async function checkRequiredOperationsSchema() {
       // deployed. Missing-function or permission errors instead fail the
       // launch gate before staff need to receive, dispatch, create stock, or
       // record a capacity-consuming manual rental.
-      const [transitionProbe, adjustmentProbe, statusProbe, creationProbe, manualOrderProbe, closingProbe] = await Promise.all([
+      const [transitionProbe, adjustmentProbe, statusProbe, creationProbe, manualOrderProbe, manualEsimOrderProbe, closingProbe] = await Promise.all([
         database.rpc('qy_transition_pocket_wifi_order', {
           p_order_id: 0,
           p_expected_status: 'paid',
@@ -615,6 +615,20 @@ async function checkRequiredOperationsSchema() {
           p_notes: null,
           p_inventory: 0,
         }).abortSignal(signal),
+        database.rpc('qy_create_manual_esim_order', {
+          p_stripe_session_id: '',
+          p_customer_name: null,
+          p_email: null,
+          p_phone: null,
+          p_amount_sgd: 0,
+          p_plan_id: null,
+          p_plan_name: null,
+          p_data_allowance: null,
+          p_country: null,
+          p_travel_start: null,
+          p_travel_end: null,
+          p_notes: null,
+        }).abortSignal(signal),
         // A null period is rejected before the accounting routine can write,
         // while still verifying its deployed signature and service-role grant.
         database.rpc('qy_record_closing_period', {
@@ -648,6 +662,10 @@ async function checkRequiredOperationsSchema() {
         console.error('production_operations_manual_order_rpc_check_failed');
         return false;
       }
+      if (!manualEsimOrderProbe.error || !/invalid manual order reference/i.test(manualEsimOrderProbe.error.message || '')) {
+        console.error('production_operations_manual_esim_order_rpc_check_failed');
+        return false;
+      }
       if (!closingProbe.error || !/accounting period dates are invalid/i.test(closingProbe.error.message || '')) {
         console.error('production_operations_closing_rpc_check_failed');
         return false;
@@ -661,7 +679,7 @@ async function checkRequiredOperationsSchema() {
 }
 
 // Health checks commonly run on a short interval and this operations probe is
-// intentionally comprehensive (nine relations plus five RPC contracts). Keep
+// intentionally comprehensive (nine relations plus seven RPC contracts). Keep
 // it responsive under multiple health-check workers without hiding a failed
 // migration or outage: only a successful result is cached, and only briefly.
 export async function hasRequiredOperationsSchema() {

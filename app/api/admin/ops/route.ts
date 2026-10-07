@@ -212,32 +212,29 @@ export async function POST(req: NextRequest) {
           throw error;
         }
       } else {
-        const { error } = await db.from('orders').insert(row);
-        if (error?.code === '23505') {
-          // The deterministic internal id is a unique retry boundary. A
-          // duplicate is safe only when it is the same manual sale; never
-          // let a reused payment reference overwrite or silently create a
-          // second eSIM entitlement with changed order details.
-          const existing = await db.from('orders')
-            .select('payment_status,customer_name,email,phone,amount_sgd,product_type,plan_id,plan_name,data_allowance,country,travel_start,travel_end')
-            .eq('stripe_session_id', row.stripe_session_id)
-            .maybeSingle();
-          if (existing.error) throw existing.error;
-          const sameOrder = existing.data &&
-            existing.data.payment_status === row.payment_status &&
-            existing.data.customer_name === row.customer_name &&
-            existing.data.email === row.email &&
-            existing.data.phone === row.phone &&
-            Number(existing.data.amount_sgd) === row.amount_sgd &&
-            existing.data.product_type === row.product_type &&
-            existing.data.plan_id === row.plan_id &&
-            existing.data.plan_name === row.plan_name &&
-            existing.data.data_allowance === row.data_allowance &&
-            existing.data.country === row.country &&
-            existing.data.travel_start === row.travel_start &&
-            existing.data.travel_end === row.travel_end;
-          if (!sameOrder) return NextResponse.json({ error: 'This payment or sales reference already belongs to different order details. Reconcile the existing order before continuing.' }, { status: 409 });
-        } else if (error) throw error;
+        // Manual eSIM creation is an irreversible digital entitlement. Keep
+        // first insert and exact retry comparison in one database transaction
+        // instead of repairing a uniqueness race with a second API query.
+        const { error } = await db.rpc('qy_create_manual_esim_order', {
+          p_stripe_session_id: row.stripe_session_id,
+          p_customer_name: row.customer_name,
+          p_email: row.email,
+          p_phone: row.phone,
+          p_amount_sgd: row.amount_sgd,
+          p_plan_id: row.plan_id,
+          p_plan_name: row.plan_name,
+          p_data_allowance: row.data_allowance,
+          p_country: row.country,
+          p_travel_start: row.travel_start,
+          p_travel_end: row.travel_end,
+          p_notes: row.notes,
+        });
+        if (error) {
+          if (/manual order reference already belongs to different order details/i.test(error.message || '')) {
+            return NextResponse.json({ error: 'This payment or sales reference already belongs to different order details. Reconcile the existing order before continuing.' }, { status: 409 });
+          }
+          throw error;
+        }
       }
     } else if (action === 'inventory_create') {
       const row = {
