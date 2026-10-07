@@ -102,6 +102,22 @@ export function validatePlpgsqlStructure(sql) {
     }
     assert.deepEqual(blocks, [], `PL/pgSQL function contains an unclosed ${blocks.at(-1)?.toUpperCase()} block`);
 
+    // Balanced keywords are not sufficient syntax evidence. PostgreSQL
+    // requires procedural block terminators to be complete statements, so a
+    // hand edit such as `END IF` followed by another statement (without the
+    // semicolon) would otherwise pass every stack/count check above and fail
+    // only after the production migration had already started. Strings and
+    // comments were removed from `code`, keeping these checks scoped to
+    // executable PL/pgSQL rather than documentation examples.
+    for (const terminator of code.matchAll(/\bend\s+(if|loop|case)\b/gi)) {
+      const remainder = code.slice((terminator.index ?? 0) + terminator[0].length);
+      assert.match(
+        remainder,
+        /^\s*;/,
+        `PL/pgSQL ${terminator[0].toUpperCase()} block terminator is missing a semicolon`,
+      );
+    }
+
     // A duplicated condition terminator such as `) then` is not visible to
     // the keyword-only check above. Track parentheses after stripping strings
     // and comments so malformed trigger expressions cannot pass the offline
@@ -175,6 +191,32 @@ assert.throws(
     $$;
   `),
   /closes CASE with bare END|unclosed BEGIN block/,
+);
+assert.throws(
+  () => validatePlpgsqlStructure(`
+    create function public.example() returns trigger language plpgsql as $$
+    begin
+      if new.value is not null then
+        return new;
+      end if
+      return old;
+    end;
+    $$;
+  `),
+  /END IF block terminator is missing a semicolon/,
+);
+assert.throws(
+  () => validatePlpgsqlStructure(`
+    create function public.example() returns void language plpgsql as $$
+    begin
+      loop
+        exit;
+      end loop -- comments cannot supply the missing statement delimiter
+      return;
+    end;
+    $$;
+  `),
+  /END LOOP block terminator is missing a semicolon/,
 );
 
 // PostgreSQL rejects an ON CONFLICT update that assigns the same target
@@ -392,5 +434,5 @@ assert.ok(inventoryTable < manualOrderFunction, 'inventory_items must exist befo
 assert.ok(integritySchemaVersion > pocketWifiPersistenceFunction, 'order-integrity schema version must be written after every paid-order function it certifies');
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
+  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure and terminators, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
 }
