@@ -1703,6 +1703,17 @@ test('admin sales-period close totals every Supabase page instead of silently us
   assert.match(adminOpsRoute, /Period dates must be valid ISO dates with the end date on or after the start date/);
 });
 
+test('sales reporting pages its full bounded view and hides incomplete headline totals', () => {
+  assert.match(reportsPage, /const REPORT_PAGE_SIZE = 250/);
+  assert.match(reportsPage, /const REPORT_MAX_ROWS = 5_000/);
+  assert.match(reportsPage, /\.order\('sales_date', \{ ascending: false \}\)\s*\.order\('product_type', \{ ascending: true \}\)\s*\.range\(from, to\)/);
+  assert.match(reportsPage, /fetchPage\(REPORT_MAX_ROWS, REPORT_MAX_ROWS\)/);
+  assert.match(reportsPage, /const reportIncomplete = reportUnavailable \|\| reportResult\.truncated/);
+  assert.match(reportsPage, /reportIncomplete \? '—' : value/);
+  assert.match(reportsPage, /Headline totals are hidden because they would be incomplete/);
+  assert.doesNotMatch(reportsPage, /\.limit\(120\)/);
+});
+
 test('sales dashboards and CRM recency use payment confirmation rather than checkout creation', () => {
   assert.match(adminPage, /withinDays\(o\.payment_confirmed_at,30\)/);
   assert.doesNotMatch(adminPage, /withinDays\(o\.created_at,30\)/);
@@ -3539,9 +3550,9 @@ test('admin reporting screens do not present failed database reads as empty oper
   // unsafe when a failed query silently renders the same zero/empty state as
   // a healthy new account. Keep the reporting surfaces explicit about each
   // unavailable panel, just as the order and inventory dashboards are.
-  assert.match(reportsPage, /const reportUnavailable=Boolean\(reportResult\?\.error\)/);
+  assert.match(reportsPage, /const reportUnavailable = Boolean\(reportResult\.error\)/);
   assert.match(reportsPage, /Sales reporting data is currently unavailable/);
-  assert.match(reportsPage, /reportUnavailable\?<p>Sales reporting is unavailable/);
+  assert.match(reportsPage, /reportUnavailable\s*\? <p>Sales reporting is unavailable/);
 
   assert.match(crmPage, /const unavailablePanels=\[customersResult\?\.error&&'customers',oppsResult\?\.error&&'sales pipeline',actsResult\?\.error&&'CRM activity'\]/);
   assert.match(crmPage, /CRM data is currently unavailable/);
