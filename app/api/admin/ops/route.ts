@@ -78,7 +78,7 @@ function optionalTravelDates(body: Record<string, unknown>) {
 
 async function paidOrderGrossForPeriod(db: ReturnType<typeof getSupabaseAdmin>, start: string, end: string) {
   if (!db) throw new Error('Database unavailable');
-  let gross = 0;
+  let grossCents = 0;
   let offset = 0;
   for (;;) {
     const { data: orders, error } = await db
@@ -94,8 +94,18 @@ async function paidOrderGrossForPeriod(db: ReturnType<typeof getSupabaseAdmin>, 
       .range(offset, offset + CLOSING_ORDER_PAGE_SIZE - 1);
     if (error) throw error;
     const page = orders || [];
-    gross += page.reduce((total: number, order: { amount_sgd: unknown }) => total + Number(order.amount_sgd || 0), 0);
-    if (page.length < CLOSING_ORDER_PAGE_SIZE) return gross;
+    for (const order of page as { amount_sgd: unknown }[]) {
+      const amountCents = nonNegativeMoney(order.amount_sgd);
+      // This is the source ledger for an accounting close. A malformed
+      // service-role import must not be silently coerced to zero or rounded
+      // through binary floating-point arithmetic into a plausible total.
+      if (amountCents === null) throw new Error('Paid order has an invalid accounting amount');
+      grossCents += amountCents;
+      if (!Number.isSafeInteger(grossCents) || grossCents > 10_000_000_000) {
+        throw new Error('Accounting period gross exceeds the supported total');
+      }
+    }
+    if (page.length < CLOSING_ORDER_PAGE_SIZE) return grossCents / 100;
     offset += page.length;
     if (offset >= MAX_CLOSING_ORDERS) {
       throw new Error(`Sales period has ${MAX_CLOSING_ORDERS.toLocaleString()} or more paid orders. Close it from the audited reporting workflow before recording this period.`);
@@ -373,6 +383,9 @@ export async function POST(req: NextRequest) {
       });
       if (error) {
         if (/closed accounting period|multiple accounting records/i.test(error.message || '')) return NextResponse.json({ error: error.message }, { status: 409 });
+        if (/paid-order ledger changed/i.test(error.message || '')) {
+          return NextResponse.json({ error: 'Paid orders changed while this accounting period was being prepared. Review the refreshed totals and save again.' }, { status: 409 });
+        }
         throw error;
       }
     } else return NextResponse.json({ error: 'Unsupported action' }, { status: 400 });

@@ -2117,7 +2117,9 @@ as $$
   -- payment-capability hand-off used before a Pocket WiFi URL is exposed.
   -- Version 28 additionally certifies the five-minute Stripe event recovery
   -- lease shared by the webhook claim and admin exception classifier.
-  select 28;
+  -- Version 29 additionally certifies database-authoritative accounting
+  -- period totals and exact paid-ledger reconciliation before a close.
+  select 29;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
@@ -2828,6 +2830,7 @@ declare
   v_existing public.closing_periods%rowtype;
   v_matches integer;
   v_now timestamptz := now();
+  v_ledger_gross numeric(10,2);
 begin
   if p_period_start is null or p_period_end is null or p_period_end < p_period_start then
     raise exception 'accounting period dates are invalid';
@@ -2842,6 +2845,25 @@ begin
   end if;
   if p_lock and nullif(trim(coalesce(p_closed_by, '')), '') is null then
     raise exception 'closed accounting period requires an accountable operator';
+  end if;
+
+  -- The paid-order ledger, not a paginated browser calculation, is the
+  -- financial authority. The application still submits the figure it showed
+  -- to the operator; comparing it here makes a concurrent webhook settlement
+  -- or repaired order a visible retry instead of closing an understated
+  -- period. Keep all arithmetic in PostgreSQL numeric cents.
+  select coalesce(sum(amount_sgd), 0)::numeric(10,2)
+    into v_ledger_gross
+  from public.orders
+  where payment_status = 'paid'
+    and payment_confirmed_at is not null
+    and (payment_confirmed_at at time zone 'Asia/Singapore')::date between p_period_start and p_period_end;
+  if p_gross_sales_sgd <> v_ledger_gross then
+    raise exception 'paid-order ledger changed while accounting period was prepared';
+  end if;
+  if p_net_sales_sgd <> p_gross_sales_sgd - p_refunds_sgd or
+     p_gross_profit_sgd <> p_net_sales_sgd - p_fees_sgd - p_cogs_sgd then
+    raise exception 'accounting period totals are inconsistent';
   end if;
 
   perform pg_advisory_xact_lock(hashtext('qy_roam_closing_period:' || p_period_start::text || ':' || p_period_end::text));
