@@ -1524,6 +1524,20 @@ test('Pocket WiFi availability publishes only validated public booking terms for
   assert.match(homePage, /Total due today: S\$\{payableTotal\.toFixed\(2\)\}/);
 });
 
+test('Pocket WiFi availability rejects ambiguous repeated date parameters before provider work', () => {
+  const route = fs.readFileSync(require.resolve('../app/api/availability/route.ts'), 'utf8');
+  const repeatedDateBoundary = route.indexOf("const startValues = req.nextUrl.searchParams.getAll('start')");
+  const globalLimit = route.indexOf('if (globallyLimited())');
+  const stripeScan = route.indexOf('const stripeHolds = await activeStripeHolds');
+
+  assert.ok(repeatedDateBoundary > -1, 'availability must inspect every supplied date value');
+  assert.match(route, /const endValues = req\.nextUrl\.searchParams\.getAll\('end'\)/);
+  assert.match(route, /startValues\.length === 1 \? parseExactIsoDate\(startValues\[0\]\) : null/);
+  assert.match(route, /endValues\.length === 1 \? parseExactIsoDate\(endValues\[0\]\) : null/);
+  assert.ok(repeatedDateBoundary < globalLimit, 'ambiguous dates must not consume the shared provider-work budget');
+  assert.ok(repeatedDateBoundary < stripeScan, 'ambiguous dates must be rejected before Stripe inventory scans');
+});
+
 test('Pocket WiFi payment UI requires a complete and coherent live availability quote', () => {
   const live = { available: true, remaining: 2, inventoryMode: 'live', minDeliveryLeadDays: 2, courierFeeSgd: 8.5 };
   assert.deepEqual(parsePocketWifiAvailability(live, true), {

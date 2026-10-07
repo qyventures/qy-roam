@@ -266,8 +266,16 @@ export async function GET(req: NextRequest) {
       headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' },
     });
   }
-  const start = parseExactIsoDate(req.nextUrl.searchParams.get('start'));
-  const end = parseExactIsoDate(req.nextUrl.searchParams.get('end'));
+  // A repeated date key is ambiguous: URLSearchParams#get silently selects
+  // the first value, while callers, proxies, or future client code may select
+  // the last. Availability is a purchase promise used immediately before
+  // checkout, so never quote stock for a range whose wire representation has
+  // more than one interpretation. This also keeps cheap malformed requests
+  // ahead of the process-wide Stripe/Supabase work budget below.
+  const startValues = req.nextUrl.searchParams.getAll('start');
+  const endValues = req.nextUrl.searchParams.getAll('end');
+  const start = startValues.length === 1 ? parseExactIsoDate(startValues[0]) : null;
+  const end = endValues.length === 1 ? parseExactIsoDate(endValues[0]) : null;
   if (!start || !end || end < start) return NextResponse.json({ available: false, error: 'Valid start and end dates are required.' }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
 
   const config = operationalConfig();
