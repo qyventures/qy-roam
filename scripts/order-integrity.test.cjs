@@ -846,6 +846,7 @@ test('webhook Checkout Session objects are structurally bounded before source me
 
 test('webhook event envelopes are structurally validated before payment routing', () => {
   const event = {
+    object: 'event',
     id: 'evt_test_webhook_envelope',
     type: 'checkout.session.completed',
     livemode: false,
@@ -853,8 +854,11 @@ test('webhook event envelopes are structurally validated before payment routing'
     data: { object: { object: 'checkout.session' } },
   };
   assert.equal(stripeWebhookEventEnvelope(event), event);
+  assert.equal(stripeWebhookEventEnvelope({ ...event, object: 'checkout.session' }), null);
   assert.equal(stripeWebhookEventEnvelope({ ...event, livemode: 'false' }), null);
   assert.equal(stripeWebhookEventEnvelope({ ...event, created: 1.5 }), null);
+  assert.equal(stripeWebhookEventEnvelope({ ...event, created: 0 }), null);
+  assert.equal(stripeWebhookEventEnvelope({ ...event, created: -1 }), null);
   assert.equal(stripeWebhookEventEnvelope({ ...event, data: null }), null);
   assert.equal(stripeWebhookEventEnvelope(null), null);
   assert.match(webhookRoute, /const webhookEvent=stripeWebhookEventEnvelope\(event\);/);

@@ -17,10 +17,13 @@ function plainRecord(value: unknown): value is Record<string, unknown> {
 // an untyped `livemode` value from becoming a payment-environment authority.
 export function stripeWebhookEventEnvelope(value: unknown): Stripe.Event | null {
   if (!plainRecord(value) ||
+    value.object !== 'event' ||
     typeof value.id !== 'string' ||
     typeof value.type !== 'string' ||
     typeof value.livemode !== 'boolean' ||
+    typeof value.created !== 'number' ||
     !Number.isSafeInteger(value.created) ||
+    value.created <= 0 ||
     !plainRecord(value.data)) {
     return null;
   }
