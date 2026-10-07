@@ -3638,7 +3638,7 @@ test('admin webhook exceptions expose a safe manual Stripe resend path and order
   assert.match(adminPage, /automatic retries are finite/);
   assert.match(adminPage, /Stripe’s manual resend/);
   assert.match(adminPage, /const orderByStripeSession = new Map/);
-  assert.match(adminPage, /persistedOrder \? <>order #\{persistedOrder\.id\} recorded as/);
+  assert.match(adminPage, /persistedOrder[\s\S]{0,100}\? <>order #\{persistedOrder\.id\} recorded as/);
   assert.match(adminPage, /<strong> no order record<\/strong>/);
   assert.match(adminPage, /target="_blank" rel="noreferrer"/);
   assert.match(adminPage, /webhookFailures\.slice\(0,50\)/);
@@ -3805,6 +3805,15 @@ test('admin aggregates fail closed when bounded order or delivery views are inco
   assert.match(adminPage, /\{!fulfilmentSummaryIncomplete && <>/);
   assert.match(adminPage, /\{!ordersIncomplete && customers\.length > 0/);
   assert.match(adminPage, /Showing the first \{ADMIN_MAX_ROWS\.toLocaleString\(\)\} orders only/);
+});
+
+test('admin Stripe recovery visibility fails closed when its bounded ledgers are incomplete', () => {
+  assert.match(adminPage, /const webhookSummaryIncomplete = Boolean\(stripeEventResult\.error\) \|\| stripeEventResult\.truncated/);
+  assert.match(adminPage, /webhookSummaryIncomplete[\s\S]*?Unavailable[\s\S]*?complete recovery ledger required/);
+  assert.match(adminPage, /!stripeEventResult\.error && webhookFailures\.length > 0/);
+  assert.match(adminPage, /stripeEventResult\.truncated && <> This is a bounded investigation sample, not the complete exception queue\.<\/>/);
+  assert.match(adminPage, /ordersIncomplete \? undefined : orderByStripeSession\.get\(failure\.stripe_session_id\)/);
+  assert.match(adminPage, /order persistence lookup unavailable/);
 });
 
 test('admin email exceptions include paid Stripe orders missing their notification ledger', () => {

@@ -186,6 +186,11 @@ export default async function AdminPage() {
   const fulfilmentSummaryIncomplete = ordersIncomplete ||
     Boolean(notificationResult.error) || notificationResult.truncated ||
     Boolean(metaDeliveryResult.error) || metaDeliveryResult.truncated;
+  // An incomplete webhook ledger cannot support a trustworthy exception
+  // count. In particular, rendering zero after a failed read can falsely tell
+  // operations that every paid event is healthy, while rendering the bounded
+  // row count as a total hides exceptions beyond the safety ceiling.
+  const webhookSummaryIncomplete = Boolean(stripeEventResult.error) || stripeEventResult.truncated;
   const truncatedPanels = [
     result.truncated && 'orders',
     inventoryResult.truncated && 'Pocket WiFi inventory',
@@ -287,19 +292,25 @@ export default async function AdminPage() {
             <div style={cardStyle}><small>Ops email exceptions</small><div style={metricStyle}>{notificationExceptions.length}</div><small>paid Stripe-order notifications not confirmed sent</small></div>
             <div style={cardStyle}><small>Meta CAPI exceptions</small><div style={metricStyle}>{metaDeliveryExceptions.length}</div><small>consented purchases not confirmed delivered</small></div>
           </>}
-          <div style={cardStyle}><small>Stripe webhook exceptions</small><div style={metricStyle}>{webhookFailures.length}</div><small>failed or abandoned events awaiting a signed retry</small></div>
+          <div style={cardStyle}><small>Stripe webhook exceptions</small>{webhookSummaryIncomplete
+            ? <><div style={{...metricStyle,fontSize:22}}>Unavailable</div><small>complete recovery ledger required</small></>
+            : <><div style={metricStyle}>{webhookFailures.length}</div><small>failed or abandoned events awaiting a signed retry</small></>}</div>
         </div>
-        {webhookFailures.length > 0 && <div role="alert" style={{...cardStyle,borderColor:'#dc2626',background:'#fef2f2',marginTop:14}}>
+        {!stripeEventResult.error && webhookFailures.length > 0 && <div role="alert" style={{...cardStyle,borderColor:'#dc2626',background:'#fef2f2',marginTop:14}}>
           <strong>Payment processing needs attention.</strong>
-          <div style={{marginTop:6}}>Stripe may still retry recent events, but automatic retries are finite. Open the signed event in Stripe, reconcile it against the order and delivery ledgers, then use Stripe’s manual resend when needed. Do not ask the customer to pay again.</div>
+          <div style={{marginTop:6}}>Stripe may still retry recent events, but automatic retries are finite. Open the signed event in Stripe, reconcile it against the order and delivery ledgers, then use Stripe’s manual resend when needed. Do not ask the customer to pay again.{stripeEventResult.truncated && <> This is a bounded investigation sample, not the complete exception queue.</>}</div>
           <ul>{webhookFailures.slice(0,50).map((failure:any)=>{
             const stripeUrl = stripeEventDashboardUrl(failure.event_id);
-            const persistedOrder = orderByStripeSession.get(failure.stripe_session_id);
+            const persistedOrder = ordersIncomplete ? undefined : orderByStripeSession.get(failure.stripe_session_id);
             return <li key={failure.event_id} style={{marginBottom:8}}>
               <code>{failure.event_type}</code>
               {failure.stripe_session_id && <> · session <code>{failure.stripe_session_id}</code></>}
               {' · '}attempt {failure.attempts}
-              {' · '}{persistedOrder ? <>order #{persistedOrder.id} recorded as <code>{persistedOrder.payment_status || 'unknown'}</code></> : <strong> no order record</strong>}
+              {' · '}{ordersIncomplete
+                ? <strong> order persistence lookup unavailable</strong>
+                : persistedOrder
+                  ? <>order #{persistedOrder.id} recorded as <code>{persistedOrder.payment_status || 'unknown'}</code></>
+                  : <strong> no order record</strong>}
               {' · '}{String(failure.last_error||'Processing worker stopped before completion').slice(0,180)}
               {stripeUrl && <> · <a href={stripeUrl} target="_blank" rel="noreferrer"><strong>Open Stripe event ↗</strong></a></>}
             </li>;
