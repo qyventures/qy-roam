@@ -112,6 +112,7 @@ const middleware = fs.readFileSync(require.resolve('../middleware.ts'), 'utf8');
 const schema = fs.readFileSync(require.resolve('../supabase/schema.sql'), 'utf8');
 const nextConfig = fs.readFileSync(require.resolve('../next.config.mjs'), 'utf8');
 const deployScript = fs.readFileSync(require.resolve('../deploy/deploy.sh'), 'utf8');
+const nginxConfig = fs.readFileSync(require.resolve('../deploy/nginx-qyroam.conf'), 'utf8');
 const supabaseAdmin = fs.readFileSync(require.resolve('../lib/supabaseAdmin.ts'), 'utf8');
 const robots = fs.readFileSync(require.resolve('../app/robots.ts'), 'utf8');
 const sitemap = fs.readFileSync(require.resolve('../app/sitemap.ts'), 'utf8');
@@ -4957,6 +4958,19 @@ test('production CSP does not permit JavaScript eval', () => {
   assert.match(nextConfig, /process\.env\.NODE_ENV === 'development' \? \["'unsafe-eval'"\] : \[\]/);
   assert.match(nextConfig, /`script-src \$\{scriptSources\}`/);
   assert.doesNotMatch(nextConfig, /"script-src 'self' 'unsafe-inline' 'unsafe-eval'/);
+});
+
+test('release verification enforces the complete customer ingress security boundary', () => {
+  assert.match(deployScript, /strict-transport-security:\.\*max-age=31536000\.\*includeSubDomains/);
+  assert.match(deployScript, /cross-origin-opener-policy:\[\[:space:\]\]\*same-origin/);
+  assert.match(deployScript, /permissions-policy:\.\*camera=/);
+  assert.match(deployScript, /\$base_url\/api\/health/);
+  assert.match(deployScript, /x-robots-tag:\.\*noindex/);
+  assert.match(deployScript, /cache-control:\.\*no-store/);
+
+  const hstsHeaders = nginxConfig.match(/add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;/g) || [];
+  assert.equal(hstsHeaders.length, 2, 'both canonical and www TLS servers must emit HSTS');
+  assert.match(nginxConfig, /server_name www\.qyroam\.com;[\s\S]*?add_header Referrer-Policy no-referrer always;[\s\S]*?return 301 https:\/\/qyroam\.com\$request_uri;/);
 });
 
 test('Stripe webhook bounds event identities before logs or durable idempotency writes', () => {

@@ -212,7 +212,21 @@ verify_customer_response_headers() {
   if ! grep -Eiq '^content-security-policy:.*frame-ancestors[^;]*none' "$response_headers" ||
      grep -Eiq '^content-security-policy:.*unsafe-eval' "$response_headers" ||
      ! grep -Eiq '^x-frame-options:[[:space:]]*DENY[[:space:]]*$' "$response_headers" ||
-     ! grep -Eiq '^x-content-type-options:[[:space:]]*nosniff[[:space:]]*$' "$response_headers"; then
+     ! grep -Eiq '^x-content-type-options:[[:space:]]*nosniff[[:space:]]*$' "$response_headers" ||
+     ! grep -Eiq '^strict-transport-security:.*max-age=31536000.*includeSubDomains' "$response_headers" ||
+     ! grep -Eiq '^referrer-policy:[[:space:]]*strict-origin-when-cross-origin[[:space:]]*$' "$response_headers" ||
+     ! grep -Eiq '^cross-origin-opener-policy:[[:space:]]*same-origin[[:space:]]*$' "$response_headers" ||
+     ! grep -Eiq '^permissions-policy:.*camera=\(\).*microphone=\(\).*geolocation=\(\)' "$response_headers"; then
+    rm -f "$response_headers"
+    return 1
+  fi
+
+  # API responses expose live order/configuration state and must never become
+  # a shared-cache or crawler surface. Use dependency-free public liveness.
+  : > "$response_headers"
+  if ! "$@" --dump-header "$response_headers" --output /dev/null "$base_url/api/health" ||
+     ! grep -Eiq '^cache-control:.*no-store' "$response_headers" ||
+     ! grep -Eiq '^x-robots-tag:.*noindex' "$response_headers"; then
     rm -f "$response_headers"
     return 1
   fi
