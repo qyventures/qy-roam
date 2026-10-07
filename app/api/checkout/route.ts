@@ -206,7 +206,11 @@ async function linkReservationToSession(supabase:NonNullable<ReturnType<typeof g
 
 export async function POST(req: Request) {
  try {
-  if(limited(req)||globallyLimited()) return NextResponse.json({error:'Too many checkout attempts. Please try again shortly.'},{status:429,headers:{'Cache-Control':'no-store','Retry-After':'60'}});
+  // Keep malformed or repeatedly abusive traffic on the per-client ingress
+  // boundary, but do not let it consume the instance-wide Stripe work budget.
+  // Running the global limiter before basic validation lets cheap invalid
+  // POSTs deny Checkout to every legitimate traveller on this process.
+  if(limited(req)) return NextResponse.json({error:'Too many checkout attempts. Please try again shortly.'},{status:429,headers:{'Cache-Control':'no-store','Retry-After':'60'}});
   if(!isJsonRequestContentType(req.headers.get('content-type'))) return NextResponse.json({error:'Expected JSON request.'},{status:415});
   // Match the readiness guard, which permits harmless deployment whitespace.
   // Passing the untrimmed secret to Stripe would otherwise make health look
@@ -236,15 +240,6 @@ export async function POST(req: Request) {
   if(!expiresAtSeconds) return NextResponse.json({error:'This checkout attempt has expired. Please refresh and try again.',checkoutExpired:true},{status:409,headers:{'Cache-Control':'no-store'}});
   const country=String(body.country||''); const wifiPlan=getWifiPlan(country); const daily=wifiPlan?.daily; const startDate=parseExactIsoDate(body.start); const endDate=parseExactIsoDate(body.end);
   if(!wifiPlan||!daily||!startDate||!endDate||endDate<startDate) return NextResponse.json({error:'Please select a valid destination and travel period.'},{status:400});
-  // A reservation alone is not enough: once payment succeeds, the webhook
-  // needs the orders and delivery/idempotency ledgers as well. Do this before
-  // creating a payable Stripe Session so an incomplete migration cannot leave
-  // a paid router booking unrecorded or unfulfillable.
-  if(!await hasRequiredPaymentSchema()) return NextResponse.json({error:'Pocket WiFi ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
-  // A router sale creates a physical-custody obligation. Do not expose a
-  // payment page against a partial deployment that can reserve stock but
-  // cannot safely dispatch or receive the assigned device afterwards.
-  if(!await hasRequiredPocketWifiFulfilmentSchema()) return NextResponse.json({error:'Pocket WiFi ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
   // Delivery is operated in Singapore. UTC midnight can still be the previous
   // calendar day in Singapore, which would incorrectly accept a past date or
   // shorten the advertised lead time during the local early morning.
@@ -254,6 +249,19 @@ export async function POST(req: Request) {
   const minLeadDays=config.minDeliveryLeadDays, earliest=operationalIsoDateAfter(minLeadDays);
   if(start<earliest) return NextResponse.json({error:`Please book at least ${minLeadDays} day${minLeadDays===1?'':'s'} before departure so we can arrange delivery. Contact +65 8032 7183 for urgent trips.`},{status:400});
   const days=Math.floor((endDate.getTime()-startDate.getTime())/86400000)+1; if(days<1||days>90) return NextResponse.json({error:'Bookings must be between 1 and 90 days.'},{status:400});
+  // Everything after this complete cheap request-validation boundary can
+  // perform schema, Stripe, or Supabase work and belongs in the shared
+  // overload budget. Invalid traffic remains isolated by the limiter above.
+  if(globallyLimited()) return NextResponse.json({error:'Too many checkout attempts. Please try again shortly.'},{status:429,headers:{'Cache-Control':'no-store','Retry-After':'60'}});
+  // A reservation alone is not enough: once payment succeeds, the webhook
+  // needs the orders and delivery/idempotency ledgers as well. Do this before
+  // creating a payable Stripe Session so an incomplete migration cannot leave
+  // a paid router booking unrecorded or unfulfillable.
+  if(!await hasRequiredPaymentSchema()) return NextResponse.json({error:'Pocket WiFi ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
+  // A router sale creates a physical-custody obligation. Do not expose a
+  // payment page against a partial deployment that can reserve stock but
+  // cannot safely dispatch or receive the assigned device afterwards.
+  if(!await hasRequiredPocketWifiFulfilmentSchema()) return NextResponse.json({error:'Pocket WiFi ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
   const stripe=createStripeClient(key);
   const inventory=config.pocketWifiInventory;
   if(inventory<1) return NextResponse.json({error:'Pocket WiFi is sold out for these dates. Please choose different dates or contact +65 8032 7183.'},{status:409,headers:{'Cache-Control':'no-store'}});

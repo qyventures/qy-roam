@@ -1855,10 +1855,23 @@ test('provider-backed public routes retain an aggregate overload ceiling across 
 
   for (const source of [wifiCheckoutRoute, esimCheckoutRoute]) {
     assert.match(source, /const globallyLimited\s*=\s*createGlobalAttemptLimiter\(\)/);
-    assert.match(source, /limited\(req\)\s*\|\|\s*globallyLimited\(\)/);
+    assert.match(source, /if\s*\(limited\(req\)\)/);
+    assert.match(source, /if\s*\(globallyLimited\(\)\)/);
   }
   assert.match(availabilityRoute, /AVAILABILITY_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS/);
   assert.match(availabilityRoute, /limited\(req\)\s*\|\|\s*globallyLimited\(\)/);
+});
+
+test('malformed checkout traffic cannot exhaust the shared Stripe work budget', () => {
+  const pocketGlobalLimit = wifiCheckoutRoute.indexOf('if(globallyLimited())');
+  assert.ok(pocketGlobalLimit > wifiCheckoutRoute.indexOf("if(!wifiPlan||!daily||!startDate||!endDate||endDate<startDate)"));
+  assert.ok(pocketGlobalLimit > wifiCheckoutRoute.indexOf('if(days<1||days>90)'));
+  assert.ok(pocketGlobalLimit < wifiCheckoutRoute.indexOf('const stripe=createStripeClient(key)'));
+
+  const esimGlobalLimit = esimCheckoutRoute.indexOf('if (globallyLimited())');
+  assert.ok(esimGlobalLimit > esimCheckoutRoute.indexOf('const plan = getEsimPlan(body.planId)'));
+  assert.ok(esimGlobalLimit > esimCheckoutRoute.indexOf("if (promoCode && promoCode !== ESIM_PROMO.code)"));
+  assert.ok(esimGlobalLimit < esimCheckoutRoute.indexOf('if (!await hasRequiredEsimOrderSchema())'));
 });
 
 test('customer confirmation lookups are throttled before provider-backed server rendering', () => {

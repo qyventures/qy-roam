@@ -59,7 +59,10 @@ function matchesRequestedEsim(session: Stripe.Checkout.Session, requestId: strin
 
 export async function POST(req: Request) {
   try {
-    if (limited(req) || globallyLimited()) return NextResponse.json({ error: 'Too many checkout attempts. Please try again shortly.' }, { status: 429, headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' } });
+    // Invalid traffic still consumes a bounded per-client ingress allowance,
+    // but it must not spend the process-wide Stripe work budget before it has
+    // proved that it resembles a real checkout.
+    if (limited(req)) return NextResponse.json({ error: 'Too many checkout attempts. Please try again shortly.' }, { status: 429, headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' } });
     if (!isJsonRequestContentType(req.headers.get('content-type'))) {
       return NextResponse.json({ error: 'Expected JSON request.' }, { status: 415 });
     }
@@ -120,6 +123,11 @@ export async function POST(req: Request) {
     if (promoCode && promoCode !== ESIM_PROMO.code) {
       return NextResponse.json({ error: 'Invalid eSIM promo code.' }, { status: 400 });
     }
+
+    // Only well-formed, currently saleable requests can proceed to provider
+    // and persistence readiness calls, so only those requests participate in
+    // the allocation-free instance-wide overload guard.
+    if (globallyLimited()) return NextResponse.json({ error: 'Too many checkout attempts. Please try again shortly.' }, { status: 429, headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' } });
 
     // eSIM has no inventory reservation, so it must explicitly verify its
     // post-payment persistence boundary before exposing a Stripe payment URL.
