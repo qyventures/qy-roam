@@ -1917,12 +1917,17 @@ test('malformed checkout traffic cannot exhaust the shared Stripe work budget', 
 
 test('rejected availability ranges cannot exhaust the shared provider-work budget', () => {
   const perClientLimit = availabilityRoute.indexOf('if (limited(req))');
-  const dateParsing = availabilityRoute.indexOf("const start = parseExactIsoDate(req.nextUrl.searchParams.get('start'))");
+  // Availability deliberately inspects every occurrence of each date key so
+  // repeated query parameters cannot be interpreted differently by another
+  // layer. Keep this ordering assertion tied to that current parsing boundary
+  // rather than the older URLSearchParams#get implementation it replaced.
+  const dateParsing = availabilityRoute.indexOf("const startValues = req.nextUrl.searchParams.getAll('start')");
   const pastDateRejection = availabilityRoute.indexOf("if (start.toISOString().slice(0, 10) < earliest)");
   const rentalLengthRejection = availabilityRoute.indexOf('if (rentalDays < 1 || rentalDays > 90)');
   const globalLimit = availabilityRoute.indexOf('if (globallyLimited())');
   const stripeConfiguration = availabilityRoute.indexOf('const stripeKey = process.env.STRIPE_SECRET_KEY?.trim()');
 
+  assert.ok(dateParsing > -1, 'availability date parsing boundary must remain visible to the ingress-ordering check');
   assert.ok(perClientLimit < dateParsing, 'malformed availability probes must still be throttled at ingress');
   assert.ok(perClientLimit < pastDateRejection);
   assert.ok(globalLimit > pastDateRejection);
