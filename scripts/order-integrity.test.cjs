@@ -3590,8 +3590,10 @@ test('admin operational visibility pages beyond one Supabase response and warns 
   // staff from treating a partial view as complete operations data.
   assert.match(adminPage, /const ADMIN_PAGE_SIZE = 250/);
   assert.match(adminPage, /const ADMIN_MAX_ROWS = 5_000/);
-  assert.match(adminPage, /async function loadPages/);
-  assert.match(adminPage, /\.range\(from, to\)/);
+  assert.match(adminPage, /async function loadKeysetPages/);
+  assert.match(adminPage, /let after: PageCursor \| null = null/);
+  assert.match(adminPage, /const next = cursorFor\(page\[page\.length - 1\]\)/);
+  assert.doesNotMatch(adminPage, /\.range\(from, to\)/);
   assert.match(adminPage, /const truncatedPanels = \[/);
   assert.match(adminPage, /Operational data needs archiving or a dedicated reporting view/);
   assert.doesNotMatch(adminPage, /from\('orders'\)\.select\('\*'\)\.order\('created_at', \{ ascending: false \}\)\.limit\(500\)/);
@@ -3601,8 +3603,9 @@ test('admin Pocket WiFi dispatch selector pages the fleet and warns when its bou
   // The main order dashboard supplies inventoryItems directly to every
   // dispatch action. A one-response inventory query can hide an otherwise
   // available router after PostgREST's row cap and block a valid hand-off.
-  assert.match(adminPage, /loadPages\(\(from, to\) => supabase\.from\('inventory_items'\)/);
-  assert.match(adminPage, /\.eq\('product_type', 'pocket_wifi'\)\s*\.order\('name'\)\s*\.order\('id'\)\s*\.range\(from, to\)/);
+  assert.match(adminPage, /loadKeysetPages\(\(after, limit\) => \{\s*let query = supabase\.from\('inventory_items'\)/);
+  assert.match(adminPage, /\.eq\('product_type', 'pocket_wifi'\)\s*\.order\('id'\)\s*\.limit\(limit\)/);
+  assert.match(adminPage, /query = query\.gt\('id', after\)/);
   assert.match(adminPage, /inventoryResult\.truncated && 'Pocket WiFi inventory'/);
   assert.match(adminPage, /inventoryItems=\{inventoryItems\}/);
   assert.doesNotMatch(adminPage, /supabase\.from\('inventory_items'\)\.select\('id,sku,name,quantity_on_hand,status'\)\.eq\('product_type', 'pocket_wifi'\)\.order\('name'\),/);
@@ -3612,7 +3615,7 @@ test('admin operational pagination distinguishes an exact view limit from a genu
   // Exactly 5,000 rows are complete, not an incident. Both bounded admin
   // loaders must probe row 5,001 and propagate probe failures so operators
   // never receive either a false truncation warning or trusted partial data.
-  assert.match(adminPage, /const beyond = await fetchPage\(ADMIN_MAX_ROWS, ADMIN_MAX_ROWS\)/);
+  assert.match(adminPage, /const beyond = await fetchPage\(after, 1\)/);
   assert.match(adminPage, /if \(beyond\.error\) return \{ data: \[\], error: beyond\.error, truncated: false \}/);
   assert.match(adminPage, /truncated: \(beyond\.data \|\| \[\]\)\.length > 0/);
   assert.match(crmPage, /const beyond=await fetchPage\(CRM_MAX_ROWS,CRM_MAX_ROWS\)/);
@@ -3624,8 +3627,9 @@ test('admin webhook recovery visibility pages every actionable Stripe exception 
   // A newest-100 diagnostic sample can hide a failed payment event from the
   // same dashboard staff use to reconcile fulfilment. Keep this recovery
   // ledger on the dashboard's explicit pagination/truncation contract.
-  assert.match(adminPage, /loadPages\(\(from, to\) => supabase\.from\('stripe_events'\)/);
-  assert.match(adminPage, /\.order\('event_id', \{ ascending: false \}\)\s*\.range\(from, to\)/);
+  assert.match(adminPage, /loadKeysetPages\(\(after, limit\) => \{\s*let query = supabase\.from\('stripe_events'\)/);
+  assert.match(adminPage, /\.order\('event_id'\)\s*\.limit\(limit\)/);
+  assert.match(adminPage, /query = query\.gt\('event_id', after\)/);
   assert.match(adminPage, /stripeEventResult\.truncated && 'Stripe webhook failures'/);
   assert.doesNotMatch(adminPage, /from\('stripe_events'\)[\s\S]{0,500}\.limit\(100\)/);
 });

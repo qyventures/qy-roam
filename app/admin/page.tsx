@@ -17,22 +17,35 @@ const ADMIN_PAGE_SIZE = 250;
 const ADMIN_MAX_ROWS = 5_000;
 
 type PagedResult = { data: any[]; error: any; truncated: boolean };
+type PageCursor = string | number;
 
-async function loadPages(fetchPage: (from: number, to: number) => PromiseLike<{ data: any[] | null; error: any }>): Promise<PagedResult> {
+async function loadKeysetPages(
+  fetchPage: (after: PageCursor | null, limit: number) => PromiseLike<{ data: any[] | null; error: any }>,
+  cursorFor: (row: any) => PageCursor | null,
+): Promise<PagedResult> {
   const data: any[] = [];
-  for (let from = 0; from < ADMIN_MAX_ROWS; from += ADMIN_PAGE_SIZE) {
-    const result = await fetchPage(from, from + ADMIN_PAGE_SIZE - 1);
+  let after: PageCursor | null = null;
+  for (let loaded = 0; loaded < ADMIN_MAX_ROWS; loaded += ADMIN_PAGE_SIZE) {
+    const result = await fetchPage(after, ADMIN_PAGE_SIZE);
     if (result.error) return { data: [], error: result.error, truncated: false };
     const page = result.data || [];
     data.push(...page);
     if (page.length < ADMIN_PAGE_SIZE) return { data, error: null, truncated: false };
+    const next = cursorFor(page[page.length - 1]);
+    // Every operational ledger below pages on an immutable unique identity.
+    // If a provider returns a malformed/repeated cursor, fail the view closed
+    // rather than looping or presenting a silently incomplete ledger.
+    if (next === null || next === after) {
+      return { data: [], error: new Error('Operational ledger returned an invalid pagination cursor'), truncated: false };
+    }
+    after = next;
   }
   // A full final page does not prove that rows were omitted. Probe exactly
   // one row beyond the rendered boundary so an account with precisely 5,000
   // records is not put into a permanent false incident state. Conversely, a
   // failed probe means completeness is unknown and must fail the panel closed
   // instead of presenting the first 5,000 rows as a trustworthy full view.
-  const beyond = await fetchPage(ADMIN_MAX_ROWS, ADMIN_MAX_ROWS);
+  const beyond = await fetchPage(after, 1);
   if (beyond.error) return { data: [], error: beyond.error, truncated: false };
   return { data, error: null, truncated: (beyond.data || []).length > 0 };
 }
@@ -98,22 +111,37 @@ export default async function AdminPage() {
   const unavailable: PagedResult = { data: [], error: new Error('Order database is not configured'), truncated: false };
   const [result, inventoryResult, notificationResult, metaDeliveryResult, stripeEventResult] = supabase
     ? await Promise.all([
-        loadPages((from, to) => supabase.from('orders').select('*').order('created_at', { ascending: false }).order('id', { ascending: false }).range(from, to)),
+        loadKeysetPages((after, limit) => {
+          let query = supabase.from('orders').select('*').order('id', { ascending: false }).limit(limit);
+          if (typeof after === 'number') query = query.lt('id', after);
+          return query;
+        }, row => Number.isSafeInteger(row?.id) && row.id > 0 ? row.id : null),
         // This list feeds the per-order dispatch selector, so a single
-        // PostgREST response is not a safe fleet boundary. Page with a stable
-        // secondary key just like orders and delivery ledgers: otherwise a
-        // valid router beyond the response cap silently disappears from the
-        // custody workflow and staff may conclude that no device is
-        // assignable. The shared ceiling keeps rendering bounded and the
+        // PostgREST response is not a safe fleet boundary. Page on the
+        // immutable inventory id: otherwise a status/name edit can move a row
+        // across page boundaries, or a valid router beyond the response cap can
+        // silently disappear from the custody workflow. The shared ceiling
+        // keeps rendering bounded and the
         // truncation warning below makes an oversized fleet explicit.
-        loadPages((from, to) => supabase.from('inventory_items')
+        loadKeysetPages((after, limit) => {
+          let query = supabase.from('inventory_items')
           .select('id,sku,name,quantity_on_hand,status')
           .eq('product_type', 'pocket_wifi')
-          .order('name')
           .order('id')
-          .range(from, to)),
-        loadPages((from, to) => supabase.from('fulfilment_notifications').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('updated_at', { ascending: false }).order('stripe_session_id').range(from, to)),
-        loadPages((from, to) => supabase.from('meta_purchase_deliveries').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('updated_at', { ascending: false }).order('stripe_session_id').range(from, to)),
+          .limit(limit);
+          if (typeof after === 'number') query = query.gt('id', after);
+          return query;
+        }, row => Number.isSafeInteger(row?.id) && row.id > 0 ? row.id : null),
+        loadKeysetPages((after, limit) => {
+          let query = supabase.from('fulfilment_notifications').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('stripe_session_id').limit(limit);
+          if (typeof after === 'string') query = query.gt('stripe_session_id', after);
+          return query;
+        }, row => typeof row?.stripe_session_id === 'string' && row.stripe_session_id ? row.stripe_session_id : null),
+        loadKeysetPages((after, limit) => {
+          let query = supabase.from('meta_purchase_deliveries').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('stripe_session_id').limit(limit);
+          if (typeof after === 'string') query = query.gt('stripe_session_id', after);
+          return query;
+        }, row => typeof row?.stripe_session_id === 'string' && row.stripe_session_id ? row.stripe_session_id : null),
         // Load every unfinished claim, then classify it with the exact same
         // lease rule as the webhook worker. Filtering only in PostgREST by an
         // old timestamp misses NULL and implausibly future processing leases:
@@ -123,17 +151,25 @@ export default async function AdminPage() {
         // sample. Apply the same bounded pagination policy as the other
         // operational ledgers so a busy incident cannot silently hide older
         // failed/abandoned events after the first 100 rows.
-        loadPages((from, to) => supabase.from('stripe_events')
+        loadKeysetPages((after, limit) => {
+          let query = supabase.from('stripe_events')
           .select('event_id,event_type,stripe_session_id,attempts,processing_started_at,last_failed_at,last_error')
           .is('processed_at', null)
-          .order('processing_started_at', { ascending: false })
-          .order('event_id', { ascending: false })
-          .range(from, to)),
+          .order('event_id')
+          .limit(limit);
+          if (typeof after === 'string') query = query.gt('event_id', after);
+          return query;
+        }, row => typeof row?.event_id === 'string' && row.event_id ? row.event_id : null),
       ])
     : [unavailable, unavailable, unavailable, unavailable, unavailable];
-  const orders: any[] = result.data ?? [];
+  // Keyset reads use immutable identities so concurrent inserts/updates cannot
+  // shift rows between pages. Restore the operator-friendly presentation
+  // order only after the complete bounded ledger has been loaded.
+  const orders: any[] = (result.data ?? []).sort((a:any,b:any) =>
+    String(b.created_at || '').localeCompare(String(a.created_at || '')) || Number(b.id || 0) - Number(a.id || 0));
   const orderByStripeSession = new Map(orders.map((order:any)=>[order.stripe_session_id,order]));
-  const inventoryItems: any[] = inventoryResult.data ?? [];
+  const inventoryItems: any[] = (inventoryResult.data ?? []).sort((a:any,b:any) =>
+    String(a.name || '').localeCompare(String(b.name || '')) || Number(a.id || 0) - Number(b.id || 0));
   const notifications: any[] = notificationResult.data ?? [];
   const notificationBySession = new Map(notifications.map((n:any)=>[n.stripe_session_id,n]));
   // A webhook failure before the notification ledger is created leaves no row
