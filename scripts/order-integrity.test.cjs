@@ -44,7 +44,7 @@ const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
 const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_EXPIRY_CREATION_MARGIN_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, CHECKOUT_ATTEMPT_MAX_FUTURE_MS, STRIPE_HOLD_SCAN_WINDOW_SECONDS, checkoutAttemptExpiresAt, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
 const { checkoutSiteOrigin, isProductionQyRoamOrigin, metaPurchaseEventSourceUrl } = require('../lib/siteOrigin.ts');
 const { hasRequiredAdminCredentials, hasRequiredMetaCapiPurchaseConfig, metaPixelId } = require('../lib/runtimeConfig.ts');
-const { metaMeasurementAllowed, setMetaMeasurementConsent } = require('../lib/metaClient.ts');
+const { metaMeasurementAllowed, metaPageViewAllowed, setMetaMeasurementConsent } = require('../lib/metaClient.ts');
 const { digitalDeliveryReferenceIssue, isSafeDigitalDeliveryReference } = require('../lib/digitalDeliveryReference.ts');
 const { SUPABASE_REQUEST_TIMEOUT_MS, SUPABASE_RESPONSE_MAX_BYTES, SUPABASE_RESPONSE_MAX_CHUNKS, canonicalSupabaseProjectUrl, fetchSupabaseWithTimeout, hasRequiredSupabaseAdminConfig, supabaseServiceRoleKey } = require('../lib/supabaseAdmin.ts');
 const { checkoutAttempt, clearCheckoutAttempt, CHECKOUT_ATTEMPT_MAX_AGE_MS } = require('../lib/checkoutAttempt.ts');
@@ -124,13 +124,28 @@ const rootLayout = fs.readFileSync(require.resolve('../app/layout.tsx'), 'utf8')
 test('consented Meta PageView measurement follows App Router navigation', () => {
   assert.match(metaConsent, /usePathname/);
   assert.match(metaConsent, /const pathname = usePathname\(\)/);
-  assert.match(metaConsent, /window\.fbq\?\.\('track', 'PageView'\)/);
+  assert.match(metaConsent, /if \(metaPageViewAllowed\(pathname\)\) window\.fbq\?\.\('track', 'PageView'\)/);
   assert.match(metaConsent, /\[choice, pathname, pixelId\]/);
   // Pixel bootstrap must not also emit a view: the route-aware effect owns
   // both the initial path and later client-side paths, avoiding a duplicate
   // initial PageView when a returning visitor has already consented.
   const loadPixelBody = metaConsent.match(/function loadPixel[\s\S]*?\n}\n/)?.[0] || '';
   assert.doesNotMatch(loadPixelBody, /['"]PageView['"]/);
+});
+
+test('Meta PageView never exposes customer confirmation capabilities or admin routes', () => {
+  assert.equal(metaPageViewAllowed('/'), true);
+  assert.equal(metaPageViewAllowed('/esim'), true);
+  assert.equal(metaPageViewAllowed('/faq'), true);
+  assert.equal(metaPageViewAllowed('/success'), false);
+  assert.equal(metaPageViewAllowed('/booking'), false);
+  assert.equal(metaPageViewAllowed('/admin'), false);
+  assert.equal(metaPageViewAllowed('/admin/inventory'), false);
+
+  // Keep Pixel bootstrap independent from the PageView decision: the paid
+  // confirmation page still needs the browser Purchase half of CAPI/Pixel
+  // deduplication after an opted-in customer returns from Stripe.
+  assert.match(metaConsent, /loadPixel\(pixelId\);\s*if \(metaPageViewAllowed\(pathname\)\)/);
 });
 
 test('checkout provenance accepts only bounded canonical Stripe metadata', () => {

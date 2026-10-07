@@ -25,6 +25,18 @@ export function metaMeasurementAllowed() {
   return metaMeasurementConsent() === 'accepted';
 }
 
+// Confirmation routes carry a Stripe Checkout Session capability in their
+// query string. Meta Pixel's standard PageView can observe the browser's full
+// page location even when our event call does not include it explicitly, so
+// never emit PageView from those routes. The admin surface is likewise an
+// operational boundary rather than a marketing destination. Pixel may still
+// be loaded on /success so the consented, event-ID-deduplicated Purchase can
+// be delivered without exposing the confirmation URL as a separate view.
+export function metaPageViewAllowed(pathname: string) {
+  return pathname !== '/success' && pathname !== '/booking' &&
+    pathname !== '/admin' && !pathname.startsWith('/admin/');
+}
+
 export function setMetaMeasurementConsent(consent: MetaConsent) {
   transientConsent = consent;
   if (typeof window === 'undefined') return;

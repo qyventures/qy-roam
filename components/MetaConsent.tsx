@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { metaMeasurementConsent, setMetaMeasurementConsent } from '@/lib/metaClient';
+import { metaMeasurementConsent, metaPageViewAllowed, setMetaMeasurementConsent } from '@/lib/metaClient';
 import { metaPixelId } from '@/lib/runtimeConfig';
 
 declare global { interface Window { fbq?: (...args: any[]) => void; _fbq?: any; } }
@@ -61,8 +61,11 @@ export default function MetaConsent() {
     // while bootstrapping fbevents.js loses every consented client-side page
     // transition. Queue one view for the initial path and each later path;
     // loadPixel is idempotent and restores consent after a revoke/re-grant.
+    // Private confirmation and operations paths still load Pixel when needed
+    // for a consented Purchase, but must not expose their current URL through
+    // the standard PageView event.
     loadPixel(pixelId);
-    window.fbq?.('track', 'PageView');
+    if (metaPageViewAllowed(pathname)) window.fbq?.('track', 'PageView');
   }, [choice, pathname, pixelId]);
 
   function choose(value: Consent) {
