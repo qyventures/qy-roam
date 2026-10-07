@@ -2,7 +2,7 @@ import { createStripeClient } from '@/lib/stripeClient';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { validateQyRoamSession, type QyRoamProductType } from '@/lib/qyRoamSession';
 import MetaPurchase from '@/components/MetaPurchase';
-import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
+import { validStripeCheckoutSessionId, validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import OrderConfirmationRefresh from '@/components/OrderConfirmationRefresh';
@@ -45,7 +45,7 @@ export default async function SuccessPage({ searchParams }: Props) {
       // credentials normally scope retrieval correctly, but an unexpected SDK
       // or upstream response must never let a different customer's session be
       // rendered as this customer's payment confirmation.
-      if (session.id !== sessionId) {
+      if (validStripeCheckoutSessionIdForMode(session.id, session.livemode) !== sessionId) {
         throw new Error('Retrieved Checkout Session does not match confirmation reference');
       }
       // Stripe credentials normally scope reads to one mode, but make the

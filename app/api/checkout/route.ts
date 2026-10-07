@@ -18,7 +18,7 @@ import { checkoutSiteOrigin } from '@/lib/siteOrigin';
 import { pocketWifiRentalCents } from '@/lib/pocketWifiPricing';
 import { safeStripeCheckoutUrl } from '@/lib/stripeCheckoutUrl';
 import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
-import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
+import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhookObject';
 
 export const runtime = 'nodejs';
@@ -101,7 +101,7 @@ async function activeStripeHolds(stripe:Stripe,stripeKey:string,start:string,end
       // an outbound retrieve target. Treat the provider response as runtime
       // data and fail the capacity scan closed if any Session identity is not
       // a bounded canonical Checkout id.
-      const sessionId=validStripeCheckoutSessionId(session.id);
+      const sessionId=validStripeCheckoutSessionIdForMode(session.id,session.livemode);
       if(!sessionId) throw new Error('Stripe returned an invalid Checkout Session identifier');
       // Stripe credentials ordinarily scope list results to one mode, but this
       // scan is an authority for scarce physical inventory. Keep it on the
@@ -179,7 +179,8 @@ async function activeStripeHolds(stripe:Stripe,stripeKey:string,start:string,end
     // count and potentially selling capacity represented on a later page.
     if(sessions.data.length===0) throw new Error('Stripe Pocket WiFi hold scan returned an empty continuation page');
     // Every row was validated above, including the final pagination cursor.
-    startingAfter=validStripeCheckoutSessionId(sessions.data[sessions.data.length-1].id)!;
+    const cursor=sessions.data[sessions.data.length-1];
+    startingAfter=validStripeCheckoutSessionIdForMode(cursor.id,cursor.livemode)!;
   }
   return {holds,requestIds,existingUrl,existingSessionId,existingSessionSnapshot,requestConflict};
 }
@@ -413,7 +414,7 @@ export async function POST(req: Request) {
   // holds. An idempotency key can also replay a completed or expired Session,
   // so validate the response from the create call itself before linking the
   // newly-created reservation or returning any checkout state to the browser.
-  const createdSessionId=validStripeCheckoutSessionId(session.id);
+  const createdSessionId=validStripeCheckoutSessionIdForMode(session.id,session.livemode);
   if(!createdSessionId){
     console.error('checkout_session_id_invalid');
     return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});

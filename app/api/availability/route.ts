@@ -16,7 +16,7 @@ import {
 import { CHECKOUT_WEBHOOK_HANDOFF_GRACE_MS, MAX_STRIPE_HOLD_SCAN_PAGES, STRIPE_HOLD_SCAN_WINDOW_SECONDS } from '@/lib/checkoutExpiry';
 import { AVAILABILITY_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS, createCheckoutAttemptLimiter, createGlobalAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
-import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
+import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { exactNonnegativeCount } from '@/lib/exactCount';
 
 export const dynamic = 'force-dynamic';
@@ -82,7 +82,7 @@ async function activeStripeHolds(stripe: Stripe, stripeKey: string, start: strin
       // Fail this inventory promise closed if Stripe ever returns an
       // unexpected identity instead of sending unbounded runtime data back in
       // a follow-up API request or into provenance verification.
-      const sessionId = validStripeCheckoutSessionId(session.id);
+      const sessionId = validStripeCheckoutSessionIdForMode(session.id, session.livemode);
       if (!sessionId) throw new Error('Stripe returned an invalid Checkout Session identifier');
       // Session status is eventually consistent around expiry. Capacity must
       // follow the Checkout Session's actual expiry, not only its age.
@@ -125,7 +125,8 @@ async function activeStripeHolds(stripe: Stripe, stripeKey: string, start: strin
     // checkout for inventory held on an unread provider page.
     if (sessions.data.length === 0) throw new Error('Stripe Pocket WiFi hold scan returned an empty continuation page');
     // Every returned row, including this cursor, was validated above.
-    startingAfter = validStripeCheckoutSessionId(sessions.data[sessions.data.length - 1].id)!;
+    const cursor = sessions.data[sessions.data.length - 1];
+    startingAfter = validStripeCheckoutSessionIdForMode(cursor.id, cursor.livemode)!;
   }
   return { holds, requestIds };
 }

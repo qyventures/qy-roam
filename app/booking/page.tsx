@@ -3,7 +3,7 @@ import { createStripeClient } from '@/lib/stripeClient';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { initialFulfilmentStatus, validFulfilmentStatus } from '@/lib/orderLifecycle';
 import { validateQyRoamSession } from '@/lib/qyRoamSession';
-import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
+import { validStripeCheckoutSessionId, validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { POCKET_WIFI_RETURN_GRACE_DAYS } from '@/lib/pocketWifiReturns';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
@@ -62,7 +62,7 @@ export default async function BookingPage({ searchParams }: Props) {
     // The customer capability URL authorises visibility of one Checkout
     // Session only. Keep the requested id authoritative even if an SDK or
     // upstream edge case supplies a different object for the retrieval.
-    if (session.id !== sessionId) {
+    if (validStripeCheckoutSessionIdForMode(session.id, session.livemode) !== sessionId) {
       throw new Error('Retrieved Checkout Session does not match booking reference');
     }
     // Keep the status page on the identical credential-mode boundary as

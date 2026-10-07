@@ -14,7 +14,7 @@ import { checkoutSiteOrigin } from '@/lib/siteOrigin';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { safeStripeCheckoutUrl } from '@/lib/stripeCheckoutUrl';
 import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
-import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
+import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhookObject';
 
 export const runtime = 'nodejs';
@@ -191,7 +191,7 @@ export async function POST(req: Request) {
     // Checkout Session id, but SDK types do not validate provider responses
     // at runtime. Bound it before it can become an outbound API path or an
     // order-provenance input.
-    const createdSessionId = validStripeCheckoutSessionId(session.id);
+    const createdSessionId = validStripeCheckoutSessionIdForMode(session.id, session.livemode);
     if (!createdSessionId) {
       console.error('esim_checkout_session_id_invalid');
       return NextResponse.json({ error: 'Secure checkout confirmation is temporarily unavailable. Please try again shortly.' }, {

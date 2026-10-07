@@ -31,7 +31,7 @@ const { WIFI_BENCHMARK, WIFI_PLANS } = require('../lib/wifiPlans.ts');
 const { pocketWifiRentalCents, sgdFromCents } = require('../lib/pocketWifiPricing.ts');
 const { allowedFulfilmentStatuses, fulfilmentNotificationActionable, validFulfilmentTransition, STRIPE_EVENT_CLAIM_STALE_MS, STRIPE_EVENT_CLAIM_CLOCK_SKEW_MS, stripeEventClaimInProgress } = require('../lib/orderLifecycle.ts');
 const { MAX_POCKET_WIFI_INVENTORY, operationalConfig } = require('../lib/operationalConfig.ts');
-const { validStripeCheckoutSessionId } = require('../lib/stripeSessionId.ts');
+const { validStripeCheckoutSessionId, validStripeCheckoutSessionIdForMode } = require('../lib/stripeSessionId.ts');
 const { validStripeEventCreated, validStripePaymentEventCreated, STRIPE_EVENT_CREATED_MIN_SECONDS, STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS } = require('../lib/stripeEventCreated.ts');
 const { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesEvent, stripeWebhookCheckoutSessionMatchesSnapshot, stripeWebhookEventEnvelope } = require('../lib/stripeWebhookObject.ts');
 const { isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError, InvalidRequestBodyLimitError, MAX_REQUEST_BODY_CHUNKS } = require('../lib/requestBody.ts');
@@ -131,6 +131,26 @@ test('consented Meta PageView measurement follows App Router navigation', () => 
   // initial PageView when a returning visitor has already consented.
   const loadPixelBody = metaConsent.match(/function loadPixel[\s\S]*?\n}\n/)?.[0] || '';
   assert.doesNotMatch(loadPixelBody, /['"]PageView['"]/);
+});
+
+test('Stripe Checkout Session identifiers agree with their runtime mode at every authority boundary', () => {
+  assert.equal(validStripeCheckoutSessionIdForMode('cs_live_Valid123', true), 'cs_live_Valid123');
+  assert.equal(validStripeCheckoutSessionIdForMode('cs_test_Valid123', false), 'cs_test_Valid123');
+  assert.equal(validStripeCheckoutSessionIdForMode('cs_test_Valid123', true), null);
+  assert.equal(validStripeCheckoutSessionIdForMode('cs_live_Valid123', false), null);
+  assert.equal(validStripeCheckoutSessionIdForMode('cs_live_Valid123', 'true'), null);
+  assert.equal(validStripeCheckoutSessionIdForMode('cs_live_bad-id', true), null);
+
+  // These responses can create a payment capability, consume inventory,
+  // persist an order, reveal customer state, or trigger external delivery.
+  // Keep each one on the identifier/mode boundary, not just the API-key mode.
+  assert.match(wifiCheckoutRoute, /validStripeCheckoutSessionIdForMode\(session\.id,session\.livemode\)/);
+  assert.match(esimCheckoutRoute, /validStripeCheckoutSessionIdForMode\(session\.id, session\.livemode\)/);
+  assert.match(availabilityRoute, /validStripeCheckoutSessionIdForMode\(session\.id, session\.livemode\)/);
+  assert.match(webhookRoute, /validStripeCheckoutSessionIdForMode\(eventSession\.id,eventSession\.livemode\)/);
+  assert.match(successPage, /validStripeCheckoutSessionIdForMode\(session\.id, session\.livemode\) !== sessionId/);
+  assert.match(bookingPage, /validStripeCheckoutSessionIdForMode\(session\.id, session\.livemode\) !== sessionId/);
+  assert.match(adminOrderRoute, /validStripeCheckoutSessionIdForMode\(session\.id, session\.livemode\) !== sessionId/);
 });
 
 test('Meta PageView never exposes customer confirmation capabilities or admin routes', () => {
@@ -825,7 +845,7 @@ test('lookalike payment sessions are ignored before persistence and durable even
   // Roam. Reject copied metadata before even constructing the Supabase client
   // so unrelated Stripe products cannot create false recovery exceptions.
   const sourceCheck = webhookRoute.indexOf('hasQyRoamWebhookSource(eventSession.metadata)');
-  const sessionIdCheck = webhookRoute.indexOf('const eventSessionId=validStripeCheckoutSessionId(eventSession.id)');
+  const sessionIdCheck = webhookRoute.indexOf('const eventSessionId=validStripeCheckoutSessionIdForMode(eventSession.id,eventSession.livemode)');
   const provenanceCheck = webhookRoute.indexOf('validQyRoamProvenance(eventSessionId,eventSession.metadata)');
   const persistence = webhookRoute.indexOf('const supabase=getSupabaseAdmin()', sourceCheck);
   const claim = webhookRoute.indexOf('claimOnce(supabase,eventClaimId,event.type,eventSessionId)');
@@ -1946,8 +1966,8 @@ test('customer-facing Stripe session lookups accept only one bounded Checkout Se
   // A bounded URL parameter only chooses the outbound Stripe request. The
   // returned object must still be bound to that same capability before either
   // customer page can display payment or fulfilment data.
-  assert.match(bookingPage, /if \(session\.id !== sessionId\)/);
-  assert.match(successPage, /if \(session\.id !== sessionId\)/);
+  assert.match(bookingPage, /if \(validStripeCheckoutSessionIdForMode\(session\.id, session\.livemode\) !== sessionId\)/);
+  assert.match(successPage, /if \(validStripeCheckoutSessionIdForMode\(session\.id, session\.livemode\) !== sessionId\)/);
 });
 
 test('confirmation overload protection counts only provider-backed session lookups', () => {
@@ -1980,24 +2000,24 @@ test('admin delivery recovery validates its stored Stripe Checkout Session id be
 
 test('checkout provider responses are bounded before their Session ids become API targets or provenance inputs', () => {
   const esimCreate = esimCheckoutRoute.indexOf('const session = await stripe.checkout.sessions.create');
-  const esimId = esimCheckoutRoute.indexOf('const createdSessionId = validStripeCheckoutSessionId(session.id)', esimCreate);
+  const esimId = esimCheckoutRoute.indexOf('const createdSessionId = validStripeCheckoutSessionIdForMode(session.id, session.livemode)', esimCreate);
   const esimUpdate = esimCheckoutRoute.indexOf('stripe.checkout.sessions.update(createdSessionId', esimCreate);
   const esimRetrieve = esimCheckoutRoute.indexOf('stripe.checkout.sessions.retrieve(createdSessionId)', esimCreate);
   assert.ok(esimCreate >= 0 && esimId > esimCreate && esimUpdate > esimId && esimRetrieve > esimId);
   assert.doesNotMatch(esimCheckoutRoute.slice(esimCreate), /sessions\.(?:update|retrieve)\(session\.id/);
 
   const wifiCreate = wifiCheckoutRoute.indexOf('session=await stripe.checkout.sessions.create');
-  const wifiId = wifiCheckoutRoute.indexOf('const createdSessionId=validStripeCheckoutSessionId(session.id)', wifiCreate);
+  const wifiId = wifiCheckoutRoute.indexOf('const createdSessionId=validStripeCheckoutSessionIdForMode(session.id,session.livemode)', wifiCreate);
   const wifiUpdate = wifiCheckoutRoute.indexOf('stripe.checkout.sessions.update(createdSessionId', wifiCreate);
   const wifiRetrieve = wifiCheckoutRoute.indexOf('stripe.checkout.sessions.retrieve(createdSessionId)', wifiCreate);
   assert.ok(wifiCreate >= 0 && wifiId > wifiCreate && wifiUpdate > wifiId && wifiRetrieve > wifiId);
   assert.doesNotMatch(wifiCheckoutRoute.slice(wifiCreate), /sessions\.(?:update|retrieve)\(session\.id/);
 
-  assert.match(wifiCheckoutRoute, /const sessionId=validStripeCheckoutSessionId\(session\.id\)/);
+  assert.match(wifiCheckoutRoute, /const sessionId=validStripeCheckoutSessionIdForMode\(session\.id,session\.livemode\)/);
   assert.match(wifiCheckoutRoute, /existingSessionId=sessionId/);
-  assert.match(wifiCheckoutRoute, /startingAfter=validStripeCheckoutSessionId\(sessions\.data\[sessions\.data\.length-1\]\.id\)!/);
-  assert.match(availabilityRoute, /const sessionId = validStripeCheckoutSessionId\(session\.id\)/);
-  assert.match(availabilityRoute, /startingAfter = validStripeCheckoutSessionId\(sessions\.data\[sessions\.data\.length - 1\]\.id\)!/);
+  assert.match(wifiCheckoutRoute, /startingAfter=validStripeCheckoutSessionIdForMode\(cursor\.id,cursor\.livemode\)!/);
+  assert.match(availabilityRoute, /const sessionId = validStripeCheckoutSessionIdForMode\(session\.id, session\.livemode\)/);
+  assert.match(availabilityRoute, /startingAfter = validStripeCheckoutSessionIdForMode\(cursor\.id, cursor\.livemode\)!/);
 });
 
 test('eSIM checkout never redirects a reused idempotency key to another plan', () => {
@@ -4266,7 +4286,7 @@ test('Stripe terminal events refresh the Checkout Session before persisting or d
     webhookRoute.indexOf("if(event.type==='checkout.session.expired')"),
   );
   const sourceBoundary = processing.indexOf('if(!hasQyRoamWebhookSource(eventSession.metadata))');
-  const sessionIdBoundary = processing.indexOf('const eventSessionId=validStripeCheckoutSessionId(eventSession.id)');
+  const sessionIdBoundary = processing.indexOf('const eventSessionId=validStripeCheckoutSessionIdForMode(eventSession.id,eventSession.livemode)');
   const refresh = processing.indexOf('refreshedSession=await stripe.checkout.sessions.retrieve(eventSessionId)');
   const refreshedObjectBoundary = processing.indexOf('const session=stripeWebhookCheckoutSession(refreshedSession)');
   const identityBoundary = processing.indexOf('if(!stripeWebhookCheckoutSessionMatchesSnapshot(eventSession,session))');
@@ -4439,7 +4459,7 @@ test('SMTP fulfilment transport bounds untrusted relay responses', () => {
 });
 
 test('admin delivery recovery requires a completed Stripe session and its complete durable commercial snapshot', () => {
-  assert.match(adminOrderRoute, /if \(session\.id !== sessionId\)/);
+  assert.match(adminOrderRoute, /if \(validStripeCheckoutSessionIdForMode\(session\.id, session\.livemode\) !== sessionId\)/);
   assert.match(adminOrderRoute, /!validation\.valid \|\| session\.status !== 'complete' \|\| session\.payment_status !== 'paid'/);
   assert.match(adminOrderRoute, /amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end/);
   assert.match(adminOrderRoute, /if \(!durableOrderMatchesPaidSession\(order, session, validation\.productType\)\)/);

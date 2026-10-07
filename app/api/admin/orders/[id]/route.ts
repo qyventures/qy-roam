@@ -9,7 +9,7 @@ import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
 import { digitalDeliveryReferenceIssue, normalizeDigitalDeliveryReference } from '@/lib/digitalDeliveryReference';
-import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
+import { validStripeCheckoutSessionId, validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { validStripePaymentEventCreated } from '@/lib/stripeEventCreated';
 import { custodyReferenceIssue, normalizeCustodyReference } from '@/lib/custodyReference';
 import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
@@ -307,7 +307,7 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     // recovery boundary with fulfilment and analytics side effects. Keep the
     // durable order reference authoritative if an SDK edge case, test double,
     // or upstream response ever supplies a different Checkout Session.
-    if (session.id !== sessionId) {
+    if (validStripeCheckoutSessionIdForMode(session.id, session.livemode) !== sessionId) {
       throw new Error('Retrieved Checkout Session does not match the order');
     }
     // Recovery is an operational mutation with external side effects. Keep it

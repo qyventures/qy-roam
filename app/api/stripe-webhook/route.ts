@@ -13,7 +13,7 @@ import { stripeWebhookSigningSecret } from '@/lib/stripeWebhookSecret';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { getEsimPlan } from '@/lib/esimPlans';
 import { fulfilmentNotificationActionable } from '@/lib/orderLifecycle';
-import { validStripeCheckoutSessionId } from '@/lib/stripeSessionId';
+import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { validStripeEventId } from '@/lib/stripeEventId';
 import { validStripePaymentEventCreated } from '@/lib/stripeEventCreated';
 import { safeHttpsDeliveryEndpoint } from '@/lib/deliveryEndpoint';
@@ -810,7 +810,7 @@ export async function POST(req:Request){
   // make cryptographic work scale with an arbitrary identifier. Keep this
   // ahead of persistence setup as well: an invalid provider object is a
   // permanent client error, not a database-readiness failure.
-  const eventSessionId=validStripeCheckoutSessionId(eventSession.id);
+  const eventSessionId=validStripeCheckoutSessionIdForMode(eventSession.id,eventSession.livemode);
   if(!eventSessionId){
     console.error('stripe_webhook_invalid_session_id',{eventId:stripeEventId});
     return webhookJson({error:'Invalid Checkout Session identifier'},{status:400});
