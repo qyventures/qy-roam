@@ -3669,7 +3669,16 @@ test('launch control reports the same checkout prerequisites that protect real o
   assert.match(launchPage, /const wifiReady=commonCheckoutReady&&paymentDbOk&&pocketWifiFulfilmentDbOk&&wifiInventory/);
   assert.match(launchPage, /Pocket WiFi dispatch and return custody schema/);
   assert.doesNotMatch(launchPage, /const esimReady=.*paymentDbOk/);
-  assert.match(launchPage, /const paidReady=esimReady&&wifiReady&&metaCapi/);
+  // Paid acquisition is a release decision, not merely the intersection of
+  // the two checkout routes. Keep it aligned with authenticated health so an
+  // incomplete operations/admin contract cannot look safe for paid traffic.
+  assert.match(launchPage, /const admin=hasRequiredAdminCredentials\(\)/);
+  assert.match(launchPage, /const releaseReady=commonCheckoutReady&&esimOrderDbOk&&paymentDbOk&&pocketWifiFulfilmentDbOk&&operationsDbOk&&admin&&Boolean\(config\)&&wifiInventory/);
+  assert.match(launchPage, /const paidReady=releaseReady&&esimReady&&wifiReady&&metaCapi/);
+  assert.match(launchPage, /!operationsDbOk&&'operations database schema'/);
+  assert.match(launchPage, /!admin&&'secure admin credentials'/);
+  assert.match(launchPage, /Release readiness/);
+  assert.match(launchPage, /Release blockers/);
   assert.match(launchPage, /eSIM approved offer/);
   assert.match(launchPage, /public eSIM checkout is paused/);
   assert.match(launchPage, /standard approved rates are active/);
