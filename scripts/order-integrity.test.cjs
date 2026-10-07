@@ -1891,9 +1891,11 @@ test('rejected availability ranges cannot exhaust the shared provider-work budge
 });
 
 test('customer confirmation lookups are throttled before provider-backed server rendering', () => {
+  assert.match(middleware, /CONFIRMATION_CLIENT_RATE_LIMIT_MAX_ATTEMPTS\s*=\s*30/);
   assert.match(middleware, /CONFIRMATION_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS\s*=\s*180/);
   assert.match(middleware, /pathname === '\/success' \|\| pathname === '\/booking'/);
-  assert.match(middleware, /if \(isProviderBackedConfirmationLookup\(req\) && confirmationGloballyLimited\(\)\)[\s\S]*?status: 429/);
+  assert.match(middleware, /const confirmationClientLimited = createFailedAdminAuthLimiter\([\s\S]*?CONFIRMATION_CLIENT_RATE_LIMIT_MAX_ATTEMPTS/);
+  assert.match(middleware, /providerBackedLookup && \(confirmationClientLimited\(req\) \|\| confirmationGloballyLimited\(\)\)[\s\S]*?status: 429/);
   assert.match(middleware, /'Cache-Control': 'no-store, max-age=0, private'/);
   assert.match(middleware, /'Referrer-Policy': 'no-referrer'/);
   assert.match(middleware, /matcher: \['\/admin\/:path\*', '\/api\/admin\/:path\*', '\/success', '\/booking'\]/);
@@ -2035,7 +2037,8 @@ test('confirmation overload protection counts only provider-backed session looku
   assert.match(middleware, /import \{ validStripeCheckoutSessionId \} from '\.\/lib\/stripeSessionId'/);
   assert.match(middleware, /const sessionIds = req\.nextUrl\.searchParams\.getAll\('session_id'\)/);
   assert.match(middleware, /sessionIds\.length === 1 && Boolean\(validStripeCheckoutSessionId\(sessionIds\[0\]\)\)/);
-  assert.match(middleware, /if \(isProviderBackedConfirmationLookup\(req\) && confirmationGloballyLimited\(\)\)/);
+  assert.match(middleware, /const providerBackedLookup = isProviderBackedConfirmationLookup\(req\)/);
+  assert.match(middleware, /providerBackedLookup && \(confirmationClientLimited\(req\) \|\| confirmationGloballyLimited\(\)\)/);
   assert.doesNotMatch(middleware, /if \(confirmationGloballyLimited\(\)\)/);
 });
 

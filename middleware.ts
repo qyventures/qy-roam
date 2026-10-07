@@ -20,7 +20,18 @@ const failedAdminAuthLimited = createFailedAdminAuthLimiter();
 // second denial-of-service vector. This is an instance-local overload guard,
 // matching the standalone single-process production deployment.
 export const CONFIRMATION_RATE_LIMIT_WINDOW_MS = 60_000;
+export const CONFIRMATION_CLIENT_RATE_LIMIT_MAX_ATTEMPTS = 30;
 export const CONFIRMATION_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS = 180;
+// Reuse the edge-safe, bounded client-window implementation used at the
+// Basic Auth boundary. Confirmation lookups are read-only, but each accepted
+// request performs a Stripe read and can also query the paid-order ledger.
+// Capping one trusted proxy identity before it reaches the shared counter
+// prevents a single noisy browser from denying confirmation to every buyer;
+// the aggregate counter below still bounds callers that rotate addresses.
+const confirmationClientLimited = createFailedAdminAuthLimiter(
+  CONFIRMATION_RATE_LIMIT_WINDOW_MS,
+  CONFIRMATION_CLIENT_RATE_LIMIT_MAX_ATTEMPTS,
+);
 let confirmationRequestCount = 0;
 let confirmationWindowResetAt = 0;
 
@@ -114,7 +125,10 @@ function isTrustedAdminMutation(req: NextRequest) {
 
 export function middleware(req: NextRequest) {
   if (isConfirmationLookup(req.nextUrl.pathname)) {
-    if (isProviderBackedConfirmationLookup(req) && confirmationGloballyLimited()) {
+    const providerBackedLookup = isProviderBackedConfirmationLookup(req);
+    // Do not spend the instance-wide budget after this client has crossed its
+    // own ceiling. This ordering preserves capacity for unrelated customers.
+    if (providerBackedLookup && (confirmationClientLimited(req) || confirmationGloballyLimited())) {
       return new NextResponse('Order confirmation is busy. Please try again shortly.', {
         status: 429,
         headers: {
