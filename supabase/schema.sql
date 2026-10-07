@@ -1648,7 +1648,9 @@ declare
   v_order public.orders%rowtype;
 begin
   if coalesce(length(trim(p_stripe_session_id)), 0) = 0 then raise exception 'manual order reference is required'; end if;
-  if p_amount_sgd is null or p_amount_sgd <= 0 then raise exception 'manual order amount must be positive'; end if;
+  if p_amount_sgd is null or p_amount_sgd <= 0 or p_amount_sgd > 99999999.99 or p_amount_sgd <> round(p_amount_sgd, 2) then
+    raise exception 'manual order amount must be positive whole cents within the order ledger range';
+  end if;
   if coalesce(length(trim(p_country)), 0) = 0 then raise exception 'Pocket WiFi destination is required'; end if;
   if p_travel_start is null or p_travel_end is null or p_travel_end < p_travel_start then raise exception 'invalid Pocket WiFi travel dates'; end if;
   -- This SECURITY DEFINER function is a second entry point into the same
@@ -1809,7 +1811,9 @@ begin
   if p_payment_failed and p_payment_status <> 'unpaid' then raise exception 'failed payment must be unpaid'; end if;
   if v_paid and p_payment_confirmed_at is null then raise exception 'paid Stripe order requires a payment confirmation time'; end if;
   if not v_paid and p_payment_confirmed_at is not null then raise exception 'unpaid Stripe order cannot have a payment confirmation time'; end if;
-  if p_amount_sgd is null or p_amount_sgd <= 0 then raise exception 'invalid eSIM payment amount'; end if;
+  if p_amount_sgd is null or p_amount_sgd <= 0 or p_amount_sgd > 99999999.99 or p_amount_sgd <> round(p_amount_sgd, 2) then
+    raise exception 'invalid eSIM payment amount';
+  end if;
   if coalesce(length(trim(p_plan_id)), 0) = 0 then raise exception 'eSIM plan id is required'; end if;
   if p_plan_id !~ '^[a-z0-9][a-z0-9-]{1,80}$' then raise exception 'invalid eSIM plan id'; end if;
   if coalesce(length(p_plan_name), 0) not between 1 and 200 or p_plan_name <> btrim(p_plan_name) or p_plan_name ~ '[[:cntrl:]]' then raise exception 'invalid eSIM plan name'; end if;
@@ -1924,7 +1928,9 @@ begin
   if v_paid and p_payment_confirmed_at is null then raise exception 'paid Stripe order requires a payment confirmation time'; end if;
   if not v_paid and p_payment_confirmed_at is not null then raise exception 'unpaid Stripe order cannot have a payment confirmation time'; end if;
   if p_travel_start is null or p_travel_end is null or p_travel_end < p_travel_start then raise exception 'invalid Pocket WiFi travel dates'; end if;
-  if p_amount_sgd is null or p_amount_sgd <= 0 then raise exception 'invalid Pocket WiFi payment amount'; end if;
+  if p_amount_sgd is null or p_amount_sgd <= 0 or p_amount_sgd > 99999999.99 or p_amount_sgd <> round(p_amount_sgd, 2) then
+    raise exception 'invalid Pocket WiFi payment amount';
+  end if;
 
   perform pg_advisory_xact_lock(hashtext('qy_roam_pocket_wifi_checkout'));
   select * into v_order from public.orders where stripe_session_id = p_stripe_session_id for update;
@@ -2048,7 +2054,9 @@ begin
   if p_stripe_session_id is null or p_stripe_session_id !~ '^manual_[a-f0-9]{48}$' then
     raise exception 'invalid manual order reference';
   end if;
-  if p_amount_sgd is null or p_amount_sgd <= 0 then raise exception 'manual order amount must be positive'; end if;
+  if p_amount_sgd is null or p_amount_sgd <= 0 or p_amount_sgd > 99999999.99 or p_amount_sgd <> round(p_amount_sgd, 2) then
+    raise exception 'manual order amount must be positive whole cents within the order ledger range';
+  end if;
   if coalesce(length(p_email), 0) not between 3 and 200
     or p_email <> lower(btrim(p_email))
     or p_email ~ '[[:cntrl:]]'
@@ -2136,8 +2144,10 @@ as $$
   -- Version 29 additionally certifies database-authoritative accounting
   -- period totals and exact paid-ledger reconciliation before a close.
   -- Version 30 additionally certifies the closed paid/unpaid domain on every
-  -- newly written durable order payment state.
-  select 30;
+  -- newly written durable order payment state. Version 31 certifies that all
+  -- privileged order entry points reject fractional cents and values outside
+  -- the numeric(10,2) ledger range before PostgreSQL can round or overflow.
+  select 31;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
