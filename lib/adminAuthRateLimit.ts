@@ -44,15 +44,30 @@ export function createFailedAdminAuthLimiter(
   maxClients = ADMIN_AUTH_MAX_CLIENTS,
 ) {
   const failures = new Map<string, FailureWindow>();
+  const boundedWindowMs = Number.isSafeInteger(windowMs) && windowMs > 0
+    ? windowMs
+    : ADMIN_AUTH_FAILURE_WINDOW_MS;
+  const boundedMaxFailures = Number.isSafeInteger(maxFailures) && maxFailures > 0
+    ? maxFailures
+    : 1;
   let nextCleanupAt = 0;
+  let lastObservedAt = 0;
 
   return (req: Request, now = Date.now()) => {
+    if (!Number.isFinite(now)) now = Date.now();
+    // Do not let a backwards wall-clock correction preserve future reset
+    // timestamps and lock legitimate operators out for the adjustment period.
+    if (now < lastObservedAt) {
+      failures.clear();
+      nextCleanupAt = 0;
+    }
+    lastObservedAt = now;
     const boundedMaxClients = Number.isSafeInteger(maxClients) && maxClients > 0 ? maxClients : 1;
     if (now >= nextCleanupAt) {
       for (const [key, failure] of failures) {
         if (failure.reset <= now) failures.delete(key);
       }
-      nextCleanupAt = now + windowMs;
+      nextCleanupAt = now + boundedWindowMs;
     }
 
     const clientKey = adminAuthClientKey(req);
@@ -61,10 +76,10 @@ export function createFailedAdminAuthLimiter(
     const key = failures.has(clientKey) || individualClients < individualCapacity ? clientKey : OVERFLOW_KEY;
     const current = failures.get(key);
     if (!current || current.reset <= now) {
-      failures.set(key, { count: 1, reset: now + windowMs });
+      failures.set(key, { count: 1, reset: now + boundedWindowMs });
       return false;
     }
     current.count += 1;
-    return current.count > maxFailures;
+    return current.count > boundedMaxFailures;
   };
 }

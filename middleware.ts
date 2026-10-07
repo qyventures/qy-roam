@@ -34,9 +34,18 @@ const confirmationClientLimited = createFailedAdminAuthLimiter(
 );
 let confirmationRequestCount = 0;
 let confirmationWindowResetAt = 0;
+let confirmationLastObservedAt = 0;
 
 function confirmationGloballyLimited(now = Date.now()) {
   if (!Number.isFinite(now)) now = Date.now();
+  // Confirmation pages perform provider-backed reads before rendering. A
+  // backwards host-clock correction must not leave their shared fixed window
+  // saturated until an old future reset time catches up.
+  if (now < confirmationLastObservedAt) {
+    confirmationRequestCount = 0;
+    confirmationWindowResetAt = 0;
+  }
+  confirmationLastObservedAt = now;
   if (confirmationWindowResetAt <= now) {
     confirmationRequestCount = 1;
     confirmationWindowResetAt = now + CONFIRMATION_RATE_LIMIT_WINDOW_MS;

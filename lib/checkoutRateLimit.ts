@@ -41,14 +41,30 @@ export function createCheckoutAttemptLimiter(
   maxClients = CHECKOUT_RATE_LIMIT_MAX_CLIENTS,
 ) {
   const attempts = new Map<string, Attempt>();
+  const boundedWindowMs = Number.isSafeInteger(windowMs) && windowMs > 0
+    ? windowMs
+    : CHECKOUT_RATE_LIMIT_WINDOW_MS;
+  const boundedMaxAttempts = Number.isSafeInteger(maxAttempts) && maxAttempts > 0
+    ? maxAttempts
+    : 1;
   // Retaining active identities prevents a rotating-IP caller from evicting
   // shoppers mid-window, but retaining expired identities forever would let a
   // short address burst permanently push every future shopper into the shared
   // overflow bucket. Sweep at most once per window so recovery is automatic
   // without turning every request into an O(maxClients) scan.
   let nextCleanupAt = 0;
+  let lastObservedAt = 0;
 
   return (req: Request, now = Date.now()) => {
+    if (!Number.isFinite(now)) now = Date.now();
+    // A backwards wall-clock correction must not retain future reset times
+    // and throttle real shoppers for the size of the adjustment. This state
+    // is process-local overload protection, so begin one fresh bounded window.
+    if (now < lastObservedAt) {
+      attempts.clear();
+      nextCleanupAt = 0;
+    }
+    lastObservedAt = now;
     const clientKey = checkoutClientKey(req);
     // Reserve one of the bounded entries for excess identities. Existing
     // individually tracked clients retain their own windows, while every new
@@ -61,7 +77,7 @@ export function createCheckoutAttemptLimiter(
       for (const [key, attempt] of attempts) {
         if (attempt.reset <= now) attempts.delete(key);
       }
-      nextCleanupAt = now + windowMs;
+      nextCleanupAt = now + boundedWindowMs;
     }
     // The overflow bucket consumes one Map entry but is not an individual
     // client slot. Excluding it here lets expired shopper identities actually
@@ -73,15 +89,15 @@ export function createCheckoutAttemptLimiter(
       : CHECKOUT_RATE_LIMIT_OVERFLOW_KEY;
     const current = attempts.get(key);
     if (current && current.reset <= now) {
-      attempts.set(key, { count: 1, reset: now + windowMs });
+      attempts.set(key, { count: 1, reset: now + boundedWindowMs });
       return false;
     }
     if (!current) {
-      attempts.set(key, { count: 1, reset: now + windowMs });
+      attempts.set(key, { count: 1, reset: now + boundedWindowMs });
       return false;
     }
     current.count += 1;
-    return current.count > maxAttempts;
+    return current.count > boundedMaxAttempts;
   };
 }
 
@@ -103,9 +119,18 @@ export function createGlobalAttemptLimiter(
     : 1;
   let count = 0;
   let reset = 0;
+  let lastObservedAt = 0;
 
   return (now = Date.now()) => {
     if (!Number.isFinite(now)) now = Date.now();
+    // Avoid extending a saturated global window after an NTP/operator clock
+    // correction. Restarting this ephemeral window preserves availability
+    // while the configured ceiling still bounds all subsequent attempts.
+    if (now < lastObservedAt) {
+      count = 0;
+      reset = 0;
+    }
+    lastObservedAt = now;
     if (reset <= now) {
       count = 1;
       reset = now + boundedWindowMs;

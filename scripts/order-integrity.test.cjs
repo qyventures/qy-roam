@@ -1853,6 +1853,14 @@ test('provider-backed public routes retain an aggregate overload ceiling across 
   assert.equal(conservative(100), false);
   assert.equal(conservative(101), true);
 
+  // A clock correction must not stretch a saturated future-dated window into
+  // a checkout outage. The corrected time starts one fresh bounded window.
+  const afterClockRollback = createGlobalAttemptLimiter(1_000, 1);
+  assert.equal(afterClockRollback(10_000), false);
+  assert.equal(afterClockRollback(10_001), true);
+  assert.equal(afterClockRollback(5_000), false);
+  assert.equal(afterClockRollback(5_001), true);
+
   for (const source of [wifiCheckoutRoute, esimCheckoutRoute]) {
     assert.match(source, /const globallyLimited\s*=\s*createGlobalAttemptLimiter\(\)/);
     assert.match(source, /if\s*\(limited\(req\)\)/);
@@ -1896,6 +1904,7 @@ test('customer confirmation lookups are throttled before provider-backed server 
   assert.match(middleware, /pathname === '\/success' \|\| pathname === '\/booking'/);
   assert.match(middleware, /const confirmationClientLimited = createFailedAdminAuthLimiter\([\s\S]*?CONFIRMATION_CLIENT_RATE_LIMIT_MAX_ATTEMPTS/);
   assert.match(middleware, /providerBackedLookup && \(confirmationClientLimited\(req\) \|\| confirmationGloballyLimited\(\)\)[\s\S]*?status: 429/);
+  assert.match(middleware, /if \(now < confirmationLastObservedAt\) \{[\s\S]*?confirmationRequestCount = 0;[\s\S]*?confirmationWindowResetAt = 0;/);
   assert.match(middleware, /'Cache-Control': 'no-store, max-age=0, private'/);
   assert.match(middleware, /'Referrer-Policy': 'no-referrer'/);
   assert.match(middleware, /matcher: \['\/admin\/:path\*', '\/api\/admin\/:path\*', '\/success', '\/booking'\]/);
@@ -1919,6 +1928,32 @@ test('checkout attempt rate limiting keeps per-client limits while bounding uniq
   assert.equal(limit(requestFor('198.51.100.1'), 1_200), false);
   // The shared overflow bucket also resets normally after its own window.
   assert.equal(limit(requestFor('198.51.100.6'), 1_200), false);
+});
+
+test('checkout and admin client windows recover safely from wall-clock rollback', () => {
+  const request = new Request('https://qyroam.test/api/checkout', { headers: { 'x-real-ip': '198.51.100.40' } });
+  const checkoutLimit = createCheckoutAttemptLimiter(1_000, 1, 3);
+  assert.equal(checkoutLimit(request, 10_000), false);
+  assert.equal(checkoutLimit(request, 10_001), true);
+  assert.equal(checkoutLimit(request, 5_000), false);
+  assert.equal(checkoutLimit(request, 5_001), true);
+
+  const adminLimit = createFailedAdminAuthLimiter(1_000, 1, 3);
+  assert.equal(adminLimit(request, 10_000), false);
+  assert.equal(adminLimit(request, 10_001), true);
+  assert.equal(adminLimit(request, 5_000), false);
+  assert.equal(adminLimit(request, 5_001), true);
+});
+
+test('client rate limiters fail conservatively with invalid internal settings', () => {
+  const request = new Request('https://qyroam.test/api/checkout', { headers: { 'x-real-ip': '198.51.100.41' } });
+  const checkoutLimit = createCheckoutAttemptLimiter(0, 0, 0);
+  assert.equal(checkoutLimit(request, 100), false);
+  assert.equal(checkoutLimit(request, 101), true);
+
+  const adminLimit = createFailedAdminAuthLimiter(0, 0, 0);
+  assert.equal(adminLimit(request, 100), false);
+  assert.equal(adminLimit(request, 101), true);
 });
 
 test('checkout attempt rate limiting remains bounded with a one-entry registry', () => {
