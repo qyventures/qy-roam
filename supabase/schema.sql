@@ -422,6 +422,18 @@ alter table public.orders add constraint orders_product_fulfilment_status_check 
   ))
 ) not valid;
 
+-- Stripe persistence and protected manual sales write only these two payment
+-- states. Keep the same closed domain on the durable ledger: PostgreSQL CHECK
+-- expressions otherwise accept NULL, and an arbitrary service-role value
+-- could evade paid/unpaid exception reporting while still participating in
+-- fulfilment and inventory queries. NOT VALID preserves historical rows for
+-- deliberate reconciliation while rejecting every new or changed invalid
+-- state immediately.
+alter table public.orders drop constraint if exists orders_payment_status_check;
+alter table public.orders add constraint orders_payment_status_check check (
+  coalesce(payment_status in ('paid', 'unpaid'), false)
+) not valid;
+
 -- A fulfilment state is a customer-facing operational claim, so its payment
 -- boundary must survive direct service-role writes as well as the webhook and
 -- admin API validation. Without this constraint, a repair/import script could
@@ -1297,6 +1309,7 @@ as $$
       'orders_digital_delivery_reference_safe_check',
       'orders_esim_fulfilled_delivery_reference_required_check',
       'orders_product_fulfilment_status_check',
+      'orders_payment_status_check',
       'orders_product_fulfilment_evidence_check',
       'orders_fulfilment_requires_paid_payment_check',
       'orders_payment_confirmed_at_requires_paid_payment_check',
@@ -1307,7 +1320,7 @@ as $$
       'orders_pocket_wifi_dispatch_evidence_check',
       'orders_pocket_wifi_return_evidence_check',
       'orders_session_id_format_check'
-    )) = 16 and
+    )) = 17 and
     (select count(*) from pg_constraint where conrelid = 'public.stripe_events'::regclass and conname in (
       'stripe_events_attempts_check',
       'stripe_events_event_id_check',
@@ -2119,7 +2132,9 @@ as $$
   -- lease shared by the webhook claim and admin exception classifier.
   -- Version 29 additionally certifies database-authoritative accounting
   -- period totals and exact paid-ledger reconciliation before a close.
-  select 29;
+  -- Version 30 additionally certifies the closed paid/unpaid domain on every
+  -- newly written durable order payment state.
+  select 30;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
