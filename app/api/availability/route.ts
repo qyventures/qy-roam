@@ -255,19 +255,20 @@ async function committedInventory(start: string, end: string, stripeHoldRequestI
 }
 
 export async function GET(req: NextRequest) {
-  const start = parseExactIsoDate(req.nextUrl.searchParams.get('start'));
-  const end = parseExactIsoDate(req.nextUrl.searchParams.get('end'));
-  if (!start || !end || end < start) return NextResponse.json({ available: false, error: 'Valid start and end dates are required.' }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
-  // Keep repeated invalid date probes on the per-client ingress boundary,
-  // but do not let them consume the instance-wide Stripe/Supabase work
-  // budget. The aggregate guard belongs immediately before the first request
-  // that can reach production dependencies below.
+  // Apply the bounded per-client ingress limit before parsing any attacker-
+  // controlled query values. Malformed dates are cheap and must never spend
+  // the shared provider-work budget below, but returning before this guard
+  // would also make them completely unthrottled and leave this public route
+  // available as an avoidable CPU/response amplifier.
   if (limited(req)) {
     return NextResponse.json({ available: false, error: 'Too many availability checks. Please try again shortly.' }, {
       status: 429,
       headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' },
     });
   }
+  const start = parseExactIsoDate(req.nextUrl.searchParams.get('start'));
+  const end = parseExactIsoDate(req.nextUrl.searchParams.get('end'));
+  if (!start || !end || end < start) return NextResponse.json({ available: false, error: 'Valid start and end dates are required.' }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
 
   const config = operationalConfig();
   if (!config) return NextResponse.json({ available: false, remaining: 0, inventoryMode: 'unavailable', error: 'Live availability is temporarily unavailable. Please try again shortly or contact +65 8032 7183.' }, { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '30' } });
