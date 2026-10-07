@@ -970,7 +970,12 @@ begin
 
   if v_event.last_error is null
     and v_event.processing_started_at is not null
-    and v_event.processing_started_at >= v_now - interval '30 minutes'
+    -- The application ingress stops waiting after 120 seconds and systemd
+    -- gives a terminating worker 150 seconds to drain. Five minutes leaves a
+    -- full additional safety margin for database cleanup without making a
+    -- crashed paid-order worker block every signed Stripe retry for half an
+    -- hour. The admin classifier uses the same boundary.
+    and v_event.processing_started_at >= v_now - interval '5 minutes'
     and v_event.processing_started_at <= v_now + interval '1 minute' then
     return query select 'in_progress'::text, null::timestamptz;
     return;
@@ -2081,7 +2086,9 @@ as $$
   -- certifies atomic, exact-idempotency creation for manual paid eSIM sales.
   -- Version 27 additionally certifies the atomic, live reservation-to-Stripe
   -- payment-capability hand-off used before a Pocket WiFi URL is exposed.
-  select 27;
+  -- Version 28 additionally certifies the five-minute Stripe event recovery
+  -- lease shared by the webhook claim and admin exception classifier.
+  select 28;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;

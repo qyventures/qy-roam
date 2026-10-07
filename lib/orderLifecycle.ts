@@ -20,10 +20,13 @@ export const ESIM_FULFILMENT_STATUSES = [
   'cancelled',
 ] as const;
 
-// Stripe webhook workers use a durable processing lease. Keep the duration in
-// one dependency-free module so recovery and the operations dashboard agree
-// about when an unfinished claim is abandoned rather than still in flight.
-export const STRIPE_EVENT_CLAIM_STALE_MS = 30 * 60_000;
+// Stripe webhook workers use a durable processing lease. Five minutes is
+// deliberately longer than the reviewed 120-second ingress window and the
+// service's 150-second graceful-stop budget, while avoiding a 30-minute gap
+// before Stripe can recover a paid order after a worker actually dies. Keep
+// the duration in one dependency-free module so recovery and the operations
+// dashboard agree about when a claim is abandoned rather than still in flight.
+export const STRIPE_EVENT_CLAIM_STALE_MS = 5 * 60_000;
 export const STRIPE_EVENT_CLAIM_CLOCK_SKEW_MS = 60_000;
 
 /**
