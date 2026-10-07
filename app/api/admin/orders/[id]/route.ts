@@ -82,6 +82,9 @@ function pocketWifiTransitionError(message: string) {
   if (/invalid Pocket WiFi fulfilment transition|only paid Pocket WiFi orders can be transitioned here|order not found/i.test(message)) {
     return { status: 409, error: 'This Pocket WiFi order can no longer make the requested transition. Refresh before updating it.' };
   }
+  if (/cancellation evidence is immutable/i.test(message)) {
+    return { status: 409, error: 'The original paid-order cancellation reason is immutable. Keep it in the notes and record any correction separately.' };
+  }
   return null;
 }
 
@@ -94,6 +97,9 @@ function esimTransitionError(message: string) {
   }
   if (/invalid eSIM fulfilment transition|only paid eSIM orders can be transitioned here|order not found/i.test(message)) {
     return { status: 409, error: 'This eSIM order can no longer make the requested transition. Refresh before updating it.' };
+  }
+  if (/cancellation evidence is immutable/i.test(message)) {
+    return { status: 409, error: 'The original paid-order cancellation reason is immutable. Keep it in the notes and record any correction separately.' };
   }
   return null;
 }

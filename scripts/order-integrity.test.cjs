@@ -3867,6 +3867,16 @@ test('paid webhook retries preserve staff-corrected fulfilment contact details',
   }
 });
 
+test('paid-order cancellation evidence cannot be rewritten after cancellation', () => {
+  assert.match(schema, /old\.payment_status = 'paid'[\s\S]*old\.fulfilment_status = 'cancelled'[\s\S]*new\.notes is distinct from old\.notes/);
+  assert.match(schema, /select match into v_existing_reason_match[\s\S]*regexp_matches\([\s\S]*Cancellation reason: \[\^\[:cntrl:\]\]\{5,500\}/);
+  assert.match(schema, /v_existing_reason := v_existing_reason_match\[2\]/);
+  assert.match(schema, /position\(E'\\n' \|\| v_existing_reason \|\| E'\\n' in E'\\n' \|\| coalesce\(new\.notes, ''\) \|\| E'\\n'\) = 0/);
+  assert.match(schema, /raise exception 'paid order cancellation evidence is immutable'/);
+  assert.match(adminOrderRoute, /cancellation evidence is immutable/);
+  assert.match(adminOrderRoute, /The original paid-order cancellation reason is immutable/);
+});
+
 test('terminal failed payment states cannot be reopened by a later paid event', () => {
   // A delayed payment is allowed to progress from awaiting_payment to paid.
   // Once Stripe has sent async_payment_failed (or an expiry closed that

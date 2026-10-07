@@ -345,12 +345,41 @@ language plpgsql
 security invoker
 set search_path = public
 as $$
+declare
+  v_existing_reason text;
+  v_existing_reason_match text[];
 begin
   if old.payment_status = 'paid'
     and old.fulfilment_status <> 'cancelled'
     and new.fulfilment_status = 'cancelled'
     and coalesce(new.notes, '') !~ '(^|\n)Cancellation reason: .{5,500}$' then
     raise exception 'paid order cancellation reason is required';
+  end if;
+
+  -- The reason is financial reconciliation evidence, not ordinary editable
+  -- notes. Once a paid order is cancelled, retain the exact original line so
+  -- a later service-role repair or same-state admin save cannot rewrite why
+  -- revenue was cancelled while still satisfying the shape constraint below.
+  -- Additional support notes remain recordable before the evidence line.
+  if old.payment_status = 'paid'
+    and old.fulfilment_status = 'cancelled'
+    and new.notes is distinct from old.notes then
+    -- `regexp_matches` returns the full capture array; use a direct
+    -- array lookup here rather than interpolating operator-authored text into
+    -- another regular expression.
+    select match into v_existing_reason_match
+    from regexp_matches(
+      coalesce(old.notes, ''),
+      '(^|\n)(Cancellation reason: [^[:cntrl:]]{5,500})$',
+      'g'
+    ) as matches(match)
+    limit 1;
+    v_existing_reason := v_existing_reason_match[2];
+
+    if v_existing_reason is not null
+      and position(E'\n' || v_existing_reason || E'\n' in E'\n' || coalesce(new.notes, '') || E'\n') = 0 then
+      raise exception 'paid order cancellation evidence is immutable';
+    end if;
   end if;
   return new;
 end;
