@@ -79,11 +79,12 @@ function optionalTravelDates(body: Record<string, unknown>) {
 async function paidOrderGrossForPeriod(db: ReturnType<typeof getSupabaseAdmin>, start: string, end: string) {
   if (!db) throw new Error('Database unavailable');
   let grossCents = 0;
-  let offset = 0;
+  let afterId: number | null = null;
+  let loaded = 0;
   for (;;) {
-    const { data: orders, error } = await db
+    let query = db
       .from('orders')
-      .select('amount_sgd')
+      .select('id,amount_sgd')
       .eq('payment_status', 'paid')
       // Checkout can be opened on one accounting day and settle on another
       // (notably for asynchronous methods). A period close is a cash-sales
@@ -91,10 +92,16 @@ async function paidOrderGrossForPeriod(db: ReturnType<typeof getSupabaseAdmin>, 
       // confirmation boundary rather than when the draft order was created.
       .gte('payment_confirmed_at', `${start}T00:00:00+08:00`)
       .lte('payment_confirmed_at', `${end}T23:59:59+08:00`)
-      .range(offset, offset + CLOSING_ORDER_PAGE_SIZE - 1);
+      // Page on the immutable primary key. Offset pages without a stable
+      // identity can overlap or skip rows when webhook settlements arrive
+      // while an operator is preparing the close.
+      .order('id')
+      .limit(CLOSING_ORDER_PAGE_SIZE);
+    if (afterId !== null) query = query.gt('id', afterId);
+    const { data: orders, error } = await query;
     if (error) throw error;
     const page = orders || [];
-    for (const order of page as { amount_sgd: unknown }[]) {
+    for (const order of page as { id: unknown; amount_sgd: unknown }[]) {
       const amountCents = nonNegativeMoney(order.amount_sgd);
       // This is the source ledger for an accounting close. A malformed
       // service-role import must not be silently coerced to zero or rounded
@@ -106,8 +113,11 @@ async function paidOrderGrossForPeriod(db: ReturnType<typeof getSupabaseAdmin>, 
       }
     }
     if (page.length < CLOSING_ORDER_PAGE_SIZE) return grossCents / 100;
-    offset += page.length;
-    if (offset >= MAX_CLOSING_ORDERS) {
+    const nextId = positiveSafeInteger(page[page.length - 1]?.id);
+    if (nextId === null || nextId === afterId) throw new Error('Paid-order ledger returned an invalid pagination cursor');
+    afterId = nextId;
+    loaded += page.length;
+    if (loaded >= MAX_CLOSING_ORDERS) {
       throw new Error(`Sales period has ${MAX_CLOSING_ORDERS.toLocaleString()} or more paid orders. Close it from the audited reporting workflow before recording this period.`);
     }
   }

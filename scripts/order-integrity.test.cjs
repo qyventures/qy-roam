@@ -1748,16 +1748,21 @@ test('admin operational mutations bound and validate their JSON request bodies',
   assert.doesNotMatch(adminOpsRoute, /await req\.json\(\)/);
 });
 
-test('admin sales-period close totals every Supabase page instead of silently using its row cap', () => {
+test('admin sales-period close totals stable keyset pages instead of silently using its row cap', () => {
   assert.match(adminOpsRoute, /async function paidOrderGrossForPeriod/);
   assert.match(adminOpsRoute, /CLOSING_ORDER_PAGE_SIZE = 1_000/);
   assert.match(adminOpsRoute, /\.gte\('payment_confirmed_at', `\$\{start\}T00:00:00\+08:00`\)/);
   assert.match(adminOpsRoute, /\.lte\('payment_confirmed_at', `\$\{end\}T23:59:59\+08:00`\)/);
   assert.doesNotMatch(adminOpsRoute, /\.gte\('created_at', `\$\{start\}T00:00:00\+08:00`\)/);
   assert.match(schema, /create index if not exists orders_paid_payment_confirmed_at_idx\s+on public\.orders\(payment_confirmed_at desc\)\s+where payment_status = 'paid'/);
-  assert.match(adminOpsRoute, /\.range\(offset, offset \+ CLOSING_ORDER_PAGE_SIZE - 1\)/);
+  assert.match(adminOpsRoute, /\.select\('id,amount_sgd'\)/);
+  assert.match(adminOpsRoute, /\.order\('id'\)\s*\.limit\(CLOSING_ORDER_PAGE_SIZE\)/);
+  assert.match(adminOpsRoute, /query = query\.gt\('id', afterId\)/);
+  assert.match(adminOpsRoute, /positiveSafeInteger\(page\[page\.length - 1\]\?\.id\)/);
+  assert.match(adminOpsRoute, /Paid-order ledger returned an invalid pagination cursor/);
+  assert.doesNotMatch(adminOpsRoute, /\.range\(offset, offset \+ CLOSING_ORDER_PAGE_SIZE - 1\)/);
   assert.match(adminOpsRoute, /if \(page\.length < CLOSING_ORDER_PAGE_SIZE\) return gross/);
-  assert.match(adminOpsRoute, /if \(offset >= MAX_CLOSING_ORDERS\)/);
+  assert.match(adminOpsRoute, /if \(loaded >= MAX_CLOSING_ORDERS\)/);
   assert.match(adminOpsRoute, /await paidOrderGrossForPeriod\(db, dates\.start!, dates\.end!\)/);
   assert.match(adminOpsRoute, /Period dates must be valid ISO dates with the end date on or after the start date/);
 });
