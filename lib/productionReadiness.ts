@@ -25,7 +25,7 @@ const READINESS_PROBE_TIMEOUT_MS = 8_000;
 // probes cannot distinguish an old function body from the current one; this
 // explicit handshake prevents a rolling application deploy from accepting a
 // payment against stale database logic.
-const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 26;
+const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 27;
 const REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 6;
 let paymentSchemaReadyUntil = 0;
 let esimOrderSchemaReadyUntil = 0;
@@ -301,6 +301,21 @@ async function checkRequiredPaymentSchema() {
       }).abortSignal(signal);
       if (reservationProbe.error || reservationProbe.data?.[0]?.reserved !== false) {
         console.error('production_payment_reservation_rpc_check_failed');
+        return false;
+      }
+      // Resolve the exact atomic Stripe-link signature and service-role grant
+      // without touching inventory. A nonexistent request must return false;
+      // a missing/stale RPC must stop checkout before it creates a payable
+      // Session whose reservation cannot be safely attached.
+      const linkProbe = await supabase.rpc('qy_link_pocket_wifi_reservation', {
+        p_checkout_request_id: `readiness_${crypto.randomUUID().replaceAll('-', '')}`,
+        p_stripe_session_id: 'cs_test_readinessProbe',
+        p_travel_start: today,
+        p_travel_end: today,
+        p_expires_at: new Date(Date.now() + 60_000).toISOString(),
+      }).abortSignal(signal);
+      if (linkProbe.error || linkProbe.data !== false) {
+        console.error('production_payment_reservation_link_rpc_check_failed');
         return false;
       }
       // Probe the Stripe-to-inventory hand-off RPC inside a transaction that

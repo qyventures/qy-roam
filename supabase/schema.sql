@@ -1519,6 +1519,54 @@ $$;
 revoke all on function public.qy_reserve_pocket_wifi(text,date,date,integer,timestamptz,integer,text[]) from public;
 grant execute on function public.qy_reserve_pocket_wifi(text,date,date,integer,timestamptz,integer,text[]) to service_role;
 
+-- A Checkout URL becomes a payable inventory obligation only after its
+-- reservation is linked to the exact Stripe Session. Keep the identity,
+-- booking snapshot and live-expiry check in one database statement so a slow
+-- provider response or concurrent retry cannot attach a stale or different
+-- reservation immediately before the API exposes the payment capability.
+create or replace function public.qy_link_pocket_wifi_reservation(
+  p_checkout_request_id text,
+  p_stripe_session_id text,
+  p_travel_start date,
+  p_travel_end date,
+  p_expires_at timestamptz
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_linked text;
+begin
+  if p_checkout_request_id is null or p_checkout_request_id !~ '^[A-Za-z0-9_-]{16,80}$' then
+    raise exception 'invalid checkout request id';
+  end if;
+  if p_stripe_session_id is null or length(p_stripe_session_id) > 255
+    or p_stripe_session_id !~ '^cs_(test|live)_[A-Za-z0-9]+$' then
+    raise exception 'invalid Stripe session id';
+  end if;
+  if p_travel_start is null or p_travel_end is null or p_travel_end < p_travel_start
+    or p_expires_at is null then
+    raise exception 'invalid reservation snapshot';
+  end if;
+
+  update public.checkout_reservations
+  set stripe_session_id = p_stripe_session_id
+  where checkout_request_id = p_checkout_request_id
+    and travel_start = p_travel_start
+    and travel_end = p_travel_end
+    and expires_at = p_expires_at
+    and expires_at > clock_timestamp()
+    and (stripe_session_id is null or stripe_session_id = p_stripe_session_id)
+  returning checkout_request_id into v_linked;
+
+  return v_linked is not null;
+end;
+$$;
+revoke all on function public.qy_link_pocket_wifi_reservation(text,text,date,date,timestamptz) from public;
+grant execute on function public.qy_link_pocket_wifi_reservation(text,text,date,date,timestamptz) to service_role;
+
 -- Manual paid Pocket WiFi orders must share checkout's inventory boundary.
 -- Checking capacity in the admin API and then inserting separately would let
 -- two operators sell the final router at the same time. This function keeps
@@ -2031,7 +2079,9 @@ as $$
   -- writes. Version 24 additionally certifies the atomic eSIM delivery
   -- transition and its service-role-only execution boundary. Version 25
   -- certifies atomic, exact-idempotency creation for manual paid eSIM sales.
-  select 26;
+  -- Version 27 additionally certifies the atomic, live reservation-to-Stripe
+  -- payment-capability hand-off used before a Pocket WiFi URL is exposed.
+  select 27;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
