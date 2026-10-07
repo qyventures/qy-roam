@@ -22,7 +22,11 @@ export const runtime = 'nodejs';
 // worker before the request is rejected.
 const MAX_ADMIN_ORDER_BODY_BYTES = 8_192;
 const ADMIN_ORDER_BODY_TIMEOUT_MS = 15_000;
-const MAX_ORDER_NOTES_LENGTH = 1_000;
+// Manual sales can already carry up to 1,500 characters of source/support
+// context plus the application-authored payment reference. Leave enough room
+// to append required cancellation evidence without deleting that audit trail.
+// The database RPCs and table constraint enforce the same cap.
+const MAX_ORDER_NOTES_LENGTH = 2_500;
 
 function trackingValue(value: unknown, existing: string | null) {
   // Keep an already-recorded reference when an older admin client submits no
@@ -53,10 +57,10 @@ function notesWithCancellationReason(existing: unknown, reason: string) {
   const evidence = `Cancellation reason: ${reason}`;
   const previous = typeof existing === 'string' ? existing.trim() : '';
   if (!previous) return evidence;
-  // The order ledger bounds notes at 1,000 characters. Keep the new audit
-  // evidence complete and retain as much earlier context as the field allows.
-  const retained = previous.slice(0, Math.max(0, 1000 - evidence.length - 1)).trimEnd();
-  return retained ? `${retained}\n${evidence}` : evidence;
+  // Cancellation is a financial reconciliation boundary. Never silently
+  // discard payment/source or support context merely to make the evidence
+  // fit; reject an unexpectedly oversized legacy row below instead.
+  return `${previous}\n${evidence}`;
 }
 
 function pocketWifiTransitionError(message: string) {
@@ -177,6 +181,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     return NextResponse.json({ error: 'Enter a cancellation reason of 5–500 characters so the paid order can be reconciled.' }, { status: 400 });
   }
   const cancellationNotes = cancelReason ? notesWithCancellationReason(existing.data.notes, cancelReason) : null;
+  if (cancellationNotes && cancellationNotes.length > MAX_ORDER_NOTES_LENGTH) {
+    return NextResponse.json({ error: `The existing order notes leave no safe room for cancellation evidence. Reconcile them to ${MAX_ORDER_NOTES_LENGTH.toLocaleString()} characters or fewer without deleting audit context, then try again.` }, { status: 409 });
+  }
   // Courier and receipt references are custody evidence, not editable order
   // notes. Once the corresponding physical boundary has been crossed, a
   // later lifecycle save must not replace the evidence staff used to hand

@@ -243,25 +243,29 @@ test('Pocket WiFi custody references remain exact, single-line audit evidence', 
   assert.match(schema, /trim\(p_return_tracking\) ~ '\[\[:cntrl:\]\]'/);
 });
 
-test('admin fulfilment notes are rejected rather than silently truncated', () => {
-  assert.match(adminOrderRoute, /const MAX_ORDER_NOTES_LENGTH = 1_000/);
+test('admin fulfilment notes and cancellation evidence are rejected rather than silently truncated', () => {
+  assert.match(adminOrderRoute, /const MAX_ORDER_NOTES_LENGTH = 2_500/);
   assert.match(adminOrderRoute, /Object\.prototype\.hasOwnProperty\.call\(body, 'notes'\)/);
   assert.match(adminOrderRoute, /body\.notes\.length > MAX_ORDER_NOTES_LENGTH/);
   assert.match(adminOrderRoute, /p_notes: cancellationNotes \|\| submittedNotes/);
   assert.doesNotMatch(adminOrderRoute, /body\.notes\.slice\(0, 1000\)/);
+  assert.doesNotMatch(adminOrderRoute, /previous\.slice\(/);
+  assert.match(adminOrderRoute, /return `\$\{previous\}\\n\$\{evidence\}`/);
+  assert.match(adminOrderRoute, /cancellationNotes\.length > MAX_ORDER_NOTES_LENGTH/);
+  assert.match(schema, /orders_notes_shape_check check \(\s*notes is null or \(length\(notes\) <= 2500 and position\(chr\(0\) in notes\) = 0\)/);
 
   const esimTransition = schema.slice(
     schema.indexOf('create or replace function public.qy_transition_esim_order'),
     schema.indexOf('-- Cancelling fulfilment does not reverse an immutable paid transaction.'),
   );
-  assert.match(esimTransition, /length\(p_notes\) > 1000/);
+  assert.match(esimTransition, /length\(p_notes\) > 2500/);
   assert.match(esimTransition, /position\(chr\(0\) in p_notes\) > 0/);
 
   const pocketWifiTransition = schema.slice(
     schema.indexOf('create or replace function public.qy_transition_pocket_wifi_order'),
     schema.indexOf('-- Presence/signature probes cannot distinguish older inventory RPC bodies.'),
   );
-  assert.match(pocketWifiTransition, /length\(p_notes\) > 1000/);
+  assert.match(pocketWifiTransition, /length\(p_notes\) > 2500/);
   assert.match(pocketWifiTransition, /position\(chr\(0\) in p_notes\) > 0/);
   assert.match(pocketWifiTransition, /notes = case when p_notes is null then notes else p_notes end/);
   assert.doesNotMatch(pocketWifiTransition, /notes = case when p_notes is null then notes else left\(p_notes, 1000\) end/);
