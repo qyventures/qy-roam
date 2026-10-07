@@ -85,6 +85,19 @@ function pocketWifiTransitionError(message: string) {
   return null;
 }
 
+function esimTransitionError(message: string) {
+  if (/changed since it was loaded/i.test(message)) {
+    return { status: 409, error: 'Order changed since it was loaded. Refresh before updating it.' };
+  }
+  if (/delivery reference is required/i.test(message)) {
+    return { status: 409, error: 'A delivery reference is required before marking this eSIM order fulfilled.' };
+  }
+  if (/invalid eSIM fulfilment transition|only paid eSIM orders can be transitioned here|order not found/i.test(message)) {
+    return { status: 409, error: 'This eSIM order can no longer make the requested transition. Refresh before updating it.' };
+  }
+  return null;
+}
+
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
   const supabase = getSupabaseAdmin();
   if (!supabase) return NextResponse.json({ error: 'Order database not configured' }, { status: 503 });
@@ -227,34 +240,24 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     return NextResponse.json({ id: order.id, fulfilment_status: order.fulfilment_status }, { headers: { 'Cache-Control': 'no-store' } });
   }
 
-  const patch: Record<string, any> = {
-    fulfilment_status: status,
-    updated_at: new Date().toISOString(),
-  };
-  if (typeof body.digital_delivery_reference === 'string') patch.digital_delivery_reference = deliveryReference || null;
-  if (typeof body.notes === 'string') patch.notes = body.notes.slice(0, 1000);
-  if (cancellationNotes) patch.notes = cancellationNotes;
-  if (status === 'dispatched' && !existing.data.dispatched_at) patch.dispatched_at = new Date().toISOString();
-  if (status === 'returned' && !existing.data.returned_at) patch.returned_at = new Date().toISOString();
-
-  // Keep validation and persistence optimistic: another operator may advance
-  // the order after the read above. Updating only the state we validated
-  // prevents a stale browser from moving a returned/closed order backwards.
-  const { data, error } = await supabase.from('orders')
-    .update(patch)
-    .eq('id', id)
-    .eq('payment_status', 'paid')
-    .eq('fulfilment_status', existing.data.fulfilment_status)
-    .select('id,fulfilment_status')
-    .maybeSingle();
-  if (error) return NextResponse.json({ error: 'Unable to update order' }, { status: 500 });
-  if (!data) {
-    return NextResponse.json({ error: 'Order changed since it was loaded. Refresh before updating it.' }, {
-      status: 409,
-      headers: { 'Cache-Control': 'no-store' },
-    });
+  // A digital hand-off is irreversible. Bind the paid-order check, expected
+  // state, lifecycle edge and audit reference under one database row lock.
+  const { data, error } = await supabase.rpc('qy_transition_esim_order', {
+    p_order_id: id,
+    p_expected_status: existing.data.fulfilment_status,
+    p_next_status: status,
+    p_digital_delivery_reference: typeof body.digital_delivery_reference === 'string' ? deliveryReference || null : null,
+    p_notes: cancellationNotes || (typeof body.notes === 'string' ? body.notes.slice(0, 1000) : null),
+  });
+  if (error) {
+    const transitionError = esimTransitionError(error.message || '');
+    if (transitionError) return NextResponse.json({ error: transitionError.error }, { status: transitionError.status });
+    console.error('admin_esim_transition_error');
+    return NextResponse.json({ error: 'Unable to update order. Please try again or contact an administrator.' }, { status: 500 });
   }
-  return NextResponse.json(data, { headers: { 'Cache-Control': 'no-store' } });
+  const order = Array.isArray(data) ? data[0] : data;
+  if (!order?.id) return NextResponse.json({ error: 'Unable to update order' }, { status: 500 });
+  return NextResponse.json({ id: order.id, fulfilment_status: order.fulfilment_status }, { headers: { 'Cache-Control': 'no-store' } });
 }
 
 // Stripe retries delivery failures for a finite window. This protected recovery

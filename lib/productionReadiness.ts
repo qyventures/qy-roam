@@ -25,7 +25,7 @@ const READINESS_PROBE_TIMEOUT_MS = 8_000;
 // probes cannot distinguish an old function body from the current one; this
 // explicit handshake prevents a rolling application deploy from accepting a
 // payment against stale database logic.
-const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 23;
+const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 24;
 const REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 5;
 let paymentSchemaReadyUntil = 0;
 let esimOrderSchemaReadyUntil = 0;
@@ -413,6 +413,20 @@ async function checkRequiredEsimOrderSchema() {
       }).abortSignal(signal);
       if (!persistenceProbe.error || !/Stripe session id is required/i.test(persistenceProbe.error.message || '')) {
         console.error('production_esim_order_persistence_rpc_check_failed');
+        return false;
+      }
+      // Digital hand-off must remain atomic after payment as well as during
+      // webhook persistence. Probe the exact transition signature and grant
+      // with an impossible id, without changing operational data.
+      const transitionProbe = await database.rpc('qy_transition_esim_order', {
+        p_order_id: 0,
+        p_expected_status: 'awaiting_fulfilment',
+        p_next_status: 'awaiting_fulfilment',
+        p_digital_delivery_reference: null,
+        p_notes: null,
+      }).abortSignal(signal);
+      if (!transitionProbe.error || !/order not found/i.test(transitionProbe.error.message || '')) {
+        console.error('production_esim_transition_rpc_check_failed');
         return false;
       }
       return true;

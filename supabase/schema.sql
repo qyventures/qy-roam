@@ -274,6 +274,67 @@ create trigger qy_enforce_esim_fulfilment_transition
 before insert or update of product_type, fulfilment_status on public.orders
 for each row execute function public.qy_enforce_esim_fulfilment_transition();
 
+-- Digital fulfilment is an irreversible credential hand-off. Keep the
+-- operator's expected state, paid-order check, transition and delivery audit
+-- pointer under one row lock, matching the atomic custody workflow used for
+-- Pocket WiFi. Application validation remains useful for immediate feedback;
+-- this function is the service-role authority when concurrent operators or
+-- recovery tools act on the same order.
+create or replace function public.qy_transition_esim_order(
+  p_order_id bigint,
+  p_expected_status text,
+  p_next_status text,
+  p_digital_delivery_reference text,
+  p_notes text
+)
+returns public.orders
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_order public.orders%rowtype;
+begin
+  if p_order_id is null or p_order_id < 1 then raise exception 'order not found'; end if;
+
+  select * into v_order from public.orders where id = p_order_id for update;
+  if not found then raise exception 'order not found'; end if;
+  if v_order.product_type <> 'esim' or v_order.payment_status <> 'paid' then
+    raise exception 'only paid eSIM orders can be transitioned here';
+  end if;
+  if v_order.fulfilment_status is distinct from p_expected_status then
+    raise exception 'order changed since it was loaded';
+  end if;
+  if not (
+    p_next_status = v_order.fulfilment_status or
+    (v_order.fulfilment_status = 'awaiting_fulfilment' and p_next_status in ('fulfilled', 'cancelled')) or
+    (v_order.fulfilment_status = 'fulfilled' and p_next_status = 'closed')
+  ) then
+    raise exception 'invalid eSIM fulfilment transition';
+  end if;
+
+  if p_next_status = 'fulfilled'
+    and coalesce(nullif(btrim(p_digital_delivery_reference), ''), v_order.digital_delivery_reference) is null then
+    raise exception 'eSIM delivery reference is required before fulfilment';
+  end if;
+
+  update public.orders set
+    fulfilment_status = p_next_status,
+    digital_delivery_reference = case
+      when p_digital_delivery_reference is not null then p_digital_delivery_reference
+      else digital_delivery_reference
+    end,
+    notes = case when p_notes is not null then p_notes else notes end,
+    updated_at = now()
+  where id = p_order_id
+  returning * into v_order;
+
+  return v_order;
+end;
+$$;
+revoke all on function public.qy_transition_esim_order(bigint,text,text,text,text) from public;
+grant execute on function public.qy_transition_esim_order(bigint,text,text,text,text) to service_role;
+
 -- Cancelling fulfilment does not reverse an immutable paid transaction. Keep
 -- an operator-authored reason in the durable order ledger so refunds and
 -- replacements can be reconciled later. Enforce this at the database edge as
@@ -1867,8 +1928,9 @@ as $$
   -- Version 22 additionally certifies exact Singapore postal codes for paid
   -- Stripe Pocket WiFi delivery records. Version 23 certifies that readiness
   -- rejects replica-only integrity triggers which are inert for application
-  -- writes.
-  select 23;
+  -- writes. Version 24 additionally certifies the atomic eSIM delivery
+  -- transition and its service-role-only execution boundary.
+  select 24;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
