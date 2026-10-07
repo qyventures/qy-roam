@@ -1397,7 +1397,7 @@ test('booking status requires a durable paid order before showing fulfilment pro
   // or unavailable order snapshot must not be rendered as the normal queued
   // fulfilment state.
   assert.match(bookingPage, /const orderLookupFailed = !supabase \|\| Boolean\(orderResult\?\.error\)/);
-  assert.match(bookingPage, /select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,fulfilment_status,/);
+  assert.match(bookingPage, /select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,fulfilment_status,/);
   assert.match(bookingPage, /const orderPersisted = durableOrderMatchesPaidSession\(storedOrder, session, productType\)/);
   assert.match(bookingPage, /paid && !orderLifecycleValid/);
   assert.match(bookingPage, /orderLookupFailed \? 'temporarily unable to verify' : 'still finalising'/);
@@ -1411,7 +1411,7 @@ test('success confirmation does not imply fulfilment is durable before the paid 
   assert.match(successPage, /getSupabaseAdmin/);
   assert.match(successPage, /let orderPersisted = false/);
   assert.match(successPage, /let orderLookupFailed = false/);
-  assert.match(successPage, /select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end'\)/);
+  assert.match(successPage, /select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent'\)/);
   assert.match(successPage, /orderPersisted = durableOrderMatchesPaidSession\(orderResult\.data, session, productType\)/);
   assert.match(successPage, /orderPersisted \? 'Order confirmed' : 'Payment confirmed'/);
   assert.match(successPage, /Please do not place a second order/);
@@ -5343,12 +5343,15 @@ test('Pocket WiFi availability fails closed when its exact committed-order count
 test('customer confirmation trusts only the durable order snapshot matching Stripe', () => {
   const esimSession = {
     id: 'cs_live_paidEsimSnapshot123',
+    livemode: true,
     mode: 'payment',
     status: 'complete',
     payment_status: 'paid',
     currency: 'sgd',
     amount_total: 1290,
     metadata: {
+      product_type: 'esim',
+      measurement_consent: 'essential',
       plan_id: 'jp-7d',
       plan_name: 'Japan · 7 days',
       data_allowance: '10 GB',
@@ -5366,6 +5369,7 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
     country: 'Japan',
     travel_start: null,
     travel_end: null,
+    measurement_consent: 'essential',
   };
   assert.equal(durableOrderMatchesPaidSession(esimOrder, esimSession, 'esim'), true);
   // Supabase/PostgREST can return a PostgreSQL numeric as a JSON number.
@@ -5387,6 +5391,8 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
     { currency: 'usd' },
     { currency: null },
     { amount_total: 0 },
+    { livemode: false },
+    { metadata: { ...esimSession.metadata, product_type: 'pocket_wifi' } },
   ]) {
     assert.equal(durableOrderMatchesPaidSession(
       { ...esimOrder, ...(sessionPatch.amount_total === 0 ? { amount_sgd: 0 } : {}) },
@@ -5448,18 +5454,22 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
     { country: 'South Korea' },
     { travel_start: '2026-10-10' },
     { travel_end: '2026-10-12' },
+    { measurement_consent: 'accepted' },
   ]) {
     assert.equal(durableOrderMatchesPaidSession({ ...esimOrder, ...patch }, esimSession, 'esim'), false);
   }
 
   const wifiSession = {
     id: 'cs_live_paidWifiSnapshot123',
+    livemode: true,
     mode: 'payment',
     status: 'complete',
     payment_status: 'paid',
     currency: 'sgd',
     amount_total: 552,
     metadata: {
+      product_type: 'pocket_wifi',
+      measurement_consent: 'accepted',
       plan_name: 'Japan Pocket WiFi',
       country: 'Japan',
       start: '2026-10-10',
@@ -5477,6 +5487,7 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
     country: 'Japan',
     travel_start: '2026-10-10',
     travel_end: '2026-10-12',
+    measurement_consent: 'accepted',
   };
   assert.equal(durableOrderMatchesPaidSession(wifiOrder, wifiSession, 'pocket_wifi'), true);
   assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, plan_id: 'jp-7d' }, wifiSession, 'pocket_wifi'), false);
@@ -5489,7 +5500,7 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
 
   for (const page of [successPage, bookingPage]) {
     assert.match(page, /durableOrderMatchesPaidSession\(/);
-    assert.match(page, /stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end/);
+    assert.match(page, /stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent/);
   }
   assert.match(successPage, /<MetaPurchase sessionId=\{sessionId\} orderPersisted=\{orderPersisted\}/);
   assert.match(bookingPage, /const order = orderLifecycleValid \? storedOrder : null/);
@@ -5502,7 +5513,7 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
 test('paid checkout replays require the same exact durable commercial snapshot as confirmation', () => {
   for (const route of [esimCheckoutRoute, wifiCheckoutRoute]) {
     assert.match(route, /import \{ durableOrderMatchesPaidSession \} from '@\/lib\/durableOrderSnapshot';/);
-    assert.match(route, /select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end'\)/);
+    assert.match(route, /select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent'\)/);
   }
   assert.match(esimCheckoutRoute, /!durableOrderMatchesPaidSession\(order\.data, currentSession, 'esim'\)/);
   assert.match(wifiCheckoutRoute, /durableOrderMatchesPaidSession\(order\.data,currentSession,'pocket_wifi'\)/);

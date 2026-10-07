@@ -1,7 +1,7 @@
 import type Stripe from 'stripe';
 import type { QyRoamProductType } from './qyRoamSession';
 import { getEsimPlan } from './esimPlans';
-import { validStripeCheckoutSessionId } from './stripeSessionId';
+import { validStripeCheckoutSessionIdForMode } from './stripeSessionId';
 
 export type DurableOrderSnapshot = {
   stripe_session_id?: unknown;
@@ -14,6 +14,7 @@ export type DurableOrderSnapshot = {
   country?: unknown;
   travel_start?: unknown;
   travel_end?: unknown;
+  measurement_consent?: unknown;
 };
 
 function sgdCents(value: unknown) {
@@ -52,9 +53,14 @@ export function durableOrderMatchesPaidSession(
   // QY Roam fulfilment or customer confirmation. This is especially important
   // for admin recovery, where a successful match can trigger external email
   // and analytics side effects.
-  const sessionId = validStripeCheckoutSessionId(session.id);
+  const sessionId = validStripeCheckoutSessionIdForMode(session.id, session.livemode);
+  const expectedMeasurementConsent = session.metadata?.measurement_consent === 'accepted'
+    ? 'accepted'
+    : 'essential';
   if (!order || !sessionId || order.stripe_session_id !== sessionId ||
     order.payment_status !== 'paid' || order.product_type !== productType ||
+    session.metadata?.product_type !== productType ||
+    order.measurement_consent !== expectedMeasurementConsent ||
     session.mode !== 'payment' || session.status !== 'complete' || session.payment_status !== 'paid' ||
     session.currency?.toLowerCase() !== 'sgd' ||
     typeof session.amount_total !== 'number' || !Number.isSafeInteger(session.amount_total) || session.amount_total <= 0 ||
