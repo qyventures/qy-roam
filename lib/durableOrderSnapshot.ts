@@ -75,9 +75,19 @@ export function durableOrderMatchesPaidSession(
     const expectedDataAllowance = session.metadata?.data_allowance ??
       getEsimPlan(session.metadata?.plan_id)?.data ?? null;
     return order.plan_id === (session.metadata?.plan_id || null) &&
-      order.data_allowance === expectedDataAllowance;
+      order.data_allowance === expectedDataAllowance &&
+      // Stripe eSIM checkout never creates a physical rental period. Keep
+      // product-inapplicable fields in this exact durable join as well: a
+      // service-role import or repair with stray travel dates must not unlock
+      // customer confirmation or admin delivery recovery as though it were
+      // the row persisted from this digital Checkout Session.
+      order.travel_start === null && order.travel_end === null;
   }
 
   return order.travel_start === (session.metadata?.start || null) &&
-    order.travel_end === (session.metadata?.end || null);
+    order.travel_end === (session.metadata?.end || null) &&
+    // Pocket WiFi has no digital package entitlement. Reject a cross-product
+    // or partially repaired row instead of silently ignoring those fields at
+    // the paid-order authority boundary.
+    order.plan_id === null && order.data_allowance === null;
 }

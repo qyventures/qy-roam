@@ -164,6 +164,22 @@ alter table public.orders add constraint orders_esim_plan_identity_shape_check c
   )
 ) not valid;
 
+-- Stripe-paid rows must not combine the commercial identities of the two
+-- products. The application persists eSIM Checkout orders without rental
+-- dates and Pocket WiFi orders without digital plan/allowance fields; keeping
+-- that separation in Postgres prevents a privileged import or repair from
+-- creating a hybrid row that customer confirmation or fulfilment recovery
+-- could mistake for the exact webhook snapshot. Manual eSIM sales may retain
+-- their operator-recorded travel dates, so scope that half to canonical
+-- Stripe Checkout identities. NOT VALID preserves review access to legacy
+-- rows while protecting every new or changed order immediately.
+alter table public.orders drop constraint if exists orders_stripe_product_snapshot_separation_check;
+alter table public.orders add constraint orders_stripe_product_snapshot_separation_check check (
+  stripe_session_id !~ '^cs_(test|live)_[A-Za-z0-9]+$' or
+  (product_type = 'esim' and travel_start is null and travel_end is null) or
+  (product_type = 'pocket_wifi' and plan_id is null and data_allowance is null)
+) not valid;
+
 -- eSIM credentials must never be stored as a delivery "reference". Keep a
 -- database backstop for direct operational writes as well as the stricter
 -- application validation; NOT VALID preserves review access to any legacy

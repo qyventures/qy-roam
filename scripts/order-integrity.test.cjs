@@ -5446,6 +5446,8 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
     { plan_name: 'Japan · 15 days' },
     { data_allowance: '5 GB' },
     { country: 'South Korea' },
+    { travel_start: '2026-10-10' },
+    { travel_end: '2026-10-12' },
   ]) {
     assert.equal(durableOrderMatchesPaidSession({ ...esimOrder, ...patch }, esimSession, 'esim'), false);
   }
@@ -5477,6 +5479,8 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
     travel_end: '2026-10-12',
   };
   assert.equal(durableOrderMatchesPaidSession(wifiOrder, wifiSession, 'pocket_wifi'), true);
+  assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, plan_id: 'jp-7d' }, wifiSession, 'pocket_wifi'), false);
+  assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, data_allowance: '10 GB' }, wifiSession, 'pocket_wifi'), false);
   assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, travel_end: '2026-10-13' }, wifiSession, 'pocket_wifi'), false);
   assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, amount_sgd: 'not-money' }, wifiSession, 'pocket_wifi'), false);
   assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, amount_sgd: 5.521 }, wifiSession, 'pocket_wifi'), false);
@@ -5489,6 +5493,10 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
   }
   assert.match(successPage, /<MetaPurchase sessionId=\{sessionId\} orderPersisted=\{orderPersisted\}/);
   assert.match(bookingPage, /const order = orderLifecycleValid \? storedOrder : null/);
+
+  assert.match(schema, /orders_stripe_product_snapshot_separation_check/);
+  assert.match(schema, /product_type = 'esim' and travel_start is null and travel_end is null/);
+  assert.match(schema, /product_type = 'pocket_wifi' and plan_id is null and data_allowance is null/);
 });
 
 test('paid checkout replays require the same exact durable commercial snapshot as confirmation', () => {
