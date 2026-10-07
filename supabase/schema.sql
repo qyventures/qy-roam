@@ -2537,8 +2537,21 @@ begin
           updated_at = v_now
       where id = v_item_id;
     else
+      -- The inventory register permits one row to represent a batch of
+      -- interchangeable routers. Dispatch already removed this returned unit
+      -- from quantity_on_hand. If other units remain in the same available
+      -- batch, changing the row status would incorrectly quarantine every one
+      -- of them and make healthy stock disappear from checkout. Preserve the
+      -- batch's saleable status in that case; the zero-quantity return
+      -- movement below is the audit record for the exceptional unit. A
+      -- depleted single-unit/batch row can safely carry the inspection state
+      -- itself until an operator deliberately clears it.
       update public.inventory_items
-      set status = case when v_return_disposition = 'damaged' then 'damaged' else 'quarantined' end,
+      set status = case
+            when quantity_on_hand = 0 then
+              case when v_return_disposition = 'damaged' then 'damaged' else 'quarantined' end
+            else status
+          end,
           updated_at = v_now
       where id = v_item_id;
     end if;
@@ -2579,9 +2592,9 @@ language sql
 immutable
 security definer
 set search_path = pg_catalog
--- Version 6 additionally certifies bounded opening stock, reorder levels,
--- unit costs and stock adjustments, including overflow-safe resulting stock.
-as $$ select 6; $$;
+-- Version 7 additionally certifies that a damaged/quarantined return from an
+-- aggregate stock row does not hide the other saleable routers in that row.
+as $$ select 7; $$;
 revoke all on function public.qy_pocket_wifi_fulfilment_schema_version() from public;
 grant execute on function public.qy_pocket_wifi_fulfilment_schema_version() to service_role;
 

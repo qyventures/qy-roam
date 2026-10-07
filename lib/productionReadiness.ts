@@ -26,7 +26,7 @@ const READINESS_PROBE_TIMEOUT_MS = 8_000;
 // explicit handshake prevents a rolling application deploy from accepting a
 // payment against stale database logic.
 const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 31;
-const REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 6;
+const REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 7;
 let paymentSchemaReadyUntil = 0;
 let esimOrderSchemaReadyUntil = 0;
 let operationsSchemaReadyUntil = 0;
