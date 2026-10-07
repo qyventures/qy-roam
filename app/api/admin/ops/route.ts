@@ -53,6 +53,20 @@ function nonNegativeInteger(value: unknown) {
   return Number.isSafeInteger(parsed) && parsed <= 1_000_000 ? parsed : null;
 }
 
+function signedNonZeroInteger(value: unknown) {
+  const raw = typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
+  if (!/^-?\d+$/.test(raw)) return null;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) && parsed !== 0 && Math.abs(parsed) <= 1_000_000 ? parsed : null;
+}
+
+function positiveSafeInteger(value: unknown) {
+  const raw = typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
+  if (!/^\d+$/.test(raw)) return null;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 function optionalTravelDates(body: Record<string, unknown>) {
   const startRaw = text(body.travel_start, 10);
   const endRaw = text(body.travel_end, 10);
@@ -237,11 +251,22 @@ export async function POST(req: NextRequest) {
         }
       }
     } else if (action === 'inventory_create') {
+      const quantityOnHand = nonNegativeInteger(body.quantity_on_hand);
+      const reorderLevel = nonNegativeInteger(body.reorder_level);
+      const unitCostCents = nonNegativeMoney(body.unit_cost_sgd);
+      const productType = text(body.product_type, 40) || 'pocket_wifi';
+      const status = text(body.status, 40).toLowerCase() || 'available';
+      if (quantityOnHand === null || reorderLevel === null || unitCostCents === null) {
+        return NextResponse.json({ error: 'Stock and reorder quantities must be whole non-negative numbers; unit cost must be a non-negative amount with at most two decimal places' }, { status: 400 });
+      }
+      if (!['pocket_wifi', 'esim'].includes(productType) || !['available', 'quarantined', 'damaged', 'maintenance'].includes(status)) {
+        return NextResponse.json({ error: 'Choose a valid inventory product type and status' }, { status: 400 });
+      }
       const row = {
-        sku: text(body.sku, 80), name: text(body.name, 120), product_type: text(body.product_type, 40) || 'pocket_wifi',
-        serial_no: text(body.serial_no, 120) || null, status: text(body.status, 40) || 'available',
-        quantity_on_hand: Math.max(0, int(body.quantity_on_hand)), reorder_level: Math.max(0, int(body.reorder_level)),
-        unit_cost_sgd: Math.max(0, num(body.unit_cost_sgd)), location: text(body.location, 120) || null, notes: text(body.notes, 1000) || null,
+        sku: text(body.sku, 80), name: text(body.name, 120), product_type: productType,
+        serial_no: text(body.serial_no, 120) || null, status,
+        quantity_on_hand: quantityOnHand, reorder_level: reorderLevel,
+        unit_cost_sgd: unitCostCents / 100, location: text(body.location, 120) || null, notes: text(body.notes, 1000) || null,
         updated_at: new Date().toISOString()
       };
       if (!row.sku || !row.name) return NextResponse.json({ error: 'SKU and name are required' }, { status: 400 });
@@ -266,12 +291,15 @@ export async function POST(req: NextRequest) {
     } else if (action === 'inventory_adjust') {
       const movementType = text(body.movement_type, 40).toLowerCase() || 'adjustment';
       const reference = text(body.reference, 120);
+      const itemId = positiveSafeInteger(body.item_id);
+      const delta = signedNonZeroInteger(body.delta);
+      if (!itemId || delta === null) return NextResponse.json({ error: 'Choose an inventory item and enter a non-zero whole-number quantity change' }, { status: 400 });
       // Dispatch and return are not generic stock adjustments: they must
       // remain tied to a paid order, assigned device and courier/receipt
       // evidence through the guarded order lifecycle.
       if (['dispatch', 'return'].includes(movementType)) return NextResponse.json({ error: 'Use the Pocket WiFi order workflow to record dispatches and returns' }, { status: 400 });
       if (!reference) return NextResponse.json({ error: 'An inventory adjustment reference is required' }, { status: 400 });
-      const { error } = await db.rpc('qy_adjust_inventory', { p_item_id: int(body.item_id), p_delta: int(body.delta), p_type: movementType, p_reference: reference, p_notes: text(body.notes, 1000) || null }); if (error) throw error;
+      const { error } = await db.rpc('qy_adjust_inventory', { p_item_id: itemId, p_delta: delta, p_type: movementType, p_reference: reference, p_notes: text(body.notes, 1000) || null }); if (error) throw error;
     } else if (action === 'inventory_status') {
       const itemId = int(body.item_id);
       const status = text(body.status, 40).toLowerCase();

@@ -2125,9 +2125,9 @@ begin
   if nullif(trim(coalesce(p_name, '')), '') is null then raise exception 'inventory name is required'; end if;
   if v_product_type not in ('pocket_wifi', 'esim') then raise exception 'invalid inventory product type'; end if;
   if v_status not in ('available', 'quarantined', 'damaged', 'maintenance') then raise exception 'invalid inventory status'; end if;
-  if p_quantity_on_hand is null or p_quantity_on_hand < 0 then raise exception 'inventory quantity cannot be negative'; end if;
-  if p_reorder_level is null or p_reorder_level < 0 then raise exception 'inventory reorder level cannot be negative'; end if;
-  if p_unit_cost_sgd is null or p_unit_cost_sgd < 0 then raise exception 'inventory unit cost cannot be negative'; end if;
+  if p_quantity_on_hand is null or p_quantity_on_hand < 0 or p_quantity_on_hand > 1000000 then raise exception 'inventory quantity is out of range'; end if;
+  if p_reorder_level is null or p_reorder_level < 0 or p_reorder_level > 1000000 then raise exception 'inventory reorder level is out of range'; end if;
+  if p_unit_cost_sgd is null or p_unit_cost_sgd < 0 or p_unit_cost_sgd > 100000 then raise exception 'inventory unit cost is out of range'; end if;
 
   insert into public.inventory_items (
     sku, name, product_type, serial_no, status, quantity_on_hand, reorder_level,
@@ -2170,7 +2170,7 @@ declare
   v_item public.inventory_items%rowtype;
 begin
   if p_item_id is null or p_item_id < 1 then raise exception 'invalid inventory item'; end if;
-  if p_delta is null or p_delta = 0 then raise exception 'inventory adjustment must not be zero'; end if;
+  if p_delta is null or p_delta = 0 or abs(p_delta::bigint) > 1000000 then raise exception 'inventory adjustment is out of range'; end if;
   if coalesce(length(trim(p_type)), 0) = 0 then raise exception 'movement type is required'; end if;
   if lower(trim(p_type)) in ('dispatch', 'return') then
     raise exception 'dispatches and returns must be recorded through the Pocket WiFi order workflow';
@@ -2193,8 +2193,8 @@ begin
   ) then
     raise exception 'inventory item is assigned to an active Pocket WiFi custody order';
   end if;
-  if v_item.quantity_on_hand + p_delta < 0 then
-    raise exception 'inventory quantity cannot be negative';
+  if v_item.quantity_on_hand::bigint + p_delta::bigint < 0 or v_item.quantity_on_hand::bigint + p_delta::bigint > 1000000 then
+    raise exception 'inventory quantity is out of range';
   end if;
 
   update public.inventory_items
@@ -2440,7 +2440,9 @@ language sql
 immutable
 security definer
 set search_path = pg_catalog
-as $$ select 5; $$;
+-- Version 6 additionally certifies bounded opening stock, reorder levels,
+-- unit costs and stock adjustments, including overflow-safe resulting stock.
+as $$ select 6; $$;
 revoke all on function public.qy_pocket_wifi_fulfilment_schema_version() from public;
 grant execute on function public.qy_pocket_wifi_fulfilment_schema_version() to service_role;
 

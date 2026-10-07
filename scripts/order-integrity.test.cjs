@@ -3375,6 +3375,23 @@ test('generic inventory adjustments cannot bypass the Pocket WiFi hand-off and i
   assert.match(adminOpsForms, /name="reference" placeholder="Inspection \/ repair reference" required/);
 });
 
+test('admin inventory quantities and costs fail closed instead of being silently coerced', () => {
+  assert.match(adminOpsRoute, /function signedNonZeroInteger\(value: unknown\)/);
+  assert.match(adminOpsRoute, /function positiveSafeInteger\(value: unknown\)/);
+  assert.match(adminOpsRoute, /const quantityOnHand = nonNegativeInteger\(body\.quantity_on_hand\)/);
+  assert.match(adminOpsRoute, /const reorderLevel = nonNegativeInteger\(body\.reorder_level\)/);
+  assert.match(adminOpsRoute, /const unitCostCents = nonNegativeMoney\(body\.unit_cost_sgd\)/);
+  assert.match(adminOpsRoute, /const delta = signedNonZeroInteger\(body\.delta\)/);
+  assert.match(adminOpsRoute, /const itemId = positiveSafeInteger\(body\.item_id\)/);
+  assert.doesNotMatch(adminOpsRoute, /quantity_on_hand: Math\.max\(0, int\(/);
+  assert.doesNotMatch(adminOpsRoute, /p_delta: int\(body\.delta\)/);
+  assert.match(schema, /p_quantity_on_hand > 1000000/);
+  assert.match(schema, /p_reorder_level > 1000000/);
+  assert.match(schema, /p_unit_cost_sgd > 100000/);
+  assert.match(schema, /abs\(p_delta::bigint\) > 1000000/);
+  assert.match(schema, /v_item\.quantity_on_hand::bigint \+ p_delta::bigint > 1000000/);
+});
+
 test('generic inventory mutations cannot make a router saleable while it is in customer custody', () => {
   const activeCustodyGuard = /inventory_item_id = p_item_id[\s\S]{0,180}product_type = 'pocket_wifi'[\s\S]{0,180}fulfilment_status in \('dispatched', 'with_customer', 'return_due'\)/g;
   assert.equal(
@@ -3383,8 +3400,8 @@ test('generic inventory mutations cannot make a router saleable while it is in c
     'both quantity adjustments and status changes must reject assigned in-custody routers',
   );
   assert.match(schema, /inventory item is assigned to an active Pocket WiFi custody order/);
-  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 5; \$\$/);
-  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 5/);
+  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 6; \$\$/);
+  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 6/);
   assert.match(productionReadiness, /database\.rpc\('qy_pocket_wifi_fulfilment_schema_version', \{\}\)/);
   assert.match(productionReadiness, /versionProbe\.data !== REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION/);
 });
@@ -3461,8 +3478,8 @@ test('Pocket WiFi inventory movements remain append-only audit evidence', () => 
     guard,
     /create trigger qy_enforce_inventory_movement_immutability[\s\S]*before update or delete on public\.inventory_movements/,
   );
-  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 5; \$\$/);
-  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 5/);
+  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 6; \$\$/);
+  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 6/);
 });
 
 test('Pocket WiFi stock can only be mutated through audited inventory RPCs', () => {
@@ -3487,8 +3504,8 @@ test('Pocket WiFi stock can only be mutated through audited inventory RPCs', () 
     const body = schema.slice(start, schema.indexOf('$$;', start) + 3);
     assert.match(body, /security definer/, `${rpc} must retain owner-authorized writes`);
   }
-  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 5; \$\$/);
-  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 5/);
+  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 6; \$\$/);
+  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 6/);
 });
 
 test('admin actions advance their transition baseline after each save', () => {
