@@ -1028,6 +1028,10 @@ alter table public.fulfilment_notifications add constraint fulfilment_notificati
 alter table public.fulfilment_notifications drop constraint if exists fulfilment_notifications_sent_at_check;
 alter table public.fulfilment_notifications add constraint fulfilment_notifications_sent_at_check
   check (status <> 'sent' or sent_at is not null) not valid;
+alter table public.fulfilment_notifications drop constraint if exists fulfilment_notifications_error_state_check;
+alter table public.fulfilment_notifications add constraint fulfilment_notifications_error_state_check check (
+  last_error is null or (status = 'pending' and attempts > 0)
+) not valid;
 -- A notification is an irreversible side effect of one durable order. The
 -- webhook persists the order before it creates this record, but retain that
 -- relationship in Postgres as well: a repair script or future worker must
@@ -1080,6 +1084,10 @@ alter table public.meta_purchase_deliveries add constraint meta_purchase_deliver
 alter table public.meta_purchase_deliveries drop constraint if exists meta_purchase_deliveries_sent_at_check;
 alter table public.meta_purchase_deliveries add constraint meta_purchase_deliveries_sent_at_check
   check (status <> 'sent' or sent_at is not null) not valid;
+alter table public.meta_purchase_deliveries drop constraint if exists meta_purchase_deliveries_error_state_check;
+alter table public.meta_purchase_deliveries add constraint meta_purchase_deliveries_error_state_check check (
+  last_error is null or (status = 'pending' and attempts > 0)
+) not valid;
 -- CAPI retries use this row as the durable Purchase-deduplication ledger.
 -- Keep it attached to the same authoritative order boundary as fulfilment
 -- notifications so an orphaned analytics record cannot be settled or retried
@@ -1111,7 +1119,7 @@ begin
   -- email that was never handed to the provider.
   if tg_op = 'INSERT' then
     if new.status <> 'pending' or new.attempts <> 0 or new.last_attempt_at is not null
-      or new.sent_at is not null then
+      or new.sent_at is not null or new.last_error is not null then
       raise exception 'new delivery ledger record must begin pending and unattempted';
     end if;
     return new;
@@ -1141,6 +1149,9 @@ begin
   end if;
   if new.status <> 'sent' and new.sent_at is not null then
     raise exception 'unfinished delivery cannot have a sent timestamp';
+  end if;
+  if new.last_error is not null and (new.status <> 'pending' or new.attempts <= 0) then
+    raise exception 'delivery failure requires a completed failed attempt';
   end if;
   return new;
 end;
@@ -1160,7 +1171,7 @@ as $$
 begin
   if tg_op = 'INSERT' then
     if new.status <> 'pending' or new.attempts <> 0 or new.last_attempt_at is not null
-      or new.sent_at is not null then
+      or new.sent_at is not null or new.last_error is not null then
       raise exception 'new delivery ledger record must begin pending and unattempted';
     end if;
     return new;
@@ -1190,6 +1201,9 @@ begin
   end if;
   if new.status <> 'sent' and new.sent_at is not null then
     raise exception 'unfinished delivery cannot have a sent timestamp';
+  end if;
+  if new.last_error is not null and (new.status <> 'pending' or new.attempts <= 0) then
+    raise exception 'delivery failure requires a completed failed attempt';
   end if;
   if old.event_time is not null and new.event_time is distinct from old.event_time then
     raise exception 'Meta Purchase event time is immutable after assignment';
@@ -1272,15 +1286,17 @@ as $$
       'fulfilment_notifications_status_check',
       'fulfilment_notifications_attempts_check',
       'fulfilment_notifications_sent_at_check',
+      'fulfilment_notifications_error_state_check',
       'fulfilment_notifications_order_fk'
-    )) = 4 and
+    )) = 5 and
     (select count(*) from pg_constraint where conrelid = 'public.meta_purchase_deliveries'::regclass and conname in (
       'meta_purchase_deliveries_status_check',
       'meta_purchase_deliveries_attempts_check',
       'meta_purchase_deliveries_event_time_check',
       'meta_purchase_deliveries_sent_at_check',
+      'meta_purchase_deliveries_error_state_check',
       'meta_purchase_deliveries_order_fk'
-    )) = 5 and
+    )) = 6 and
     -- This table is defined just after the readiness function on a clean
     -- install. Resolve it softly here so function creation remains additive;
     -- the completed migration cannot report ready until the table and both
@@ -2015,7 +2031,7 @@ as $$
   -- writes. Version 24 additionally certifies the atomic eSIM delivery
   -- transition and its service-role-only execution boundary. Version 25
   -- certifies atomic, exact-idempotency creation for manual paid eSIM sales.
-  select 25;
+  select 26;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
