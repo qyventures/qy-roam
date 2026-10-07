@@ -258,7 +258,11 @@ export async function GET(req: NextRequest) {
   const start = parseExactIsoDate(req.nextUrl.searchParams.get('start'));
   const end = parseExactIsoDate(req.nextUrl.searchParams.get('end'));
   if (!start || !end || end < start) return NextResponse.json({ available: false, error: 'Valid start and end dates are required.' }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
-  if (limited(req) || globallyLimited()) {
+  // Keep repeated invalid date probes on the per-client ingress boundary,
+  // but do not let them consume the instance-wide Stripe/Supabase work
+  // budget. The aggregate guard belongs immediately before the first request
+  // that can reach production dependencies below.
+  if (limited(req)) {
     return NextResponse.json({ available: false, error: 'Too many availability checks. Please try again shortly.' }, {
       status: 429,
       headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' },
@@ -281,6 +285,17 @@ export async function GET(req: NextRequest) {
   };
   if (start.toISOString().slice(0, 10) < earliest) return NextResponse.json({ available: false, ...bookingTerms, error: `Please book at least ${minLeadDays} day${minLeadDays === 1 ? '' : 's'} before departure.` }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
   if (rentalDays < 1 || rentalDays > 90) return NextResponse.json({ available: false, ...bookingTerms, error: 'Bookings must be between 1 and 90 days.' }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
+
+  // Only a currently bookable range can proceed to configuration, schema,
+  // Stripe, or Supabase checks. Count that provider-capable request against
+  // the allocation-free shared ceiling so cheap rejected ranges cannot deny
+  // live availability to all shoppers on this process.
+  if (globallyLimited()) {
+    return NextResponse.json({ available: false, error: 'Too many availability checks. Please try again shortly.' }, {
+      status: 429,
+      headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' },
+    });
+  }
 
   // Availability is a promise that a customer can proceed to payment. Match
   // every non-request-specific checkout prerequisite before calculating stock:

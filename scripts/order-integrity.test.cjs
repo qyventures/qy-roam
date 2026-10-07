@@ -1859,7 +1859,8 @@ test('provider-backed public routes retain an aggregate overload ceiling across 
     assert.match(source, /if\s*\(globallyLimited\(\)\)/);
   }
   assert.match(availabilityRoute, /AVAILABILITY_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS/);
-  assert.match(availabilityRoute, /limited\(req\)\s*\|\|\s*globallyLimited\(\)/);
+  assert.match(availabilityRoute, /if\s*\(limited\(req\)\)/);
+  assert.match(availabilityRoute, /if\s*\(globallyLimited\(\)\)/);
 });
 
 test('malformed checkout traffic cannot exhaust the shared Stripe work budget', () => {
@@ -1872,6 +1873,20 @@ test('malformed checkout traffic cannot exhaust the shared Stripe work budget', 
   assert.ok(esimGlobalLimit > esimCheckoutRoute.indexOf('const plan = getEsimPlan(body.planId)'));
   assert.ok(esimGlobalLimit > esimCheckoutRoute.indexOf("if (promoCode && promoCode !== ESIM_PROMO.code)"));
   assert.ok(esimGlobalLimit < esimCheckoutRoute.indexOf('if (!await hasRequiredEsimOrderSchema())'));
+});
+
+test('rejected availability ranges cannot exhaust the shared provider-work budget', () => {
+  const perClientLimit = availabilityRoute.indexOf('if (limited(req))');
+  const pastDateRejection = availabilityRoute.indexOf("if (start.toISOString().slice(0, 10) < earliest)");
+  const rentalLengthRejection = availabilityRoute.indexOf('if (rentalDays < 1 || rentalDays > 90)');
+  const globalLimit = availabilityRoute.indexOf('if (globallyLimited())');
+  const stripeConfiguration = availabilityRoute.indexOf('const stripeKey = process.env.STRIPE_SECRET_KEY?.trim()');
+
+  assert.ok(perClientLimit > availabilityRoute.indexOf("const end = parseExactIsoDate(req.nextUrl.searchParams.get('end'))"));
+  assert.ok(perClientLimit < pastDateRejection);
+  assert.ok(globalLimit > pastDateRejection);
+  assert.ok(globalLimit > rentalLengthRejection);
+  assert.ok(globalLimit < stripeConfiguration);
 });
 
 test('customer confirmation lookups are throttled before provider-backed server rendering', () => {
@@ -2679,7 +2694,8 @@ test('Pocket WiFi availability bounds public Stripe and database capacity scans'
   assert.doesNotMatch(availabilityRoute, /\.range\(from, from \+ RESERVATION_SCAN_PAGE_SIZE - 1\)/);
   assert.match(availabilityRoute, /Pocket WiFi reservation scan exceeded its safe page limit/);
   assert.match(availabilityRoute, /activeReservations\(supabase, start, end, reservationCutoff\)/);
-  assert.match(availabilityRoute, /if \(limited\(req\) \|\| globallyLimited\(\)\)/);
+  assert.match(availabilityRoute, /if \(limited\(req\)\)/);
+  assert.match(availabilityRoute, /if \(globallyLimited\(\)\)/);
   assert.match(availabilityRoute, /Too many availability checks/);
   assert.match(availabilityRoute, /status: 429/);
   assert.match(availabilityRoute, /'Retry-After': '60'/);
