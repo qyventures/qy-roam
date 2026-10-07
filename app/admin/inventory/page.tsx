@@ -20,34 +20,52 @@ type ReservationPageResult={data:any[];error:any;truncated:boolean};
 
 async function loadInventoryItemPages(db:NonNullable<ReturnType<typeof getSupabaseAdmin>>):Promise<InventoryItemPageResult>{
  const data:any[]=[];
- for(let from=0;from<INVENTORY_ITEM_MAX_ROWS;from+=INVENTORY_ITEM_PAGE_SIZE){
-  const result=await db.from('inventory_items').select('*').order('name').order('id').range(from,from+INVENTORY_ITEM_PAGE_SIZE-1);
+ let afterId:number|null=null;
+ const fetchPage=(limit:number)=>{
+  let query=db.from('inventory_items').select('*').order('id').limit(limit);
+  if(afterId!==null) query=query.gt('id',afterId);
+  return query;
+ };
+ for(let loaded=0;loaded<INVENTORY_ITEM_MAX_ROWS;loaded+=INVENTORY_ITEM_PAGE_SIZE){
+  const result=await fetchPage(INVENTORY_ITEM_PAGE_SIZE);
   if(result.error) return {data:[],error:result.error,truncated:false};
   const page=result.data||[];
   data.push(...page);
   if(page.length<INVENTORY_ITEM_PAGE_SIZE) return {data,error:null,truncated:false};
+  const nextId=page[page.length-1]?.id;
+  if(!Number.isSafeInteger(nextId)||nextId<=0||nextId===afterId) return {data:[],error:new Error('Inventory register returned an invalid pagination cursor'),truncated:false};
+  afterId=nextId;
  }
  // As with the movement ledger, distinguish a full final page from an
  // actually truncated register. Inventory totals must never quietly describe
  // only the first response when the physical fleet grows beyond this view.
- const beyond=await db.from('inventory_items').select('id').order('name').order('id').range(INVENTORY_ITEM_MAX_ROWS,INVENTORY_ITEM_MAX_ROWS);
+ const beyond=await fetchPage(1);
  if(beyond.error) return {data:[],error:beyond.error,truncated:false};
  return {data,error:null,truncated:(beyond.data||[]).length>0};
 }
 
 async function loadMovementPages(db:NonNullable<ReturnType<typeof getSupabaseAdmin>>):Promise<MovementPageResult>{
  const data:any[]=[];
- for(let from=0;from<INVENTORY_MOVEMENT_MAX_ROWS;from+=INVENTORY_MOVEMENT_PAGE_SIZE){
-  const result=await db.from('inventory_movements').select('*').order('created_at',{ascending:false}).order('id',{ascending:false}).range(from,from+INVENTORY_MOVEMENT_PAGE_SIZE-1);
+ let beforeId:number|null=null;
+ const fetchPage=(limit:number)=>{
+  let query=db.from('inventory_movements').select('*').order('id',{ascending:false}).limit(limit);
+  if(beforeId!==null) query=query.lt('id',beforeId);
+  return query;
+ };
+ for(let loaded=0;loaded<INVENTORY_MOVEMENT_MAX_ROWS;loaded+=INVENTORY_MOVEMENT_PAGE_SIZE){
+  const result=await fetchPage(INVENTORY_MOVEMENT_PAGE_SIZE);
   if(result.error) return {data:[],error:result.error,truncated:false};
   const page=result.data||[];
   data.push(...page);
   if(page.length<INVENTORY_MOVEMENT_PAGE_SIZE) return {data,error:null,truncated:false};
+  const nextId=page[page.length-1]?.id;
+  if(!Number.isSafeInteger(nextId)||nextId<=0||nextId===beforeId) return {data:[],error:new Error('Inventory movement ledger returned an invalid pagination cursor'),truncated:false};
+  beforeId=nextId;
  }
  // A full final page alone does not prove there is another movement. Check one
  // additional row so the warning means history was actually omitted, rather
  // than appearing forever when the ledger happens to contain exactly 5,000.
- const beyond=await db.from('inventory_movements').select('id').order('created_at',{ascending:false}).order('id',{ascending:false}).range(INVENTORY_MOVEMENT_MAX_ROWS,INVENTORY_MOVEMENT_MAX_ROWS);
+ const beyond=await fetchPage(1);
  if(beyond.error) return {data:[],error:beyond.error,truncated:false};
  return {data,error:null,truncated:(beyond.data||[]).length>0};
 }
@@ -60,14 +78,23 @@ async function loadReservationPages(db:NonNullable<ReturnType<typeof getSupabase
  const now=new Date().toISOString();
  const cutoff=new Date(Date.now()-RESERVATION_HANDOFF_GRACE_MS).toISOString();
  const activeFilter=`and(stripe_session_id.is.null,expires_at.gt.${now}),and(stripe_session_id.not.is.null,expires_at.gt.${cutoff})`;
- for(let from=0;from<RESERVATION_MAX_ROWS;from+=RESERVATION_PAGE_SIZE){
-  const result=await db.from('checkout_reservations').select('checkout_request_id,stripe_session_id,travel_start,travel_end,expires_at,created_at').or(activeFilter).order('expires_at').order('checkout_request_id').range(from,from+RESERVATION_PAGE_SIZE-1);
+ let afterRequestId:string|null=null;
+ const fetchPage=(limit:number)=>{
+  let query=db.from('checkout_reservations').select('checkout_request_id,stripe_session_id,travel_start,travel_end,expires_at,created_at').or(activeFilter).order('checkout_request_id').limit(limit);
+  if(afterRequestId!==null) query=query.gt('checkout_request_id',afterRequestId);
+  return query;
+ };
+ for(let loaded=0;loaded<RESERVATION_MAX_ROWS;loaded+=RESERVATION_PAGE_SIZE){
+  const result=await fetchPage(RESERVATION_PAGE_SIZE);
   if(result.error) return {data:[],error:result.error,truncated:false};
   const page=result.data||[];
   data.push(...page);
   if(page.length<RESERVATION_PAGE_SIZE) return {data,error:null,truncated:false};
+  const nextRequestId=page[page.length-1]?.checkout_request_id;
+  if(typeof nextRequestId!=='string'||!nextRequestId||nextRequestId===afterRequestId) return {data:[],error:new Error('Checkout reservation register returned an invalid pagination cursor'),truncated:false};
+  afterRequestId=nextRequestId;
  }
- const beyond=await db.from('checkout_reservations').select('checkout_request_id').or(activeFilter).order('expires_at').order('checkout_request_id').range(RESERVATION_MAX_ROWS,RESERVATION_MAX_ROWS);
+ const beyond=await fetchPage(1);
  if(beyond.error) return {data:[],error:beyond.error,truncated:false};
  return {data,error:null,truncated:(beyond.data||[]).length>0};
 }
@@ -85,9 +112,11 @@ export default async function InventoryPage(){
       loadReservationPages(db),
     ])
    :[unavailable,unavailable,unavailable];
- const items:any[]=itemsResult.data??[];
- const moves:any[]=movesResult.data??[];
- const reservations:any[]=reservationsResult.data??[];
+ // Page on immutable identities for correctness, then restore the useful
+ // operator-facing order after the complete bounded result is in memory.
+ const items:any[]=(itemsResult.data??[]).sort((a:any,b:any)=>String(a.name||'').localeCompare(String(b.name||''))||Number(a.id||0)-Number(b.id||0));
+ const moves:any[]=(movesResult.data??[]).sort((a:any,b:any)=>String(b.created_at||'').localeCompare(String(a.created_at||''))||Number(b.id||0)-Number(a.id||0));
+ const reservations:any[]=(reservationsResult.data??[]).sort((a:any,b:any)=>String(a.expires_at||'').localeCompare(String(b.expires_at||''))||String(a.checkout_request_id||'').localeCompare(String(b.checkout_request_id||'')));
  const failedPanels=[itemsResult.error&&'inventory register',movesResult.error&&'movement audit trail',reservationsResult.error&&'checkout reservation register'].filter(Boolean) as string[];
  const available=items.reduce((s:number,x:any)=>s+Number(x.quantity_on_hand||0),0);
  const saleablePocketWifi=items.filter((x:any)=>x.product_type==='pocket_wifi'&&x.status==='available').reduce((s:number,x:any)=>s+Number(x.quantity_on_hand||0),0);
