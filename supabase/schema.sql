@@ -2273,7 +2273,30 @@ create table if not exists public.inventory_movements (
 -- generated constraint explicitly so the additive migration is safe both for
 -- fresh installs and deployments that already have inventory movements.
 alter table public.inventory_movements drop constraint if exists inventory_movements_quantity_check;
-alter table public.inventory_movements add constraint inventory_movements_quantity_check check (quantity <> 0 or movement_type in ('return_quarantined', 'return_damaged', 'status_change'));
+alter table public.inventory_movements add constraint inventory_movements_quantity_check check (
+  (movement_type = 'opening_stock' and quantity > 0) or
+  (movement_type = 'adjustment' and quantity <> 0) or
+  (movement_type = 'purchase' and quantity > 0) or
+  (movement_type = 'write_off' and quantity < 0) or
+  (movement_type = 'dispatch' and quantity = -1) or
+  (movement_type = 'return' and quantity = 1) or
+  (movement_type in ('return_quarantined', 'return_damaged', 'status_change') and quantity = 0)
+) not valid;
+-- Movement labels are machine-interpreted custody evidence, not free-form
+-- descriptions. Close the domain and require a bounded reconciliation
+-- reference so direct owner writes cannot manufacture ambiguous stock history.
+alter table public.inventory_movements drop constraint if exists inventory_movements_type_check;
+alter table public.inventory_movements add constraint inventory_movements_type_check check (
+  movement_type in (
+    'opening_stock', 'adjustment', 'purchase', 'write_off', 'dispatch',
+    'return', 'return_quarantined', 'return_damaged', 'status_change'
+  )
+) not valid;
+alter table public.inventory_movements drop constraint if exists inventory_movements_reference_check;
+alter table public.inventory_movements add constraint inventory_movements_reference_check check (
+  reference is not null and length(reference) between 1 and 120 and
+  reference = btrim(reference) and reference !~ '[[:cntrl:]]'
+) not valid;
 alter table public.inventory_movements enable row level security;
 
 -- Stock movements are the audit evidence behind both saleable quantity and
@@ -2389,12 +2412,16 @@ declare
 begin
   if p_item_id is null or p_item_id < 1 then raise exception 'invalid inventory item'; end if;
   if p_delta is null or p_delta = 0 or abs(p_delta::bigint) > 1000000 then raise exception 'inventory adjustment is out of range'; end if;
-  if coalesce(length(trim(p_type)), 0) = 0 then raise exception 'movement type is required'; end if;
-  if lower(trim(p_type)) in ('dispatch', 'return') then
-    raise exception 'dispatches and returns must be recorded through the Pocket WiFi order workflow';
+  if lower(trim(coalesce(p_type, ''))) not in ('adjustment', 'purchase', 'write_off') then
+    raise exception 'invalid generic inventory movement type';
   end if;
+  if lower(trim(p_type)) = 'purchase' and p_delta < 1 then raise exception 'inventory purchase must increase stock'; end if;
+  if lower(trim(p_type)) = 'write_off' and p_delta > -1 then raise exception 'inventory write-off must decrease stock'; end if;
   if nullif(trim(coalesce(p_reference, '')), '') is null then
     raise exception 'inventory adjustment reference is required';
+  end if;
+  if length(trim(p_reference)) > 120 or trim(p_reference) ~ '[[:cntrl:]]' then
+    raise exception 'invalid inventory adjustment reference';
   end if;
 
   select * into v_item from public.inventory_items where id = p_item_id for update;
@@ -2456,6 +2483,9 @@ begin
   end if;
   if nullif(trim(coalesce(p_reference, '')), '') is null then
     raise exception 'inventory status reference is required';
+  end if;
+  if length(trim(p_reference)) > 120 or trim(p_reference) ~ '[[:cntrl:]]' then
+    raise exception 'invalid inventory status reference';
   end if;
 
   select * into v_item from public.inventory_items where id = p_item_id for update;
@@ -2683,9 +2713,11 @@ language sql
 immutable
 security definer
 set search_path = pg_catalog
--- Version 7 additionally certifies that a damaged/quarantined return from an
--- aggregate stock row does not hide the other saleable routers in that row.
-as $$ select 8; $$;
+-- Version 8 certifies that a damaged/quarantined return from an aggregate
+-- stock row does not hide the other saleable routers in that row. Version 9
+-- closes the movement-type domain and enforces direction/quantity semantics
+-- for every newly written stock-ledger row.
+as $$ select 9; $$;
 revoke all on function public.qy_pocket_wifi_fulfilment_schema_version() from public;
 grant execute on function public.qy_pocket_wifi_fulfilment_schema_version() to service_role;
 

@@ -3545,7 +3545,7 @@ test('admin fulfilment writes reject stale same-status saves using the exact ord
     assert.match(transition, /raise exception 'order changed since it was loaded'/);
   }
   assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 34/);
-  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 8/);
+  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 9/);
 });
 
 test('eSIM delivery evidence and fulfilment transition share one database authority', () => {
@@ -3644,10 +3644,19 @@ test('Pocket WiFi inspection status changes are durably audited before a unit ca
 });
 
 test('generic inventory adjustments cannot bypass the Pocket WiFi hand-off and inspection audit boundaries', () => {
-  assert.match(schema, /dispatches and returns must be recorded through the Pocket WiFi order workflow/);
+  assert.match(schema, /not in \('adjustment', 'purchase', 'write_off'\)/);
   assert.match(schema, /inventory adjustment reference is required/);
   assert.match(schema, /inventory status reference is required/);
-  assert.match(adminOpsRoute, /Use the Pocket WiFi order workflow to record dispatches and returns/);
+  assert.match(adminOpsRoute, /!\['adjustment', 'purchase', 'write_off'\]\.includes\(movementType\)/);
+  assert.match(schema, /movement_type = 'dispatch' and quantity = -1/);
+  assert.match(schema, /movement_type = 'return' and quantity = 1/);
+  assert.match(schema, /movement_type in \('return_quarantined', 'return_damaged', 'status_change'\) and quantity = 0/);
+  assert.match(schema, /inventory_movements_reference_check/);
+  assert.match(adminOpsRoute, /movementType === 'purchase' && delta < 1/);
+  assert.match(adminOpsRoute, /movementType === 'write_off' && delta > -1/);
+  assert.match(adminOpsRoute, /validInventoryReference\(reference\)/);
+  assert.match(schema, /invalid inventory adjustment reference/);
+  assert.match(schema, /invalid inventory status reference/);
   assert.match(adminOpsRoute, /An inventory adjustment reference is required/);
   assert.match(adminOpsRoute, /An inspection or repair reference is required before changing device status/);
   assert.doesNotMatch(adminOpsForms, /<option>dispatch<\/option>/);
@@ -3681,8 +3690,8 @@ test('generic inventory mutations cannot make a router saleable while it is in c
     'both quantity adjustments and status changes must reject assigned in-custody routers',
   );
   assert.match(schema, /inventory item is assigned to an active Pocket WiFi custody order/);
-  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 8; \$\$/);
-  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 8/);
+  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 9; \$\$/);
+  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 9/);
   assert.match(productionReadiness, /database\.rpc\('qy_pocket_wifi_fulfilment_schema_version', \{\}\)/);
   assert.match(productionReadiness, /versionProbe\.data !== REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION/);
 });
@@ -3759,8 +3768,8 @@ test('Pocket WiFi inventory movements remain append-only audit evidence', () => 
     guard,
     /create trigger qy_enforce_inventory_movement_immutability[\s\S]*before update or delete on public\.inventory_movements/,
   );
-  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 8; \$\$/);
-  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 8/);
+  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 9; \$\$/);
+  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 9/);
 });
 
 test('Pocket WiFi stock can only be mutated through audited inventory RPCs', () => {
@@ -3785,8 +3794,8 @@ test('Pocket WiFi stock can only be mutated through audited inventory RPCs', () 
     const body = schema.slice(start, schema.indexOf('$$;', start) + 3);
     assert.match(body, /security definer/, `${rpc} must retain owner-authorized writes`);
   }
-  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 8; \$\$/);
-  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 8/);
+  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 9; \$\$/);
+  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 9/);
 });
 
 test('admin actions advance their transition baseline after each save', () => {

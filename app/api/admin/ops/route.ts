@@ -67,6 +67,10 @@ function positiveSafeInteger(value: unknown) {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
+function validInventoryReference(value: string) {
+  return value.length >= 1 && value.length <= 120 && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
 function optionalTravelDates(body: Record<string, unknown>) {
   const startRaw = text(body.travel_start, 10);
   const endRaw = text(body.travel_end, 10);
@@ -310,15 +314,19 @@ export async function POST(req: NextRequest) {
       if (error) throw error;
     } else if (action === 'inventory_adjust') {
       const movementType = text(body.movement_type, 40).toLowerCase() || 'adjustment';
-      const reference = text(body.reference, 120);
+      const reference = typeof body.reference === 'string' ? body.reference.trim() : '';
       const itemId = positiveSafeInteger(body.item_id);
       const delta = signedNonZeroInteger(body.delta);
       if (!itemId || delta === null) return NextResponse.json({ error: 'Choose an inventory item and enter a non-zero whole-number quantity change' }, { status: 400 });
-      // Dispatch and return are not generic stock adjustments: they must
-      // remain tied to a paid order, assigned device and courier/receipt
-      // evidence through the guarded order lifecycle.
-      if (['dispatch', 'return'].includes(movementType)) return NextResponse.json({ error: 'Use the Pocket WiFi order workflow to record dispatches and returns' }, { status: 400 });
+      // Keep generic stock corrections on a closed vocabulary. Custody and
+      // inspection movement names are interpreted as audit evidence by the
+      // database; a stale or hand-authored client must not be able to forge
+      // one through this general-purpose endpoint.
+      if (!['adjustment', 'purchase', 'write_off'].includes(movementType)) return NextResponse.json({ error: 'Choose adjustment, purchase, or write-off as the stock movement type' }, { status: 400 });
+      if (movementType === 'purchase' && delta < 1) return NextResponse.json({ error: 'A purchase must increase stock' }, { status: 400 });
+      if (movementType === 'write_off' && delta > -1) return NextResponse.json({ error: 'A write-off must decrease stock' }, { status: 400 });
       if (!reference) return NextResponse.json({ error: 'An inventory adjustment reference is required' }, { status: 400 });
+      if (!validInventoryReference(reference)) return NextResponse.json({ error: 'Inventory references must be a single line of 120 characters or fewer' }, { status: 400 });
       const { error } = await db.rpc('qy_adjust_inventory', { p_item_id: itemId, p_delta: delta, p_type: movementType, p_reference: reference, p_notes: text(body.notes, 1000) || null }); if (error) throw error;
     } else if (action === 'inventory_status') {
       const itemId = int(body.item_id);
@@ -330,8 +338,9 @@ export async function POST(req: NextRequest) {
       if (!['available', 'quarantined', 'damaged', 'maintenance'].includes(status)) {
         return NextResponse.json({ error: 'Choose a valid inventory status' }, { status: 400 });
       }
-      const reference = text(body.reference, 120);
+      const reference = typeof body.reference === 'string' ? body.reference.trim() : '';
       if (!reference) return NextResponse.json({ error: 'An inspection or repair reference is required before changing device status' }, { status: 400 });
+      if (!validInventoryReference(reference)) return NextResponse.json({ error: 'Inventory references must be a single line of 120 characters or fewer' }, { status: 400 });
       // Status changes control whether a router can be dispatched. Keep them
       // in the inventory movement ledger instead of making an unaudited table
       // update that could silently restore a quarantined unit to saleable use.
