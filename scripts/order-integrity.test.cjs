@@ -4912,6 +4912,21 @@ test('Stripe webhook bounds third-party delivery responses as well as request ti
   assert.equal(responseReader.match(/for \(;;\)/g)?.length, 1);
 });
 
+test('failed third-party deliveries do not wait for an unused provider response body', () => {
+  const deliveryClient = webhookRoute.slice(
+    webhookRoute.indexOf('async function postJsonWithTimeout'),
+    webhookRoute.indexOf('function metaPurchaseEligible'),
+  );
+  const failedStatus = deliveryClient.indexOf('if(!response.ok)');
+  const bodyRead = deliveryClient.indexOf('await readDeliveryResponseBody(response,deadline)');
+  assert.ok(failedStatus >= 0 && failedStatus < bodyRead);
+  assert.match(deliveryClient, /void response\.body\?\.cancel\(\)\.catch\(\(\)=>undefined\)/);
+  assert.match(deliveryClient, /return \{ok:false,status:response\.status,responseBody:''\}/);
+  // A 2xx response still needs the exact Meta/relay acknowledgement before an
+  // irreversible delivery ledger can be marked sent.
+  assert.match(deliveryClient, /return \{ok:true,status:response\.status,responseBody\}/);
+});
+
 test('paid-order delivery endpoints are fail-closed and never follow credential-bearing redirects', () => {
   // A relay typo must stop checkout before a customer pays, rather than
   // failing only when the webhook tries to send fulfilment data. Redirects

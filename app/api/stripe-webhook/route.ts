@@ -276,10 +276,20 @@ async function postJsonWithTimeout(url:string,body:unknown,timeoutMs=DELIVERY_TI
       fetch(url,{method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify(body),signal:controller.signal,redirect:'error'}),
       deadline,
     ]);
+    // A non-2xx status is already sufficient to keep the durable delivery
+    // retryable, and neither caller exposes or persists the provider body.
+    // Do not let a relay or analytics provider return error headers and then
+    // hold this paid-order webhook open with a slow/never-ending body. Body
+    // cancellation is teardown only: never await an uncooperative peer.
+    if(!response.ok) {
+      void response.body?.cancel().catch(()=>undefined);
+      return {ok:false,status:response.status,responseBody:''};
+    }
     // Consume the response while the deadline is still active. A provider that
-    // sends headers and then stalls its body must not hold the webhook open.
+    // sends successful headers and then stalls its required acknowledgement
+    // body must not hold the webhook open.
     const responseBody=await readDeliveryResponseBody(response,deadline);
-    return {ok:response.ok,status:response.status,responseBody};
+    return {ok:true,status:response.status,responseBody};
   }finally{
     clearTimeout(timeout);
     rejectDeadline=undefined;
