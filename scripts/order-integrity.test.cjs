@@ -5095,15 +5095,21 @@ test('Supabase order-critical requests use a bounded shared transport', async ()
 
   // Chunked responses have no useful Content-Length. Enforce the same limit
   // while Supabase consumes the stream so an upstream cannot bypass the bound.
-  global.fetch = async () => new Response(new ReadableStream({
-    start(controller) {
-      controller.enqueue(new Uint8Array(9));
-      controller.enqueue(new Uint8Array(8));
-    },
-  }), { status: 200 });
+  let oversizedResponseSignal;
+  global.fetch = async (_input, init) => {
+    oversizedResponseSignal = init.signal;
+    return new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(9));
+        controller.enqueue(new Uint8Array(8));
+      },
+    }), { status: 200 });
+  };
   try {
     const response = await fetchSupabaseWithTimeout('https://supabase.example/rest/v1/orders', undefined, 100, 16);
     await assert.rejects(() => response.arrayBuffer(), /Supabase response body is too large/);
+    assert.equal(oversizedResponseSignal.aborted, true);
+    assert.match(oversizedResponseSignal.reason.message, /Supabase response body is too large/);
   } finally {
     global.fetch = originalFetch;
   }
@@ -5156,14 +5162,20 @@ test('Supabase order-critical requests use a bounded shared transport', async ()
   }
 
   // Once a caller cancels the wrapped response, an uncooperative upstream
-  // reader must not retain that checkout/webhook worker during teardown.
+  // reader must not retain that checkout/webhook worker during teardown. The
+  // underlying fetch also needs an abort signal: reader cancellation alone is
+  // not guaranteed to close the network request in every runtime.
   let upstreamCancelStarted = false;
-  global.fetch = async () => new Response(new ReadableStream({
-    cancel() {
-      upstreamCancelStarted = true;
-      return new Promise(() => {});
-    },
-  }), { status: 200 });
+  let cancelledResponseSignal;
+  global.fetch = async (_input, init) => {
+    cancelledResponseSignal = init.signal;
+    return new Response(new ReadableStream({
+      cancel() {
+        upstreamCancelStarted = true;
+        return new Promise(() => {});
+      },
+    }), { status: 200 });
+  };
   try {
     const response = await fetchSupabaseWithTimeout('https://supabase.example/rest/v1/orders', undefined, 5_000);
     const cancelled = response.body.cancel(new Error('Caller stopped reading'));
@@ -5172,6 +5184,8 @@ test('Supabase order-critical requests use a bounded shared transport', async ()
       new Promise((_, reject) => setTimeout(() => reject(new Error('Wrapped cancellation remained blocked')), 50)),
     ]);
     assert.equal(upstreamCancelStarted, true);
+    assert.equal(cancelledResponseSignal.aborted, true);
+    assert.match(cancelledResponseSignal.reason.message, /Caller stopped reading/);
   } finally {
     global.fetch = originalFetch;
   }

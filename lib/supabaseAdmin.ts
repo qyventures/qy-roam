@@ -123,6 +123,7 @@ export async function fetchSupabaseWithTimeout(
     contentLength = declaredContentLength(response.headers.get('content-length'), maximumResponseBytes);
   } catch {
     cleanup();
+    controller.abort(new RangeError('Supabase response body is too large or invalid'));
     void response.body?.cancel().catch(() => undefined);
     throw new RangeError('Supabase response body is too large or invalid');
   }
@@ -147,6 +148,16 @@ export async function fetchSupabaseWithTimeout(
   }
 
   const reader = response.body.getReader();
+  const stopUpstream = (reason: unknown) => {
+    // Cancelling a response consumer does not consistently abort the fetch
+    // that owns its network connection. End both sides explicitly: abort is
+    // the strongest signal for compliant fetch implementations, while reader
+    // cancellation remains useful for custom/proxy-backed streams. Neither
+    // teardown path is awaited because an uncooperative upstream must not
+    // extend an already-final response failure.
+    if (!controller.signal.aborted) controller.abort(reason);
+    void reader.cancel(reason).catch(() => undefined);
+  };
   let responseBytes = 0;
   let responseChunks = 0;
   const body = new ReadableStream<Uint8Array>({
@@ -166,7 +177,7 @@ export async function fetchSupabaseWithTimeout(
         if (responseChunks > SUPABASE_RESPONSE_MAX_CHUNKS) {
           const fragmentationError = new RangeError('Supabase response body is too fragmented');
           cleanup();
-          void reader.cancel(fragmentationError).catch(() => undefined);
+          stopUpstream(fragmentationError);
           streamController.error(fragmentationError);
           return;
         }
@@ -174,9 +185,7 @@ export async function fetchSupabaseWithTimeout(
         if (responseBytes > maximumResponseBytes) {
           const sizeError = new RangeError('Supabase response body is too large');
           cleanup();
-          // Do not await cancellation: a broken upstream must not be able to
-          // turn the response-size boundary into another unbounded wait.
-          void reader.cancel(sizeError).catch(() => undefined);
+          stopUpstream(sizeError);
           streamController.error(sizeError);
           return;
         }
@@ -193,7 +202,7 @@ export async function fetchSupabaseWithTimeout(
       // work alive by returning a reader.cancel() promise that never settles.
       // Tear the source down on a best-effort basis, matching the timeout and
       // response-limit paths above, and let the caller finish immediately.
-      void reader.cancel(reason).catch(() => undefined);
+      stopUpstream(reason);
     },
   });
 
