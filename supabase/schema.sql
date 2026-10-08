@@ -386,6 +386,8 @@ as $$
 declare
   v_existing_reason text;
   v_existing_reason_match text[];
+  v_new_reason text;
+  v_new_reason_match text[];
 begin
   if old.payment_status = 'paid'
     and old.fulfilment_status <> 'cancelled'
@@ -398,7 +400,11 @@ begin
   -- notes. Once a paid order is cancelled, retain the exact original line so
   -- a later service-role repair or same-state admin save cannot rewrite why
   -- revenue was cancelled while still satisfying the shape constraint below.
-  -- Additional support notes remain recordable before the evidence line.
+  -- Additional support notes remain recordable before the evidence line. The
+  -- terminal evidence itself must remain exactly the same: merely retaining
+  -- the old reason somewhere in the notes is insufficient because appending
+  -- a second `Cancellation reason:` line makes that later line look like the
+  -- authoritative financial decision.
   if old.payment_status = 'paid'
     and old.fulfilment_status = 'cancelled'
     and new.notes is distinct from old.notes then
@@ -414,8 +420,17 @@ begin
     limit 1;
     v_existing_reason := v_existing_reason_match[2];
 
+    select match into v_new_reason_match
+    from regexp_matches(
+      coalesce(new.notes, ''),
+      '(^|\n)(Cancellation reason: [^[:cntrl:]]{5,500})$',
+      'g'
+    ) as matches(match)
+    limit 1;
+    v_new_reason := v_new_reason_match[2];
+
     if v_existing_reason is not null
-      and position(E'\n' || v_existing_reason || E'\n' in E'\n' || coalesce(new.notes, '') || E'\n') = 0 then
+      and v_new_reason is distinct from v_existing_reason then
       raise exception 'paid order cancellation evidence is immutable';
     end if;
   end if;
@@ -2183,8 +2198,9 @@ as $$
   -- privileged order entry points reject fractional cents and values outside
   -- the numeric(10,2) ledger range before PostgreSQL can round or overflow.
   -- Version 32 additionally certifies exact optimistic version checks for
-  -- concurrent admin eSIM fulfilment updates.
-  select 32;
+  -- concurrent admin eSIM fulfilment updates. Version 33 certifies that a
+  -- cancelled paid order retains one immutable terminal cancellation reason.
+  select 33;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;

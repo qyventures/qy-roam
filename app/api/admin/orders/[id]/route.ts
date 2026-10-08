@@ -180,6 +180,13 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   if (status === 'cancelled' && existing.data.fulfilment_status !== 'cancelled' && !cancelReason) {
     return NextResponse.json({ error: 'Enter a cancellation reason of 5–500 characters so the paid order can be reconciled.' }, { status: 400 });
   }
+  // A paid cancellation has one authoritative financial-reconciliation
+  // reason. Once the order is cancelled, ordinary support context may still
+  // be saved without removing that evidence, but a second cancellation reason
+  // would make the last line appear to supersede the original decision.
+  if (cancelReason && existing.data.fulfilment_status === 'cancelled') {
+    return NextResponse.json({ error: 'The original cancellation reason is immutable. Record any follow-up context in the order notes.' }, { status: 409 });
+  }
   // Cancellation appends immutable financial-reconciliation evidence to the
   // notes already protected by the optimistic version check. A legacy or
   // custom client must not submit a replacement notes value in the same
