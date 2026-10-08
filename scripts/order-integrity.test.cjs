@@ -4920,8 +4920,13 @@ test('failed third-party deliveries do not wait for an unused provider response 
   const failedStatus = deliveryClient.indexOf('if(!response.ok)');
   const bodyRead = deliveryClient.indexOf('await readDeliveryResponseBody(response,deadline)');
   assert.ok(failedStatus >= 0 && failedStatus < bodyRead);
+  assert.match(deliveryClient, /if\(!response\.ok\) \{\s*controller\.abort\(new Error\('Delivery provider rejected the request'\)\)/);
   assert.match(deliveryClient, /void response\.body\?\.cancel\(\)\.catch\(\(\)=>undefined\)/);
   assert.match(deliveryClient, /return \{ok:false,status:response\.status,responseBody:''\}/);
+  // Reader cancellation and fetch abortion are separate in some runtimes.
+  // A malformed, truncated, oversized, or fragmented 2xx acknowledgement
+  // must stop the credential-bearing request before it enters durable retry.
+  assert.match(deliveryClient, /catch\(error\) \{[\s\S]*?if\(!controller\.signal\.aborted\) controller\.abort\(error\);[\s\S]*?void response\.body\?\.cancel\(error\)/);
   // A 2xx response still needs the exact Meta/relay acknowledgement before an
   // irreversible delivery ledger can be marked sent.
   assert.match(deliveryClient, /return \{ok:true,status:response\.status,responseBody\}/);

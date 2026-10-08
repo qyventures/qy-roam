@@ -281,14 +281,31 @@ async function postJsonWithTimeout(url:string,body:unknown,timeoutMs=DELIVERY_TI
     // Do not let a relay or analytics provider return error headers and then
     // hold this paid-order webhook open with a slow/never-ending body. Body
     // cancellation is teardown only: never await an uncooperative peer.
+    // Explicitly abort the owning fetch as well because Web Stream
+    // cancellation alone is not guaranteed to close the network request in
+    // every runtime. This request carries either paid-order/SMTP details or a
+    // Meta credential, so a rejected response must not leave it alive after
+    // the webhook has moved into its durable retry path.
     if(!response.ok) {
+      controller.abort(new Error('Delivery provider rejected the request'));
       void response.body?.cancel().catch(()=>undefined);
       return {ok:false,status:response.status,responseBody:''};
     }
     // Consume the response while the deadline is still active. A provider that
     // sends successful headers and then stalls its required acknowledgement
     // body must not hold the webhook open.
-    const responseBody=await readDeliveryResponseBody(response,deadline);
+    let responseBody:string;
+    try {
+      responseBody=await readDeliveryResponseBody(response,deadline);
+    } catch(error) {
+      // The bounded reader already cancels its stream on read failures, but
+      // cancellation and fetch abortion are distinct operations in Node and
+      // proxy-backed runtimes. Stop both before surfacing the retryable
+      // provider failure; do not await teardown from an uncooperative peer.
+      if(!controller.signal.aborted) controller.abort(error);
+      void response.body?.cancel(error).catch(()=>undefined);
+      throw error;
+    }
     return {ok:true,status:response.status,responseBody};
   }finally{
     clearTimeout(timeout);
