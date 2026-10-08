@@ -252,6 +252,12 @@ test('admin fulfilment notes and cancellation evidence are rejected rather than 
   assert.doesNotMatch(adminOrderRoute, /previous\.slice\(/);
   assert.match(adminOrderRoute, /return `\$\{previous\}\\n\$\{evidence\}`/);
   assert.match(adminOrderRoute, /cancellationNotes\.length > MAX_ORDER_NOTES_LENGTH/);
+  // Cancellation evidence is appended to the version-checked durable notes.
+  // Never accept a second notes replacement in that request and then silently
+  // discard it when the cancellation payload wins the RPC argument.
+  assert.match(adminOrderRoute, /if \(cancelReason && submittedNotes !== null\)/);
+  assert.match(adminOrderRoute, /Save order-note changes before cancelling/);
+  assert.match(adminOrderRoute, /p_notes: cancellationNotes \|\| submittedNotes/);
   assert.match(schema, /orders_notes_shape_check check \(\s*notes is null or \(length\(notes\) <= 2500 and position\(chr\(0\) in notes\) = 0\)/);
 
   const esimTransition = schema.slice(

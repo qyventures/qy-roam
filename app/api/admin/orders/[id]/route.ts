@@ -180,6 +180,16 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   if (status === 'cancelled' && existing.data.fulfilment_status !== 'cancelled' && !cancelReason) {
     return NextResponse.json({ error: 'Enter a cancellation reason of 5–500 characters so the paid order can be reconciled.' }, { status: 400 });
   }
+  // Cancellation appends immutable financial-reconciliation evidence to the
+  // notes already protected by the optimistic version check. A legacy or
+  // custom client must not submit a replacement notes value in the same
+  // request: previously that value was validated but silently ignored in
+  // favour of the database snapshot. Requiring the two edits to be separate
+  // makes each write explicit and prevents either the existing audit trail or
+  // the operator's newly submitted context from disappearing unnoticed.
+  if (cancelReason && submittedNotes !== null) {
+    return NextResponse.json({ error: 'Save order-note changes before cancelling, then refresh and submit the cancellation reason separately.' }, { status: 409 });
+  }
   const cancellationNotes = cancelReason ? notesWithCancellationReason(existing.data.notes, cancelReason) : null;
   if (cancellationNotes && cancellationNotes.length > MAX_ORDER_NOTES_LENGTH) {
     return NextResponse.json({ error: `The existing order notes leave no safe room for cancellation evidence. Reconcile them to ${MAX_ORDER_NOTES_LENGTH.toLocaleString()} characters or fewer without deleting audit context, then try again.` }, { status: 409 });
