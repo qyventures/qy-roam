@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextResponse as FrameworkNextResponse } from 'next/server';
 import type Stripe from 'stripe';
 import { createStripeClient } from '../../../lib/stripeClient';
 import { applyPromoCents, normalisePromoCode, promoIsActive } from '../../../lib/promotions';
@@ -22,6 +22,19 @@ import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhookObject';
 
 export const runtime = 'nodejs';
+
+// Checkout responses describe request validity, live operational readiness,
+// inventory and payment capabilities. None are safe to retain at a browser,
+// proxy or CDN: even an early 4xx/503 can become stale and block a later valid
+// attempt. Route every response through one boundary so new return paths are
+// non-cacheable by default instead of relying on each branch to remember it.
+const NextResponse = {
+  json(body: unknown, init: ResponseInit = {}) {
+    const headers = new Headers(init.headers);
+    headers.set('Cache-Control', 'no-store');
+    return FrameworkNextResponse.json(body, { ...init, headers });
+  },
+};
 
 const MAX_BODY_BYTES=4096;
 const CHECKOUT_BODY_TIMEOUT_MS=15_000;

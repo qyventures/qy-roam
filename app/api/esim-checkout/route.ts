@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextResponse as FrameworkNextResponse } from 'next/server';
 import type Stripe from 'stripe';
 import { createStripeClient } from '../../../lib/stripeClient';
 import { ESIM_PROMO, esimPromoIsActive, getEsimPlan } from '../../../lib/esimPlans';
@@ -18,6 +18,18 @@ import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhookObject';
 
 export const runtime = 'nodejs';
+
+// A checkout response can carry live pricing/readiness state or a payment
+// capability. Make the non-cacheable contract structural so an early error
+// branch added later cannot accidentally strand customers behind a cached
+// validation or configuration response.
+const NextResponse = {
+  json(body: unknown, init: ResponseInit = {}) {
+    const headers = new Headers(init.headers);
+    headers.set('Cache-Control', 'no-store');
+    return FrameworkNextResponse.json(body, { ...init, headers });
+  },
+};
 
 const MAX_BODY_BYTES = 4096;
 const CHECKOUT_BODY_TIMEOUT_MS = 15_000;

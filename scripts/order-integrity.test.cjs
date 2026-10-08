@@ -122,6 +122,17 @@ const privacyPage = fs.readFileSync(require.resolve('../app/privacy/page.tsx'), 
 const termsPage = fs.readFileSync(require.resolve('../app/terms/page.tsx'), 'utf8');
 const rootLayout = fs.readFileSync(require.resolve('../app/layout.tsx'), 'utf8');
 
+test('every checkout response is non-cacheable, including early validation and readiness failures', () => {
+  for (const [name, route] of [
+    ['Pocket WiFi', wifiCheckoutRoute],
+    ['eSIM', esimCheckoutRoute],
+  ]) {
+    assert.match(route, /import \{ NextResponse as FrameworkNextResponse \} from 'next\/server'/, `${name} checkout must isolate the framework response primitive`);
+    assert.match(route, /const NextResponse = \{[\s\S]*?headers\.set\('Cache-Control', 'no-store'\);[\s\S]*?FrameworkNextResponse\.json\(body, \{ \.\.\.init, headers \}\)/, `${name} checkout must apply no-store at its response boundary`);
+    assert.equal((route.match(/FrameworkNextResponse\.json/g) || []).length, 1, `${name} checkout must not bypass its non-cacheable response boundary`);
+  }
+});
+
 test('consented Meta PageView measurement follows App Router navigation', () => {
   assert.match(metaConsent, /usePathname/);
   assert.match(metaConsent, /const pathname = usePathname\(\)/);
