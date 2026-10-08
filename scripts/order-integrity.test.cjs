@@ -93,6 +93,7 @@ const operationalDate = fs.readFileSync(require.resolve('../lib/operationalDate.
 const smtpClient = fs.readFileSync(require.resolve('../lib/smtp.ts'), 'utf8');
 const webhookRoute = fs.readFileSync(require.resolve('../app/api/stripe-webhook/route.ts'), 'utf8');
 const healthRoute = fs.readFileSync(require.resolve('../app/api/health/route.ts'), 'utf8');
+const pocketWifiStock = fs.readFileSync(require.resolve('../lib/pocketWifiStock.ts'), 'utf8');
 const healthCheckToken = fs.readFileSync(require.resolve('../lib/healthCheckToken.ts'), 'utf8');
 const successPage = fs.readFileSync(require.resolve('../app/success/page.tsx'), 'utf8');
 const orderConfirmationRefresh = fs.readFileSync(require.resolve('../components/OrderConfirmationRefresh.tsx'), 'utf8');
@@ -660,12 +661,12 @@ test('Pocket WiFi deployment inventory cannot exceed the database reservation bo
 });
 
 test('Pocket WiFi availability scans the full saleable register with bounded arithmetic', () => {
-  assert.match(availabilityRoute, /const MAX_INVENTORY_SCAN_PAGES = 11/);
-  assert.match(availabilityRoute, /\.select\('id,quantity_on_hand'\)/);
-  assert.match(availabilityRoute, /\.order\('id'\)/);
-  assert.match(availabilityRoute, /query = query\.gt\('id', afterId\)/);
-  assert.match(availabilityRoute, /if \(total >= configuredInventory\) return total/);
-  assert.match(availabilityRoute, /throw new Error\('Pocket WiFi inventory scan exceeded its safe page limit'\)/);
+  assert.match(pocketWifiStock, /export const MAX_INVENTORY_SCAN_PAGES = 11/);
+  assert.match(pocketWifiStock, /\.select\('id,quantity_on_hand'\)/);
+  assert.match(pocketWifiStock, /\.order\('id'\)/);
+  assert.match(pocketWifiStock, /query = query\.gt\('id', afterId\)/);
+  assert.match(pocketWifiStock, /if \(total >= configuredInventory\) return total/);
+  assert.match(pocketWifiStock, /throw new Error\('Pocket WiFi inventory scan exceeded its safe page limit'\)/);
   const boundedSaleableSums = schema.match(/least\(p_inventory::bigint, coalesce\(sum\(quantity_on_hand::bigint\), 0\)\)::integer/g) || [];
   assert.equal(boundedSaleableSums.length, 2, 'public and manual capacity authorities must clamp saleable stock before integer conversion');
 });
@@ -2677,7 +2678,7 @@ test('Pocket WiFi capacity cannot exceed physically saleable inventory', () => {
   assert.match(schema, /if v_effective_inventory < 1 or v_committed >= v_effective_inventory then/);
   assert.match(schema, /if v_effective_inventory < 1 or v_booked \+ v_reserved >= v_effective_inventory then/);
   assert.match(productionReadiness, /table: 'inventory_items',[\s\S]*?columns: 'id,product_type,status,quantity_on_hand'/);
-  assert.match(availabilityRoute, /supabase\.from\('inventory_items'\)\.select\('id,quantity_on_hand'\)/);
+  assert.match(pocketWifiStock, /supabase\.from\('inventory_items'\)\.select\('id,quantity_on_hand'\)/);
   assert.match(availabilityRoute, /const effectiveInventory = Math\.min\(inventory, inventoryState\.saleableInventory\)/);
 });
 
@@ -3972,19 +3973,25 @@ test('authenticated health readiness fails when any order-critical dependency is
   assert.match(healthRoute, /hasRequiredEsimOrderSchema/);
   assert.match(healthRoute, /hasRequiredPocketWifiFulfilmentSchema/);
   assert.match(healthRoute, /hasRequiredStripeApiAccess/);
-  assert.match(healthRoute, /const \[stripeApi, esimOrderSchema, paymentSchema, pocketWifiFulfilmentSchema, operationsSchema\] = await Promise\.all\(\[/);
+  assert.match(healthRoute, /const \[stripeApi, esimOrderSchema, paymentSchema, pocketWifiFulfilmentSchema, operationsSchema, pocketWifiStock\] = await Promise\.all\(\[/);
   assert.match(healthRoute, /stripeApi,/);
   assert.match(healthRoute, /esimOrderSchema,/);
   assert.match(healthRoute, /pocketWifiFulfilmentSchema,/);
+  assert.match(healthRoute, /hasSaleablePocketWifiInventory\(config\?\.pocketWifiInventory \|\| 0\)/);
+  assert.match(healthRoute, /const availabilityChecks = \{ pocketWifiStock \}/);
   assert.match(healthRoute, /const launchReady = Object\.values\(checks\)\.every\(Boolean\)/);
   assert.match(healthRoute, /const commonCheckoutReady = Boolean\(/);
   assert.match(healthRoute, /esim: commonCheckoutReady && Boolean\(esimOrderSchema\) && esimPromoIsActive\(\)/);
   assert.match(healthRoute, /pocketWifi: commonCheckoutReady && Boolean\(paymentSchema\) &&/);
-  assert.match(healthRoute, /Boolean\(pocketWifiFulfilmentSchema\) && checks\.inventory/);
+  assert.match(healthRoute, /Boolean\(pocketWifiFulfilmentSchema\) && checks\.inventory && availabilityChecks\.pocketWifiStock/);
+  assert.match(pocketWifiStock, /\.eq\('product_type', 'pocket_wifi'\)/);
+  assert.match(pocketWifiStock, /\.eq\('status', 'available'\)/);
+  assert.match(pocketWifiStock, /throw new Error\('Pocket WiFi inventory scan exceeded its safe page limit'\)/);
   assert.match(healthRoute, /const checkoutReady = Object\.values\(checkoutChecks\)\.every\(Boolean\)/);
   assert.match(healthRoute, /const salesReady = launchReady && Object\.values\(checkoutChecks\)\.some\(Boolean\)/);
   assert.match(healthRoute, /const paidAcquisitionReady = launchReady && checkoutReady && Object\.values\(paidAcquisitionChecks\)\.every\(Boolean\)/);
   assert.match(healthRoute, /checkoutChecks,/);
+  assert.match(healthRoute, /availabilityChecks,/);
   assert.match(healthRoute, /checkoutMissing,/);
   assert.match(healthRoute, /ok: launchReady/);
   assert.match(healthRoute, /salesReady,/);

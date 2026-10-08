@@ -7,6 +7,7 @@ import { hasOrderIntegritySigningConfig } from '@/lib/orderProvenance';
 import { healthCheckToken } from '@/lib/healthCheckToken';
 import { hasRequiredSupabaseAdminConfig } from '@/lib/supabaseAdmin';
 import { esimPromoIsActive } from '@/lib/esimPlans';
+import { hasSaleablePocketWifiInventory } from '@/lib/pocketWifiStock';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -50,12 +51,13 @@ export async function GET(req: Request) {
   // Pocket WiFi requirement. Keep the authenticated release signal aligned
   // with both routes so it cannot declare the store ready while eSIM checkout
   // correctly fails closed against a partial migration.
-  const [stripeApi, esimOrderSchema, paymentSchema, pocketWifiFulfilmentSchema, operationsSchema] = await Promise.all([
+  const [stripeApi, esimOrderSchema, paymentSchema, pocketWifiFulfilmentSchema, operationsSchema, pocketWifiStock] = await Promise.all([
     hasRequiredStripeApiAccess(),
     hasRequiredEsimOrderSchema(),
     hasRequiredPaymentSchema(),
     hasRequiredPocketWifiFulfilmentSchema(),
     hasRequiredOperationsSchema(),
+    hasSaleablePocketWifiInventory(config?.pocketWifiInventory || 0),
   ]);
   const checks = {
     stripe: hasRequiredStripeCheckoutConfig(),
@@ -77,6 +79,7 @@ export async function GET(req: Request) {
   const paidAcquisitionChecks = {
     metaCapi: hasRequiredMetaCapiPurchaseConfig(),
   };
+  const availabilityChecks = { pocketWifiStock };
   const launchReady = Object.values(checks).every(Boolean);
   // Deployment readiness and product availability are related but distinct.
   // A deliberately paused eSIM offer must not prevent a safe Pocket WiFi
@@ -93,7 +96,7 @@ export async function GET(req: Request) {
   const checkoutChecks = {
     esim: commonCheckoutReady && Boolean(esimOrderSchema) && esimPromoIsActive(),
     pocketWifi: commonCheckoutReady && Boolean(paymentSchema) &&
-      Boolean(pocketWifiFulfilmentSchema) && checks.inventory,
+      Boolean(pocketWifiFulfilmentSchema) && checks.inventory && availabilityChecks.pocketWifiStock,
   };
   const checkoutReady = Object.values(checkoutChecks).every(Boolean);
   // A release can intentionally pause one product (for example, when an
@@ -126,6 +129,7 @@ export async function GET(req: Request) {
     service: 'qy-roam',
     checks,
     checkoutChecks,
+    availabilityChecks,
     paidAcquisitionChecks,
     missing,
     checkoutMissing,

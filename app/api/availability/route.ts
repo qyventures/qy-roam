@@ -18,6 +18,7 @@ import { AVAILABILITY_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS, createCheckoutAttemptLimit
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { exactNonnegativeCount } from '@/lib/exactCount';
+import { saleablePocketWifiInventory } from '@/lib/pocketWifiStock';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,11 +37,6 @@ const globallyLimited = createGlobalAttemptLimiter(60_000, AVAILABILITY_GLOBAL_R
 // router that checkout's database-side count will correctly reject.
 const RESERVATION_SCAN_PAGE_SIZE = 1_000;
 const MAX_RESERVATION_SCAN_PAGES = 5;
-const INVENTORY_SCAN_PAGE_SIZE = 1_000;
-// Operational configuration caps the fleet at 10,000 units. Because this
-// scan excludes zero-quantity rows, ten full pages are enough to reach that
-// cap; one final page lets a smaller, highly fragmented register prove EOF.
-const MAX_INVENTORY_SCAN_PAGES = 11;
 
 // Availability is a purchase promise, rather than a rough stock estimate.
 // Keep its unavailable response identical across prerequisite failures so the
@@ -171,43 +167,6 @@ async function activeReservations(
   throw new Error('Pocket WiFi reservation scan exceeded its safe page limit');
 }
 
-async function saleableInventory(
-  supabase: NonNullable<ReturnType<typeof getSupabaseAdmin>>,
-  configuredInventory: number,
-) {
-  let afterId: number | null = null;
-  let total = 0;
-  for (let page = 0; page < MAX_INVENTORY_SCAN_PAGES; page += 1) {
-    let query = supabase.from('inventory_items').select('id,quantity_on_hand')
-      .eq('product_type', 'pocket_wifi')
-      .eq('status', 'available')
-      .gt('quantity_on_hand', 0)
-      .order('id')
-      .limit(INVENTORY_SCAN_PAGE_SIZE);
-    if (afterId !== null) query = query.gt('id', afterId);
-    const response = await query;
-    if (response.error) throw response.error;
-    const rows = response.data || [];
-    for (const row of rows) {
-      const id = Number(row.id);
-      const quantity = Number(row.quantity_on_hand);
-      if (!Number.isSafeInteger(id) || id < 1 || !Number.isSafeInteger(quantity) || quantity < 1) {
-        throw new Error('Pocket WiFi inventory contains an invalid saleable quantity');
-      }
-      // Only the configured fleet cap can affect the public answer. Clamp as
-      // we add so corrupt or unexpectedly large provider values cannot lose
-      // integer precision before Math.min is applied by the caller.
-      total = Math.min(configuredInventory, total + Math.min(quantity, configuredInventory));
-      if (total >= configuredInventory) return total;
-    }
-    if (rows.length < INVENTORY_SCAN_PAGE_SIZE) return total;
-    const lastId = Number(rows[rows.length - 1].id);
-    if (!Number.isSafeInteger(lastId) || lastId < 1) throw new Error('Pocket WiFi inventory scan returned an invalid cursor');
-    afterId = lastId;
-  }
-  throw new Error('Pocket WiFi inventory scan exceeded its safe page limit');
-}
-
 async function committedInventory(start: string, end: string, stripeHoldRequestIds: Set<string>, configuredInventory: number) {
   const supabase = getSupabaseAdmin();
   if (!supabase) throw new Error('Supabase is not configured');
@@ -233,7 +192,7 @@ async function committedInventory(start: string, end: string, stripeHoldRequestI
     // The configured fleet size is a safety cap, not evidence that a router
     // is physically dispatchable. Keep the public availability promise tied
     // to the same available-status, on-hand inventory pool used at dispatch.
-    saleableInventory(supabase, configuredInventory),
+    saleablePocketWifiInventory(supabase, configuredInventory),
   ]);
   if (orders.error) throw orders.error;
 
