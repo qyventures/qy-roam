@@ -994,8 +994,55 @@ begin
   if old.processed_at is not null and old.* is distinct from new.* then
     raise exception 'processed Stripe event is immutable';
   end if;
+  -- `processing_started_at` is the compare-and-swap token held by one
+  -- webhook worker. It may move only when the atomic claim RPC starts the
+  -- next attempt; letting an ordinary service-role update rewrite it could
+  -- make the real owner unable to settle or fail its work, or let a stale
+  -- worker appear to own a newer claim. At PostgreSQL's integer ceiling the
+  -- counter deliberately saturates, but a fresh timestamp still identifies
+  -- the new owner.
+  if new.processing_started_at is distinct from old.processing_started_at and not (
+    new.processed_at is null
+    and new.last_error is null
+    and new.last_failed_at is not distinct from old.last_failed_at
+    and (
+      (old.attempts = 2147483647 and new.attempts = 2147483647)
+      or (old.attempts < 2147483647 and new.attempts = old.attempts + 1)
+    )
+  ) then
+    raise exception 'Stripe event claim token can change only with a new attempt';
+  end if;
   if new.attempts < old.attempts then
     raise exception 'Stripe event attempts cannot decrease';
+  end if;
+  if new.attempts is distinct from old.attempts
+    and new.processing_started_at is not distinct from old.processing_started_at then
+    raise exception 'Stripe event attempts can change only with a new claim token';
+  end if;
+  -- Failure evidence is written once by the worker that still owns the claim.
+  -- Reclaim first clears `last_error`; a direct writer must not silently erase
+  -- or rewrite an exception without also acquiring the next attempt above.
+  if new.last_error is distinct from old.last_error and not (
+    (old.last_error is null and new.last_error is not null
+      and new.last_failed_at is not null
+      and new.processing_started_at is not distinct from old.processing_started_at
+      and new.attempts = old.attempts
+      and new.processed_at is null)
+    or (old.last_error is not null and new.last_error is null
+      and new.processing_started_at is distinct from old.processing_started_at)
+  ) then
+    raise exception 'Stripe event failure evidence can change only on failure or reclaim';
+  end if;
+  if new.last_failed_at is distinct from old.last_failed_at
+    and not (old.last_error is null and new.last_error is not null) then
+    raise exception 'Stripe event failure timestamp can change only with new failure evidence';
+  end if;
+  if new.processed_at is distinct from old.processed_at and not (
+    old.processed_at is null and new.processed_at is not null
+    and new.processing_started_at is not distinct from old.processing_started_at
+    and new.attempts = old.attempts and new.last_error is null
+  ) then
+    raise exception 'Stripe event can settle only under its current claim';
   end if;
   if new.last_error is not null and new.last_failed_at is null then
     raise exception 'failed Stripe event requires a failure timestamp';
@@ -2200,7 +2247,9 @@ as $$
   -- Version 32 additionally certifies exact optimistic version checks for
   -- concurrent admin eSIM fulfilment updates. Version 33 certifies that a
   -- cancelled paid order retains one immutable terminal cancellation reason.
-  select 33;
+  -- Version 34 certifies claim-owned Stripe event settlement and immutable
+  -- webhook failure audit transitions.
+  select 34;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
