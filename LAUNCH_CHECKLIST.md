@@ -34,6 +34,12 @@ The production Stripe endpoint must be created in **live mode**. The webhook
 rejects a signed event when its Stripe mode does not match `STRIPE_SECRET_KEY`,
 so a test-mode endpoint cannot create operational orders or fulfilment alerts.
 
+When rotating an endpoint signing secret, set the new value as
+`STRIPE_WEBHOOK_SECRET` and temporarily retain the old value as
+`STRIPE_WEBHOOK_SECRET_PREVIOUS`. Restart/redeploy, then remove the previous
+value after Stripe's retry window for deliveries signed before rotation has
+cleared. Readiness fails closed if either configured value is malformed.
+
 ### Checkout-integrity secret rotation
 
 Rotate this secret without invalidating a customer who has already reached

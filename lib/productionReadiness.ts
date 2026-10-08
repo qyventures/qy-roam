@@ -2,7 +2,7 @@ import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import crypto from 'crypto';
 import { isSafeSmtpHost, isSafeSmtpMailbox, smtpSecureTransport } from '@/lib/smtp';
 import { safeHttpsDeliveryEndpoint } from '@/lib/deliveryEndpoint';
-import { stripeWebhookSigningSecret } from '@/lib/stripeWebhookSecret';
+import { stripeWebhookSigningSecrets } from '@/lib/stripeWebhookSecret';
 import { createStripeClient } from '@/lib/stripeClient';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/stripeCheckoutConfig';
 export { hasRequiredStripeCheckoutConfig };
@@ -248,7 +248,7 @@ export function hasRequiredFulfilmentEmailConfig() {
 // to the other pre-payment guards so the public checkout routes fail closed
 // instead of creating an order that requires dashboard recovery.
 export function hasRequiredStripeWebhookConfig() {
-  return Boolean(stripeWebhookSigningSecret());
+  return Boolean(stripeWebhookSigningSecrets());
 }
 
 /**

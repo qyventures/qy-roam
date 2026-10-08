@@ -39,7 +39,7 @@ const { checkoutClientKey, createCheckoutAttemptLimiter, createGlobalAttemptLimi
 const { adminAuthClientKey, createFailedAdminAuthLimiter } = require('../lib/adminAuthRateLimit.ts');
 const { ADMIN_MUTATION_HEADER, ADMIN_MUTATION_HEADER_VALUE, adminMutationHeaders } = require('../lib/adminMutation.ts');
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = require('../lib/stripeCheckoutConfig.ts');
-const { stripeWebhookSigningSecret } = require('../lib/stripeWebhookSecret.ts');
+const { stripeWebhookSigningSecret, stripeWebhookSigningSecrets } = require('../lib/stripeWebhookSecret.ts');
 const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
 const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_EXPIRY_CREATION_MARGIN_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, CHECKOUT_ATTEMPT_MAX_FUTURE_MS, STRIPE_HOLD_SCAN_WINDOW_SECONDS, checkoutAttemptExpiresAt, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
 const { checkoutSiteOrigin, isProductionQyRoamOrigin, metaPurchaseEventSourceUrl } = require('../lib/siteOrigin.ts');
@@ -2473,8 +2473,36 @@ test('Stripe webhook rejects malformed signing-secret configuration as unavailab
 test('Stripe webhook readiness and verification share a canonical signing secret', () => {
   assert.equal(stripeWebhookSigningSecret('  whsec_abcdefghijklmnopqrstuvwxyz123456  \n'), 'whsec_abcdefghijklmnopqrstuvwxyz123456');
   assert.equal(stripeWebhookSigningSecret('whsec_abc\ndefghijklmnopqrstuvwxyz123456'), null);
-  assert.match(productionReadiness, /return Boolean\(stripeWebhookSigningSecret\(\)\)/);
-  assert.match(webhookRoute, /webhookSecret=stripeWebhookSigningSecret\(\)/);
+  assert.match(productionReadiness, /return Boolean\(stripeWebhookSigningSecrets\(\)\)/);
+  assert.match(webhookRoute, /webhookSecrets=stripeWebhookSigningSecrets\(\)/);
+});
+
+test('Stripe webhook secret rotation accepts only one valid prior secret', () => {
+  const current = process.env.STRIPE_WEBHOOK_SECRET;
+  const previous = process.env.STRIPE_WEBHOOK_SECRET_PREVIOUS;
+  try {
+    process.env.STRIPE_WEBHOOK_SECRET = 'whsec_currentabcdefghijklmnopqrstuvwxyz';
+    delete process.env.STRIPE_WEBHOOK_SECRET_PREVIOUS;
+    assert.deepEqual(stripeWebhookSigningSecrets(), ['whsec_currentabcdefghijklmnopqrstuvwxyz']);
+
+    process.env.STRIPE_WEBHOOK_SECRET_PREVIOUS = '  whsec_previousabcdefghijklmnopqrstuvwxyz  ';
+    assert.deepEqual(stripeWebhookSigningSecrets(), [
+      'whsec_currentabcdefghijklmnopqrstuvwxyz',
+      'whsec_previousabcdefghijklmnopqrstuvwxyz',
+    ]);
+
+    process.env.STRIPE_WEBHOOK_SECRET_PREVIOUS = 'whsec_currentabcdefghijklmnopqrstuvwxyz';
+    assert.deepEqual(stripeWebhookSigningSecrets(), ['whsec_currentabcdefghijklmnopqrstuvwxyz']);
+
+    process.env.STRIPE_WEBHOOK_SECRET_PREVIOUS = 'malformed';
+    assert.equal(stripeWebhookSigningSecrets(), null);
+  } finally {
+    if (current === undefined) delete process.env.STRIPE_WEBHOOK_SECRET;
+    else process.env.STRIPE_WEBHOOK_SECRET = current;
+    if (previous === undefined) delete process.env.STRIPE_WEBHOOK_SECRET_PREVIOUS;
+    else process.env.STRIPE_WEBHOOK_SECRET_PREVIOUS = previous;
+  }
+  assert.match(webhookRoute, /for\(const webhookSecret of webhookSecrets\)/);
 });
 
 test('production checkout and recovery reject test-mode Stripe server credentials', () => {

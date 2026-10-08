@@ -12,3 +12,22 @@ export function stripeWebhookSigningSecret(value = process.env.STRIPE_WEBHOOK_SE
     ? secret
     : null;
 }
+
+/**
+ * Return the bounded set of secrets accepted during an intentional Stripe
+ * endpoint-secret rotation. New deployments still require the active secret;
+ * when a previous value is explicitly present it must be just as valid, so a
+ * typo cannot make readiness green while old signed deliveries are rejected.
+ * Equal values are collapsed to avoid doing duplicate verification work.
+ */
+export function stripeWebhookSigningSecrets() {
+  const current = stripeWebhookSigningSecret();
+  if (!current) return null;
+
+  const previousValue = process.env.STRIPE_WEBHOOK_SECRET_PREVIOUS;
+  if (!previousValue) return [current];
+
+  const previous = stripeWebhookSigningSecret(previousValue);
+  if (!previous) return null;
+  return previous === current ? [current] : [current, previous];
+}

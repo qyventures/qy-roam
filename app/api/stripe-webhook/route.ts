@@ -9,7 +9,7 @@ import { validateQyRoamSession } from '@/lib/qyRoamSession';
 import { validCheckoutRequestId } from '@/lib/checkoutValidation';
 import { hasOrderIntegritySigningConfig, validQyRoamProvenance } from '@/lib/orderProvenance';
 import { hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '@/lib/productionReadiness';
-import { stripeWebhookSigningSecret } from '@/lib/stripeWebhookSecret';
+import { stripeWebhookSigningSecrets } from '@/lib/stripeWebhookSecret';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { getEsimPlan } from '@/lib/esimPlans';
 import { fulfilmentNotificationActionable } from '@/lib/orderLifecycle';
@@ -719,13 +719,13 @@ export async function POST(req:Request){
   // hasRequiredStripeCheckoutConfig canonicalises ordinary deployment
   // whitespace. Use the same value for signature verification and API reads
   // so a health-ready service cannot reject every signed payment event.
-  const key=process.env.STRIPE_SECRET_KEY?.trim(),webhookSecret=stripeWebhookSigningSecret();
+  const key=process.env.STRIPE_SECRET_KEY?.trim(),webhookSecrets=stripeWebhookSigningSecrets();
   // This must use the same strict signing-secret boundary as checkout and
   // authenticated readiness. A merely non-empty malformed secret otherwise
   // makes every authentic Stripe delivery look like a bad signature (400),
   // which prevents a configuration outage from being surfaced and retried as
   // a service dependency failure.
-  if(!hasRequiredStripeCheckoutConfig()||!hasRequiredStripeWebhookConfig()||!hasOrderIntegritySigningConfig()||!key||!webhookSecret) {
+  if(!hasRequiredStripeCheckoutConfig()||!hasRequiredStripeWebhookConfig()||!hasOrderIntegritySigningConfig()||!key||!webhookSecrets) {
     return webhookJson({error:'Webhook configuration incomplete'},{status:503});
   }
   // Stripe signs JSON Checkout event bytes. A different media type cannot be
@@ -754,7 +754,19 @@ export async function POST(req:Request){
     if (error instanceof StripeWebhookBodyTimeoutError) return webhookJson({error:'Webhook payload timed out'},{status:408});
     return webhookJson({error:'Invalid webhook payload'},{status:400});
   }
-  try{event=stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret);}catch{return webhookJson({error:'Invalid signature'},{status:400});}
+  // Stripe can continue delivering attempts signed with the prior endpoint
+  // secret during a controlled rotation. Accept one explicitly configured
+  // previous secret without weakening the signature boundary or exposing
+  // which key matched. The helper keeps this list valid and bounded to two.
+  let verifiedEvent:Stripe.Event|undefined;
+  for(const webhookSecret of webhookSecrets){
+    try{
+      verifiedEvent=stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret);
+      break;
+    }catch{}
+  }
+  if(!verifiedEvent) return webhookJson({error:'Invalid signature'},{status:400});
+  event=verifiedEvent;
   const webhookEvent=stripeWebhookEventEnvelope(event);
   if(!webhookEvent) {
     console.error('stripe_webhook_invalid_event_envelope');
