@@ -186,9 +186,14 @@ export async function fetchSupabaseWithTimeout(
         streamController.error(controller.signal.reason === timeoutError ? timeoutError : error);
       }
     },
-    async cancel(reason) {
+    cancel(reason) {
       cleanup();
-      await reader.cancel(reason);
+      // Consumer cancellation is already final for the wrapped response. An
+      // upstream proxy/runtime is not allowed to keep checkout or webhook
+      // work alive by returning a reader.cancel() promise that never settles.
+      // Tear the source down on a best-effort basis, matching the timeout and
+      // response-limit paths above, and let the caller finish immediately.
+      void reader.cancel(reason).catch(() => undefined);
     },
   });
 

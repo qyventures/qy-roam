@@ -5155,6 +5155,27 @@ test('Supabase order-critical requests use a bounded shared transport', async ()
     global.fetch = originalFetch;
   }
 
+  // Once a caller cancels the wrapped response, an uncooperative upstream
+  // reader must not retain that checkout/webhook worker during teardown.
+  let upstreamCancelStarted = false;
+  global.fetch = async () => new Response(new ReadableStream({
+    cancel() {
+      upstreamCancelStarted = true;
+      return new Promise(() => {});
+    },
+  }), { status: 200 });
+  try {
+    const response = await fetchSupabaseWithTimeout('https://supabase.example/rest/v1/orders', undefined, 5_000);
+    const cancelled = response.body.cancel(new Error('Caller stopped reading'));
+    await Promise.race([
+      cancelled,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Wrapped cancellation remained blocked')), 50)),
+    ]);
+    assert.equal(upstreamCancelStarted, true);
+  } finally {
+    global.fetch = originalFetch;
+  }
+
   // A completed body remains readable and clears its deadline normally.
   global.fetch = async () => new Response('{"ok":true}', { status: 200 });
   try {
