@@ -3964,11 +3964,14 @@ test('launch control reports the same checkout prerequisites that protect real o
   assert.match(launchPage, /hasOrderIntegritySigningConfig/);
   assert.match(launchPage, /hasRequiredEsimOrderSchema\(\)/);
   assert.match(launchPage, /hasRequiredPocketWifiFulfilmentSchema\(\)/);
+  assert.match(launchPage, /hasSaleablePocketWifiInventory\(config\?\.pocketWifiInventory\|\|0\)/);
   assert.match(launchPage, /const commonCheckoutReady=stripe&&stripeApi&&webhook&&site&&orderIntegrity&&smtp/);
   assert.match(launchPage, /const esimOfferActive=esimPromoIsActive\(\)/);
   assert.match(launchPage, /const wifiPromoActive=promoIsActive\(\)/);
   assert.match(launchPage, /const esimReady=commonCheckoutReady&&esimOrderDbOk&&esimOfferActive/);
-  assert.match(launchPage, /const wifiReady=commonCheckoutReady&&paymentDbOk&&pocketWifiFulfilmentDbOk&&wifiInventory/);
+  assert.match(launchPage, /const wifiReady=commonCheckoutReady&&paymentDbOk&&pocketWifiFulfilmentDbOk&&wifiInventory&&pocketWifiStock/);
+  assert.match(launchPage, /wifiInventory&&!pocketWifiStock&&'available Pocket WiFi unit in the inventory register'/);
+  assert.match(launchPage, /Pocket WiFi available stock/);
   assert.match(launchPage, /Pocket WiFi dispatch and return custody schema/);
   assert.doesNotMatch(launchPage, /const esimReady=.*paymentDbOk/);
   // Paid acquisition is a release decision, not merely the intersection of
