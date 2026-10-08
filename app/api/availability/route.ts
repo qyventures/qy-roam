@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import type Stripe from 'stripe';
 import { createStripeClient } from '../../../lib/stripeClient';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
-import { parseExactIsoDate, validCheckoutRequestId } from '@/lib/checkoutValidation';
+import { parseExactIsoDate } from '@/lib/checkoutValidation';
 import { operationalConfig } from '@/lib/operationalConfig';
 import { operationalIsoDateAfter } from '@/lib/operationalDate';
 import { hasOrderIntegritySigningConfig, validQyRoamProvenance } from '@/lib/orderProvenance';
@@ -13,30 +13,20 @@ import {
   hasRequiredStripeCheckoutConfig,
   hasRequiredStripeWebhookConfig,
 } from '@/lib/productionReadiness';
-import { CHECKOUT_WEBHOOK_HANDOFF_GRACE_MS, MAX_STRIPE_HOLD_SCAN_PAGES, STRIPE_HOLD_SCAN_WINDOW_SECONDS } from '@/lib/checkoutExpiry';
+import { MAX_STRIPE_HOLD_SCAN_PAGES, STRIPE_HOLD_SCAN_WINDOW_SECONDS } from '@/lib/checkoutExpiry';
 import { AVAILABILITY_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS, createCheckoutAttemptLimiter, createGlobalAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
-import { exactNonnegativeCount } from '@/lib/exactCount';
-import { saleablePocketWifiInventory } from '@/lib/pocketWifiStock';
 
 export const dynamic = 'force-dynamic';
 
-// A live availability lookup performs a Stripe hold scan and several database
-// reads. Keep ordinary date-picker retries responsive while preventing the
+// A live availability lookup performs a Stripe hold scan and an atomic database
+// snapshot. Keep ordinary date-picker retries responsive while preventing the
 // public endpoint from becoming an unbounded provider-work amplifier. This is
 // deliberately separate from the stricter checkout limiter because checking
 // a date range is safe to repeat a little more often than opening payment.
 const limited = createCheckoutAttemptLimiter(60_000, 30);
 const globallyLimited = createGlobalAttemptLimiter(60_000, AVAILABILITY_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS);
-// Supabase/PostgREST applies a per-response row ceiling. A single response is
-// not a safe capacity authority: a larger fleet can legitimately have more
-// than that many unexpired, overlapping reservations across a long (up to
-// 90-day) rental range. Scan every page we rely on, with a firm work ceiling;
-// an incomplete scan must make availability unavailable rather than promise a
-// router that checkout's database-side count will correctly reject.
-const RESERVATION_SCAN_PAGE_SIZE = 1_000;
-const MAX_RESERVATION_SCAN_PAGES = 5;
 
 // Availability is a purchase promise, rather than a rough stock estimate.
 // Keep its unavailable response identical across prerequisite failures so the
@@ -127,90 +117,24 @@ async function activeStripeHolds(stripe: Stripe, stripeKey: string, start: strin
   return { holds, requestIds };
 }
 
-async function activeReservations(
-  supabase: NonNullable<ReturnType<typeof getSupabaseAdmin>>,
-  start: string,
-  end: string,
-  reservationCutoff: string,
-) {
-  const checkoutCutoff = new Date().toISOString();
-  const reservations: { checkout_request_id: string }[] = [];
-  let afterRequestId: string | null = null;
-  for (let page = 0; page < MAX_RESERVATION_SCAN_PAGES; page += 1) {
-    // Offset pagination can skip a reservation when an expired row is deleted
-    // while this public scan is moving between pages. Use the immutable
-    // primary checkout identity as a keyset cursor so concurrent cleanup
-    // cannot shift later rows into an already-read offset and overstate stock.
-    let query = supabase.from('checkout_reservations').select('checkout_request_id')
-      // Unlinked attempts have no Stripe payment capability or webhook
-      // handoff, so they stop consuming stock at normal checkout expiry.
-      // Linked sessions retain the recovery grace used by the database RPC.
-      .or(`and(stripe_session_id.is.null,expires_at.gt.${checkoutCutoff}),and(stripe_session_id.not.is.null,expires_at.gt.${reservationCutoff})`)
-      .lte('travel_start', end)
-      .gte('travel_end', start)
-      .order('checkout_request_id')
-      .limit(RESERVATION_SCAN_PAGE_SIZE);
-    if (afterRequestId) query = query.gt('checkout_request_id', afterRequestId);
-    const response = await query;
-    if (response.error) throw response.error;
-    const rows = response.data || [];
-    for (const row of rows) {
-      if (!validCheckoutRequestId(row.checkout_request_id)) {
-        throw new Error('Pocket WiFi reservation has an invalid checkout request identity');
-      }
-    }
-    reservations.push(...rows);
-    if (rows.length < RESERVATION_SCAN_PAGE_SIZE) return reservations;
-    afterRequestId = validCheckoutRequestId(rows[rows.length - 1].checkout_request_id);
-    if (!afterRequestId) throw new Error('Pocket WiFi reservation scan returned an invalid cursor');
-  }
-  throw new Error('Pocket WiFi reservation scan exceeded its safe page limit');
-}
-
 async function committedInventory(start: string, end: string, stripeHoldRequestIds: Set<string>, configuredInventory: number) {
   const supabase = getSupabaseAdmin();
   if (!supabase) throw new Error('Supabase is not configured');
-
-  const reservationCutoff = new Date(Date.now() - CHECKOUT_WEBHOOK_HANDOFF_GRACE_MS).toISOString();
-  const [orders, reservations, saleableItems] = await Promise.all([
-    supabase.from('orders').select('id', { count: 'exact', head: true })
-      .eq('product_type', 'pocket_wifi')
-      // Only Stripe can create an asynchronous awaiting-payment commitment.
-      // Legacy unpaid manual rows have no settlement callback and must not
-      // consume physical capacity forever.
-      .or('payment_status.eq.paid,and(stripe_session_id.like.cs_*,fulfilment_status.eq.awaiting_payment)')
-      .lte('travel_start', end)
-      .gte('travel_end', start)
-      // Dispatch atomically removes an assigned router from quantity_on_hand.
-      // The saleable-inventory query below already reflects that hand-off, so
-      // excluding it here avoids double-counting. Keep legacy dispatched rows
-      // with no assigned stock item committed: there is no evidence their
-      // inventory was decremented. This mirrors the reservation RPC.
-      .or('dispatched_at.is.null,inventory_item_id.is.null')
-      .or('fulfilment_status.not.in.(cancelled,payment_failed,returned,closed),and(fulfilment_status.eq.cancelled,dispatched_at.not.is.null,returned_at.is.null,inventory_item_id.is.null)'),
-    activeReservations(supabase, start, end, reservationCutoff),
-    // The configured fleet size is a safety cap, not evidence that a router
-    // is physically dispatchable. Keep the public availability promise tied
-    // to the same available-status, on-hand inventory pool used at dispatch.
-    saleablePocketWifiInventory(supabase, configuredInventory),
-  ]);
-  if (orders.error) throw orders.error;
-
-  // PostgREST normally returns a number for an exact HEAD count, but a
-  // missing/invalid Content-Range can leave `count` null without an ordinary
-  // query error. This value is an authority for the last physical router: do
-  // not interpret an incomplete provider response as zero committed orders.
-  const committedOrders = exactNonnegativeCount(orders.count, 'Committed Pocket WiFi order count');
-
-  // A checkout session normally has a matching reservation. Count that session
-  // once via Stripe, then add only reservations that have no open session yet.
-  const unlinkedReservations = reservations.filter(
-    ({ checkout_request_id }) => !stripeHoldRequestIds.has(checkout_request_id),
-  ).length;
-  return {
-    committed: committedOrders + unlinkedReservations,
-    saleableInventory: saleableItems,
-  };
+  const snapshot = await supabase.rpc('qy_pocket_wifi_availability_snapshot', {
+    p_travel_start: start,
+    p_travel_end: end,
+    p_inventory: configuredInventory,
+    p_stripe_hold_request_ids: [...stripeHoldRequestIds],
+  });
+  if (snapshot.error) throw snapshot.error;
+  const row = Array.isArray(snapshot.data) ? snapshot.data[0] : snapshot.data;
+  const committed = Number(row?.committed);
+  const saleableInventory = Number(row?.saleable_inventory);
+  if (!Number.isSafeInteger(committed) || committed < 0 ||
+    !Number.isSafeInteger(saleableInventory) || saleableInventory < 0 || saleableInventory > configuredInventory) {
+    throw new Error('Pocket WiFi availability snapshot is invalid');
+  }
+  return { committed, saleableInventory };
 }
 
 export async function GET(req: NextRequest) {

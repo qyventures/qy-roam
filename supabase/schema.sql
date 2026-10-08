@@ -1397,6 +1397,7 @@ as $$
     to_regclass('public.fulfilment_notifications') is not null and
     to_regclass('public.meta_purchase_deliveries') is not null and
     to_regprocedure('public.qy_claim_stripe_event(text,text,text)') is not null and
+    to_regprocedure('public.qy_pocket_wifi_availability_snapshot(date,date,integer,text[])') is not null and
     -- The CRM trigger delegates its ledger-derived totals to this helper.
     -- Check that dependency explicitly: a partial/manual migration must not
     -- pass payment readiness and then fail every paid-order insert when the
@@ -1507,6 +1508,85 @@ alter table public.checkout_reservations add constraint checkout_reservations_se
   )
 ) not valid;
 alter table public.checkout_reservations enable row level security;
+
+-- Public availability must observe orders, temporary reservations and
+-- saleable stock in one database snapshot. Reading those ledgers through
+-- separate PostgREST requests can straddle the atomic reservation-to-order
+-- handoff (or dispatch stock movement), briefly miss both representations and
+-- invite a shopper into a checkout that the final reservation authority must
+-- reject. Serialize this read with the same transaction lock as reservation,
+-- persistence. The final values are also produced by one SQL statement, so
+-- an inventory dispatch/return transaction cannot be observed half-applied.
+create or replace function public.qy_pocket_wifi_availability_snapshot(
+  p_travel_start date,
+  p_travel_end date,
+  p_inventory integer,
+  p_stripe_hold_request_ids text[] default array[]::text[]
+)
+returns table(committed integer, saleable_inventory integer)
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if p_travel_start is null or p_travel_end is null or p_travel_end < p_travel_start then
+    raise exception 'invalid availability dates';
+  end if;
+  if p_inventory is null or p_inventory < 0 or p_inventory > 10000 then
+    raise exception 'invalid Pocket WiFi inventory limit';
+  end if;
+  if p_stripe_hold_request_ids is null
+    or cardinality(p_stripe_hold_request_ids) > 500
+    or exists (
+      select 1 from unnest(p_stripe_hold_request_ids) as hold_ids(hold_id)
+      where hold_id is null or hold_id !~ '^[A-Za-z0-9_-]{16,80}$'
+    )
+    or cardinality(p_stripe_hold_request_ids) <> (
+      select count(distinct hold_id) from unnest(p_stripe_hold_request_ids) as hold_ids(hold_id)
+    ) then
+    raise exception 'invalid Stripe hold request identities';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtext('qy_roam_pocket_wifi_checkout'));
+
+  return query
+  select
+    (
+      select count(*)::integer
+      from public.orders
+      where product_type = 'pocket_wifi'
+        and (payment_status = 'paid' or (
+          stripe_session_id ~ '^cs_(test|live)_[A-Za-z0-9]+$' and
+          fulfilment_status = 'awaiting_payment'
+        ))
+        and travel_start <= p_travel_end
+        and travel_end >= p_travel_start
+        and (dispatched_at is null or inventory_item_id is null)
+        and (
+          fulfilment_status not in ('cancelled', 'payment_failed', 'returned', 'closed')
+          or (fulfilment_status = 'cancelled' and dispatched_at is not null and returned_at is null and inventory_item_id is null)
+        )
+    ) + (
+      select count(*)::integer
+      from public.checkout_reservations
+      where (
+          (stripe_session_id is null and expires_at > now())
+          or (stripe_session_id is not null and expires_at > now() - interval '4 days')
+        )
+        and travel_start <= p_travel_end
+        and travel_end >= p_travel_start
+        and not (checkout_request_id = any(p_stripe_hold_request_ids))
+    ),
+    (
+      select least(p_inventory::bigint, coalesce(sum(quantity_on_hand::bigint), 0))::integer
+      from public.inventory_items
+      where product_type = 'pocket_wifi'
+        and status = 'available'
+    );
+end;
+$$;
+revoke all on function public.qy_pocket_wifi_availability_snapshot(date,date,integer,text[]) from public;
+grant execute on function public.qy_pocket_wifi_availability_snapshot(date,date,integer,text[]) to service_role;
 
 create or replace function public.qy_reserve_pocket_wifi(
   p_checkout_request_id text,
@@ -2249,7 +2329,9 @@ as $$
   -- cancelled paid order retains one immutable terminal cancellation reason.
   -- Version 34 certifies claim-owned Stripe event settlement and immutable
   -- webhook failure audit transitions.
-  select 34;
+  -- Version 35 requires one atomic Pocket WiFi availability snapshot across
+  -- durable orders, temporary reservations and saleable physical stock.
+  select 35;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
