@@ -113,13 +113,23 @@ export async function fetchSupabaseWithTimeout(
     requestSignal?.removeEventListener('abort', abortFromRequest);
   };
 
-  if (requestSignal?.aborted) abortFromRequest();
-  else requestSignal?.addEventListener('abort', abortFromRequest, { once: true });
-
   const timeout = setTimeout(() => {
     controller.abort(timeoutError);
     rejectDeadline?.(timeoutError);
   }, timeoutMs);
+  // An AbortSignal can already be cancelled when Supabase starts the fetch
+  // (for example, when a readiness deadline expires between building the
+  // query and dispatching it). Initialise the transport timer before running
+  // abort cleanup, then reject without invoking fetch at all. The previous
+  // ordering called cleanup while `timeout` was still in its temporal dead
+  // zone, replacing the caller's cancellation with a ReferenceError and
+  // potentially starting a privileged request after its owner had stopped
+  // waiting for it.
+  if (requestSignal?.aborted) {
+    abortFromRequest();
+    return await deadline;
+  }
+  requestSignal?.addEventListener('abort', abortFromRequest, { once: true });
   let response: Response;
   try {
     response = await Promise.race([
