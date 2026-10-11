@@ -1290,7 +1290,20 @@ begin
   ) then
     raise exception 'invalid delivery ledger status transition';
   end if;
-  if new.status = 'sending' and (new.attempts <= old.attempts or new.last_attempt_at is null) then
+  -- Claiming a send normally advances the counter exactly once. At the
+  -- PostgreSQL integer ceiling the application deliberately saturates the
+  -- counter, so require a fresh attempt timestamp instead of making that
+  -- otherwise valid paid-order recovery permanently unclaimable. Exact
+  -- increments also prevent a service-role repair from inventing skipped
+  -- attempts while moving a row into the irreversible provider-work state.
+  if new.status = 'sending' and (
+    new.last_attempt_at is null
+    or new.last_attempt_at is not distinct from old.last_attempt_at
+    or not (
+      (old.attempts = 2147483647 and new.attempts = 2147483647)
+      or (old.attempts < 2147483647 and new.attempts = old.attempts + 1)
+    )
+  ) then
     raise exception 'sending delivery requires a recorded attempt';
   end if;
   if new.status <> 'sent' and new.sent_at is not null then
@@ -1342,7 +1355,17 @@ begin
   ) then
     raise exception 'invalid delivery ledger status transition';
   end if;
-  if new.status = 'sending' and (new.attempts <= old.attempts or new.last_attempt_at is null) then
+  -- Keep the Meta delivery claim contract identical to fulfilment email:
+  -- exactly one counter step below the integer ceiling, or a saturated
+  -- counter plus a fresh ownership timestamp at the ceiling.
+  if new.status = 'sending' and (
+    new.last_attempt_at is null
+    or new.last_attempt_at is not distinct from old.last_attempt_at
+    or not (
+      (old.attempts = 2147483647 and new.attempts = 2147483647)
+      or (old.attempts < 2147483647 and new.attempts = old.attempts + 1)
+    )
+  ) then
     raise exception 'sending delivery requires a recorded attempt';
   end if;
   if new.status <> 'sent' and new.sent_at is not null then

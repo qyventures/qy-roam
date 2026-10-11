@@ -620,6 +620,18 @@ test('durable retry counters recover malformed inherited values without exceedin
   assert.match(webhookRoute, /attempts:nextRetryAttempt\(delivery\.attempts,0\)/);
 });
 
+test('delivery ledger claims remain recoverable at the PostgreSQL retry-counter ceiling', () => {
+  // Both outbound ledgers use the same application-side saturating counter.
+  // Their database triggers must accept that ceiling only with a fresh claim
+  // timestamp, while retaining exact +1 accounting below the ceiling.
+  // One additional match belongs to the independent Stripe-event claim
+  // state machine, which follows the same safe saturation rule.
+  assert.equal((schema.match(/old\.attempts = 2147483647 and new\.attempts = 2147483647/g) || []).length, 3);
+  assert.equal((schema.match(/old\.attempts < 2147483647 and new\.attempts = old\.attempts \+ 1/g) || []).length, 3);
+  assert.equal((schema.match(/new\.last_attempt_at is not distinct from old\.last_attempt_at/g) || []).length, 2);
+  assert.doesNotMatch(schema, /new\.status = 'sending' and \(new\.attempts <= old\.attempts or new\.last_attempt_at is null\)/);
+});
+
 test('durable orders accept only canonical Stripe or protected manual-sale identities', () => {
   assert.match(
     schema,
@@ -4419,7 +4431,7 @@ test('delivery ledgers cannot claim provider success without an audited send att
   assert.match(schema, /if tg_op = 'INSERT' then[\s\S]{0,350}new\.status <> 'pending'[\s\S]{0,350}new delivery ledger record must begin pending and unattempted/g);
   assert.match(schema, /old\.status = 'pending' and new\.status = 'sending'/);
   assert.match(schema, /old\.status = 'sending' and new\.status in \('pending', 'sent'\)/);
-  assert.match(schema, /new\.status = 'sending' and \(new\.attempts <= old\.attempts or new\.last_attempt_at is null\)/);
+  assert.equal((schema.match(/new\.status = 'sending' and \(\s*new\.last_attempt_at is null\s*or new\.last_attempt_at is not distinct from old\.last_attempt_at[\s\S]{0,250}old\.attempts = 2147483647 and new\.attempts = 2147483647[\s\S]{0,180}old\.attempts < 2147483647 and new\.attempts = old\.attempts \+ 1/g) || []).length, 2);
   assert.match(schema, /new\.status <> 'sent' and new\.sent_at is not null/);
   assert.equal((schema.match(/new\.sent_at is not null or new\.last_error is not null/g) || []).length, 2);
   assert.equal((schema.match(/delivery failure requires a completed failed attempt/g) || []).length, 2);
