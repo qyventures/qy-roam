@@ -4502,6 +4502,20 @@ test('admin visibility detects abandoned Stripe claims using the webhook recover
   assert.match(adminPage, /Processing worker stopped before completion/);
 });
 
+test('admin return custody queue exposes due routers before they become overdue', () => {
+  assert.match(adminPage, /const returnDueOrders = active\.filter/);
+  assert.match(adminPage, /typeof days === 'number' && days < 0/);
+  assert.match(adminPage, /const overdueReturnOrders = returnDueOrders\.filter/);
+  assert.match(adminPage, /days < -POCKET_WIFI_RETURN_GRACE_DAYS/);
+  assert.match(adminPage, /<small>WiFi returns due<\/small>/);
+  assert.match(adminPage, /Pocket WiFi returns are due\./);
+  assert.match(adminPage, /no return reference recorded/);
+  assert.match(adminPage, /href=\{`#order-\$\{order\.id\}`\}/);
+  assert.match(adminPage, /id=\{`order-\$\{o\.id\}`\}/);
+  assert.match(adminPage, /returnDueOrders\.slice\(0,50\)/);
+  assert.match(adminPage, /!ordersIncomplete && returnDueOrders\.length > 0/);
+});
+
 test('admin financial reporting fails closed on malformed paid ledger rows', () => {
   assert.match(adminPage, /function paidAmountCents\(value: unknown\)/);
   assert.match(adminPage, /const invalidPaidAmounts = paid\.filter\(\(o:any\)=>paidAmountCents\(o\.amount_sgd\) === null\)/);

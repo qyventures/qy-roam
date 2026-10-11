@@ -302,10 +302,14 @@ export default async function AdminPage() {
     const days = daysFromToday(o.travel_start);
     return typeof days === 'number' && days <= 2 && !['fulfilled','closed'].includes(o.fulfilment_status);
   });
-  const returnExceptions = active.filter((o:any) => {
+  const returnDueOrders = active.filter((o:any) => {
     if (isEsim(o)) return false;
     const days = daysFromToday(o.travel_end);
-    return typeof days === 'number' && days < -POCKET_WIFI_RETURN_GRACE_DAYS && !['returned','closed'].includes(o.fulfilment_status);
+    return typeof days === 'number' && days < 0 && !['returned','closed'].includes(o.fulfilment_status);
+  }).sort((a:any,b:any) => String(a.travel_end || '').localeCompare(String(b.travel_end || '')) || Number(a.id || 0) - Number(b.id || 0));
+  const overdueReturnOrders = returnDueOrders.filter((o:any) => {
+    const days = daysFromToday(o.travel_end);
+    return typeof days === 'number' && days < -POCKET_WIFI_RETURN_GRACE_DAYS;
   });
 
   return <main className="wrap section legal" style={{maxWidth:1280}}>
@@ -356,7 +360,7 @@ export default async function AdminPage() {
           {!fulfilmentSummaryIncomplete && <>
             <div style={cardStyle}><small>WiFi dispatch exceptions</small><div style={metricStyle}>{wifiDispatchExceptions.length}</div><small>departing within 2 days / unresolved</small></div>
             <div style={cardStyle}><small>eSIM fulfilment exceptions</small><div style={metricStyle}>{esimExceptions.length}</div><small>departing within 2 days / unresolved</small></div>
-            <div style={cardStyle}><small>Overdue WiFi returns</small><div style={metricStyle}>{returnExceptions.length}</div><small>more than {POCKET_WIFI_RETURN_GRACE_DAYS} days past trip end</small></div>
+            <div style={cardStyle}><small>WiFi returns due</small><div style={metricStyle}>{returnDueOrders.length}</div><small>{overdueReturnOrders.length} more than {POCKET_WIFI_RETURN_GRACE_DAYS} days overdue</small></div>
             <div style={cardStyle}><small>Ops email exceptions</small><div style={metricStyle}>{notificationExceptions.length}</div><small>paid Stripe-order notifications not confirmed sent</small></div>
             <div style={cardStyle}><small>Meta CAPI exceptions</small><div style={metricStyle}>{metaDeliveryExceptions.length}</div><small>consented purchases not confirmed delivered</small></div>
           </>}
@@ -364,6 +368,25 @@ export default async function AdminPage() {
             ? <><div style={{...metricStyle,fontSize:22}}>Unavailable</div><small>complete recovery ledger required</small></>
             : <><div style={metricStyle}>{webhookFailures.length}</div><small>failed or abandoned events awaiting a signed retry</small></>}</div>
         </div>
+        {!ordersIncomplete && returnDueOrders.length > 0 && <div role="alert" style={{...cardStyle,borderColor:overdueReturnOrders.length > 0 ? '#dc2626' : '#b45309',background:overdueReturnOrders.length > 0 ? '#fef2f2' : '#fffbeb',marginTop:14}}>
+          <strong>{overdueReturnOrders.length > 0 ? 'Pocket WiFi returns need immediate follow-up.' : 'Pocket WiFi returns are due.'}</strong>
+          <div style={{marginTop:6}}>Confirm the device is in transit, record the return tracking reference, and use the protected receipt action only after the physical router is received and inspected.</div>
+          <ul>{returnDueOrders.slice(0,50).map((order:any)=>{
+            const days = daysFromToday(order.travel_end);
+            const daysPastTrip = typeof days === 'number' ? Math.abs(days) : null;
+            const overdue = typeof days === 'number' && days < -POCKET_WIFI_RETURN_GRACE_DAYS;
+            return <li key={order.id} style={{marginBottom:8}}>
+              <a href={`#order-${order.id}`}><strong>Order #{order.id}</strong></a>
+              {' · '}{order.customer_name || order.email || order.phone || 'Customer details unavailable'}
+              {' · '}trip ended {order.travel_end}
+              {daysPastTrip !== null && <> ({daysPastTrip} day{daysPastTrip === 1 ? '' : 's'} ago)</>}
+              {' · '}status <code>{order.fulfilment_status || 'unknown'}</code>
+              {' · '}{order.return_tracking ? <>return reference <code>{order.return_tracking}</code></> : <strong>no return reference recorded</strong>}
+              {overdue && <> · <strong>overdue</strong></>}
+            </li>;
+          })}</ul>
+          {returnDueOrders.length > 50 && <div><strong>{returnDueOrders.length - 50} more due returns are not expanded here.</strong> Review the flagged order rows below to reconcile the full queue.</div>}
+        </div>}
         {!stripeEventResult.error && webhookFailures.length > 0 && <div role="alert" style={{...cardStyle,borderColor:'#dc2626',background:'#fef2f2',marginTop:14}}>
           <strong>Payment processing needs attention.</strong>
           <div style={{marginTop:6}}>Stripe may still retry recent events, but automatic retries are finite. Open the signed event in Stripe, reconcile it against the order and delivery ledgers, then use Stripe’s manual resend when needed. Do not ask the customer to pay again.{stripeEventResult.truncated && <> This is a bounded investigation sample, not the complete exception queue.</>}</div>
@@ -406,7 +429,7 @@ export default async function AdminPage() {
             (fulfilmentNotificationActionable(o.product_type, o.fulfilment_status) && notification?.status !== 'sent') ||
             (metaCapiConfigured && o.measurement_consent === 'accepted' && metaDelivery?.status !== 'sent')
           );
-          return <tr key={o.id} style={{borderTop:'1px solid #e5e8ed',verticalAlign:'top'}}>
+          return <tr id={`order-${o.id}`} key={o.id} style={{borderTop:'1px solid #e5e8ed',verticalAlign:'top'}}>
             <td style={{padding:'14px 10px'}}><strong>{String(o.stripe_session_id || o.id).slice(-10)}</strong><br/><small>{o.created_at ? new Date(o.created_at).toLocaleDateString('en-SG') : ''}</small></td>
             <td style={{padding:'14px 8px'}}>{o.customer_name || '-'}<br/><small>{o.phone || '-'}</small>{o.email && <><br/><small>{o.email}</small></>}</td>
             <td style={{padding:'14px 8px'}}><strong>{product}</strong>{o.plan_name && <><br/><small>{o.plan_name}</small></>}{isEsim(o) && o.plan_id && <><br/><small>Plan ID: {o.plan_id}</small></>}{isEsim(o) && o.data_allowance && <><br/><small>Data: {o.data_allowance}</small></>}<br/>{o.country || '-'}<br/><small>{o.travel_start || '-'} → {o.travel_end || '-'}</small>{flag && <><br/><small><strong>{flag}</strong></small></>}</td>
