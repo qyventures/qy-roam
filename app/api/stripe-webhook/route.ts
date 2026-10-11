@@ -44,6 +44,13 @@ const MAX_STRIPE_WEBHOOK_BODY_CHUNKS = 4_096;
 // an oversized or control-character-bearing value before handing it to the
 // SDK's signature parser.
 const MAX_STRIPE_SIGNATURE_HEADER_BYTES = 8_192;
+// Keep Stripe's signed-request freshness policy owned by this application
+// instead of inheriting an SDK default that could change across upgrades.
+// Five minutes is Stripe's documented/default delivery tolerance and allows
+// ordinary proxy/host clock skew. Legitimate later deliveries are freshly
+// signed by Stripe; durable event claims, rather than an old signature, are
+// the idempotency boundary for retries.
+export const STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS = 300;
 // Do not let a peer that sends headers and then stalls its upload pin a
 // webhook worker indefinitely. Stripe will retry a timed-out delivery, while
 // the bounded body size below continues to protect memory for completed reads.
@@ -797,7 +804,7 @@ async function handleStripeWebhook(req:Request){
   let verifiedEvent:Stripe.Event|undefined;
   for(const webhookSecret of webhookSecrets){
     try{
-      verifiedEvent=stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret);
+      verifiedEvent=stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS);
       break;
     }catch{}
   }

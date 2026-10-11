@@ -2545,6 +2545,17 @@ test('Stripe webhook secret rotation accepts only one valid prior secret', () =>
   assert.match(webhookRoute, /for\(const webhookSecret of webhookSecrets\)/);
 });
 
+test('Stripe webhook signature freshness is an explicit bounded release contract', () => {
+  // Do not silently inherit a future Stripe SDK default. Stripe re-signs
+  // genuine webhook retries, while the database event claim provides durable
+  // replay protection after a request crosses this freshness boundary.
+  assert.match(webhookRoute, /STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS\s*=\s*300/);
+  assert.match(
+    webhookRoute,
+    /constructEvent\(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS\)/,
+  );
+});
+
 test('production checkout and recovery reject test-mode Stripe server credentials', () => {
   const previousKey = process.env.STRIPE_SECRET_KEY;
   const previousNodeEnv = process.env.NODE_ENV;
@@ -4895,7 +4906,7 @@ test('Stripe webhook bounds raw payload memory before signature verification', (
   assert.match(webhookRoute, /value\.length <= MAX_STRIPE_SIGNATURE_HEADER_BYTES/);
   assert.match(webhookRoute, /\^\[\\x20-\\x7e\]\+\$/);
   const signatureValidation = webhookRoute.indexOf("const stripeSignature=validStripeSignatureHeader(req.headers.get('stripe-signature'))");
-  const signatureCheck = webhookRoute.indexOf('stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret)');
+  const signatureCheck = webhookRoute.indexOf('stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS)');
   assert.ok(signatureValidation >= 0 && signatureCheck > signatureValidation, 'Stripe signature header must be bounded before verification');
 });
 
@@ -4910,7 +4921,7 @@ test('Stripe webhook rejects non-JSON payloads before reading request bodies', (
 test('Stripe webhook rejects unusable signature headers before reading request bodies', () => {
   const signatureBoundary = webhookRoute.indexOf("const stripeSignature=validStripeSignatureHeader(req.headers.get('stripe-signature'))");
   const bodyRead = webhookRoute.indexOf('payload=await readStripeWebhookBody(req)');
-  const signatureVerification = webhookRoute.indexOf('stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret)');
+  const signatureVerification = webhookRoute.indexOf('stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS)');
 
   assert.ok(signatureBoundary > -1);
   assert.ok(bodyRead > signatureBoundary);
@@ -4927,7 +4938,7 @@ test('Stripe webhook rejects encoded payloads before reading or signature verifi
   assert.match(webhookRoute, /value === null \|\| value\.trim\(\)\.toLowerCase\(\) === 'identity'/);
   const encodingGuard = webhookRoute.indexOf("if(!hasIdentityContentEncoding(req.headers.get('content-encoding'))) ");
   const bodyRead = webhookRoute.indexOf('payload=await readStripeWebhookBody(req)');
-  const signatureVerification = webhookRoute.indexOf('stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret)');
+  const signatureVerification = webhookRoute.indexOf('stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS)');
   assert.ok(encodingGuard >= 0 && encodingGuard < bodyRead && bodyRead < signatureVerification);
   assert.match(webhookRoute, /Unsupported webhook content encoding'\},\{status:415\}/);
 });
