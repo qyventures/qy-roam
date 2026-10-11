@@ -666,6 +666,16 @@ test('manual sales cannot create permanent unpaid Pocket WiFi capacity holds', (
   assert.equal(stripePendingCommitments.length, 3);
 });
 
+test('manual paid-order entry is bounded and blocks concurrent duplicate submissions', () => {
+  assert.match(manualOrderForm, /const inFlight=useRef\(false\)/);
+  assert.match(manualOrderForm, /if\(inFlight\.current\)return;inFlight\.current=true/);
+  assert.match(manualOrderForm, /await fetchCustomerJson\('\/api\/admin\/ops'/);
+  assert.match(manualOrderForm, /instanceof CustomerRequestTimeoutError/);
+  assert.match(manualOrderForm, /Check the orders list before retrying with the same payment or sales reference/);
+  assert.match(manualOrderForm, /finally\{inFlight\.current=false;setBusy\(false\)\}/);
+  assert.doesNotMatch(manualOrderForm, /await fetch\('/);
+});
+
 test('Pocket WiFi reservation authority validates its complete capacity snapshot', () => {
   // The app obtains these values from bounded configuration, a short Checkout
   // attempt, and at most five 100-row Stripe pages. The SECURITY DEFINER RPC
