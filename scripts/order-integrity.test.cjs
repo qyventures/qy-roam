@@ -5321,11 +5321,24 @@ test('Supabase order-critical requests use a bounded shared transport', async ()
   // A caller can expire before the Supabase request is dispatched. Preserve
   // that exact cancellation, and do not start a credential-bearing fetch
   // after its owner has already stopped waiting. This also guards the timer
-  // cleanup ordering: cleanup must never read an uninitialised timer binding.
+  // cleanup ordering: cleanup must never read an uninitialised timer binding,
+  // and the early return must not retain that timer until its full deadline.
   let alreadyAbortedFetches = 0;
+  let alreadyAbortedTimer;
+  let alreadyAbortedTimerCleared = false;
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
   global.fetch = async () => {
     alreadyAbortedFetches += 1;
     return new Response('{}');
+  };
+  global.setTimeout = (callback, delay, ...args) => {
+    alreadyAbortedTimer = originalSetTimeout(callback, delay, ...args);
+    return alreadyAbortedTimer;
+  };
+  global.clearTimeout = (timer) => {
+    if (timer === alreadyAbortedTimer) alreadyAbortedTimerCleared = true;
+    return originalClearTimeout(timer);
   };
   try {
     const caller = new AbortController();
@@ -5339,8 +5352,11 @@ test('Supabase order-critical requests use a bounded shared transport', async ()
       /Readiness probe already cancelled/,
     );
     assert.equal(alreadyAbortedFetches, 0);
+    assert.equal(alreadyAbortedTimerCleared, true);
   } finally {
     global.fetch = originalFetch;
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
   }
 
   // Reject a declared oversized response before consuming it. PostgREST

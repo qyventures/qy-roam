@@ -127,6 +127,12 @@ export async function fetchSupabaseWithTimeout(
   // waiting for it.
   if (requestSignal?.aborted) {
     abortFromRequest();
+    // `abortFromRequest` rejects the explicit deadline but there is no
+    // fetch/race catch on this early-return path to perform normal cleanup.
+    // Clear the transport timeout now so repeated already-expired readiness
+    // or order work cannot retain one live timer per rejected request until
+    // the full Supabase timeout elapses.
+    cleanup();
     return await deadline;
   }
   requestSignal?.addEventListener('abort', abortFromRequest, { once: true });
