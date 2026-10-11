@@ -81,7 +81,7 @@ systemctl status qy-roam --no-pager
 journalctl -u qy-roam -n 100 --no-pager
 ```
 
-The unauthenticated endpoint above is a liveness probe and intentionally does not disclose configuration. `deploy/deploy.sh` uses `HEALTH_CHECK_TOKEN` to verify private launch readiness and fails if any launch-critical configuration is missing. Do not proceed unless that deployment check passes.
+The unauthenticated endpoint above is a liveness probe and intentionally does not disclose configuration. With `HEALTH_CHECK_TOKEN`, HTTP 200 and `ok: true` mean the store is sales-ready with at least one complete checkout path; `launchReady` separately identifies shared infrastructure readiness. `deploy/deploy.sh` verifies this private sales-readiness boundary. Do not proceed unless that deployment check passes.
 
 ## 3. DNS and HTTPS
 

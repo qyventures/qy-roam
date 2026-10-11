@@ -139,7 +139,14 @@ export async function GET(req: Request) {
     // merely that its Stripe keys and public URL look plausible. The public
     // branch above remains a dependency-free liveness probe for process
     // supervision.
-    ok: launchReady,
+    // `ok` and the HTTP status are the coarse signal consumed by monitors
+    // that do not understand the richer readiness fields below. A deployment
+    // with sound shared configuration but no saleable product is still a
+    // customer-facing outage, so only at-least-one-checkout readiness may
+    // produce a successful authenticated health response. Keep launchReady as
+    // a separate diagnostic so operators can distinguish infrastructure from
+    // product-specific stock, schema, or offer blockers.
+    ok: salesReady,
     launchReady,
     salesReady,
     checkoutReady,
@@ -153,5 +160,5 @@ export async function GET(req: Request) {
     checkoutMissing,
     paidAcquisitionMissing,
     timestamp: new Date().toISOString()
-  }, { status: launchReady ? 200 : 503, headers });
+  }, { status: salesReady ? 200 : 503, headers });
 }

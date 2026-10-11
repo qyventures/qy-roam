@@ -45,8 +45,10 @@ all-product availability (`checkoutChecks` / `checkoutReady`), and the stricter
 paid-acquisition gate (`paidAcquisitionReady`). Deployment requires
 `salesReady`; an intentionally expired eSIM offer therefore remains visibly
 blocked without preventing a safe Pocket WiFi release or rollback, while a
-store with every checkout blocked cannot be promoted. Do not send paid traffic
-while `paidAcquisitionReady` is false.
+store with every checkout blocked cannot be promoted. For authenticated calls,
+the top-level `ok` value and HTTP 200 status mean `salesReady`; shared
+infrastructure readiness remains available separately as `launchReady`. Do not
+send paid traffic while `paidAcquisitionReady` is false.
 
 ## Nginx and TLS
 

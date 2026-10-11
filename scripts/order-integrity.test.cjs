@@ -4087,9 +4087,11 @@ test('authenticated health readiness separates shared release controls from prod
   assert.match(healthRoute, /checkoutChecks,/);
   assert.match(healthRoute, /availabilityChecks,/);
   assert.match(healthRoute, /checkoutMissing,/);
-  assert.match(healthRoute, /ok: launchReady/);
+  assert.match(healthRoute, /ok: salesReady/);
   assert.match(healthRoute, /salesReady,/);
-  assert.match(healthRoute, /status: launchReady \? 200 : 503/);
+  assert.match(healthRoute, /status: salesReady \? 200 : 503/);
+  assert.doesNotMatch(healthRoute, /ok: launchReady/);
+  assert.doesNotMatch(healthRoute, /status: launchReady \? 200 : 503/);
   // Release and recovery verification must reject a fully configured but
   // commercially unavailable storefront.
   // Smoke, live-loopback, public-ingress, and automatic rollback checks all
