@@ -66,6 +66,7 @@ const { exactStripeClaimToken } = require('../lib/stripeClaimToken.ts');
 const { parsePocketWifiAvailability } = require('../lib/pocketWifiAvailability.ts');
 const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutResponse.ts');
 const { MANUAL_ORDER_REFERENCE_MAX_LENGTH, manualOrderReference, manualOrderSessionId } = require('../lib/manualOrderReference.ts');
+const { createConcurrencyLimiter } = require('../lib/concurrencyLimit.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { hasOrderIntegritySecret, hasOrderIntegritySigningConfig, isCanonicalStripeMetadata, signedQyRoamProvenance, validQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -5773,4 +5774,35 @@ test('paid checkout replays require the same exact durable commercial snapshot a
   const wifiPaidReplay = wifiCheckoutRoute.slice(wifiCheckoutRoute.indexOf("currentSession.status==='complete'&&currentSession.payment_status==='paid'"));
   assert.doesNotMatch(esimPaidReplay.slice(0, esimPaidReplay.indexOf('completed: true')), /order\.data\?\.payment_status\s*!==\s*'paid'/);
   assert.doesNotMatch(wifiPaidReplay.slice(0, wifiPaidReplay.indexOf('completed:true')), /order\.data\?\.payment_status\s*===\s*'paid'/);
+});
+
+test('Stripe webhook concurrency is bounded without queueing or leaking admission slots', () => {
+  const limiter = createConcurrencyLimiter(2);
+  const releaseFirst = limiter.tryAcquire();
+  const releaseSecond = limiter.tryAcquire();
+  assert.equal(typeof releaseFirst, 'function');
+  assert.equal(typeof releaseSecond, 'function');
+  assert.equal(limiter.activeCount(), 2);
+  assert.equal(limiter.tryAcquire(), null);
+
+  releaseFirst();
+  releaseFirst();
+  assert.equal(limiter.activeCount(), 1, 'release callbacks must be idempotent');
+  const releaseThird = limiter.tryAcquire();
+  assert.equal(typeof releaseThird, 'function');
+  assert.equal(limiter.activeCount(), 2);
+  releaseSecond();
+  releaseThird();
+  assert.equal(limiter.activeCount(), 0);
+
+  const conservative = createConcurrencyLimiter(0);
+  const releaseOnly = conservative.tryAcquire();
+  assert.equal(typeof releaseOnly, 'function');
+  assert.equal(conservative.tryAcquire(), null);
+  releaseOnly();
+
+  assert.match(webhookRoute, /STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS = 16/);
+  assert.match(webhookRoute, /const release=stripeWebhookConcurrency\.tryAcquire\(\)/);
+  assert.match(webhookRoute, /status:503,[\s\S]{0,100}headers:\{'Retry-After':'5'\}/);
+  assert.match(webhookRoute, /try\{\s*return await handleStripeWebhook\(req\);\s*\}finally\{\s*release\(\);/);
 });

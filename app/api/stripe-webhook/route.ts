@@ -28,6 +28,7 @@ import { contentLengthMatches, declaredContentLength } from '@/lib/contentLength
 import { paidFulfilmentDetailsIssue } from '@/lib/paidFulfilmentDetails';
 import { isJsonRequestContentType } from '@/lib/requestBody';
 import { exactStripeClaimToken } from '@/lib/stripeClaimToken';
+import { createConcurrencyLimiter } from '@/lib/concurrencyLimit';
 
 export const runtime = 'nodejs';
 
@@ -48,6 +49,14 @@ const MAX_STRIPE_SIGNATURE_HEADER_BYTES = 8_192;
 // the bounded body size below continues to protect memory for completed reads.
 const STRIPE_WEBHOOK_BODY_TIMEOUT_MS = 15_000;
 const STRIPE_WEBHOOK_RESPONSE_HEADERS = { 'Cache-Control': 'no-store' } as const;
+// Paid events can hold a worker across bounded Stripe, Supabase, SMTP and Meta
+// calls. Bound aggregate in-flight work as well as each individual deadline:
+// otherwise a burst of slow signed deliveries (or unsigned slow uploads) can
+// consume every standalone Node worker and make checkout/admin unavailable.
+// Stripe retries non-2xx deliveries, and the durable event/delivery ledgers
+// make that retry safe. No queue is retained in this process.
+export const STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS = 16;
+const stripeWebhookConcurrency = createConcurrencyLimiter(STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS);
 
 function webhookJson(body: unknown, init: ResponseInit = {}) {
   return NextResponse.json(body, {
@@ -742,7 +751,7 @@ export async function deliverPaidOrderSideEffects(supabase:NonNullable<ReturnTyp
   if(failures.length) throw new AggregateError(failures.map((failure)=>failure.reason),'One or more paid-order deliveries failed');
 }
 
-export async function POST(req:Request){
+async function handleStripeWebhook(req:Request){
   // hasRequiredStripeCheckoutConfig canonicalises ordinary deployment
   // whitespace. Use the same value for signature verification and API reads
   // so a health-ready service cannot reject every signed payment event.
@@ -1041,4 +1050,19 @@ export async function POST(req:Request){
     return webhookJson({error:'Processing failed'},{status:500});
   }
   return webhookJson({received:true});
+}
+
+export async function POST(req:Request){
+  const release=stripeWebhookConcurrency.tryAcquire();
+  if(!release){
+    return webhookJson({error:'Webhook processing is busy'},{
+      status:503,
+      headers:{'Retry-After':'5'},
+    });
+  }
+  try{
+    return await handleStripeWebhook(req);
+  }finally{
+    release();
+  }
 }
