@@ -3811,6 +3811,16 @@ test('admin CRM writes reject malformed commercial data and missing mutation tar
   assert.match(adminOpsRoute, /if \(!data\) return NextResponse\.json\(\{ error: 'Opportunity not found' \}, \{ status: 404 \}\)/);
 });
 
+test('admin inventory identities and CRM follow-up timestamps are exact operational data', () => {
+  assert.match(adminOpsRoute, /function optionalOperationalDateTime\(value: unknown\)/);
+  assert.match(adminOpsRoute, /const candidate = local \? `\$\{value\}.*?\+08:00` : value/);
+  assert.match(adminOpsRoute, /const itemId = positiveSafeInteger\(body\.item_id\);[\s\S]*?action === 'customer_create'/);
+  assert.doesNotMatch(adminOpsRoute, /action === 'inventory_status'[\s\S]*?const itemId = int\(body\.item_id\)/);
+  assert.match(adminOpsRoute, /const dueAt = optionalOperationalDateTime\(body\.due_at\)/);
+  assert.match(adminOpsRoute, /due_at: dueAt/);
+  assert.doesNotMatch(adminOpsRoute, /due_at: body\.due_at \|\| null/);
+});
+
 test('generic inventory mutations cannot make a router saleable while it is in customer custody', () => {
   const activeCustodyGuard = /inventory_item_id = p_item_id[\s\S]{0,180}product_type = 'pocket_wifi'[\s\S]{0,180}fulfilment_status in \('dispatched', 'with_customer', 'return_due'\)/g;
   assert.equal(

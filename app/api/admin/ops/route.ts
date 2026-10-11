@@ -25,8 +25,6 @@ const CLOSING_ORDER_PAGE_SIZE = 1_000;
 const MAX_CLOSING_ORDERS = 50_000;
 
 function text(v: unknown, max = 500) { return String(v ?? '').trim().slice(0, max); }
-function num(v: unknown, fallback = 0) { const n = Number(v); return Number.isFinite(n) ? n : fallback; }
-function int(v: unknown, fallback = 0) { return Math.trunc(num(v, fallback)); }
 function money(value: unknown) {
   const raw = typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
   if (!/^\d+(?:\.\d{1,2})?$/.test(raw)) return null;
@@ -75,6 +73,32 @@ function optionalPositiveSafeInteger(value: unknown) {
 function exactPercentage(value: unknown) {
   const parsed = nonNegativeInteger(value);
   return parsed !== null && parsed <= 100 ? parsed : null;
+}
+
+// Admin browsers submit datetime-local values without an offset. Operations
+// are run on the Singapore business calendar, so make that interpretation
+// explicit before persisting a timestamptz. Accept an offset-bearing ISO value
+// from intentional API clients too, but reject normalized dates (31 February,
+// hour 24, and similar) instead of letting the database/provider reinterpret
+// them differently.
+function optionalOperationalDateTime(value: unknown) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string' || value !== value.trim() || value.length > 35) return undefined;
+  const local = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value);
+  const candidate = local ? `${value}${local[6] ? '' : ':00'}+08:00` : value;
+  if (!local && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(candidate)) return undefined;
+  const parsed = new Date(candidate);
+  if (!Number.isFinite(parsed.getTime())) return undefined;
+  if (local) {
+    const [year, month, day, hour, minute, second = '00'] = local.slice(1);
+    const singapore = new Date(parsed.getTime() + 8 * 60 * 60 * 1000);
+    if (
+      singapore.getUTCFullYear() !== Number(year) || singapore.getUTCMonth() + 1 !== Number(month) ||
+      singapore.getUTCDate() !== Number(day) || singapore.getUTCHours() !== Number(hour) ||
+      singapore.getUTCMinutes() !== Number(minute) || singapore.getUTCSeconds() !== Number(second)
+    ) return undefined;
+  }
+  return parsed.toISOString();
 }
 
 function validInventoryReference(value: string) {
@@ -339,12 +363,12 @@ export async function POST(req: NextRequest) {
       if (!validInventoryReference(reference)) return NextResponse.json({ error: 'Inventory references must be a single line of 120 characters or fewer' }, { status: 400 });
       const { error } = await db.rpc('qy_adjust_inventory', { p_item_id: itemId, p_delta: delta, p_type: movementType, p_reference: reference, p_notes: text(body.notes, 1000) || null }); if (error) throw error;
     } else if (action === 'inventory_status') {
-      const itemId = int(body.item_id);
+      const itemId = positiveSafeInteger(body.item_id);
       const status = text(body.status, 40).toLowerCase();
       // Status is intentionally separate from a quantity adjustment. Returning
       // a quarantined unit to service requires staff to both record the
       // inspection decision here and post the physical stock movement above.
-      if (!itemId) return NextResponse.json({ error: 'Choose an inventory item' }, { status: 400 });
+      if (itemId === null) return NextResponse.json({ error: 'Choose an inventory item' }, { status: 400 });
       if (!['available', 'quarantined', 'damaged', 'maintenance'].includes(status)) {
         return NextResponse.json({ error: 'Choose a valid inventory status' }, { status: 400 });
       }
@@ -373,9 +397,11 @@ export async function POST(req: NextRequest) {
     } else if (action === 'activity_create') {
       const customerId = optionalPositiveSafeInteger(body.customer_id);
       const activityType = text(body.activity_type, 40) || 'note';
+      const dueAt = optionalOperationalDateTime(body.due_at);
       if (body.customer_id !== undefined && body.customer_id !== null && body.customer_id !== '' && customerId === null) return NextResponse.json({ error: 'Choose a valid customer' }, { status: 400 });
       if (!['note', 'call', 'whatsapp', 'email', 'task'].includes(activityType)) return NextResponse.json({ error: 'Choose a valid activity type' }, { status: 400 });
-      const { error } = await db.from('crm_activities').insert({ customer_id: customerId, activity_type: activityType, subject: text(body.subject, 160) || null, detail: text(body.detail, 2000) || null, due_at: body.due_at || null, owner: text(body.owner, 100) || null }); if (error) throw error;
+      if (dueAt === undefined) return NextResponse.json({ error: 'Choose a valid follow-up date and time' }, { status: 400 });
+      const { error } = await db.from('crm_activities').insert({ customer_id: customerId, activity_type: activityType, subject: text(body.subject, 160) || null, detail: text(body.detail, 2000) || null, due_at: dueAt, owner: text(body.owner, 100) || null }); if (error) throw error;
     } else if (action === 'activity_complete') {
       const activityId = positiveSafeInteger(body.id);
       if (activityId === null) return NextResponse.json({ error: 'Choose a valid activity' }, { status: 400 });
