@@ -7,6 +7,11 @@ import { contentLengthMatches, declaredContentLength } from './contentLength';
 // must release the Node worker and let the existing idempotent recovery paths
 // retry rather than indefinitely consuming capacity.
 export const SUPABASE_REQUEST_TIMEOUT_MS = 15_000;
+// Keep every caller inside a finite transport contract. The default is the
+// order-critical budget; the larger ceiling leaves room for an explicitly
+// reviewed maintenance call without allowing NaN/Infinity (or an accidental
+// multi-minute value) to disable worker recovery.
+export const SUPABASE_REQUEST_TIMEOUT_MAX_MS = 60_000;
 // Every current operational list is explicitly paginated, while checkout and
 // webhook mutations return only a handful of rows. This ceiling is generous
 // for those responses but prevents a broken PostgREST gateway or proxy from
@@ -63,7 +68,15 @@ export async function fetchSupabaseWithTimeout(
   timeoutMs = SUPABASE_REQUEST_TIMEOUT_MS,
   maximumResponseBytes = SUPABASE_RESPONSE_MAX_BYTES,
 ) {
-  if (!Number.isSafeInteger(maximumResponseBytes) || maximumResponseBytes < 0) {
+  // These arguments are a resource boundary shared by reservations, paid
+  // orders and webhook idempotency. Validate them before creating a timer or
+  // starting a credential-bearing fetch: setTimeout coerces invalid values,
+  // while Infinity/NaN in the byte comparison could make the response body
+  // effectively unbounded.
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > SUPABASE_REQUEST_TIMEOUT_MAX_MS) {
+    throw new RangeError('Invalid Supabase request timeout');
+  }
+  if (!Number.isSafeInteger(maximumResponseBytes) || maximumResponseBytes < 0 || maximumResponseBytes > SUPABASE_RESPONSE_MAX_BYTES) {
     throw new RangeError('Invalid Supabase response body limit');
   }
   const controller = new AbortController();

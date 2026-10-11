@@ -46,7 +46,7 @@ const { checkoutSiteOrigin, isProductionQyRoamOrigin, metaPurchaseEventSourceUrl
 const { hasRequiredAdminCredentials, hasRequiredMetaCapiPurchaseConfig, metaPixelId } = require('../lib/runtimeConfig.ts');
 const { metaMeasurementAllowed, metaPageViewAllowed, setMetaMeasurementConsent } = require('../lib/metaClient.ts');
 const { digitalDeliveryReferenceIssue, isSafeDigitalDeliveryReference } = require('../lib/digitalDeliveryReference.ts');
-const { SUPABASE_REQUEST_TIMEOUT_MS, SUPABASE_RESPONSE_MAX_BYTES, SUPABASE_RESPONSE_MAX_CHUNKS, canonicalSupabaseProjectUrl, fetchSupabaseWithTimeout, hasRequiredSupabaseAdminConfig, supabaseServiceRoleKey } = require('../lib/supabaseAdmin.ts');
+const { SUPABASE_REQUEST_TIMEOUT_MS, SUPABASE_REQUEST_TIMEOUT_MAX_MS, SUPABASE_RESPONSE_MAX_BYTES, SUPABASE_RESPONSE_MAX_CHUNKS, canonicalSupabaseProjectUrl, fetchSupabaseWithTimeout, hasRequiredSupabaseAdminConfig, supabaseServiceRoleKey } = require('../lib/supabaseAdmin.ts');
 const { checkoutAttempt, clearCheckoutAttempt, CHECKOUT_ATTEMPT_MAX_AGE_MS } = require('../lib/checkoutAttempt.ts');
 const { CUSTOMER_REQUEST_TIMEOUT_MS, CustomerRequestTimeoutError, fetchCustomerJson, fetchCustomerRequest } = require('../lib/clientRequest.ts');
 const { safeHttpsDeliveryEndpoint } = require('../lib/deliveryEndpoint.ts');
@@ -5249,12 +5249,40 @@ test('Pocket WiFi hold scans fail closed on malformed or duplicate Stripe pages'
 
 test('Supabase order-critical requests use a bounded shared transport', async () => {
   assert.equal(SUPABASE_REQUEST_TIMEOUT_MS, 15_000);
+  assert.equal(SUPABASE_REQUEST_TIMEOUT_MAX_MS, 60_000);
   assert.equal(SUPABASE_RESPONSE_MAX_BYTES, 8 * 1024 * 1024);
   assert.equal(SUPABASE_RESPONSE_MAX_CHUNKS, 16_384);
   assert.match(supabaseAdmin, /global: \{ fetch: fetchSupabaseWithTimeout \}/);
   assert.match(supabaseAdmin, /const timeout = setTimeout\(\(\) => \{[\s\S]*?controller\.abort\(timeoutError\);[\s\S]*?rejectDeadline\?\.\(timeoutError\);[\s\S]*?\}, timeoutMs\)/);
   assert.match(supabaseAdmin, /Promise\.race\(\[reader\.read\(\), deadline\]\)/);
   assert.match(supabaseAdmin, /requestSignal\?\.addEventListener\('abort', abortFromRequest, \{ once: true \}\)/);
+
+  // Invalid resource limits must fail before a service-role request starts.
+  // JavaScript timers coerce NaN/Infinity, and an infinite byte ceiling would
+  // otherwise turn a programming mistake into an unbounded privileged read.
+  const originalFetchForLimits = global.fetch;
+  let invalidLimitFetches = 0;
+  global.fetch = async () => {
+    invalidLimitFetches += 1;
+    return new Response('{}');
+  };
+  try {
+    for (const timeout of [0, -1, NaN, Infinity, 60_001]) {
+      await assert.rejects(
+        () => fetchSupabaseWithTimeout('https://supabase.example/rest/v1/orders', undefined, timeout),
+        /Invalid Supabase request timeout/,
+      );
+    }
+    for (const maximumBytes of [-1, NaN, Infinity, SUPABASE_RESPONSE_MAX_BYTES + 1]) {
+      await assert.rejects(
+        () => fetchSupabaseWithTimeout('https://supabase.example/rest/v1/orders', undefined, 100, maximumBytes),
+        /Invalid Supabase response body limit/,
+      );
+    }
+    assert.equal(invalidLimitFetches, 0);
+  } finally {
+    global.fetch = originalFetchForLimits;
+  }
 
   const originalFetch = global.fetch;
   let receivedSignal;
