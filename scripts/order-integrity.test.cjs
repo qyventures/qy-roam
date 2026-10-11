@@ -991,6 +991,19 @@ test('lookalike payment sessions are ignored before persistence and durable even
   assert.match(webhookRoute, /return webhookJson\(\{received:true,ignored:true\}\)/);
 });
 
+test('only authenticated QY Roam events consume paid-order webhook processing capacity', () => {
+  const releaseUpload = webhookRoute.indexOf('releaseUpload();');
+  const sourceRouting = webhookRoute.indexOf('if(!hasQyRoamWebhookSource(eventSession.metadata))');
+  const provenanceRouting = webhookRoute.indexOf('if(!validQyRoamProvenance(eventSessionId,eventSession.metadata))');
+  const processingAdmission = webhookRoute.indexOf('const releaseProcessing=stripeWebhookConcurrency.tryAcquire()');
+  const persistence = webhookRoute.indexOf('const supabase=getSupabaseAdmin()', processingAdmission);
+
+  assert.ok(releaseUpload > -1 && releaseUpload < sourceRouting);
+  assert.ok(sourceRouting < provenanceRouting);
+  assert.ok(provenanceRouting < processingAdmission);
+  assert.ok(processingAdmission < persistence);
+});
+
 test('Stripe webhook failure logging does not print raw dependency errors', () => {
   // These paths can catch SMTP relay, Meta, Stripe, and PostgREST failures.
   // Their exception text is not a safe logging channel because providers and

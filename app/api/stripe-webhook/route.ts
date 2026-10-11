@@ -844,19 +844,13 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void){
     return webhookJson({error:'Stripe event mode mismatch'},{status:400});
   }
   if(!['checkout.session.completed','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed','checkout.session.expired'].includes(event.type)) return webhookJson({received:true});
-  // Authentication has completed and the event is relevant to QY Roam's
-  // paid-order lifecycle, so the larger upload allocation is no longer
-  // needed. Release it before acquiring scarce dependency work; otherwise a
-  // burst of valid deliveries could unnecessarily consume both pools.
+  // Authentication has completed and this is a terminal Checkout lifecycle
+  // event, so the larger upload allocation is no longer needed. Release it
+  // before doing the remaining bounded, in-memory routing checks. Do not yet
+  // acquire the scarce dependency-work pool: a Stripe account can be shared
+  // with other products, and their authentic Checkout events must not reduce
+  // QY Roam's capacity to persist and fulfil its own paid orders.
   releaseUpload();
-  const releaseProcessing=stripeWebhookConcurrency.tryAcquire();
-  if(!releaseProcessing){
-    return webhookJson({error:'Webhook processing is busy'}, {
-      status:503,
-      headers:{'Retry-After':'5'},
-    });
-  }
-  try {
   // The SDK type is not a runtime validator. Inspect the deserialised event
   // object before reading its metadata or using its id in an outbound Stripe
   // request / durable ledger key. This leaves malformed signed payloads as a
@@ -903,6 +897,18 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void){
     console.error('stripe_webhook_untrusted_checkout_session');
     return webhookJson({received:true,ignored:true});
   }
+  // Only a structurally valid, Session-bound QY Roam event may consume a
+  // paid-order processing slot. Everything above is authenticated, bounded
+  // in-memory validation; everything below can call Stripe, Supabase, SMTP or
+  // Meta and therefore belongs inside this non-queueing admission boundary.
+  const releaseProcessing=stripeWebhookConcurrency.tryAcquire();
+  if(!releaseProcessing){
+    return webhookJson({error:'Webhook processing is busy'}, {
+      status:503,
+      headers:{'Retry-After':'5'},
+    });
+  }
+  try {
   const supabase=getSupabaseAdmin(); if(!supabase) return webhookJson({error:'Persistence unavailable'},{status:503});
   // Claim every trusted terminal event before the outbound Stripe refresh. If
   // that dependency is unavailable until Stripe exhausts its delivery retry
