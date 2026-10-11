@@ -1871,6 +1871,28 @@ test('admin operational mutations bound and validate their JSON request bodies',
   assert.doesNotMatch(adminOpsRoute, /await req\.json\(\)/);
 });
 
+test('admin operational mutations are single-flight and recover from stalled browser requests', () => {
+  // Stock adjustments and accounting/CRM writes are not all naturally
+  // idempotent. Guard synchronously (React state alone can lag a second click)
+  // and keep response-body parsing inside the shared browser deadline.
+  assert.match(adminOpsForms, /const inFlight=useRef\(false\)/);
+  assert.match(adminOpsForms, /if\(inFlight\.current\)return false;inFlight\.current=true/);
+  assert.match(adminOpsForms, /fetchCustomerJson\('\/api\/admin\/ops'/);
+  assert.match(adminOpsForms, /inFlight\.current=false;setBusy\(false\)/);
+  assert.match(adminOpsForms, /Check the refreshed record before retrying/);
+  assert.match(adminOpsForms, /Post movement<\/button>/);
+  assert.match(adminOpsForms, /disabled=\{s\.busy\}>Post movement/);
+
+  // Lifecycle changes and irreversible delivery retries share one lock so an
+  // operator cannot launch both mutations against the same order at once.
+  assert.match(adminOrderActions, /const mutationInFlight = useRef\(false\)/);
+  assert.equal((adminOrderActions.match(/if \(mutationInFlight\.current\) return/g) || []).length, 2);
+  assert.equal((adminOrderActions.match(/fetchCustomerJson\(`/g) || []).length, 2);
+  assert.match(adminOrderActions, /disabled=\{saving \|\| retrying \|\| statuses\.length < 2\}/);
+  assert.match(adminOrderActions, /disabled=\{saving \|\| retrying\}/);
+  assert.match(adminOrderActions, /Refresh the order before retrying/);
+});
+
 test('admin sales-period close totals stable keyset pages instead of silently using its row cap', () => {
   assert.match(adminOpsRoute, /async function paidOrderGrossForPeriod/);
   assert.match(adminOpsRoute, /CLOSING_ORDER_PAGE_SIZE = 1_000/);

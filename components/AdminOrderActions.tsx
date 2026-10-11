@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { allowedFulfilmentStatuses } from '@/lib/orderLifecycle';
 import { adminMutationHeaders } from '@/lib/adminMutation';
+import { CustomerRequestTimeoutError, fetchCustomerJson } from '@/lib/clientRequest';
 
 export default function AdminOrderActions({ id, initialStatus, initialUpdatedAt, paymentStatus, productType = 'pocket_wifi', courierTracking = '', returnTracking = '', digitalDeliveryReference = '', inventoryItemId = null, inventoryItems = [], canRetryNotifications = false }: { id: number; initialStatus: string; initialUpdatedAt: string; paymentStatus: string | null; productType?: string | null; courierTracking?: string | null; returnTracking?: string | null; digitalDeliveryReference?: string | null; inventoryItemId?: number | null; inventoryItems?: { id: number; name: string; sku: string; quantity_on_hand: number; status: string }[]; canRetryNotifications?: boolean }) {
   const isEsim = productType === 'esim';
@@ -22,8 +23,11 @@ export default function AdminOrderActions({ id, initialStatus, initialUpdatedAt,
   const [saving, setSaving] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [message, setMessage] = useState('');
+  const mutationInFlight = useRef(false);
 
   async function save() {
+    if (mutationInFlight.current) return;
+    mutationInFlight.current = true;
     setSaving(true); setMessage('');
     try {
       if (!isEsim && status === 'dispatched' && !courier.trim()) {
@@ -57,27 +61,29 @@ export default function AdminOrderActions({ id, initialStatus, initialUpdatedAt,
         // terminal action (closing an already fulfilled order).
         if (deliveryReference.trim()) body.digital_delivery_reference = deliveryReference;
       }
-      const res = await fetch(`/api/admin/orders/${id}`, { method: 'PATCH', headers: adminMutationHeaders(true), body: JSON.stringify(body) });
-      const result = await res.json().catch(() => null) as { fulfilment_status?: string; updated_at?: string; error?: string } | null;
+      const { response: res, value } = await fetchCustomerJson(`/api/admin/orders/${id}`, { method: 'PATCH', headers: adminMutationHeaders(true), body: JSON.stringify(body) });
+      const result = value as { fulfilment_status?: string; updated_at?: string; error?: string } | null;
       if (!res.ok) throw new Error(result?.error || 'Update failed');
       if (!result?.fulfilment_status || !result.updated_at) throw new Error('Invalid update response');
       setCurrentStatus(result.fulfilment_status);
       setExpectedUpdatedAt(result.updated_at);
       setStatus(result.fulfilment_status);
       setMessage('Saved');
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'Could not save'); }
-    finally { setSaving(false); }
+    } catch (error) { setMessage(error instanceof CustomerRequestTimeoutError ? 'The update timed out. Refresh the order before retrying.' : error instanceof Error ? error.message : 'Could not save'); }
+    finally { mutationInFlight.current = false; setSaving(false); }
   }
 
   async function retryNotifications() {
+    if (mutationInFlight.current) return;
+    mutationInFlight.current = true;
     setRetrying(true); setMessage('');
     try {
-      const res = await fetch(`/api/admin/orders/${id}`, { method: 'POST', headers: adminMutationHeaders() });
-      const result = await res.json().catch(() => null) as { error?: string } | null;
+      const { response: res, value } = await fetchCustomerJson(`/api/admin/orders/${id}`, { method: 'POST', headers: adminMutationHeaders() });
+      const result = value as { error?: string } | null;
       if (!res.ok) throw new Error(result?.error || 'Notification retry failed');
       setMessage('Order delivery retry started');
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'Could not retry notifications'); }
-    finally { setRetrying(false); }
+    } catch (error) { setMessage(error instanceof CustomerRequestTimeoutError ? 'The retry timed out. Refresh the order before retrying again.' : error instanceof Error ? error.message : 'Could not retry notifications'); }
+    finally { mutationInFlight.current = false; setRetrying(false); }
   }
 
   // The API also rejects unpaid transitions, but the operator UI should not
@@ -111,8 +117,8 @@ export default function AdminOrderActions({ id, initialStatus, initialUpdatedAt,
     </>}
     {isEsim && <><input aria-label="eSIM delivery reference" placeholder="Provider order ID or secure delivery/email log reference" value={deliveryReference} onChange={e=>setDeliveryReference(e.target.value)} readOnly={['fulfilled','closed'].includes(currentStatus)} /><small>{['fulfilled','closed'].includes(currentStatus) ? 'Delivery audit references are immutable after fulfilment.' : 'Mark fulfilled only after the QR code / activation instructions have been sent. Record a delivery reference, never the QR code.'}</small></>}
     {status === 'cancelled' && <><textarea aria-label="Cancellation reason" placeholder="Cancellation reason / refund or replacement reference" minLength={5} maxLength={500} value={cancellationReason} onChange={e=>setCancellationReason(e.target.value)} /><small>Required audit evidence. Cancelling fulfilment does not itself refund the payment; record the refund or replacement reference here.</small></>}
-    <button type="button" onClick={save} disabled={saving || statuses.length < 2}>{saving ? 'Saving…' : 'Save'}</button>
-    {canRetryNotifications && <button type="button" onClick={retryNotifications} disabled={retrying}>{retrying ? 'Retrying deliveries…' : 'Retry order deliveries'}</button>}
+    <button type="button" onClick={save} disabled={saving || retrying || statuses.length < 2}>{saving ? 'Saving…' : 'Save'}</button>
+    {canRetryNotifications && <button type="button" onClick={retryNotifications} disabled={saving || retrying}>{retrying ? 'Retrying deliveries…' : 'Retry order deliveries'}</button>}
     {message && <small aria-live="polite">{message}</small>}
   </div>;
 }
