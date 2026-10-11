@@ -1,4 +1,7 @@
 import type { Metadata } from 'next';
+import { operationalConfig } from '@/lib/operationalConfig';
+
+export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
   title: 'FAQ',
@@ -12,9 +15,9 @@ export const metadata: Metadata = {
   },
 };
 
-const faqs = [
+function faqContent(minDeliveryLeadDays: number) { return [
   ['How does QY Roam work?', 'Choose your destination and travel dates, reserve your pocket WiFi online, and we will courier it to your Singapore delivery address before departure. After your trip, follow the return instructions supplied with your order.'],
-  ['How early should I book?', 'Please book at least 2 days before your travel start date for normal courier fulfilment. For urgent travel, contact us on WhatsApp at +65 8032 7183 before paying.'],
+  ['How early should I book?', `Please book at least ${minDeliveryLeadDays} day${minDeliveryLeadDays === 1 ? '' : 's'} before your travel start date for normal courier fulfilment. For urgent travel, contact us on WhatsApp at +65 8032 7183 before paying.`],
   ['Can I connect more than one device?', 'Yes. Pocket WiFi is designed to share one connection across multiple phones, tablets or laptops. Actual performance depends on the local mobile network and simultaneous usage.'],
   ['When does my rental period start?', 'Your booked usage period runs from the start date through the end date shown in your reservation, inclusive.'],
   ['How do I return the device?', 'Pack the complete equipment set after your trip and follow the return courier instructions supplied with your order. Hand it to the return courier within 5 calendar days after your rental ends and keep your tracking or acceptance evidence until receipt is confirmed.'],
@@ -22,22 +25,20 @@ const faqs = [
   ['What payment methods can I use?', 'Checkout is processed securely by Stripe. Card and PayNow availability is shown at checkout.'],
   ['Is coverage guaranteed everywhere?', 'Coverage, speed and network availability depend on local mobile operators, geography, congestion and device conditions.'],
   ['How can I get help?', 'WhatsApp or call our Singapore support team at +65 8032 7183.']
-];
-
-const faqSchema = {
-  '@context': 'https://schema.org',
-  '@type': 'FAQPage',
-  mainEntity: faqs.map(([question, answer]) => ({
-    '@type': 'Question',
-    name: question,
-    acceptedAnswer: {
-      '@type': 'Answer',
-      text: answer
-    }
-  }))
-};
+]; }
 
 export default function FAQ() {
+  const minDeliveryLeadDays = operationalConfig()?.minDeliveryLeadDays ?? 2;
+  const faqs = faqContent(minDeliveryLeadDays);
+  const faqSchema = {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    mainEntity: faqs.map(([question, answer]) => ({
+      '@type': 'Question',
+      name: question,
+      acceptedAnswer: { '@type': 'Answer', text: answer }
+    }))
+  };
   return (
     <main className="wrap section">
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(faqSchema) }} />

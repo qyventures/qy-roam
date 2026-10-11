@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useMemo, useRef, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { applyPromoCents, LAUNCH_PROMO, promoIsActive, validLaunchPromo } from '../lib/promotions';
 import { WIFI_PLANS } from '../lib/wifiPlans';
 import { pocketWifiRentalCents, sgdFromCents } from '../lib/pocketWifiPricing';
@@ -56,6 +56,24 @@ export default function Home() {
   const availabilityRequest = useRef(0);
   const selectedBooking = useRef({ country, start, end });
   selectedBooking.current = { country, start, end };
+  useEffect(() => {
+    let active = true;
+    void fetchCustomerJson('/api/booking-terms', { cache: 'no-store' }).then(({ response, value }) => {
+      if (!active || !response.ok || !value || typeof value !== 'object' || Array.isArray(value)) return;
+      const leadDays = (value as Record<string, unknown>).minDeliveryLeadDays;
+      if (!Number.isSafeInteger(leadDays) || (leadDays as number) < 0 || (leadDays as number) > 365) return;
+
+      const authoritativeLeadDays = leadDays as number;
+      const previousDefault = operationalIsoDateAfter(DEFAULT_DELIVERY_LEAD_DAYS);
+      const nextEarliest = operationalIsoDateAfter(authoritativeLeadDays);
+      setDeliveryLeadDays(authoritativeLeadDays);
+      // Move only untouched defaults. Never overwrite dates the traveller has
+      // already selected while this small terms request was in flight.
+      setStart(current => current === previousDefault ? nextEarliest : current);
+      setEnd(current => current === previousDefault ? nextEarliest : current);
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, []);
   const plan = useMemo(() => plans.find(p => p.country === country) || plans[0], [country]);
   const datesValid = Boolean(start && end && start >= earliestStart && end >= start);
   const days = daysBetween(start, end);

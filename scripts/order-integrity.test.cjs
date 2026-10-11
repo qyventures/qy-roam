@@ -83,6 +83,7 @@ const adminOrderActions = fs.readFileSync(require.resolve('../components/AdminOr
 const esimCheckoutRoute = fs.readFileSync(require.resolve('../app/api/esim-checkout/route.ts'), 'utf8');
 const wifiCheckoutRoute = fs.readFileSync(require.resolve('../app/api/checkout/route.ts'), 'utf8');
 const availabilityRoute = fs.readFileSync(require.resolve('../app/api/availability/route.ts'), 'utf8');
+const bookingTermsRoute = fs.readFileSync(require.resolve('../app/api/booking-terms/route.ts'), 'utf8');
 const esimPage = fs.readFileSync(require.resolve('../app/esim/page.tsx'), 'utf8');
 const esimLayout = fs.readFileSync(require.resolve('../app/esim/layout.tsx'), 'utf8');
 const homePage = fs.readFileSync(require.resolve('../app/page.tsx'), 'utf8');
@@ -5877,4 +5878,16 @@ test('customer confirmation views share one bounded provider-work budget', () =>
   assert.match(bookingPage, /const releaseConfirmation = tryAcquireConfirmationConcurrency\(\)/);
   assert.match(bookingPage, /if \(!releaseConfirmation\)[\s\S]*?Order status is busy/);
   assert.match(bookingPage, /finally \{\s*releaseConfirmation\(\);\s*\}/);
+});
+
+test('public Pocket WiFi booking terms stay aligned with the checkout authority', () => {
+  assert.match(bookingTermsRoute, /operationalConfig\(\)/);
+  assert.match(bookingTermsRoute, /minDeliveryLeadDays:\s*config\.minDeliveryLeadDays/);
+  assert.match(bookingTermsRoute, /'Cache-Control':\s*'no-store'/);
+  assert.match(homePage, /fetchCustomerJson\('\/api\/booking-terms',\s*\{\s*cache:\s*'no-store'\s*\}\)/);
+  assert.match(homePage, /setDeliveryLeadDays\(authoritativeLeadDays\)/);
+  assert.match(homePage, /setStart\(current => current === previousDefault \? nextEarliest : current\)/);
+  assert.match(homePage, /setEnd\(current => current === previousDefault \? nextEarliest : current\)/);
+  assert.match(faqPage, /operationalConfig\(\)\?\.minDeliveryLeadDays/);
+  assert.doesNotMatch(faqPage, /Please book at least 2 days/);
 });
