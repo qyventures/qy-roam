@@ -4254,6 +4254,15 @@ test('admin recovery only resumes actionable fulfilment while preserving consent
   assert.match(adminOrderActions, /Retry order deliveries/);
 });
 
+test('admin delivery recovery is bounded without queueing or leaking admission slots', () => {
+  assert.match(adminOrderRoute, /ADMIN_DELIVERY_RETRY_MAX_CONCURRENT_REQUESTS = 4/);
+  assert.match(adminOrderRoute, /createConcurrencyLimiter\(ADMIN_DELIVERY_RETRY_MAX_CONCURRENT_REQUESTS\)/);
+  assert.match(adminOrderRoute, /const release = adminDeliveryRetryConcurrency\.tryAcquire\(\)/);
+  assert.match(adminOrderRoute, /Order delivery recovery is busy\. Please try again shortly\./);
+  assert.match(adminOrderRoute, /'Retry-After': '5'/);
+  assert.match(adminOrderRoute, /try \{\s*return await retryOrderDeliveries\(req, context\);\s*\} finally \{\s*release\(\);\s*\}/);
+});
+
 test('SMTP and Meta delivery settlement retain ownership of their sending leases', () => {
   // A worker can outlive the stale-lease timeout while its provider call is
   // in flight. Its completion or failure must not overwrite the newer retry.

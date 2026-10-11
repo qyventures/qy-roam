@@ -13,6 +13,7 @@ import { validStripeCheckoutSessionId, validStripeCheckoutSessionIdForMode } fro
 import { validStripePaymentEventCreated } from '@/lib/stripeEventCreated';
 import { custodyReferenceIssue, normalizeCustodyReference } from '@/lib/custodyReference';
 import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
+import { createConcurrencyLimiter } from '@/lib/concurrencyLimit';
 
 export const runtime = 'nodejs';
 
@@ -27,6 +28,13 @@ const ADMIN_ORDER_BODY_TIMEOUT_MS = 15_000;
 // to append required cancellation evidence without deleting that audit trail.
 // The database RPCs and table constraint enforce the same cap.
 const MAX_ORDER_NOTES_LENGTH = 2_500;
+// A recovery attempt can span bounded Stripe, Supabase, SMTP, and Meta calls.
+// Basic Auth limits this route to staff, but multiple tabs or an automation
+// retry loop could still occupy every standalone Node worker. Reject excess
+// work instead of queueing it in memory; the durable delivery ledgers make a
+// later retry safe and remain the authority for provider idempotency.
+const ADMIN_DELIVERY_RETRY_MAX_CONCURRENT_REQUESTS = 4;
+const adminDeliveryRetryConcurrency = createConcurrencyLimiter(ADMIN_DELIVERY_RETRY_MAX_CONCURRENT_REQUESTS);
 
 function trackingValue(value: unknown, existing: string | null) {
   // Keep an already-recorded reference when an older admin client submits no
@@ -311,7 +319,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 // action lets an operator safely resume a failed paid-order notification after
 // that window: the same per-session ledgers used by the webhook prevent a
 // duplicate email or Meta Purchase once either delivery is already marked sent.
-export async function POST(_req: Request, { params }: { params: { id: string } }) {
+async function retryOrderDeliveries(_req: Request, { params }: { params: { id: string } }) {
   const supabase = getSupabaseAdmin();
   if (!supabase) return NextResponse.json({ error: 'Order database not configured' }, { status: 503 });
   // Recovery must use the same canonical credential that checkout readiness
@@ -432,5 +440,23 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     // for operators, so keep server logs to a stable event name here.
     console.error('admin_order_notification_retry_error');
     return NextResponse.json({ error: 'Unable to retry order notifications. Please try again shortly.' }, { status: 500 });
+  }
+}
+
+export async function POST(req: Request, context: { params: { id: string } }) {
+  const release = adminDeliveryRetryConcurrency.tryAcquire();
+  if (!release) {
+    return NextResponse.json(
+      { error: 'Order delivery recovery is busy. Please try again shortly.' },
+      {
+        status: 503,
+        headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' },
+      },
+    );
+  }
+  try {
+    return await retryOrderDeliveries(req, context);
+  } finally {
+    release();
   }
 }
