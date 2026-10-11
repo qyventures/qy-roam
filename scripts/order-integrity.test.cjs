@@ -5549,6 +5549,21 @@ test('release verification enforces the complete customer ingress security bound
   assert.match(nginxConfig, /server_name www\.qyroam\.com;[\s\S]*?add_header Referrer-Policy no-referrer always;[\s\S]*?return 301 https:\/\/qyroam\.com\$request_uri;/);
 });
 
+test('Stripe webhook uploads reach the bounded application reader without proxy buffering', () => {
+  // `client_body_timeout` only limits inactivity between reads. Keep the
+  // webhook's absolute body deadline and concurrency admission effective by
+  // streaming these two exact route shapes, without changing buffering for
+  // the rest of the storefront and admin ingress.
+  const webhookLocation = nginxConfig.match(/location ~ \^\/api\/\(stripe\/webhook\|stripe-webhook\)\$ \{[\s\S]*?\n    \}/)?.[0] || '';
+  assert.match(webhookLocation, /proxy_request_buffering off;/);
+  assert.match(webhookLocation, /proxy_pass http:\/\/127\.0\.0\.1:3100;/);
+  assert.match(webhookLocation, /proxy_set_header X-Real-IP \$remote_addr;/);
+  assert.match(webhookLocation, /proxy_read_timeout 120s;/);
+  assert.equal((nginxConfig.match(/proxy_request_buffering off;/g) || []).length, 1, 'only Stripe webhook ingress should bypass request buffering');
+  assert.match(webhookRoute, /const STRIPE_WEBHOOK_BODY_TIMEOUT_MS = 15_000/);
+  assert.match(webhookRoute, /const stripeWebhookConcurrency = createConcurrencyLimiter\(STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS\)/);
+});
+
 test('Stripe webhook bounds event identities before logs or durable idempotency writes', () => {
   assert.match(stripeEventId, /typeof value !== 'string'/);
   assert.match(stripeEventId, /\^evt_\[A-Za-z0-9\]\{8,96\}\$/);
