@@ -5939,14 +5939,17 @@ test('Stripe webhook concurrency is bounded without queueing or leaking admissio
   releaseOnly();
 
   assert.match(webhookRoute, /STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS = 16/);
-  assert.match(webhookRoute, /const release=stripeWebhookConcurrency\.tryAcquire\(\)/);
+  assert.match(webhookRoute, /const releaseProcessing=stripeWebhookConcurrency\.tryAcquire\(\)/);
   assert.match(webhookRoute, /status:503,[\s\S]{0,100}headers:\{'Retry-After':'5'\}/);
-  assert.match(webhookRoute, /try\{\s*return await handleStripeWebhook\(req\);\s*\}finally\{\s*release\(\);/);
+  assert.match(webhookRoute, /finally \{\s*releaseProcessing\(\);\s*\}/);
+  assert.match(webhookRoute, /STRIPE_WEBHOOK_MAX_CONCURRENT_UPLOADS = 32/);
+  assert.match(webhookRoute, /const release=stripeWebhookUploadConcurrency\.tryAcquire\(\)/);
+  assert.match(webhookRoute, /let uploadReleased=false;[\s\S]*if\(uploadReleased\) return;[\s\S]*return await handleStripeWebhook\(req,releaseUpload\);[\s\S]*finally\{\s*releaseUpload\(\);/);
 });
 
 test('obviously invalid webhook traffic cannot consume paid-order processing slots', () => {
   const postBoundary = webhookRoute.slice(webhookRoute.indexOf('export async function POST(req:Request)'));
-  const admissionIndex = postBoundary.indexOf('stripeWebhookConcurrency.tryAcquire()');
+  const admissionIndex = postBoundary.indexOf('stripeWebhookUploadConcurrency.tryAcquire()');
   assert.ok(admissionIndex > 0, 'webhook admission control must remain present');
   const beforeAdmission = postBoundary.slice(0, admissionIndex);
 
@@ -5956,6 +5959,18 @@ test('obviously invalid webhook traffic cannot consume paid-order processing slo
   assert.match(beforeAdmission, /hasIdentityContentEncoding\(req\.headers\.get\('content-encoding'\)\)/);
   assert.match(beforeAdmission, /validStripeSignatureHeader\(req\.headers\.get\('stripe-signature'\)\)/);
   assert.doesNotMatch(beforeAdmission, /readStripeWebhookBody\(|constructEvent\(/);
+});
+
+test('unauthenticated slow webhook uploads cannot occupy paid-order processing slots', () => {
+  const handlerBoundary = webhookRoute.slice(
+    webhookRoute.indexOf('async function handleStripeWebhook'),
+    webhookRoute.indexOf('export async function POST(req:Request)'),
+  );
+  const verificationIndex = handlerBoundary.indexOf('event=verifiedEvent');
+  const processingIndex = handlerBoundary.indexOf('stripeWebhookConcurrency.tryAcquire()');
+  assert.ok(verificationIndex > 0);
+  assert.ok(processingIndex > verificationIndex, 'paid-order admission must follow signature verification');
+  assert.match(handlerBoundary.slice(verificationIndex, processingIndex), /releaseUpload\(\)/);
 });
 
 test('product checkouts share one bounded live-work budget and always release admission', () => {

@@ -64,6 +64,14 @@ const STRIPE_WEBHOOK_RESPONSE_HEADERS = { 'Cache-Control': 'no-store' } as const
 // make that retry safe. No queue is retained in this process.
 export const STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS = 16;
 const stripeWebhookConcurrency = createConcurrencyLimiter(STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS);
+// Body reads need their own, slightly wider admission boundary. Acquiring the
+// paid-order processing pool before signature verification lets a caller with
+// only a plausible-looking header occupy every slot for the full upload
+// deadline. Keep memory and slow-upload work bounded here, then release this
+// slot as soon as the signature is verified and compete separately for the
+// smaller pool that protects Stripe, Supabase and delivery dependencies.
+export const STRIPE_WEBHOOK_MAX_CONCURRENT_UPLOADS = 32;
+const stripeWebhookUploadConcurrency = createConcurrencyLimiter(STRIPE_WEBHOOK_MAX_CONCURRENT_UPLOADS);
 
 function webhookJson(body: unknown, init: ResponseInit = {}) {
   return NextResponse.json(body, {
@@ -758,7 +766,7 @@ export async function deliverPaidOrderSideEffects(supabase:NonNullable<ReturnTyp
   if(failures.length) throw new AggregateError(failures.map((failure)=>failure.reason),'One or more paid-order deliveries failed');
 }
 
-async function handleStripeWebhook(req:Request){
+async function handleStripeWebhook(req:Request, releaseUpload:()=>void){
   // hasRequiredStripeCheckoutConfig canonicalises ordinary deployment
   // whitespace. Use the same value for signature verification and API reads
   // so a health-ready service cannot reject every signed payment event.
@@ -836,6 +844,19 @@ async function handleStripeWebhook(req:Request){
     return webhookJson({error:'Stripe event mode mismatch'},{status:400});
   }
   if(!['checkout.session.completed','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed','checkout.session.expired'].includes(event.type)) return webhookJson({received:true});
+  // Authentication has completed and the event is relevant to QY Roam's
+  // paid-order lifecycle, so the larger upload allocation is no longer
+  // needed. Release it before acquiring scarce dependency work; otherwise a
+  // burst of valid deliveries could unnecessarily consume both pools.
+  releaseUpload();
+  const releaseProcessing=stripeWebhookConcurrency.tryAcquire();
+  if(!releaseProcessing){
+    return webhookJson({error:'Webhook processing is busy'}, {
+      status:503,
+      headers:{'Retry-After':'5'},
+    });
+  }
+  try {
   // The SDK type is not a runtime validator. Inspect the deserialised event
   // object before reading its metadata or using its id in an outbound Stripe
   // request / durable ledger key. This leaves malformed signed payloads as a
@@ -1057,6 +1078,9 @@ async function handleStripeWebhook(req:Request){
     return webhookJson({error:'Processing failed'},{status:500});
   }
   return webhookJson({received:true});
+  } finally {
+    releaseProcessing();
+  }
 }
 
 export async function POST(req:Request){
@@ -1076,16 +1100,22 @@ export async function POST(req:Request){
   if(!validStripeSignatureHeader(req.headers.get('stripe-signature'))) {
     return webhookJson({error:'Invalid signature'},{status:400});
   }
-  const release=stripeWebhookConcurrency.tryAcquire();
+  const release=stripeWebhookUploadConcurrency.tryAcquire();
   if(!release){
-    return webhookJson({error:'Webhook processing is busy'},{
+    return webhookJson({error:'Webhook upload capacity is busy'},{
       status:503,
       headers:{'Retry-After':'5'},
     });
   }
-  try{
-    return await handleStripeWebhook(req);
-  }finally{
+  let uploadReleased=false;
+  const releaseUpload=()=>{
+    if(uploadReleased) return;
+    uploadReleased=true;
     release();
+  };
+  try{
+    return await handleStripeWebhook(req,releaseUpload);
+  }finally{
+    releaseUpload();
   }
 }
