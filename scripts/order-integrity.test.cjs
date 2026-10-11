@@ -3893,10 +3893,10 @@ test('admin order visibility fails loudly instead of presenting a database failu
   assert.match(adminPage, /Operational data is currently unavailable:/);
   assert.match(adminPage, /Do not treat empty panels as no orders/);
   assert.match(adminPage, /const ordersUnavailable = Boolean\(result\.error\)/);
-  assert.match(adminPage, /ordersIncomplete \? <p role="status"><strong>Sales and order metrics are unavailable/);
+  assert.match(adminPage, /reportingIncomplete \? <p role="status"><strong>Sales and order metrics are unavailable/);
   assert.match(adminPage, /\{!fulfilmentSummaryIncomplete && <>[\s\S]*?WiFi dispatch exceptions[\s\S]*?Meta CAPI exceptions[\s\S]*?<\/>\}/);
   assert.match(adminPage, /ordersUnavailable \? <p><strong>Orders are unavailable\.<\/strong>[\s\S]*?: result\.truncated \? <p role="status">[\s\S]*?: supabase && orders\.length === 0 && <p>No orders yet\.<\/p>/);
-  assert.match(adminPage, /ordersIncomplete && <p><strong>Customer order history is unavailable/);
+  assert.match(adminPage, /reportingIncomplete && <p><strong>Customer order history is unavailable/);
 });
 
 test('admin reporting screens do not present failed database reads as empty operational data', () => {
@@ -4178,9 +4178,9 @@ test('admin aggregates fail closed when bounded order or delivery views are inco
   assert.match(adminPage, /const fulfilmentSummaryIncomplete = ordersIncomplete \|\|/);
   assert.match(adminPage, /Boolean\(notificationResult\.error\) \|\| notificationResult\.truncated/);
   assert.match(adminPage, /Boolean\(metaDeliveryResult\.error\) \|\| metaDeliveryResult\.truncated/);
-  assert.match(adminPage, /\{ordersIncomplete \? <p role="status">/);
+  assert.match(adminPage, /\{reportingIncomplete \? <p role="status">/);
   assert.match(adminPage, /\{!fulfilmentSummaryIncomplete && <>/);
-  assert.match(adminPage, /\{!ordersIncomplete && customers\.length > 0/);
+  assert.match(adminPage, /\{!reportingIncomplete && customers\.length > 0/);
   assert.match(adminPage, /Showing the first \{ADMIN_MAX_ROWS\.toLocaleString\(\)\} orders only/);
 });
 
@@ -4470,6 +4470,16 @@ test('admin visibility detects abandoned Stripe claims using the webhook recover
   assert.match(adminPage, /!stripeEventClaimInProgress\(event\.processing_started_at, event\.last_error\)/);
   assert.match(adminPage, /failed or abandoned events awaiting a signed retry/);
   assert.match(adminPage, /Processing worker stopped before completion/);
+});
+
+test('admin financial reporting fails closed on malformed paid ledger rows', () => {
+  assert.match(adminPage, /function paidAmountCents\(value: unknown\)/);
+  assert.match(adminPage, /const invalidPaidAmounts = paid\.filter\(\(o:any\)=>paidAmountCents\(o\.amount_sgd\) === null\)/);
+  assert.match(adminPage, /const invalidPaymentTimes = paid\.filter/);
+  assert.match(adminPage, /const reportingIncomplete = ordersIncomplete \|\| reportingIntegrityIssues\.length > 0/);
+  assert.match(adminPage, /Paid sales ledger needs reconciliation\./);
+  assert.match(adminPage, /\{reportingIncomplete \? <p role="status">/);
+  assert.doesNotMatch(adminPage, /Number\(o\.amount_sgd \|\| 0\)/);
 });
 
 test('admin webhook visibility includes malformed and future-dated leases', () => {

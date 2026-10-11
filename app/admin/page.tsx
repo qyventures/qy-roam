@@ -55,7 +55,20 @@ function daysFromToday(value: string | null | undefined) {
 }
 
 function isEsim(order: any) { return order.product_type === 'esim'; }
-function money(value: number) { return `S$${Number(value || 0).toFixed(2)}`; }
+function paidAmountCents(value: unknown) {
+  const raw = typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
+  if (!/^\d+(?:\.\d{1,2})?$/.test(raw)) return null;
+  const [dollars, fraction = ''] = raw.split('.');
+  const cents = Number(dollars) * 100 + Number(fraction.padEnd(2, '0'));
+  return Number.isSafeInteger(cents) && cents > 0 && cents <= 9_999_999_999 ? cents : null;
+}
+function money(value: unknown) {
+  const cents = paidAmountCents(value);
+  return cents === null ? '—' : formatCents(cents);
+}
+function formatCents(cents: number) {
+  return Number.isSafeInteger(cents) && cents >= 0 ? `S$${(cents / 100).toFixed(2)}` : '—';
+}
 function isStripeCheckoutOrder(order: any) { return typeof order.stripe_session_id === 'string' && order.stripe_session_id.startsWith('cs_'); }
 function stripeEventDashboardUrl(eventId: unknown) {
   const match = typeof eventId === 'string' ? /^stripe:(evt_[A-Za-z0-9]{8,96})$/.exec(eventId) : null;
@@ -236,19 +249,34 @@ export default async function AdminPage() {
   ].filter(Boolean) as string[];
 
   const paid = orders.filter((o:any)=>o.payment_status === 'paid');
+  // Additive database constraints deliberately keep historical/imported rows
+  // visible even when they predate today's paid-ledger contract. Never turn a
+  // malformed amount into zero/NaN or silently omit a bad payment timestamp
+  // from rolling revenue: flag those rows for reconciliation and withhold all
+  // financial/customer aggregates until the source ledger is coherent.
+  const invalidPaidAmounts = paid.filter((o:any)=>paidAmountCents(o.amount_sgd) === null);
+  const invalidPaymentTimes = paid.filter((o:any) => {
+    const timestamp = typeof o.payment_confirmed_at === 'string' ? Date.parse(o.payment_confirmed_at) : Number.NaN;
+    return !Number.isFinite(timestamp);
+  });
+  const reportingIntegrityIssues = [
+    ...invalidPaidAmounts.map((o:any)=>`order #${o.id} has an invalid paid amount`),
+    ...invalidPaymentTimes.map((o:any)=>`order #${o.id} has an invalid payment confirmation time`),
+  ];
+  const reportingIncomplete = ordersIncomplete || reportingIntegrityIssues.length > 0;
   // "Active" on this operations dashboard means paid work that can safely be
   // fulfilled. Unpaid asynchronous Checkouts remain in the order table below
   // and in Stripe recovery visibility, but must never inflate the fulfilment
   // workload or departure/return exception queues.
   const active = paid.filter((o:any)=>!['closed','cancelled','payment_failed'].includes(o.fulfilment_status));
-  const revenue = paid.reduce((sum:number,o:any)=>sum + Number(o.amount_sgd || 0), 0);
+  const revenueCents = paid.reduce((sum:number,o:any)=>sum + (paidAmountCents(o.amount_sgd) || 0), 0);
   // A Checkout Session can be created days before an asynchronous payment is
   // confirmed. Sales recency must follow the immutable payment boundary used
   // by period closing and Meta Purchase, otherwise a newly settled payment
   // can be omitted from the rolling metric and customer purchase ordering.
-  const revenue30 = paid.filter((o:any)=>withinDays(o.payment_confirmed_at,30)).reduce((sum:number,o:any)=>sum + Number(o.amount_sgd || 0), 0);
-  const esimRevenue = paid.filter(isEsim).reduce((sum:number,o:any)=>sum + Number(o.amount_sgd || 0), 0);
-  const wifiRevenue = paid.filter((o:any)=>!isEsim(o)).reduce((sum:number,o:any)=>sum + Number(o.amount_sgd || 0), 0);
+  const revenue30Cents = paid.filter((o:any)=>withinDays(o.payment_confirmed_at,30)).reduce((sum:number,o:any)=>sum + (paidAmountCents(o.amount_sgd) || 0), 0);
+  const esimRevenueCents = paid.filter(isEsim).reduce((sum:number,o:any)=>sum + (paidAmountCents(o.amount_sgd) || 0), 0);
+  const wifiRevenueCents = paid.filter((o:any)=>!isEsim(o)).reduce((sum:number,o:any)=>sum + (paidAmountCents(o.amount_sgd) || 0), 0);
 
   const customerMap = new Map<string, any>();
   for (const o of paid) {
@@ -256,7 +284,7 @@ export default async function AdminPage() {
     if (!key) continue;
     const current = customerMap.get(key) || {name:o.customer_name,email:o.email,phone:o.phone,orders:0,revenue:0,last:o.payment_confirmed_at,products:new Set<string>()};
     current.orders += 1;
-    current.revenue += Number(o.amount_sgd || 0);
+    current.revenue += paidAmountCents(o.amount_sgd) || 0;
     current.products.add(isEsim(o) ? 'eSIM' : 'Pocket WiFi');
     if (String(o.payment_confirmed_at || '') > String(current.last || '')) current.last = o.payment_confirmed_at;
     customerMap.set(key,current);
@@ -295,6 +323,10 @@ export default async function AdminPage() {
         <strong>Operational data needs archiving or a dedicated reporting view.</strong>
         <div style={{marginTop:6}}>This screen safely loaded its first {ADMIN_MAX_ROWS.toLocaleString()} rows but stopped before all {truncatedPanels.join(', ')} could be reviewed. Do not rely on these totals or exception counts until the backlog is reconciled.</div>
       </div>}
+      {!ordersIncomplete && reportingIntegrityIssues.length > 0 && <div role="alert" style={{...cardStyle,borderColor:'#dc2626',background:'#fef2f2',marginBottom:20}}>
+        <strong>Paid sales ledger needs reconciliation.</strong>
+        <div style={{marginTop:6}}>Financial and customer aggregates are withheld because {reportingIntegrityIssues.slice(0,3).join('; ')}{reportingIntegrityIssues.length > 3 ? `; and ${reportingIntegrityIssues.length - 3} more issue${reportingIntegrityIssues.length === 4 ? '' : 's'}` : ''}. The order rows remain visible below; correct the durable ledger before using dashboard totals.</div>
+      </div>}
       {!metaCapiConfigured && <div role="alert" style={{...cardStyle,borderColor:'#b45309',background:'#fffbeb',marginBottom:20}}>
         <strong>Meta CAPI Purchase delivery is not configured.</strong>
         <div style={{marginTop:6}}>Consented purchases remain safely recorded in the order ledger, but no server-side Purchase events can be sent or retried until a valid Pixel ID and CAPI access token are configured.</div>
@@ -307,13 +339,13 @@ export default async function AdminPage() {
       </nav>
 
       <section id="dashboard">
-        {ordersIncomplete ? <p role="status"><strong>Sales and order metrics are unavailable until the complete order ledger can be loaded.</strong> {result.truncated && <>The bounded order detail below remains available for investigation, but it is not used for headline totals.</>}</p> : <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(190px,1fr))',gap:14}}>
-          <div style={cardStyle}><small>Paid revenue</small><div style={metricStyle}>{money(revenue)}</div><small>{paid.length} paid orders</small></div>
-          <div style={cardStyle}><small>Revenue · last 30 days</small><div style={metricStyle}>{money(revenue30)}</div><small>rolling 30-day sales</small></div>
+        {reportingIncomplete ? <p role="status"><strong>Sales and order metrics are unavailable until the complete paid ledger is loaded and valid.</strong> {result.truncated && <>The bounded order detail below remains available for investigation, but it is not used for headline totals.</>}</p> : <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(190px,1fr))',gap:14}}>
+          <div style={cardStyle}><small>Paid revenue</small><div style={metricStyle}>{formatCents(revenueCents)}</div><small>{paid.length} paid orders</small></div>
+          <div style={cardStyle}><small>Revenue · last 30 days</small><div style={metricStyle}>{formatCents(revenue30Cents)}</div><small>rolling 30-day sales</small></div>
           <div style={cardStyle}><small>Active paid orders</small><div style={metricStyle}>{active.length}</div><small>safe to track for fulfilment</small></div>
           <div style={cardStyle}><small>Customers</small><div style={metricStyle}>{customers.length}</div><small>{repeatCustomers.length} repeat customers</small></div>
-          <div style={cardStyle}><small>eSIM revenue</small><div style={metricStyle}>{money(esimRevenue)}</div><small>{paid.filter(isEsim).length} paid orders</small></div>
-          <div style={cardStyle}><small>Pocket WiFi revenue</small><div style={metricStyle}>{money(wifiRevenue)}</div><small>{paid.filter((o:any)=>!isEsim(o)).length} paid orders</small></div>
+          <div style={cardStyle}><small>eSIM revenue</small><div style={metricStyle}>{formatCents(esimRevenueCents)}</div><small>{paid.filter(isEsim).length} paid orders</small></div>
+          <div style={cardStyle}><small>Pocket WiFi revenue</small><div style={metricStyle}>{formatCents(wifiRevenueCents)}</div><small>{paid.filter((o:any)=>!isEsim(o)).length} paid orders</small></div>
         </div>}
       </section>
 
@@ -391,14 +423,14 @@ export default async function AdminPage() {
     <section id="customers" style={{marginTop:34}}>
       <h2>Customer CRM</h2>
       <p style={{color:'#64748b'}}>Customer history is aggregated from paid orders. This is the first CRM layer; lead stages, notes, tasks and WhatsApp history can be added next.</p>
-      {ordersIncomplete && <p><strong>Customer order history is unavailable until the complete order ledger can be loaded.</strong></p>}
-      {!ordersIncomplete && customers.length > 0 && <div style={{overflowX:'auto',...cardStyle,padding:0}}><table style={{width:'100%',borderCollapse:'collapse',minWidth:760}}>
+      {reportingIncomplete && <p><strong>Customer order history is unavailable until the complete paid ledger is loaded and valid.</strong></p>}
+      {!reportingIncomplete && customers.length > 0 && <div style={{overflowX:'auto',...cardStyle,padding:0}}><table style={{width:'100%',borderCollapse:'collapse',minWidth:760}}>
         <thead><tr style={{background:'#f8fafc'}}><th align="left" style={{padding:'12px 10px'}}>Customer</th><th align="left">Products</th><th align="left">Orders</th><th align="left">Lifetime value</th><th align="left">Last purchase</th></tr></thead>
         <tbody>{customers.slice(0,200).map((c:any,idx:number)=><tr key={`${c.email || c.phone || c.name}-${idx}`} style={{borderTop:'1px solid #e5e8ed'}}>
           <td style={{padding:'14px 10px'}}><strong>{c.name || '-'}</strong><br/><small>{c.email || '-'}</small><br/><small>{c.phone || '-'}</small></td>
           <td>{Array.from(c.products).join(' + ')}</td>
           <td>{c.orders}{c.orders > 1 ? ' · Repeat' : ''}</td>
-          <td><strong>{money(c.revenue)}</strong></td>
+          <td><strong>{formatCents(c.revenue)}</strong></td>
           <td>{c.last ? new Date(c.last).toLocaleDateString('en-SG') : '-'}</td>
         </tr>)}</tbody>
       </table></div>}
