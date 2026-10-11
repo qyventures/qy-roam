@@ -86,16 +86,20 @@ assert.ok(
 assert.match(deploy, /cutover_attempted=1\nif ! systemctl restart/);
 assert.match(deploy, /if \[\[ "\$cutover_attempted" -eq 0 \]\]; then/);
 assert.match(deploy, /qyroam-rollback-health/);
+assert.match(
+  deploy,
+  /rollback_health_header[\s\S]*?result\.launchReady!==true\|\|result\.salesReady!==true\|\|result\.service!==['"]qy-roam['"]/,
+  'automatic rollback must not report recovery when every checkout is blocked',
+);
 assert.match(deploy, /rollback_ready=0/);
-assert.match(deploy, /result\.launchReady!==true\|\|result\.service!=='qy-roam'/);
-assert.match(deploy, /Previous QY Roam artifact restored, restarted, and launch-ready/);
-assert.match(deploy, /Automatic rollback did not become launch-ready/);
+assert.match(deploy, /Previous QY Roam artifact restored, restarted, and sales-ready/);
+assert.match(deploy, /Automatic rollback did not become sales-ready/);
 assert.ok(
   deploy.indexOf('if systemctl restart "$SERVICE_NAME"; then') === -1,
   'rollback must not treat systemd accepting a restart as proof that checkout recovered',
 );
 assert.ok(
-  deploy.indexOf('rollback_ready=0') < deploy.indexOf('Previous QY Roam artifact restored, restarted, and launch-ready'),
+  deploy.indexOf('rollback_ready=0') < deploy.indexOf('Previous QY Roam artifact restored, restarted, and sales-ready'),
   'rollback success must be reported only after authenticated readiness succeeds',
 );
 assert.match(deploy, /release_verified=1\ncleanup_release_snapshot/);
@@ -114,7 +118,7 @@ assert.match(deploy, /http:\/\/127\.0\.0\.1:\$\{smoke_port\}\/api\/health/);
 assert.match(deploy, /smoke_health_header=/);
 assert.match(deploy, /chmod 600 "\$smoke_log" "\$smoke_health_header"/);
 assert.match(deploy, /curl --header "@\$smoke_health_header" --fail --silent --show-error --max-time "\$READINESS_CURL_TIMEOUT_SECONDS"/);
-assert.match(deploy, /result\.launchReady!==true\|\|result\.service!=='qy-roam'/);
+assert.match(deploy, /result\.launchReady!==true\|\|result\.salesReady!==true\|\|result\.service!=='qy-roam'/);
 assert.match(deploy, /Built QY Roam artifact failed its isolated startup smoke test/);
 assert.match(standalonePackager, /resolve\(root, 'public'\)/);
 assert.match(standalonePackager, /resolve\(root, distDir, 'static'\)/);

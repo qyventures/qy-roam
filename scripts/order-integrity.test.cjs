@@ -4090,12 +4090,14 @@ test('authenticated health readiness separates shared release controls from prod
   assert.match(healthRoute, /ok: launchReady/);
   assert.match(healthRoute, /salesReady,/);
   assert.match(healthRoute, /status: launchReady \? 200 : 503/);
-  // Release verification must reject a fully configured but commercially
-  // unavailable storefront. Rollback intentionally retains the older
-  // launchReady-only check so the immediately previous artifact remains
-  // recoverable across this health-contract addition.
-  assert.equal((deployScript.match(/result\.salesReady!==true/g) || []).length, 3);
-  assert.match(deployScript, /result\.launchReady!==true\|\|result\.service!=='qy-roam'/);
+  // Release and recovery verification must reject a fully configured but
+  // commercially unavailable storefront.
+  // Smoke, live-loopback, public-ingress, and automatic rollback checks all
+  // require at least one complete checkout path. A restored process with
+  // shared configuration but no saleable product is not a successful sales
+  // recovery and must retain its recovery artifact for operator action.
+  assert.equal((deployScript.match(/result\.salesReady!==true/g) || []).length, 4);
+  assert.doesNotMatch(deployScript, /result\.launchReady!==true\|\|result\.service!=='qy-roam'/);
   assert.doesNotMatch(healthRoute, /const coreReady/);
   // Checkout redirects customers to the server-created Stripe-hosted Session
   // URL and never uses Stripe.js. A stale or absent browser publishable key

@@ -161,7 +161,7 @@ restore_previous_artifact() {
   local attempt
   for attempt in {1..15}; do
     if curl --header "@$rollback_health_header" --fail --silent --show-error --max-time "$READINESS_CURL_TIMEOUT_SECONDS" "$HEALTH_URL" |
-       node -e "let body='';process.stdin.on('data',chunk=>body+=chunk).on('end',()=>{const result=JSON.parse(body);if(result.launchReady!==true||result.service!=='qy-roam')process.exit(1)})"; then
+       node -e "let body='';process.stdin.on('data',chunk=>body+=chunk).on('end',()=>{const result=JSON.parse(body);if(result.launchReady!==true||result.salesReady!==true||result.service!=='qy-roam')process.exit(1)})"; then
       rollback_ready=1
       break
     fi
@@ -169,12 +169,12 @@ restore_previous_artifact() {
   done
   rm -f "$rollback_health_header"
   if [[ "$rollback_ready" -eq 1 ]]; then
-    echo "Previous QY Roam artifact restored, restarted, and launch-ready." >&2
+    echo "Previous QY Roam artifact restored, restarted, and sales-ready." >&2
     return 0
   fi
 
   release_snapshot_cleanup_enabled=0
-  echo "Automatic rollback did not become launch-ready; operator intervention is required." >&2
+  echo "Automatic rollback did not become sales-ready; operator intervention is required." >&2
   echo "Recovery snapshot retained at $rollback_dir/previous-next" >&2
   systemctl --no-pager --full status "$SERVICE_NAME" >&2 || true
   journalctl -u "$SERVICE_NAME" -n 50 --no-pager >&2 || true
