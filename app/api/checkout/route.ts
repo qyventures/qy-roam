@@ -264,6 +264,13 @@ export async function POST(req: Request) {
   const minLeadDays=config.minDeliveryLeadDays, earliest=operationalIsoDateAfter(minLeadDays);
   if(start<earliest) return NextResponse.json({error:`Please book at least ${minLeadDays} day${minLeadDays===1?'':'s'} before departure so we can arrange delivery. Contact +65 8032 7183 for urgent trips.`},{status:400});
   const days=Math.floor((endDate.getTime()-startDate.getTime())/86400000)+1; if(days<1||days>90) return NextResponse.json({error:'Bookings must be between 1 and 90 days.'},{status:400});
+  // Resolve the deployment-controlled redirect origin before any Stripe read
+  // or inventory reservation. A malformed production URL is deterministic:
+  // no Checkout Session can be created safely. Discovering it only after the
+  // reservation RPC would leave one unlinked router hold per failed request
+  // until expiry, allowing configuration drift to consume all saleable
+  // capacity even though Stripe was never asked to create a payment page.
+  const origin=checkoutSiteOrigin(req.url);
   // Everything after this complete cheap request-validation boundary can
   // perform schema, Stripe, or Supabase work and belongs in the shared
   // overload budget. Invalid traffic remains isolated by the limiter above.
@@ -415,7 +422,6 @@ export async function POST(req: Request) {
   if(reservation.error) throw reservation.error;
   const reserved=reservation.data?.[0]?.reserved===true;
   if(!reserved) return NextResponse.json({error:'Pocket WiFi is sold out or currently reserved for these dates. Please try different dates or contact +65 8032 7183.'},{status:409,headers:{'Cache-Control':'no-store'}});
-  const origin=checkoutSiteOrigin(req.url);
   const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[]=[{quantity:1,price_data:{currency:'sgd',unit_amount:rentalAmount,product_data:{name:`QY Roam Pocket WiFi — ${country}`,description:`${start} to ${end} · ${days} day${days===1?'':'s'}${promo.discountCents>0?` · ${normalisePromoCode(body.promoCode)} applied`:''}`}}}];
   if(courierFee>0) lineItems.push({quantity:1,price_data:{currency:'sgd',unit_amount:courierFee,product_data:{name:'Singapore courier delivery & return handling'}}});
   // Readiness, hold scans and the reservation RPC can take time after the

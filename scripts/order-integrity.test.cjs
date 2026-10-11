@@ -5431,6 +5431,18 @@ test('Stripe Checkout redirects fail closed unless production uses a canonical Q
     assert.match(route, /checkoutSiteOrigin\(req\.url\)/);
     assert.doesNotMatch(route, /function siteOrigin\(/);
   }
+  // Pocket WiFi has a scarce, durable reservation boundary. Deployment URL
+  // drift is known before any provider call and must fail before that boundary
+  // so repeated checkout attempts cannot strand unlinked capacity until the
+  // normal reservation expiry.
+  assert.ok(
+    wifiCheckoutRoute.indexOf('const origin=checkoutSiteOrigin(req.url)') <
+      wifiCheckoutRoute.indexOf("const holdState=await activeStripeHolds"),
+  );
+  assert.ok(
+    wifiCheckoutRoute.indexOf('const origin=checkoutSiteOrigin(req.url)') <
+      wifiCheckoutRoute.indexOf("supabase.rpc('qy_reserve_pocket_wifi'"),
+  );
   assert.match(healthRoute, /isProductionQyRoamOrigin\(process\.env\.NEXT_PUBLIC_SITE_URL\)/);
   assert.match(launchPage, /isProductionQyRoamOrigin\(process\.env\.NEXT_PUBLIC_SITE_URL\)/);
   assert.doesNotMatch(launchPage, /function isProductionSiteUrl/);
