@@ -1060,6 +1060,22 @@ async function handleStripeWebhook(req:Request){
 }
 
 export async function POST(req:Request){
+  // Keep requests that cannot possibly be a Stripe delivery outside the
+  // scarce paid-order work budget. Signature verification still requires the
+  // exact body below, but these headers are sufficient to reject ordinary
+  // scanners, cross-site form posts, compressed payloads and missing/flooded
+  // signature values without letting them crowd out an authentic payment
+  // event. Repeat the checks inside handleStripeWebhook as a defence-in-depth
+  // boundary for any future internal caller of that function.
+  if(!isJsonRequestContentType(req.headers.get('content-type'))) {
+    return webhookJson({error:'Expected JSON webhook payload'},{status:415});
+  }
+  if(!hasIdentityContentEncoding(req.headers.get('content-encoding'))) {
+    return webhookJson({error:'Unsupported webhook content encoding'},{status:415});
+  }
+  if(!validStripeSignatureHeader(req.headers.get('stripe-signature'))) {
+    return webhookJson({error:'Invalid signature'},{status:400});
+  }
   const release=stripeWebhookConcurrency.tryAcquire();
   if(!release){
     return webhookJson({error:'Webhook processing is busy'},{

@@ -5928,6 +5928,20 @@ test('Stripe webhook concurrency is bounded without queueing or leaking admissio
   assert.match(webhookRoute, /try\{\s*return await handleStripeWebhook\(req\);\s*\}finally\{\s*release\(\);/);
 });
 
+test('obviously invalid webhook traffic cannot consume paid-order processing slots', () => {
+  const postBoundary = webhookRoute.slice(webhookRoute.indexOf('export async function POST(req:Request)'));
+  const admissionIndex = postBoundary.indexOf('stripeWebhookConcurrency.tryAcquire()');
+  assert.ok(admissionIndex > 0, 'webhook admission control must remain present');
+  const beforeAdmission = postBoundary.slice(0, admissionIndex);
+
+  // These checks use only bounded headers and must remain ahead of admission.
+  // Cryptographic verification still occurs after the exact raw body is read.
+  assert.match(beforeAdmission, /isJsonRequestContentType\(req\.headers\.get\('content-type'\)\)/);
+  assert.match(beforeAdmission, /hasIdentityContentEncoding\(req\.headers\.get\('content-encoding'\)\)/);
+  assert.match(beforeAdmission, /validStripeSignatureHeader\(req\.headers\.get\('stripe-signature'\)\)/);
+  assert.doesNotMatch(beforeAdmission, /readStripeWebhookBody\(|constructEvent\(/);
+});
+
 test('product checkouts share one bounded live-work budget and always release admission', () => {
   assert.equal(CHECKOUT_MAX_CONCURRENT_REQUESTS, 12);
   const releases = [];
