@@ -6,7 +6,7 @@
  */
 const MAX_STRIPE_SECRET_KEY_LENGTH = 256;
 
-function stripeSecretKeyMode(value?: string) {
+export function stripeSecretKeyMode(value?: string) {
   const key = value?.trim();
   if (!key || key.length > MAX_STRIPE_SECRET_KEY_LENGTH) return null;
   // Stripe server keys are opaque, but both standard and restricted keys

@@ -38,7 +38,7 @@ const { isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutErro
 const { checkoutClientKey, createCheckoutAttemptLimiter, createGlobalAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { adminAuthClientKey, createFailedAdminAuthLimiter } = require('../lib/adminAuthRateLimit.ts');
 const { ADMIN_MUTATION_HEADER, ADMIN_MUTATION_HEADER_VALUE, adminMutationHeaders } = require('../lib/adminMutation.ts');
-const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = require('../lib/stripeCheckoutConfig.ts');
+const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode, stripeSecretKeyMode } = require('../lib/stripeCheckoutConfig.ts');
 const { stripeWebhookSigningSecret, stripeWebhookSigningSecrets } = require('../lib/stripeWebhookSecret.ts');
 const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
 const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_EXPIRY_CREATION_MARGIN_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, CHECKOUT_ATTEMPT_MAX_FUTURE_MS, STRIPE_HOLD_SCAN_WINDOW_SECONDS, STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, checkoutAttemptExpiresAt, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
@@ -4046,8 +4046,17 @@ test('admin webhook recovery visibility pages every actionable Stripe exception 
 test('admin webhook exceptions expose a safe manual Stripe resend path and order-persistence state', () => {
   assert.match(adminPage, /function stripeEventDashboardUrl\(eventId: unknown\)/);
   assert.match(adminPage, /\^stripe:\(evt_\[A-Za-z0-9\]\{8,96\}\)\$/);
-  assert.match(adminPage, /if \(!stripeKey\?\.startsWith\('sk_live_'\) && !stripeKey\?\.startsWith\('sk_test_'\)\) return null/);
-  assert.match(adminPage, /const testMode = stripeKey\.startsWith\('sk_test_'\)/);
+  assert.match(adminPage, /stripeSecretKeyMode\(process\.env\.STRIPE_SECRET_KEY\)/);
+  assert.match(adminPage, /stripeMode === 'test' \? 'test\/' : ''/);
+  assert.doesNotMatch(adminPage, /startsWith\('sk_(?:live|test)_'\)/);
+  // The dashboard recovery path supports the same standard/restricted and
+  // live/test credential modes as checkout. In particular, least-privilege
+  // production keys must not make signed-event recovery links disappear.
+  assert.equal(stripeSecretKeyMode('sk_live_abcdefghijklmnop'), 'live');
+  assert.equal(stripeSecretKeyMode('rk_live_abcdefghijklmnop'), 'live');
+  assert.equal(stripeSecretKeyMode('sk_test_abcdefghijklmnop'), 'test');
+  assert.equal(stripeSecretKeyMode('rk_test_abcdefghijklmnop'), 'test');
+  assert.equal(stripeSecretKeyMode('rk_live_short'), null);
   assert.match(adminPage, /automatic retries are finite/);
   assert.match(adminPage, /Stripe’s manual resend/);
   assert.match(adminPage, /const orderByStripeSession = new Map/);

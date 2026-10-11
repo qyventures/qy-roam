@@ -5,6 +5,7 @@ import { hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
 import { isSafeDigitalDeliveryReference } from '@/lib/digitalDeliveryReference';
 import { operationalDaysFromToday } from '@/lib/operationalDate';
 import { POCKET_WIFI_RETURN_GRACE_DAYS } from '@/lib/pocketWifiReturns';
+import { stripeSecretKeyMode } from '@/lib/stripeCheckoutConfig';
 
 export const dynamic = 'force-dynamic';
 
@@ -76,10 +77,12 @@ function stripeEventDashboardUrl(eventId: unknown) {
   // The admin page never exposes the credential itself. Its mode only selects
   // the matching Stripe dashboard so an operator cannot accidentally inspect
   // or resend a test event while reconciling a live paid order (or vice versa).
-  const stripeKey = process.env.STRIPE_SECRET_KEY?.trim();
-  if (!stripeKey?.startsWith('sk_live_') && !stripeKey?.startsWith('sk_test_')) return null;
-  const testMode = stripeKey.startsWith('sk_test_');
-  return `https://dashboard.stripe.com/${testMode ? 'test/' : ''}events/${match[1]}`;
+  // Use the same bounded key parser as checkout and webhook mode validation.
+  // Production may intentionally use a least-privilege `rk_live_…` key; the
+  // recovery link must remain available in that supported configuration.
+  const stripeMode = stripeSecretKeyMode(process.env.STRIPE_SECRET_KEY);
+  if (!stripeMode) return null;
+  return `https://dashboard.stripe.com/${stripeMode === 'test' ? 'test/' : ''}events/${match[1]}`;
 }
 function customerKey(order: any) {
   return String(order.email || order.phone || order.customer_name || order.stripe_session_id || '').trim().toLowerCase();
