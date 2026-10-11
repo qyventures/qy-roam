@@ -2753,6 +2753,16 @@ test('payment-readiness checks coalesce healthy checkout probes without caching 
   assert.match(productionReadiness, /async function checkRequiredPocketWifiFulfilmentSchema\(\)/);
 });
 
+test('stock readiness coalesces deploy probes without caching failures or crossing fleet limits', () => {
+  assert.match(pocketWifiStock, /export const STOCK_READINESS_CACHE_MS = 5_000/);
+  assert.match(pocketWifiStock, /let stockCheckInFlight: Promise<boolean> \| null = null/);
+  assert.match(pocketWifiStock, /stockReadyConfiguredInventory === configuredInventory/);
+  assert.match(pocketWifiStock, /stockCheckInFlightConfiguredInventory !== configuredInventory/);
+  assert.match(pocketWifiStock, /if \(ready\) \{[\s\S]*?stockReadyUntil = Date\.now\(\) \+ STOCK_READINESS_CACHE_MS/);
+  assert.doesNotMatch(pocketWifiStock, /if \(!ready\)[\s\S]{0,100}stockReadyUntil/);
+  assert.match(pocketWifiStock, /if \(stockCheckInFlight === check\) \{/);
+});
+
 test('Pocket WiFi checkout fails closed when its paid-order schema is unavailable', () => {
   assert.match(wifiCheckoutRoute, /hasRequiredPaymentSchema/);
   assert.match(wifiCheckoutRoute, /if\(!await hasRequiredPaymentSchema\(\)\)/);
