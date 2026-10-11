@@ -20,6 +20,7 @@ import { safeStripeCheckoutUrl } from '@/lib/stripeCheckoutUrl';
 import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhookObject';
+import { tryAcquireCheckoutConcurrency } from '@/lib/checkoutConcurrency';
 
 export const runtime = 'nodejs';
 
@@ -218,6 +219,7 @@ async function linkReservationToSession(supabase:NonNullable<ReturnType<typeof g
 }
 
 export async function POST(req: Request) {
+ let releaseCheckout: (()=>void)|null=null;
  try {
   // Keep malformed or repeatedly abusive traffic on the per-client ingress
   // boundary, but do not let it consume the instance-wide Stripe work budget.
@@ -266,6 +268,12 @@ export async function POST(req: Request) {
   // perform schema, Stripe, or Supabase work and belongs in the shared
   // overload budget. Invalid traffic remains isolated by the limiter above.
   if(globallyLimited()) return NextResponse.json({error:'Too many checkout attempts. Please try again shortly.'},{status:429,headers:{'Cache-Control':'no-store','Retry-After':'60'}});
+  // Rate limiting bounds starts over time; it does not bound simultaneous
+  // Stripe and database calls when dependencies are slow. Share a small
+  // non-queueing admission budget with eSIM checkout so overload sheds work
+  // promptly while this request's durable idempotency identity stays intact.
+  releaseCheckout=tryAcquireCheckoutConcurrency();
+  if(!releaseCheckout) return NextResponse.json({error:'Checkout is busy. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'5'}});
   // A reservation alone is not enough: once payment succeeds, the webhook
   // needs the orders and delivery/idempotency ledgers as well. Do this before
   // creating a payable Stripe Session so an incomplete migration cannot leave
@@ -591,5 +599,7 @@ export async function POST(req: Request) {
     {error:'Pocket WiFi checkout is temporarily unavailable. Please try again shortly.'},
     {status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}},
   );
+ } finally {
+  releaseCheckout?.();
  }
 }

@@ -67,6 +67,7 @@ const { parsePocketWifiAvailability } = require('../lib/pocketWifiAvailability.t
 const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutResponse.ts');
 const { MANUAL_ORDER_REFERENCE_MAX_LENGTH, manualOrderReference, manualOrderSessionId } = require('../lib/manualOrderReference.ts');
 const { createConcurrencyLimiter } = require('../lib/concurrencyLimit.ts');
+const { CHECKOUT_MAX_CONCURRENT_REQUESTS, tryAcquireCheckoutConcurrency } = require('../lib/checkoutConcurrency.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { hasOrderIntegritySecret, hasOrderIntegritySigningConfig, isCanonicalStripeMetadata, signedQyRoamProvenance, validQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -5805,4 +5806,34 @@ test('Stripe webhook concurrency is bounded without queueing or leaking admissio
   assert.match(webhookRoute, /const release=stripeWebhookConcurrency\.tryAcquire\(\)/);
   assert.match(webhookRoute, /status:503,[\s\S]{0,100}headers:\{'Retry-After':'5'\}/);
   assert.match(webhookRoute, /try\{\s*return await handleStripeWebhook\(req\);\s*\}finally\{\s*release\(\);/);
+});
+
+test('product checkouts share one bounded live-work budget and always release admission', () => {
+  assert.equal(CHECKOUT_MAX_CONCURRENT_REQUESTS, 12);
+  const releases = [];
+  for (let index = 0; index < CHECKOUT_MAX_CONCURRENT_REQUESTS; index += 1) {
+    const release = tryAcquireCheckoutConcurrency();
+    assert.equal(typeof release, 'function');
+    releases.push(release);
+  }
+  assert.equal(tryAcquireCheckoutConcurrency(), null);
+  releases.forEach((release) => release());
+  const recovered = tryAcquireCheckoutConcurrency();
+  assert.equal(typeof recovered, 'function');
+  recovered();
+
+  for (const route of [wifiCheckoutRoute, esimCheckoutRoute]) {
+    assert.match(route, /releaseCheckout\s*=\s*tryAcquireCheckoutConcurrency\(\)/);
+    assert.match(route, /Checkout is busy[\s\S]{0,180}status:\s*503/);
+    assert.match(route, /['"]Retry-After['"]\s*:\s*['"]5['"]/);
+    assert.match(route, /finally\s*\{\s*releaseCheckout\?\.\(\);/);
+  }
+  assert.ok(
+    wifiCheckoutRoute.indexOf('releaseCheckout=tryAcquireCheckoutConcurrency()') > wifiCheckoutRoute.indexOf('if(globallyLimited())'),
+    'Pocket WiFi admission must follow cheap validation and rate limiting',
+  );
+  assert.ok(
+    esimCheckoutRoute.indexOf('releaseCheckout = tryAcquireCheckoutConcurrency()') > esimCheckoutRoute.indexOf('if (globallyLimited())'),
+    'eSIM admission must follow cheap validation and rate limiting',
+  );
 });

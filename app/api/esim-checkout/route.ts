@@ -16,6 +16,7 @@ import { safeStripeCheckoutUrl } from '@/lib/stripeCheckoutUrl';
 import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhookObject';
+import { tryAcquireCheckoutConcurrency } from '@/lib/checkoutConcurrency';
 
 export const runtime = 'nodejs';
 
@@ -70,6 +71,7 @@ function matchesRequestedEsim(session: Stripe.Checkout.Session, requestId: strin
 }
 
 export async function POST(req: Request) {
+  let releaseCheckout: (() => void) | null = null;
   try {
     // Invalid traffic still consumes a bounded per-client ingress allowance,
     // but it must not spend the process-wide Stripe work budget before it has
@@ -140,6 +142,14 @@ export async function POST(req: Request) {
     // and persistence readiness calls, so only those requests participate in
     // the allocation-free instance-wide overload guard.
     if (globallyLimited()) return NextResponse.json({ error: 'Too many checkout attempts. Please try again shortly.' }, { status: 429, headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' } });
+    // Use the same live-work ceiling as Pocket WiFi checkout. The admission
+    // guard deliberately sits after cheap validation, so malformed traffic
+    // cannot consume the scarce slots used for provider and schema calls.
+    releaseCheckout = tryAcquireCheckoutConcurrency();
+    if (!releaseCheckout) return NextResponse.json({ error: 'Checkout is busy. Please try again shortly.' }, {
+      status: 503,
+      headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' },
+    });
 
     // eSIM has no inventory reservation, so it must explicitly verify its
     // post-payment persistence boundary before exposing a Stripe payment URL.
@@ -394,5 +404,7 @@ export async function POST(req: Request) {
       status: 503,
       headers: { 'Cache-Control': 'no-store', 'Retry-After': '10' },
     });
+  } finally {
+    releaseCheckout?.();
   }
 }
