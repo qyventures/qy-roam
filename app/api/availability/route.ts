@@ -17,6 +17,7 @@ import { MAX_STRIPE_HOLD_SCAN_PAGES, STRIPE_HOLD_SCAN_WINDOW_SECONDS } from '@/l
 import { AVAILABILITY_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS, createCheckoutAttemptLimiter, createGlobalAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
+import { tryAcquireAvailabilityConcurrency } from '@/lib/availabilityConcurrency';
 
 export const dynamic = 'force-dynamic';
 
@@ -138,6 +139,8 @@ async function committedInventory(start: string, end: string, stripeHoldRequestI
 }
 
 export async function GET(req: NextRequest) {
+  let releaseAvailability: (() => void) | null = null;
+  try {
   // Apply the bounded per-client ingress limit before parsing any attacker-
   // controlled query values. Malformed dates are cheap and must never spend
   // the shared provider-work budget below, but returning before this guard
@@ -189,6 +192,18 @@ export async function GET(req: NextRequest) {
     });
   }
 
+  // Rate limiting bounds starts over time, but slow Stripe or Supabase calls
+  // can still overlap. Do not queue excess live inventory promises in this
+  // process: the browser can retry this read-only request without creating a
+  // payment capability or changing stock.
+  releaseAvailability = tryAcquireAvailabilityConcurrency();
+  if (!releaseAvailability) {
+    return NextResponse.json({ available: false, error: 'Live availability is busy. Please try again shortly.' }, {
+      status: 503,
+      headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' },
+    });
+  }
+
   // Availability is a promise that a customer can proceed to payment. Match
   // every non-request-specific checkout prerequisite before calculating stock:
   // missing webhook, fulfilment, or signing configuration used to leave the
@@ -236,5 +251,8 @@ export async function GET(req: NextRequest) {
     // customer data, or implementation details.
     console.error('availability_check_failed');
     return NextResponse.json({ available: false, remaining: 0, inventoryMode: 'unavailable', error: 'Live availability is temporarily unavailable. Please try again shortly or contact +65 8032 7183.' }, { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '30' } });
+  }
+  } finally {
+    releaseAvailability?.();
   }
 }

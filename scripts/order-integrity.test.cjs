@@ -68,6 +68,7 @@ const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutRespon
 const { MANUAL_ORDER_REFERENCE_MAX_LENGTH, manualOrderReference, manualOrderSessionId } = require('../lib/manualOrderReference.ts');
 const { createConcurrencyLimiter } = require('../lib/concurrencyLimit.ts');
 const { CHECKOUT_MAX_CONCURRENT_REQUESTS, tryAcquireCheckoutConcurrency } = require('../lib/checkoutConcurrency.ts');
+const { AVAILABILITY_MAX_CONCURRENT_REQUESTS, tryAcquireAvailabilityConcurrency } = require('../lib/availabilityConcurrency.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { hasOrderIntegritySecret, hasOrderIntegritySigningConfig, isCanonicalStripeMetadata, signedQyRoamProvenance, validQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -133,6 +134,26 @@ test('every checkout response is non-cacheable, including early validation and r
     assert.match(route, /const NextResponse = \{[\s\S]*?headers\.set\('Cache-Control', 'no-store'\);[\s\S]*?FrameworkNextResponse\.json\(body, \{ \.\.\.init, headers \}\)/, `${name} checkout must apply no-store at its response boundary`);
     assert.equal((route.match(/FrameworkNextResponse\.json/g) || []).length, 1, `${name} checkout must not bypass its non-cacheable response boundary`);
   }
+});
+
+test('live availability has a bounded non-queueing dependency-work budget', () => {
+  assert.equal(AVAILABILITY_MAX_CONCURRENT_REQUESTS, 8);
+  const releases = Array.from({ length: AVAILABILITY_MAX_CONCURRENT_REQUESTS }, () => tryAcquireAvailabilityConcurrency());
+  assert.ok(releases.every((release) => typeof release === 'function'));
+  assert.equal(tryAcquireAvailabilityConcurrency(), null);
+  releases[0]();
+  const reacquired = tryAcquireAvailabilityConcurrency();
+  assert.equal(typeof reacquired, 'function');
+  releases[0]();
+  for (const release of releases.slice(1)) release();
+  reacquired();
+
+  const validationBoundary = availabilityRoute.indexOf('if (globallyLimited())');
+  const admission = availabilityRoute.indexOf('releaseAvailability = tryAcquireAvailabilityConcurrency()');
+  const firstDependency = availabilityRoute.indexOf('hasRequiredPaymentSchema()');
+  assert.ok(validationBoundary > -1 && admission > validationBoundary && firstDependency > admission);
+  assert.match(availabilityRoute, /if \(!releaseAvailability\)[\s\S]*?status: 503[\s\S]*?'Retry-After': '5'/);
+  assert.match(availabilityRoute, /finally \{\s*releaseAvailability\?\.\(\);\s*\}/);
 });
 
 test('consented Meta PageView measurement follows App Router navigation', () => {
