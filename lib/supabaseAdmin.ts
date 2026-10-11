@@ -215,7 +215,16 @@ export async function fetchSupabaseWithTimeout(
         streamController.enqueue(chunk.value);
       } catch (error) {
         cleanup();
-        streamController.error(controller.signal.reason === timeoutError ? timeoutError : error);
+        // A failed read is terminal for the wrapped response, but it is not
+        // necessarily terminal for the fetch that owns the upstream socket.
+        // In particular, our explicit deadline can win while a custom or
+        // proxy-backed reader.read() remains pending. Abort the request and
+        // cancel that reader on every terminal read failure so a timed-out
+        // checkout/webhook does not leave a privileged Supabase connection
+        // alive until the remote peer eventually closes it.
+        const terminalError = controller.signal.reason === timeoutError ? timeoutError : error;
+        stopUpstream(terminalError);
+        streamController.error(terminalError);
       }
     },
     cancel(reason) {

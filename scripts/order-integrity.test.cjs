@@ -5449,12 +5449,41 @@ test('Supabase order-critical requests use a bounded shared transport', async ()
   // A broken proxy/runtime stream can leave read() pending forever even after
   // fetch's AbortSignal fires; the wrapper still has to release the checkout
   // or webhook worker at the configured boundary.
-  global.fetch = async () => new Response(new ReadableStream({
-    pull() { return new Promise(() => {}); },
-  }), { status: 200 });
+  let stalledBodyCancelled = false;
+  let stalledResponseSignal;
+  global.fetch = async (_input, init) => {
+    stalledResponseSignal = init.signal;
+    return new Response(new ReadableStream({
+      pull() { return new Promise(() => {}); },
+      cancel() { stalledBodyCancelled = true; },
+    }), { status: 200 });
+  };
   try {
     const response = await fetchSupabaseWithTimeout('https://supabase.example/rest/v1/orders', undefined, 20);
     await assert.rejects(() => response.text(), /Supabase request timed out/);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(stalledResponseSignal.aborted, true);
+    assert.equal(stalledBodyCancelled, true);
+  } finally {
+    global.fetch = originalFetch;
+  }
+
+  // A source can also fail independently of the deadline. Propagate its
+  // application-facing error, while still aborting the fetch so a custom
+  // transport cannot retain the credential-bearing connection after its body
+  // has become unusable.
+  let failedResponseSignal;
+  global.fetch = async (_input, init) => {
+    failedResponseSignal = init.signal;
+    return new Response(new ReadableStream({
+      pull(controller) { controller.error(new Error('Broken Supabase response stream')); },
+    }), { status: 200 });
+  };
+  try {
+    const response = await fetchSupabaseWithTimeout('https://supabase.example/rest/v1/orders', undefined, 100);
+    await assert.rejects(() => response.text(), /Broken Supabase response stream/);
+    assert.equal(failedResponseSignal.aborted, true);
+    assert.match(failedResponseSignal.reason.message, /Broken Supabase response stream/);
   } finally {
     global.fetch = originalFetch;
   }
