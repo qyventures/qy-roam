@@ -313,6 +313,50 @@ export function validateDuplicateReturningClauses(sql) {
 
 validateDuplicateReturningClauses(schema);
 
+// Named function arguments share one namespace in PostgreSQL. A duplicated
+// RPC parameter prevents CREATE OR REPLACE FUNCTION from compiling, but can
+// hide easily in the longer checkout and fulfilment signatures while every
+// body/contract check below still passes. Repository RPC arguments use the
+// explicit `p_` convention, so validate that narrow production contract
+// without trying to implement PostgreSQL's complete type grammar offline.
+export function validateDuplicateFunctionParameters(sql) {
+  const declaration = /\bcreate\s+(?:or\s+replace\s+)?function\s+[a-z_][a-z0-9_.]*\s*\(([\s\S]*?)\)\s*returns\b/gi;
+  let match;
+  while ((match = declaration.exec(sql)) !== null) {
+    const header = match[1]
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/--[^\r\n]*/g, ' ');
+    const parameters = [...header.matchAll(/(?:^|,)\s*(p_[a-z_][a-z0-9_]*)\s+/gi)]
+      .map((parameter) => parameter[1].toLowerCase());
+    const duplicates = parameters.filter((parameter, index) => parameters.indexOf(parameter) !== index);
+    assert.deepEqual(
+      [...new Set(duplicates)],
+      [],
+      `Function declares a parameter more than once: ${[...new Set(duplicates)].join(', ')}`,
+    );
+  }
+}
+
+validateDuplicateFunctionParameters(schema);
+
+// Keep the release-command path self-testing, like the other lightweight SQL
+// validators in this file. Comments between arguments must not hide a copied
+// parameter name.
+validateDuplicateFunctionParameters(`
+  create function public.example(p_value integer, p_label text default 'ok')
+  returns void language sql as $$ select $$;
+`);
+assert.throws(
+  () => validateDuplicateFunctionParameters(`
+    create or replace function public.example(
+      p_value integer,
+      p_label text, -- accidental copy follows
+      p_value integer default 0
+    ) returns void language sql as $$ select $$;
+  `),
+  /parameter more than once: p_value/,
+);
+
 // Keep this release guard covered by the command deployment actually runs.
 assert.throws(
   () => validateDuplicateReturningClauses(`
@@ -437,5 +481,5 @@ assert.ok(inventoryTable < manualOrderFunction, 'inventory_items must exist befo
 assert.ok(integritySchemaVersion > pocketWifiPersistenceFunction, 'order-integrity schema version must be written after every paid-order function it certifies');
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure and terminators, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
+  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure and terminators, function parameters, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
 }

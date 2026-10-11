@@ -5543,7 +5543,15 @@ test('Stripe webhook bounds event identities before logs or durable idempotency 
 });
 
 test('deployment rejects structurally broken PL/pgSQL before schema application', async () => {
-  const { validateDuplicateReturningClauses, validatePlpgsqlStructure } = await import('./check-operations-schema.mjs');
+  const { validateDuplicateFunctionParameters, validateDuplicateReturningClauses, validatePlpgsqlStructure } = await import('./check-operations-schema.mjs');
+  assert.doesNotThrow(() => validateDuplicateFunctionParameters(`
+    create function public.example(p_first integer, p_second text default 'safe')
+    returns void language sql as $$ select $$;
+  `));
+  assert.throws(() => validateDuplicateFunctionParameters(`
+    create function public.example(p_first integer, p_second text, p_first integer)
+    returns void language sql as $$ select $$;
+  `), /parameter more than once: p_first/);
   assert.doesNotThrow(() => validatePlpgsqlStructure(`
     create function public.example() returns trigger language plpgsql as $$
     begin
