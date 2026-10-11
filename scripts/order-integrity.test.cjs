@@ -83,6 +83,7 @@ const adminOrderActions = fs.readFileSync(require.resolve('../components/AdminOr
 const esimCheckoutRoute = fs.readFileSync(require.resolve('../app/api/esim-checkout/route.ts'), 'utf8');
 const wifiCheckoutRoute = fs.readFileSync(require.resolve('../app/api/checkout/route.ts'), 'utf8');
 const availabilityRoute = fs.readFileSync(require.resolve('../app/api/availability/route.ts'), 'utf8');
+const pocketWifiStripeHolds = fs.readFileSync(require.resolve('../lib/pocketWifiStripeHolds.ts'), 'utf8');
 const bookingTermsRoute = fs.readFileSync(require.resolve('../app/api/booking-terms/route.ts'), 'utf8');
 const esimPage = fs.readFileSync(require.resolve('../app/esim/page.tsx'), 'utf8');
 const esimLayout = fs.readFileSync(require.resolve('../app/esim/layout.tsx'), 'utf8');
@@ -183,7 +184,7 @@ test('Stripe Checkout Session identifiers agree with their runtime mode at every
   // Keep each one on the identifier/mode boundary, not just the API-key mode.
   assert.match(wifiCheckoutRoute, /validStripeCheckoutSessionIdForMode\(session\.id,session\.livemode\)/);
   assert.match(esimCheckoutRoute, /validStripeCheckoutSessionIdForMode\(session\.id, session\.livemode\)/);
-  assert.match(availabilityRoute, /validStripeCheckoutSessionIdForMode\(session\.id, session\.livemode\)/);
+  assert.match(pocketWifiStripeHolds, /validStripeCheckoutSessionIdForMode\(session\.id, session\.livemode\)/);
   assert.match(webhookRoute, /validStripeCheckoutSessionIdForMode\(eventSession\.id,eventSession\.livemode\)/);
   assert.match(successPage, /validStripeCheckoutSessionIdForMode\(session\.id, session\.livemode\) !== sessionId/);
   assert.match(bookingPage, /validStripeCheckoutSessionIdForMode\(session\.id, session\.livemode\) !== sessionId/);
@@ -1218,8 +1219,7 @@ test('rejects non-payment Checkout modes even with valid signed order metadata',
   // while counting short-lived router reservations for availability.
   assert.match(esimCheckoutRoute, /return session\.mode === 'payment' &&/);
   assert.match(wifiCheckoutRoute, /return session\.mode==='payment' &&/);
-  assert.match(wifiCheckoutRoute, /if\(session\.mode!=='payment'\|\|\s*!Number\.isSafeInteger\(session\.created\)\|\|session\.created<cutoff/);
-  assert.match(availabilityRoute, /if \(session\.mode !== 'payment' \|\|\s*!Number\.isSafeInteger\(session\.created\) \|\| session\.created < cutoff/);
+  assert.match(pocketWifiStripeHolds, /if \(session\.mode !== 'payment' \|\|\s*!Number\.isSafeInteger\(session\.created\) \|\| session\.created < cutoff/);
 });
 
 test('rejects unsupported Stripe payment states before order persistence', () => {
@@ -2236,11 +2236,9 @@ test('checkout provider responses are bounded before their Session ids become AP
   assert.ok(wifiCreate >= 0 && wifiId > wifiCreate && wifiUpdate > wifiId && wifiRetrieve > wifiId);
   assert.doesNotMatch(wifiCheckoutRoute.slice(wifiCreate), /sessions\.(?:update|retrieve)\(session\.id/);
 
-  assert.match(wifiCheckoutRoute, /const sessionId=validStripeCheckoutSessionIdForMode\(session\.id,session\.livemode\)/);
+  assert.match(pocketWifiStripeHolds, /const sessionId = validStripeCheckoutSessionIdForMode\(session\.id, session\.livemode\)/);
   assert.match(wifiCheckoutRoute, /existingSessionId=sessionId/);
-  assert.match(wifiCheckoutRoute, /startingAfter=validStripeCheckoutSessionIdForMode\(cursor\.id,cursor\.livemode\)!/);
-  assert.match(availabilityRoute, /const sessionId = validStripeCheckoutSessionIdForMode\(session\.id, session\.livemode\)/);
-  assert.match(availabilityRoute, /startingAfter = validStripeCheckoutSessionIdForMode\(cursor\.id, cursor\.livemode\)!/);
+  assert.match(pocketWifiStripeHolds, /startingAfter = validStripeCheckoutSessionIdForMode\(cursor\.id, cursor\.livemode\)!/);
 });
 
 test('eSIM checkout never redirects a reused idempotency key to another plan', () => {
@@ -2380,8 +2378,7 @@ test('Pocket WiFi expiry and inventory scans share the Stripe-safe hold window',
   const expiresAt = checkoutAttemptExpiresAt(futureAttempt, serverNow);
   assert.ok(expiresAt);
   assert.equal(expiresAt - Math.floor(serverNow / 1000), STRIPE_HOLD_SCAN_WINDOW_SECONDS);
-  assert.match(wifiCheckoutRoute, /const cutoff=nowSeconds-STRIPE_HOLD_SCAN_WINDOW_SECONDS/);
-  assert.match(availabilityRoute, /const cutoff = nowSeconds - STRIPE_HOLD_SCAN_WINDOW_SECONDS/);
+  assert.match(pocketWifiStripeHolds, /const cutoff = nowSeconds - STRIPE_HOLD_SCAN_WINDOW_SECONDS/);
 });
 
 test('Pocket WiFi checkout inventory holds enforce the configured Stripe mode boundary', () => {
@@ -2389,7 +2386,7 @@ test('Pocket WiFi checkout inventory holds enforce the configured Stripe mode bo
   // authority and must reject wrong-mode list objects before they can consume
   // capacity or become the idempotent recovery Session for this request.
   assert.match(wifiCheckoutRoute, /async function activeStripeHolds\(stripe:Stripe,stripeKey:string,/);
-  assert.match(wifiCheckoutRoute, /if\(!stripeEventMatchesConfiguredMode\(stripeKey,session\.livemode\)\) continue;/);
+  assert.match(pocketWifiStripeHolds, /if \(!stripeEventMatchesConfiguredMode\(stripeKey, session\.livemode\)\) continue;/);
   assert.match(wifiCheckoutRoute, /activeStripeHolds\(stripe,key,start,end,requestId,requested\)/);
 });
 
@@ -2621,7 +2618,7 @@ test('Checkout Session creation and recovery enforce the configured Stripe crede
   assert.match(wifiCheckoutRoute, /stripeEventMatchesConfiguredMode\(key,existing\.livemode\)/);
   assert.match(wifiCheckoutRoute, /stripeEventMatchesConfiguredMode\(key,session\.livemode\)/);
   assert.match(wifiCheckoutRoute, /stripeEventMatchesConfiguredMode\(key,currentSession\.livemode\)/);
-  assert.match(availabilityRoute, /if \(!stripeEventMatchesConfiguredMode\(stripeKey, session\.livemode\)\) continue;/);
+  assert.match(pocketWifiStripeHolds, /if \(!stripeEventMatchesConfiguredMode\(stripeKey, session\.livemode\)\) continue;/);
 });
 
 test('signed Stripe webhooks cannot cross the configured test/live boundary', () => {
@@ -3166,44 +3163,39 @@ test('Pocket WiFi capacity retains legacy post-dispatch cancellations until retu
 });
 
 test('Pocket WiFi availability only counts Checkout Sessions that are still unexpired', () => {
-  const checkoutRoute = fs.readFileSync(require.resolve('../app/api/checkout/route.ts'), 'utf8');
-  for (const source of [checkoutRoute, availabilityRoute]) {
-    assert.match(source, /session\.expires_at\s*<=\s*nowSeconds/);
-    assert.match(source, /!Number\.isSafeInteger\(session\.expires_at\)/);
-  }
+  assert.match(pocketWifiStripeHolds, /session\.expires_at\s*<=\s*nowSeconds/);
+  assert.match(pocketWifiStripeHolds, /!Number\.isSafeInteger\(session\.expires_at\)/);
+  assert.match(wifiCheckoutRoute, /scanActivePocketWifiStripeHolds\(/);
+  assert.match(availabilityRoute, /scanActivePocketWifiStripeHolds\(/);
 });
 
 test('Pocket WiFi Stripe-hold scans paginate recent sessions with a fail-closed work ceiling', () => {
-  for (const source of [wifiCheckoutRoute, availabilityRoute]) {
-    assert.match(source, /created:\s*\{\s*gte:\s*cutoff\s*\}/);
-    assert.match(source, /starting_after/);
-    assert.doesNotMatch(source, /limit:\s*(?:[1-9]|[1-9]\d)(?!\d)/);
-    assert.match(source, /pagesScanned\s*>=\s*MAX_STRIPE_HOLD_SCAN_PAGES/);
-    assert.match(source, /Stripe Pocket WiFi hold scan exceeded its safe page limit/);
-  }
+  assert.match(pocketWifiStripeHolds, /created:\s*\{\s*gte:\s*cutoff\s*\}/);
+  assert.match(pocketWifiStripeHolds, /starting_after/);
+  assert.doesNotMatch(pocketWifiStripeHolds, /limit:\s*(?:[1-9]|[1-9]\d)(?!\d)/);
+  assert.match(pocketWifiStripeHolds, /pagesScanned\s*>=\s*MAX_STRIPE_HOLD_SCAN_PAGES/);
+  assert.match(pocketWifiStripeHolds, /Stripe Pocket WiFi hold scan exceeded its safe page limit/);
   const checkoutExpiry = fs.readFileSync(require.resolve('../lib/checkoutExpiry.ts'), 'utf8');
   assert.match(checkoutExpiry, /export const MAX_STRIPE_HOLD_SCAN_PAGES\s*=\s*5/);
 });
 
 test('authenticated Pocket WiFi hold anomalies fail capacity scans closed', () => {
-  for (const [name, route, endMarker] of [
-    ['checkout', wifiCheckoutRoute, '// A Stripe Checkout URL'],
-    ['availability', availabilityRoute, 'async function committedInventory('],
-  ]) {
-    const scanStart = route.indexOf('async function activeStripeHolds(');
-    const scanEnd = route.indexOf(endMarker, scanStart);
-    const scan = route.slice(scanStart, scanEnd);
+  for (const [name, route] of [['checkout', wifiCheckoutRoute], ['availability', availabilityRoute]]) {
+    assert.match(route, /scanActivePocketWifiStripeHolds\(/, `${name} must use the shared authenticated hold scanner`);
+  }
+  {
+    const scan = pocketWifiStripeHolds;
     const provenance = scan.indexOf('validQyRoamProvenance(sessionId,');
     const lifecycleFailure = scan.indexOf("throw new Error('Stripe returned an invalid authenticated Pocket WiFi hold lifecycle')");
     const dateFailure = scan.indexOf("throw new Error('Stripe returned invalid dates for an authenticated Pocket WiFi hold')");
 
-    assert.ok(provenance >= 0, `${name} hold scans must authenticate QY Roam sessions`);
-    assert.ok(lifecycleFailure > provenance, `${name} must fail closed on malformed signed hold lifecycle data`);
-    assert.ok(dateFailure > lifecycleFailure, `${name} must fail closed on malformed signed hold travel dates`);
+    assert.ok(provenance >= 0, 'hold scans must authenticate QY Roam sessions');
+    assert.ok(lifecycleFailure > provenance, 'hold scans must fail closed on malformed signed lifecycle data');
+    assert.ok(dateFailure > lifecycleFailure, 'hold scans must fail closed on malformed signed travel dates');
     assert.match(scan, /Number\.isSafeInteger\(session\.created\)/);
     assert.match(scan, /Number\.isSafeInteger\(session\.expires_at\)/);
-    assert.match(scan, /parseExactIsoDate\(holdStart\)/);
-    assert.match(scan, /parseExactIsoDate\(holdEnd\)/);
+    assert.match(scan, /parseExactIsoDate\(start\)/);
+    assert.match(scan, /parseExactIsoDate\(end\)/);
   }
 });
 
@@ -3214,45 +3206,29 @@ test('Pocket WiFi idempotent recovery completes the inventory hold scan', () => 
   const scan = wifiCheckoutRoute.slice(scanStart, scanEnd);
   const ownSessionBranch = scan.slice(
     scan.indexOf("if(requestId&&session.metadata?.checkout_request_id===requestId)"),
-    scan.indexOf('const holdStart=', scan.indexOf("if(requestId&&session.metadata?.checkout_request_id===requestId)")),
+    scan.indexOf('if(holdStart<=end', scan.indexOf("if(requestId&&session.metadata?.checkout_request_id===requestId)")),
   );
   assert.match(ownSessionBranch, /matchingRequestSessions\+=1/);
   assert.match(ownSessionBranch, /if\(!sameBooking\|\|matchingRequestSessions>1\)/);
   assert.match(ownSessionBranch, /requestConflict=true/);
   assert.doesNotMatch(ownSessionBranch, /requestConflict=!sameBooking/);
   assert.match(ownSessionBranch, /if\(sameBooking&&matchingRequestSessions===1\)/);
-  assert.match(ownSessionBranch, /continue;/);
-  assert.doesNotMatch(ownSessionBranch, /return\s+\{/);
+  assert.match(ownSessionBranch, /return;/);
   assert.match(scan, /return \{holds,requestIds,existingUrl,existingSessionId,existingSessionSnapshot,requestConflict\};/);
 });
 
 test('Pocket WiFi hold scans fail closed on an empty Stripe continuation page', () => {
-  for (const [name, route] of [
-    ['checkout', wifiCheckoutRoute],
-    ['availability', availabilityRoute],
-  ]) {
-    const scanStart = route.indexOf('async function activeStripeHolds(');
-    const scanEnd = route.indexOf('\n}\n', scanStart);
-    assert.ok(scanStart >= 0 && scanEnd > scanStart, `${name} hold scan must be present`);
-    const scan = route.slice(scanStart, scanEnd);
-    assert.match(scan, /if\s*\(?!sessions\.has_more\)\s*break;/, `${name} must stop only when Stripe says pagination is complete`);
-    assert.match(scan, /if\s*\(sessions\.data\.length\s*===?\s*0\)\s*throw new Error\(/, `${name} must reject an unusable continuation cursor`);
-    assert.doesNotMatch(scan, /if\s*\(?!sessions\.has_more\s*\|\|\s*sessions\.data\.length\s*===?\s*0\)\s*break;/, `${name} must not accept a partial hold count`);
-  }
+  assert.match(pocketWifiStripeHolds, /if \(!sessions\.has_more\) return;/);
+  assert.match(pocketWifiStripeHolds, /if \(sessions\.data\.length === 0\) \{\s*throw new Error\(/);
 });
 
 test('Pocket WiFi holds require server-issued checkout provenance', () => {
-  const checkoutRoute = fs.readFileSync(require.resolve('../app/api/checkout/route.ts'), 'utf8');
-  assert.match(checkoutRoute, /validQyRoamProvenance\(sessionId,\s*session\.metadata\)/);
-  assert.match(availabilityRoute, /validQyRoamProvenance\(sessionId,\s*session\.metadata\)/);
+  assert.match(pocketWifiStripeHolds, /validQyRoamProvenance\(sessionId,\s*session\.metadata\)/);
 });
 
 test('Pocket WiFi holds require an explicit Pocket WiFi product identity', () => {
-  const checkoutRoute = fs.readFileSync(require.resolve('../app/api/checkout/route.ts'), 'utf8');
-  for (const source of [checkoutRoute, availabilityRoute]) {
-    assert.match(source, /session\.metadata\?\.product_type\s*!==?\s*['"]pocket_wifi['"]/);
-    assert.doesNotMatch(source, /session\.metadata\?\.product_type\s*&&\s*session\.metadata\.product_type\s*!==?\s*['"]pocket_wifi['"]/);
-  }
+  assert.match(pocketWifiStripeHolds, /session\.metadata\?\.product_type\s*!==?\s*['"]pocket_wifi['"]/);
+  assert.doesNotMatch(pocketWifiStripeHolds, /session\.metadata\?\.product_type\s*&&\s*session\.metadata\.product_type\s*!==?\s*['"]pocket_wifi['"]/);
 });
 
 test('manual orders cannot bypass paid-order lifecycle, pricing, or WiFi capacity fields', () => {
@@ -5109,8 +5085,7 @@ test('Stripe network calls use a bounded shared production client', () => {
 
 test('Pocket WiFi hold scans have one bounded read attempt per page', () => {
   assert.equal(STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, 5_000);
-  assert.match(wifiCheckoutRoute, /checkout\.sessions\.list\([\s\S]*?timeout:STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS,maxNetworkRetries:0/);
-  assert.match(availabilityRoute, /checkout\.sessions\.list\([\s\S]*?timeout: STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, maxNetworkRetries: 0/);
+  assert.match(pocketWifiStripeHolds, /checkout\.sessions\.list\([\s\S]*?timeout: STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, maxNetworkRetries: 0/);
 });
 
 test('Supabase order-critical requests use a bounded shared transport', async () => {

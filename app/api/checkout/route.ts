@@ -13,7 +13,7 @@ import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
 import { createCheckoutAttemptLimiter, createGlobalAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { metaAttributionFromRequest } from '@/lib/metaAttribution';
-import { checkoutAttemptExpiresAt, MAX_STRIPE_HOLD_SCAN_PAGES, STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, STRIPE_HOLD_SCAN_WINDOW_SECONDS } from '@/lib/checkoutExpiry';
+import { checkoutAttemptExpiresAt } from '@/lib/checkoutExpiry';
 import { checkoutSiteOrigin } from '@/lib/siteOrigin';
 import { pocketWifiRentalCents } from '@/lib/pocketWifiPricing';
 import { safeStripeCheckoutUrl } from '@/lib/stripeCheckoutUrl';
@@ -21,6 +21,7 @@ import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhookObject';
 import { tryAcquireCheckoutConcurrency } from '@/lib/checkoutConcurrency';
+import { scanActivePocketWifiStripeHolds } from '@/lib/pocketWifiStripeHolds';
 
 export const runtime = 'nodejs';
 
@@ -82,13 +83,6 @@ function matchesRequestedPocketWifi(session:Stripe.Checkout.Session,requestId:st
 }
 
 async function activeStripeHolds(stripe:Stripe,stripeKey:string,start:string,end:string,requestId:string|null,requested:RequestedPocketWifi) {
-  const nowSeconds=Math.floor(Date.now()/1000);
-  // The expiry is derived from a browser timestamp with a bounded future-skew
-  // allowance. Scan that complete possible lifetime, not just the nominal
-  // payment window, so a still-payable session never falls out of inventory.
-  const cutoff=nowSeconds-STRIPE_HOLD_SCAN_WINDOW_SECONDS;
-  let startingAfter:string|undefined;
-  let pagesScanned=0;
   let holds=0;
   const requestIds:string[]=[];
   let existingUrl:string|null=null;
@@ -96,65 +90,7 @@ async function activeStripeHolds(stripe:Stripe,stripeKey:string,start:string,end
   let existingSessionSnapshot:Pick<Stripe.Checkout.Session,'id'|'livemode'|'created'>|null=null;
   let requestConflict=false;
   let matchingRequestSessions=0;
-  // Every still-valid QY Roam Checkout Session is an inventory hold. Scan the
-  // complete hold window within the shared, fail-closed page ceiling below:
-  // stopping with a partial count could oversell the final routers. The server
-  // gives these sessions a short bounded expiry, so Stripe can filter out
-  // historical open sessions before this bounded account-level scan.
-  for(;;){
-    if(pagesScanned>=MAX_STRIPE_HOLD_SCAN_PAGES) {
-      // Do not return a partial count: it could free a router that is held on
-      // a later page. The route's existing error boundary fails this checkout
-      // attempt closed, preserving inventory integrity during account noise.
-      throw new Error('Stripe Pocket WiFi hold scan exceeded its safe page limit');
-    }
-    const sessions=await stripe.checkout.sessions.list(
-      {status:'open',limit:100,created:{gte:cutoff},...(startingAfter?{starting_after:startingAfter}:{})},
-      // A failed read is safe for the shopper to retry. Do not apply the
-      // shared client's payment-oriented network retry independently to each
-      // page or a five-page capacity scan can monopolise a checkout slot for
-      // minutes during a provider incident.
-      {timeout:STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS,maxNetworkRetries:0},
-    );
-    pagesScanned+=1;
-    for(const session of sessions.data){
-      // List results become pagination cursors and, for an idempotent retry,
-      // an outbound retrieve target. Treat the provider response as runtime
-      // data and fail the capacity scan closed if any Session identity is not
-      // a bounded canonical Checkout id.
-      const sessionId=validStripeCheckoutSessionIdForMode(session.id,session.livemode);
-      if(!sessionId) throw new Error('Stripe returned an invalid Checkout Session identifier');
-      // Stripe credentials ordinarily scope list results to one mode, but this
-      // scan is an authority for scarce physical inventory. Keep it on the
-      // same explicit live/test boundary as availability and every later
-      // Checkout response: a wrong-mode object must neither consume stock nor
-      // be selected as this request's idempotent recovery Session.
-      if(!stripeEventMatchesConfiguredMode(stripeKey,session.livemode)) continue;
-      // Stripe normally removes expired sessions from the "open" list, but
-      // expiry is the inventory boundary. Check it explicitly so a session
-      // expired early (or retained briefly by the API) cannot block a router.
-      // Do not let a manually-created lookalike session in a shared Stripe
-      // account consume scarce router capacity. Holds use the same
-      // server-authored provenance boundary as paid-order fulfilment.
-      if(session.metadata?.source!=='qyroam.com'||!validQyRoamProvenance(sessionId,session.metadata)) continue;
-      // A signed QY Roam session is not necessarily a router reservation.
-      // Require the explicit server-authored product identity; treating an
-      // absent type as Pocket WiFi could reserve stock for another product
-      // during a metadata migration or an operational recovery.
-      if(session.metadata?.product_type!=='pocket_wifi') continue;
-      // Once provenance proves this is one of our router checkouts, malformed
-      // lifecycle data is not safe to treat like an unrelated account-level
-      // Session. Ignoring a signed, still-payable hold because Stripe returned
-      // a missing/invalid expiry (or an impossible creation timestamp) can
-      // expose the final physical unit twice. Genuine sessions created by this
-      // route always satisfy these bounds, so fail the complete capacity scan
-      // closed and let the shopper retry after the provider anomaly clears.
-      if(session.mode!=='payment'||
-        !Number.isSafeInteger(session.created)||session.created<cutoff||
-        !Number.isSafeInteger(session.expires_at)||session.expires_at!<=session.created){
-        throw new Error('Stripe returned an invalid authenticated Pocket WiFi hold lifecycle');
-      }
-      if(session.expires_at<=nowSeconds) continue;
+  await scanActivePocketWifiStripeHolds(stripe,stripeKey,({session,sessionId,start:holdStart,end:holdEnd})=>{
       if(requestId&&session.metadata?.checkout_request_id===requestId){
         const sameBooking=matchesRequestedPocketWifi(session,requestId,requested);
         matchingRequestSessions+=1;
@@ -177,32 +113,18 @@ async function activeStripeHolds(stripe:Stripe,stripeKey:string,start:string,end
           // reservation, so it must not consume capacity twice. Still finish
           // the bounded scan: later pages can reveal duplicate/conflicting
           // capabilities or holds whose reservation write is absent.
-          continue;
+          return;
         }
         // A conflicting or duplicate capability is not safely represented by
         // this caller's single reservation. Fall through and count any date
         // overlap like another Stripe hold, in addition to refusing recovery.
       }
-      const holdStart=session.metadata?.start, holdEnd=session.metadata?.end;
-      const holdStartDate=parseExactIsoDate(holdStart), holdEndDate=parseExactIsoDate(holdEnd);
-      if(!holdStartDate||!holdEndDate||holdEndDate<holdStartDate){
-        throw new Error('Stripe returned invalid dates for an authenticated Pocket WiFi hold');
-      }
-      if(holdStart!<=end&&holdEnd!>=start){
+      if(holdStart<=end&&holdEnd>=start){
         holds+=1;
         const holdRequestId=validCheckoutRequestId(session.metadata?.checkout_request_id);
         if(holdRequestId) requestIds.push(holdRequestId);
       }
-    }
-    if(!sessions.has_more) break;
-    // `has_more` promises a usable cursor. Treat a contradictory empty page
-    // as an incomplete provider scan rather than accepting the partial hold
-    // count and potentially selling capacity represented on a later page.
-    if(sessions.data.length===0) throw new Error('Stripe Pocket WiFi hold scan returned an empty continuation page');
-    // Every row was validated above, including the final pagination cursor.
-    const cursor=sessions.data[sessions.data.length-1];
-    startingAfter=validStripeCheckoutSessionIdForMode(cursor.id,cursor.livemode)!;
-  }
+  });
   return {holds,requestIds,existingUrl,existingSessionId,existingSessionSnapshot,requestConflict};
 }
 
