@@ -45,20 +45,17 @@ export default async function LaunchPage(){
  // or paid traffic pointed at it look launch-ready.
  const esimReady=commonCheckoutReady&&esimOrderDbOk&&esimOfferActive;
  const wifiReady=commonCheckoutReady&&paymentDbOk&&pocketWifiFulfilmentDbOk&&wifiInventory&&pocketWifiStock;
- // Paid traffic must use the same full release boundary as authenticated
- // health/deployment verification. Product checkout gates alone do not prove
- // that staff can administer orders, reconcile inventory, or operate the
- // reporting workflow after a sale. Without this boundary the dashboard can
- // say "Paid acquisition Ready" while deploy.sh correctly refuses cutover
- // because the operations schema (or another launch-critical control) is
- // unavailable.
+ // Release readiness requires shared operational controls and at least one
+ // complete saleable product path. Product-specific schemas and router stock
+ // must not block a safe release for the other product when an offer is
+ // intentionally paused; paid acquisition remains stricter and requires both.
  const admin=hasRequiredAdminCredentials();
- const releaseReady=commonCheckoutReady&&esimOrderDbOk&&paymentDbOk&&pocketWifiFulfilmentDbOk&&operationsDbOk&&admin&&Boolean(config)&&wifiInventory;
+ const releaseReady=commonCheckoutReady&&operationsDbOk&&admin&&(esimReady||wifiReady);
  const paidReady=releaseReady&&esimReady&&wifiReady&&metaCapi;
  const commonBlockers=[!stripe&&'live Stripe credential',stripe&&!stripeApi&&'Stripe Checkout API access',!webhook&&'Stripe webhook signing secret',!site&&'production HTTPS site URL',!orderIntegrity&&'order-integrity signing secret',!smtp&&'fulfilment email transport'].filter(Boolean) as string[];
  const esimBlockers=[...commonBlockers,!esimOrderDbOk&&'eSIM order database schema',!esimOfferActive&&`current approved eSIM offer (the ${ESIM_PROMO.code} offer ended ${ESIM_PROMO.endDate})`].filter(Boolean) as string[];
  const wifiBlockers=[...commonBlockers,!paymentDbOk&&'Pocket WiFi payment and reservation schema',!pocketWifiFulfilmentDbOk&&'Pocket WiFi dispatch and return custody schema',!wifiInventory&&'Pocket WiFi saleable-capacity setting',wifiInventory&&!pocketWifiStock&&'available Pocket WiFi unit in the inventory register'].filter(Boolean) as string[];
- const releaseBlockers=Array.from(new Set([...commonBlockers,!esimOrderDbOk&&'eSIM order database schema',!paymentDbOk&&'Pocket WiFi payment and reservation schema',!pocketWifiFulfilmentDbOk&&'Pocket WiFi dispatch and return custody schema',!operationsDbOk&&'operations database schema',!admin&&'secure admin credentials',!config&&'complete delivery, courier and inventory configuration',!wifiInventory&&'Pocket WiFi saleable-capacity setting'].filter(Boolean))) as string[];
+ const releaseBlockers=Array.from(new Set([...commonBlockers,!operationsDbOk&&'operations database schema',!admin&&'secure admin credentials',!esimReady&&!wifiReady&&'at least one complete saleable product checkout'].filter(Boolean))) as string[];
  const paidBlockers=Array.from(new Set([...releaseBlockers,...esimBlockers,...wifiBlockers,!metaCapi&&'valid Meta Pixel ID and CAPI access token'].filter(Boolean))) as string[];
  return <main className="wrap section legal" style={{maxWidth:1100}}><span className="eyebrow">Launch control</span><h1>Production readiness</h1><p style={{color:'#64748b'}}>Safe configuration check only. Secret values are never displayed. Checkout status reflects the gates enforced before a customer can pay.</p>
  <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:14,marginTop:20}}><div style={card}><small>Release readiness</small><h2 style={{margin:'6px 0'}}>{releaseReady?'✓ Ready':'⚠ Blocked'}</h2><span style={{color:'#64748b'}}>{releaseReady?'Matches the authenticated production health gate.':`${releaseBlockers.length} release blocker${releaseBlockers.length===1?'':'s'} remaining.`}</span></div><div style={card}><small>eSIM checkout</small><h2 style={{margin:'6px 0'}}>{esimReady?'✓ Ready':'⚠ Blocked'}</h2><span style={{color:'#64748b'}}>Payment, durable order record and fulfilment alert.</span></div><div style={card}><small>Pocket WiFi checkout</small><h2 style={{margin:'6px 0'}}>{wifiReady?'✓ Ready':'⚠ Blocked'}</h2><span style={{color:'#64748b'}}>Payment, reservation, physical-custody and router-capacity controls.</span></div><div style={card}><small>Paid acquisition</small><h2 style={{margin:'6px 0'}}>{paidReady?'✓ Ready':'⚠ Hold'}</h2><span style={{color:'#64748b'}}>{paidReady?'Release, storefront, fulfilment and measurement controls ready.':`${paidBlockers.length} production blocker${paidBlockers.length===1?'':'s'} remaining.`}</span></div></div>

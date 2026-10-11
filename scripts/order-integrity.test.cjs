@@ -4034,7 +4034,7 @@ test('launch control reports the same checkout prerequisites that protect real o
   // the two checkout routes. Keep it aligned with authenticated health so an
   // incomplete operations/admin contract cannot look safe for paid traffic.
   assert.match(launchPage, /const admin=hasRequiredAdminCredentials\(\)/);
-  assert.match(launchPage, /const releaseReady=commonCheckoutReady&&esimOrderDbOk&&paymentDbOk&&pocketWifiFulfilmentDbOk&&operationsDbOk&&admin&&Boolean\(config\)&&wifiInventory/);
+  assert.match(launchPage, /const releaseReady=commonCheckoutReady&&operationsDbOk&&admin&&\(esimReady\|\|wifiReady\)/);
   assert.match(launchPage, /const paidReady=releaseReady&&esimReady&&wifiReady&&metaCapi/);
   assert.match(launchPage, /!operationsDbOk&&'operations database schema'/);
   assert.match(launchPage, /!admin&&'secure admin credentials'/);
@@ -4052,7 +4052,7 @@ test('launch control reports the same checkout prerequisites that protect real o
   assert.doesNotMatch(launchPage, /const organicReady=stripe&&paymentDbOk/);
 });
 
-test('authenticated health readiness fails when any order-critical dependency is unavailable', () => {
+test('authenticated health readiness separates shared release controls from product-specific checkout gates', () => {
   // Public unauthenticated probes intentionally report process liveness, but
   // the token-authenticated response is used as the production readiness
   // boundary and must not return 200 for a service unable to take orders.
@@ -4065,7 +4065,15 @@ test('authenticated health readiness fails when any order-critical dependency is
   assert.match(healthRoute, /pocketWifiFulfilmentSchema,/);
   assert.match(healthRoute, /hasSaleablePocketWifiInventory\(config\?\.pocketWifiInventory \|\| 0\)/);
   assert.match(healthRoute, /const availabilityChecks = \{ pocketWifiStock \}/);
-  assert.match(healthRoute, /const launchReady = Object\.values\(checks\)\.every\(Boolean\)/);
+  assert.match(healthRoute, /const launchChecks = \{/);
+  assert.match(healthRoute, /operationsSchema: checks\.operationsSchema/);
+  assert.match(healthRoute, /fulfilmentEmail: checks\.fulfilmentEmail/);
+  assert.match(healthRoute, /const launchReady = Object\.values\(launchChecks\)\.every\(Boolean\)/);
+  assert.match(healthRoute, /const missing = Object\.entries\(launchChecks\)/);
+  assert.doesNotMatch(healthRoute, /const launchChecks = \{[\s\S]*?esimOrderSchema:/);
+  assert.doesNotMatch(healthRoute, /const launchChecks = \{[\s\S]*?paymentSchema:/);
+  assert.doesNotMatch(healthRoute, /const launchChecks = \{[\s\S]*?pocketWifiFulfilmentSchema:/);
+  assert.doesNotMatch(healthRoute, /const launchChecks = \{[\s\S]*?inventory:/);
   assert.match(healthRoute, /const commonCheckoutReady = Boolean\(/);
   assert.match(healthRoute, /esim: commonCheckoutReady && Boolean\(esimOrderSchema\) && esimPromoIsActive\(\)/);
   assert.match(healthRoute, /pocketWifi: commonCheckoutReady && Boolean\(paymentSchema\) &&/);

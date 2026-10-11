@@ -80,7 +80,25 @@ export async function GET(req: Request) {
     metaCapi: hasRequiredMetaCapiPurchaseConfig(),
   };
   const availabilityChecks = { pocketWifiStock };
-  const launchReady = Object.values(checks).every(Boolean);
+  // Product-specific contracts belong to their checkout gate below. Requiring
+  // both product schemas (and router stock) here made the supposedly
+  // product-tolerant release gate impossible: an intentionally paused eSIM
+  // could block a safe Pocket WiFi release, and an unavailable router fleet
+  // could block an otherwise safe eSIM release. Keep the shared operational
+  // controls launch-critical, then let `salesReady` require at least one
+  // complete product path.
+  const launchChecks = {
+    stripe: checks.stripe,
+    stripeApi: checks.stripeApi,
+    siteUrl: checks.siteUrl,
+    webhook: checks.webhook,
+    orderIntegrity: checks.orderIntegrity,
+    supabase: checks.supabase,
+    operationsSchema: checks.operationsSchema,
+    admin: checks.admin,
+    fulfilmentEmail: checks.fulfilmentEmail,
+  };
+  const launchReady = Object.values(launchChecks).every(Boolean);
   // Deployment readiness and product availability are related but distinct.
   // A deliberately paused eSIM offer must not prevent a safe Pocket WiFi
   // release or rollback, while the machine-readable paid-acquisition signal
@@ -108,7 +126,7 @@ export async function GET(req: Request) {
   const salesReady = launchReady && Object.values(checkoutChecks).some(Boolean);
   const paidAcquisitionReady = launchReady && checkoutReady && Object.values(paidAcquisitionChecks).every(Boolean);
 
-  const missing = Object.entries(checks).filter(([, configured]) => !configured).map(([name]) => name);
+  const missing = Object.entries(launchChecks).filter(([, configured]) => !configured).map(([name]) => name);
   const paidAcquisitionMissing = Object.entries(paidAcquisitionChecks)
     .filter(([, configured]) => !configured)
     .map(([name]) => name);
