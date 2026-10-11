@@ -32,6 +32,7 @@ export async function scanActivePocketWifiStripeHolds(
   const cutoff = nowSeconds - STRIPE_HOLD_SCAN_WINDOW_SECONDS;
   let startingAfter: string | undefined;
   let pagesScanned = 0;
+  const seenSessionIds = new Set<string>();
 
   for (;;) {
     if (pagesScanned >= MAX_STRIPE_HOLD_SCAN_PAGES) {
@@ -43,11 +44,29 @@ export async function scanActivePocketWifiStripeHolds(
     );
     pagesScanned += 1;
 
+    // The Stripe SDK is a compile-time shape guarantee, not a runtime one.
+    // This response controls both inventory arithmetic and the next outbound
+    // pagination cursor, so an incomplete proxy/SDK response must fail the
+    // whole capacity check closed instead of being interpreted as an empty or
+    // final page.
+    if (!sessions || !Array.isArray(sessions.data) || typeof sessions.has_more !== 'boolean') {
+      throw new Error('Stripe Pocket WiFi hold scan returned an invalid page');
+    }
+
     for (const session of sessions.data) {
       // Validate every identifier because the last row may become an outbound
       // pagination cursor even when the Session is unrelated to QY Roam.
       const sessionId = validStripeCheckoutSessionIdForMode(session.id, session.livemode);
       if (!sessionId) throw new Error('Stripe returned an invalid Checkout Session identifier');
+      // Cursor pagination should expose each Checkout Session exactly once.
+      // If Stripe or an intermediary repeats a row across pages, counting it
+      // twice makes availability inconsistent with the durable reservation
+      // authority; silently ignoring it could hide a non-advancing page.
+      // Reject the snapshot so both availability and checkout remain aligned.
+      if (seenSessionIds.has(sessionId)) {
+        throw new Error('Stripe Pocket WiFi hold scan returned a duplicate Checkout Session');
+      }
+      seenSessionIds.add(sessionId);
       if (!stripeEventMatchesConfiguredMode(stripeKey, session.livemode)) continue;
       if (session.metadata?.source !== 'qyroam.com' || !validQyRoamProvenance(sessionId, session.metadata)) continue;
       if (session.metadata?.product_type !== 'pocket_wifi') continue;

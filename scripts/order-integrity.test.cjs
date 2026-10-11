@@ -70,9 +70,10 @@ const { createConcurrencyLimiter } = require('../lib/concurrencyLimit.ts');
 const { CHECKOUT_MAX_CONCURRENT_REQUESTS, tryAcquireCheckoutConcurrency } = require('../lib/checkoutConcurrency.ts');
 const { AVAILABILITY_MAX_CONCURRENT_REQUESTS, tryAcquireAvailabilityConcurrency } = require('../lib/availabilityConcurrency.ts');
 const { CONFIRMATION_MAX_CONCURRENT_REQUESTS, tryAcquireConfirmationConcurrency } = require('../lib/confirmationConcurrency.ts');
+const { scanActivePocketWifiStripeHolds } = require('../lib/pocketWifiStripeHolds.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
-const { hasOrderIntegritySecret, hasOrderIntegritySigningConfig, isCanonicalStripeMetadata, signedQyRoamProvenance, validQyRoamProvenance } = require('../lib/orderProvenance.ts');
+const { hasOrderIntegritySecret, hasOrderIntegritySigningConfig, isCanonicalStripeMetadata, QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance, validQyRoamProvenance } = require('../lib/orderProvenance.ts');
 
 // The success page, booking-status page, and Stripe webhook must all use this
 // same validator rather than trusting the QY Roam source marker by itself.
@@ -5086,6 +5087,82 @@ test('Stripe network calls use a bounded shared production client', () => {
 test('Pocket WiFi hold scans have one bounded read attempt per page', () => {
   assert.equal(STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, 5_000);
   assert.match(pocketWifiStripeHolds, /checkout\.sessions\.list\([\s\S]*?timeout: STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, maxNetworkRetries: 0/);
+});
+
+test('Pocket WiFi hold scans visit only current authenticated holds across every Stripe page', async () => {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const stripeKey = 'sk_test_inventoryscancredential';
+  const session = (id, overrides = {}) => {
+    const metadata = {
+      source: 'qyroam.com',
+      product_type: 'pocket_wifi',
+      checkout_request_id: crypto.randomUUID(),
+      start: '2026-12-01',
+      end: '2026-12-05',
+      ...overrides.metadata,
+    };
+    return {
+      id,
+      livemode: false,
+      mode: 'payment',
+      created: nowSeconds - 30,
+      expires_at: nowSeconds + 1_800,
+      ...overrides,
+      metadata: { ...metadata, [QY_ROAM_PROVENANCE_METADATA_KEY]: signedQyRoamProvenance(id, metadata) },
+    };
+  };
+  const first = session('cs_test_scanfirst');
+  const expired = session('cs_test_scanexpired', { expires_at: nowSeconds });
+  const unrelated = session('cs_test_scanunrelated');
+  unrelated.metadata = { source: 'another-product' };
+  const second = session('cs_test_scansecond', { metadata: { start: '2027-01-01', end: '2027-01-02' } });
+  const calls = [];
+  const pages = [
+    { data: [first, expired, unrelated], has_more: true },
+    { data: [second], has_more: false },
+  ];
+  const stripe = { checkout: { sessions: { list: async (params, options) => {
+    calls.push({ params, options });
+    return pages[calls.length - 1];
+  } } } };
+  const visited = [];
+
+  await scanActivePocketWifiStripeHolds(stripe, stripeKey, (hold) => visited.push(hold));
+
+  assert.deepEqual(visited.map((hold) => hold.sessionId), [first.id, second.id]);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].params.starting_after, undefined);
+  assert.equal(calls[1].params.starting_after, unrelated.id);
+  assert.deepEqual(calls[0].options, { timeout: STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, maxNetworkRetries: 0 });
+});
+
+test('Pocket WiFi hold scans fail closed on malformed or duplicate Stripe pages', async () => {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const id = 'cs_test_scanduplicate';
+  const unsignedMetadata = {
+    source: 'qyroam.com',
+    product_type: 'pocket_wifi',
+    checkout_request_id: crypto.randomUUID(),
+    start: '2026-12-01',
+    end: '2026-12-05',
+  };
+  const metadata = { ...unsignedMetadata, [QY_ROAM_PROVENANCE_METADATA_KEY]: signedQyRoamProvenance(id, unsignedMetadata) };
+  const session = { id, livemode: false, mode: 'payment', created: nowSeconds - 30, expires_at: nowSeconds + 1_800, metadata };
+  let page = 0;
+  const duplicateStripe = { checkout: { sessions: { list: async () => {
+    page += 1;
+    return { data: [session], has_more: page === 1 };
+  } } } };
+  await assert.rejects(
+    () => scanActivePocketWifiStripeHolds(duplicateStripe, 'sk_test_inventoryscancredential', () => {}),
+    /duplicate Checkout Session/,
+  );
+
+  const malformedStripe = { checkout: { sessions: { list: async () => ({ data: [], has_more: 'false' }) } } };
+  await assert.rejects(
+    () => scanActivePocketWifiStripeHolds(malformedStripe, 'sk_test_inventoryscancredential', () => {}),
+    /invalid page/,
+  );
 });
 
 test('Supabase order-critical requests use a bounded shared transport', async () => {
