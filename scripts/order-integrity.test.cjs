@@ -63,7 +63,7 @@ const { exactNonnegativeCount } = require('../lib/exactCount.ts');
 const { custodyReferenceIssue, normalizeCustodyReference, MAX_CUSTODY_REFERENCE_LENGTH } = require('../lib/custodyReference.ts');
 const { durableOrderMatchesPaidSession } = require('../lib/durableOrderSnapshot.ts');
 const { exactStripeClaimToken } = require('../lib/stripeClaimToken.ts');
-const { parsePocketWifiAvailability } = require('../lib/pocketWifiAvailability.ts');
+const { parsePocketWifiAvailability, parsePocketWifiBookingTerms } = require('../lib/pocketWifiAvailability.ts');
 const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutResponse.ts');
 const { MANUAL_ORDER_REFERENCE_MAX_LENGTH, manualOrderReference, manualOrderSessionId } = require('../lib/manualOrderReference.ts');
 const { createConcurrencyLimiter } = require('../lib/concurrencyLimit.ts');
@@ -6187,11 +6187,25 @@ test('customer confirmation views share one bounded provider-work budget', () =>
 test('public Pocket WiFi booking terms stay aligned with the checkout authority', () => {
   assert.match(bookingTermsRoute, /operationalConfig\(\)/);
   assert.match(bookingTermsRoute, /minDeliveryLeadDays:\s*config\.minDeliveryLeadDays/);
+  assert.match(bookingTermsRoute, /courierFeeSgd:\s*config\.courierFeeCents \/ 100/);
   assert.match(bookingTermsRoute, /'Cache-Control':\s*'no-store'/);
   assert.match(homePage, /fetchCustomerJson\('\/api\/booking-terms',\s*\{\s*cache:\s*'no-store'\s*\}\)/);
+  assert.match(homePage, /parsePocketWifiBookingTerms\(value\)/);
   assert.match(homePage, /setDeliveryLeadDays\(authoritativeLeadDays\)/);
+  assert.match(homePage, /setCourierFeeSgd\(terms\.courierFeeSgd\)/);
   assert.match(homePage, /setStart\(current => current === previousDefault \? nextEarliest : current\)/);
   assert.match(homePage, /setEnd\(current => current === previousDefault \? nextEarliest : current\)/);
   assert.match(faqPage, /operationalConfig\(\)\?\.minDeliveryLeadDays/);
   assert.doesNotMatch(faqPage, /Please book at least 2 days/);
+});
+
+test('initial Pocket WiFi booking terms require one coherent cent-precise price snapshot', () => {
+  assert.deepEqual(parsePocketWifiBookingTerms({ minDeliveryLeadDays: 3, courierFeeSgd: 1.15 }), {
+    minDeliveryLeadDays: 3,
+    courierFeeSgd: 1.15,
+  });
+  assert.equal(parsePocketWifiBookingTerms({ minDeliveryLeadDays: 3 }), null);
+  assert.equal(parsePocketWifiBookingTerms({ courierFeeSgd: 4.5 }), null);
+  assert.equal(parsePocketWifiBookingTerms({ minDeliveryLeadDays: 3, courierFeeSgd: 1.001 }), null);
+  assert.equal(parsePocketWifiBookingTerms({ minDeliveryLeadDays: 366, courierFeeSgd: 0 }), null);
 });

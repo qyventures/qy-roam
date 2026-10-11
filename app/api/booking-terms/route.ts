@@ -14,7 +14,14 @@ export function GET() {
     });
   }
 
-  return NextResponse.json({ minDeliveryLeadDays: config.minDeliveryLeadDays }, {
+  // Both values affect the price/date promise rendered before a traveller's
+  // first availability lookup. They are public booking terms, and checkout
+  // still recalculates them from the same server-side configuration before
+  // creating a payment Session.
+  return NextResponse.json({
+    minDeliveryLeadDays: config.minDeliveryLeadDays,
+    courierFeeSgd: config.courierFeeCents / 100,
+  }, {
     headers: { 'Cache-Control': 'no-store' },
   });
 }

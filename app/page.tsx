@@ -9,7 +9,7 @@ import { operationalIsoDateAfter } from '../lib/operationalDate';
 import { checkoutAttempt, clearCheckoutAttempt, type CheckoutAttempt } from '../lib/checkoutAttempt';
 import { fetchCustomerJson } from '../lib/clientRequest';
 import { esimPromoIsActive } from '../lib/esimPlans';
-import { parsePocketWifiAvailability, type PocketWifiAvailability } from '../lib/pocketWifiAvailability';
+import { parsePocketWifiAvailability, parsePocketWifiBookingTerms, type PocketWifiAvailability } from '../lib/pocketWifiAvailability';
 import { parseCustomerCheckoutResponse } from '../lib/customerCheckoutResponse';
 
 const plans = WIFI_PLANS;
@@ -60,13 +60,18 @@ export default function Home() {
     let active = true;
     void fetchCustomerJson('/api/booking-terms', { cache: 'no-store' }).then(({ response, value }) => {
       if (!active || !response.ok || !value || typeof value !== 'object' || Array.isArray(value)) return;
-      const leadDays = (value as Record<string, unknown>).minDeliveryLeadDays;
-      if (!Number.isSafeInteger(leadDays) || (leadDays as number) < 0 || (leadDays as number) > 365) return;
+      // Treat the initial public terms as one coherent price/date snapshot.
+      // Applying only one valid field from a malformed or partially deployed
+      // response could still show a payable total that disagrees with the
+      // checkout authority until the first availability lookup.
+      const terms = parsePocketWifiBookingTerms(value);
+      if (!terms) return;
 
-      const authoritativeLeadDays = leadDays as number;
+      const authoritativeLeadDays = terms.minDeliveryLeadDays;
       const previousDefault = operationalIsoDateAfter(DEFAULT_DELIVERY_LEAD_DAYS);
       const nextEarliest = operationalIsoDateAfter(authoritativeLeadDays);
       setDeliveryLeadDays(authoritativeLeadDays);
+      setCourierFeeSgd(terms.courierFeeSgd);
       // Move only untouched defaults. Never overwrite dates the traveller has
       // already selected while this small terms request was in flight.
       setStart(current => current === previousDefault ? nextEarliest : current);

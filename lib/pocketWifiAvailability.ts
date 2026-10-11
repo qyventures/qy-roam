@@ -6,6 +6,11 @@ export type PocketWifiAvailability = {
   courierFeeSgd?: number;
 };
 
+export type PocketWifiBookingTerms = {
+  minDeliveryLeadDays: number;
+  courierFeeSgd: number;
+};
+
 function validLeadDays(value: unknown) {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 365;
 }
@@ -19,6 +24,20 @@ function validCourierFee(value: unknown) {
 
 function validPublicError(value: unknown) {
   return typeof value === 'string' && value.length > 0 && value.length <= 500 && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
+// The lightweight booking-terms endpoint lets the storefront render its
+// first payable total before doing a provider-backed stock lookup. Keep its
+// runtime-data boundary identical to the complete terms embedded in a live
+// availability response.
+export function parsePocketWifiBookingTerms(value: unknown): PocketWifiBookingTerms | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  if (!validLeadDays(input.minDeliveryLeadDays) || !validCourierFee(input.courierFeeSgd)) return null;
+  return {
+    minDeliveryLeadDays: input.minDeliveryLeadDays as number,
+    courierFeeSgd: input.courierFeeSgd as number,
+  };
 }
 
 // The browser uses this response to disclose the payable total and enable the
