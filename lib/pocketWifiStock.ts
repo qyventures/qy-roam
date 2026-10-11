@@ -5,10 +5,18 @@ const INVENTORY_SCAN_PAGE_SIZE = 1_000;
 // scan excludes zero-quantity rows, ten full pages are enough to reach that
 // cap; one final page lets a smaller, highly fragmented register prove EOF.
 export const MAX_INVENTORY_SCAN_PAGES = 11;
+// Stock readiness is part of the authenticated health response used during
+// deployment. The scan can legitimately span several PostgREST pages, so the
+// transport's per-request timeout is not an end-to-end bound. Keep the whole
+// scan inside the same budget as the other database readiness probes: a
+// slow-but-responsive database must not leave a deploy probe (or admin launch
+// page render) working through eleven independent request deadlines.
+export const STOCK_READINESS_TIMEOUT_MS = 8_000;
 
 export async function saleablePocketWifiInventory(
   supabase: NonNullable<ReturnType<typeof getSupabaseAdmin>>,
   configuredInventory: number,
+  signal?: AbortSignal,
 ) {
   let afterId: number | null = null;
   let total = 0;
@@ -20,6 +28,7 @@ export async function saleablePocketWifiInventory(
       .order('id')
       .limit(INVENTORY_SCAN_PAGE_SIZE);
     if (afterId !== null) query = query.gt('id', afterId);
+    if (signal) query = query.abortSignal(signal);
     const response = await query;
     if (response.error) throw response.error;
     const rows = response.data || [];
@@ -43,12 +52,16 @@ export async function saleablePocketWifiInventory(
 export async function hasSaleablePocketWifiInventory(configuredInventory: number) {
   const supabase = getSupabaseAdmin();
   if (!supabase || !Number.isSafeInteger(configuredInventory) || configuredInventory < 1) return false;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(new Error('Pocket WiFi stock readiness timed out')), STOCK_READINESS_TIMEOUT_MS);
   try {
-    return await saleablePocketWifiInventory(supabase, configuredInventory) > 0;
+    return await saleablePocketWifiInventory(supabase, configuredInventory, controller.signal) > 0;
   } catch {
     // Health is a release authority. An incomplete stock read must not
     // promote a storefront whose only active product cannot be purchased.
     console.error('production_pocket_wifi_inventory_check_failed');
     return false;
+  } finally {
+    clearTimeout(timeout);
   }
 }

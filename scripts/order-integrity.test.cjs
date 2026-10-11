@@ -712,11 +712,16 @@ test('Pocket WiFi deployment inventory cannot exceed the database reservation bo
 
 test('Pocket WiFi availability scans the full saleable register with bounded arithmetic', () => {
   assert.match(pocketWifiStock, /export const MAX_INVENTORY_SCAN_PAGES = 11/);
+  assert.match(pocketWifiStock, /export const STOCK_READINESS_TIMEOUT_MS = 8_000/);
   assert.match(pocketWifiStock, /\.select\('id,quantity_on_hand'\)/);
   assert.match(pocketWifiStock, /\.order\('id'\)/);
   assert.match(pocketWifiStock, /query = query\.gt\('id', afterId\)/);
+  assert.match(pocketWifiStock, /if \(signal\) query = query\.abortSignal\(signal\)/);
   assert.match(pocketWifiStock, /if \(total >= configuredInventory\) return total/);
   assert.match(pocketWifiStock, /throw new Error\('Pocket WiFi inventory scan exceeded its safe page limit'\)/);
+  assert.match(pocketWifiStock, /setTimeout\(\(\) => controller\.abort\([\s\S]*?STOCK_READINESS_TIMEOUT_MS\)/);
+  assert.match(pocketWifiStock, /saleablePocketWifiInventory\(supabase, configuredInventory, controller\.signal\)/);
+  assert.match(pocketWifiStock, /finally \{\s*clearTimeout\(timeout\);\s*\}/);
   const boundedSaleableSums = schema.match(/least\(p_inventory::bigint, coalesce\(sum\(quantity_on_hand::bigint\), 0\)\)::integer/g) || [];
   assert.equal(boundedSaleableSums.length, 3, 'availability, public checkout and manual sales must clamp saleable stock before integer conversion');
 });
