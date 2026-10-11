@@ -67,6 +67,16 @@ function positiveSafeInteger(value: unknown) {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
+function optionalPositiveSafeInteger(value: unknown) {
+  if (value === undefined || value === null || value === '') return null;
+  return positiveSafeInteger(value);
+}
+
+function exactPercentage(value: unknown) {
+  const parsed = nonNegativeInteger(value);
+  return parsed !== null && parsed <= 100 ? parsed : null;
+}
+
 function validInventoryReference(value: string) {
   return value.length >= 1 && value.length <= 120 && !/[\u0000-\u001f\u007f]/.test(value);
 }
@@ -355,20 +365,54 @@ export async function POST(req: NextRequest) {
         throw error;
       }
     } else if (action === 'customer_create') {
-      const row = { email: text(body.email, 200).toLowerCase() || null, phone: text(body.phone, 60) || null, name: text(body.name, 120) || null, status: text(body.status, 40) || 'lead', source: text(body.source, 80) || 'manual', notes: text(body.notes, 1500) || null, updated_at: new Date().toISOString() };
+      const status = text(body.status, 40) || 'lead';
+      if (!['lead', 'active', 'inactive'].includes(status)) return NextResponse.json({ error: 'Choose a valid customer status' }, { status: 400 });
+      const row = { email: text(body.email, 200).toLowerCase() || null, phone: text(body.phone, 60) || null, name: text(body.name, 120) || null, status, source: text(body.source, 80) || 'manual', notes: text(body.notes, 1500) || null, updated_at: new Date().toISOString() };
       if (!row.email && !row.phone) return NextResponse.json({ error: 'Email or phone is required' }, { status: 400 });
       const { error } = await db.from('customers').insert(row); if (error) throw error;
     } else if (action === 'activity_create') {
-      const { error } = await db.from('crm_activities').insert({ customer_id: int(body.customer_id) || null, activity_type: text(body.activity_type, 40) || 'note', subject: text(body.subject, 160) || null, detail: text(body.detail, 2000) || null, due_at: body.due_at || null, owner: text(body.owner, 100) || null }); if (error) throw error;
+      const customerId = optionalPositiveSafeInteger(body.customer_id);
+      const activityType = text(body.activity_type, 40) || 'note';
+      if (body.customer_id !== undefined && body.customer_id !== null && body.customer_id !== '' && customerId === null) return NextResponse.json({ error: 'Choose a valid customer' }, { status: 400 });
+      if (!['note', 'call', 'whatsapp', 'email', 'task'].includes(activityType)) return NextResponse.json({ error: 'Choose a valid activity type' }, { status: 400 });
+      const { error } = await db.from('crm_activities').insert({ customer_id: customerId, activity_type: activityType, subject: text(body.subject, 160) || null, detail: text(body.detail, 2000) || null, due_at: body.due_at || null, owner: text(body.owner, 100) || null }); if (error) throw error;
     } else if (action === 'activity_complete') {
-      const { error } = await db.from('crm_activities').update({ completed_at: new Date().toISOString() }).eq('id', int(body.id)); if (error) throw error;
+      const activityId = positiveSafeInteger(body.id);
+      if (activityId === null) return NextResponse.json({ error: 'Choose a valid activity' }, { status: 400 });
+      const { data, error } = await db.from('crm_activities').update({ completed_at: new Date().toISOString() }).eq('id', activityId).select('id').maybeSingle();
+      if (error) throw error;
+      if (!data) return NextResponse.json({ error: 'Activity not found' }, { status: 404 });
     } else if (action === 'opportunity_create') {
-      const row = { customer_id: int(body.customer_id) || null, title: text(body.title, 180), product_type: text(body.product_type, 40) || null, stage: text(body.stage, 40) || 'lead', probability: Math.min(100, Math.max(0, num(body.probability))), expected_value_sgd: Math.max(0, num(body.expected_value_sgd)), expected_close_date: body.expected_close_date || null, source: text(body.source, 80) || null, owner: text(body.owner, 100) || null, notes: text(body.notes, 1500) || null, updated_at: new Date().toISOString() };
+      const customerId = optionalPositiveSafeInteger(body.customer_id);
+      const productType = text(body.product_type, 40) || null;
+      const stage = text(body.stage, 40) || 'lead';
+      const probability = exactPercentage(body.probability);
+      // A blank optional value means the opportunity has not been valued yet.
+      // Preserve that existing UI contract as zero, while rejecting malformed,
+      // negative, fractional-cent, or oversized values instead of coercing
+      // them through Number(...).
+      const expectedValueCents = body.expected_value_sgd === ''
+        ? 0
+        : nonNegativeMoney(body.expected_value_sgd);
+      const expectedCloseDate = text(body.expected_close_date, 10) || null;
+      if (body.customer_id !== undefined && body.customer_id !== null && body.customer_id !== '' && customerId === null) return NextResponse.json({ error: 'Choose a valid customer' }, { status: 400 });
+      if (productType !== null && !['pocket_wifi', 'esim'].includes(productType)) return NextResponse.json({ error: 'Choose a valid opportunity product type' }, { status: 400 });
+      if (!['lead', 'qualified', 'proposal', 'negotiation', 'won', 'lost'].includes(stage)) return NextResponse.json({ error: 'Choose a valid opportunity stage' }, { status: 400 });
+      if (probability === null || expectedValueCents === null) return NextResponse.json({ error: 'Probability must be a whole percentage from 0 to 100 and expected value must be a non-negative amount with at most two decimal places' }, { status: 400 });
+      if (expectedCloseDate !== null && !parseExactIsoDate(expectedCloseDate)) return NextResponse.json({ error: 'Choose a valid expected close date' }, { status: 400 });
+      const row = { customer_id: customerId, title: text(body.title, 180), product_type: productType, stage, probability, expected_value_sgd: expectedValueCents / 100, expected_close_date: expectedCloseDate, source: text(body.source, 80) || null, owner: text(body.owner, 100) || null, notes: text(body.notes, 1500) || null, updated_at: new Date().toISOString() };
       if (!row.title) return NextResponse.json({ error: 'Opportunity title is required' }, { status: 400 });
       const { error } = await db.from('sales_opportunities').insert(row); if (error) throw error;
     } else if (action === 'opportunity_stage') {
-      const stage = text(body.stage, 40); const probability = Math.min(100, Math.max(0, num(body.probability)));
-      const { error } = await db.from('sales_opportunities').update({ stage, probability, updated_at: new Date().toISOString() }).eq('id', int(body.id)); if (error) throw error;
+      const opportunityId = positiveSafeInteger(body.id);
+      const stage = text(body.stage, 40);
+      const probability = exactPercentage(body.probability);
+      if (opportunityId === null) return NextResponse.json({ error: 'Choose a valid opportunity' }, { status: 400 });
+      if (!['lead', 'qualified', 'proposal', 'negotiation', 'won', 'lost'].includes(stage)) return NextResponse.json({ error: 'Choose a valid opportunity stage' }, { status: 400 });
+      if (probability === null) return NextResponse.json({ error: 'Probability must be a whole percentage from 0 to 100' }, { status: 400 });
+      const { data, error } = await db.from('sales_opportunities').update({ stage, probability, updated_at: new Date().toISOString() }).eq('id', opportunityId).select('id').maybeSingle();
+      if (error) throw error;
+      if (!data) return NextResponse.json({ error: 'Opportunity not found' }, { status: 404 });
     } else if (action === 'forecast_upsert') {
       const month = text(body.forecast_month, 10); const product = text(body.product_type, 40);
       const forecastOrders = nonNegativeInteger(body.forecast_orders);

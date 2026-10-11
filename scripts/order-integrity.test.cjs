@@ -3798,6 +3798,19 @@ test('admin inventory quantities and costs fail closed instead of being silently
   assert.match(schema, /v_item\.quantity_on_hand::bigint \+ p_delta::bigint > 1000000/);
 });
 
+test('admin CRM writes reject malformed commercial data and missing mutation targets', () => {
+  assert.match(adminOpsRoute, /function exactPercentage\(value: unknown\)/);
+  assert.match(adminOpsRoute, /const expectedValueCents = body\.expected_value_sgd === ''[\s\S]*?nonNegativeMoney\(body\.expected_value_sgd\)/);
+  assert.match(adminOpsRoute, /!\['lead', 'qualified', 'proposal', 'negotiation', 'won', 'lost'\]\.includes\(stage\)/);
+  assert.match(adminOpsRoute, /expectedCloseDate !== null && !parseExactIsoDate\(expectedCloseDate\)/);
+  assert.doesNotMatch(adminOpsRoute, /expected_value_sgd: Math\.max\(0, num\(/);
+  assert.doesNotMatch(adminOpsRoute, /probability = Math\.min\(100, Math\.max\(0, num\(/);
+  assert.match(adminOpsRoute, /from\('crm_activities'\)\.update\([\s\S]*?\.select\('id'\)\.maybeSingle\(\)/);
+  assert.match(adminOpsRoute, /if \(!data\) return NextResponse\.json\(\{ error: 'Activity not found' \}, \{ status: 404 \}\)/);
+  assert.match(adminOpsRoute, /from\('sales_opportunities'\)\.update\([\s\S]*?\.select\('id'\)\.maybeSingle\(\)/);
+  assert.match(adminOpsRoute, /if \(!data\) return NextResponse\.json\(\{ error: 'Opportunity not found' \}, \{ status: 404 \}\)/);
+});
+
 test('generic inventory mutations cannot make a router saleable while it is in customer custody', () => {
   const activeCustodyGuard = /inventory_item_id = p_item_id[\s\S]{0,180}product_type = 'pocket_wifi'[\s\S]{0,180}fulfilment_status in \('dispatched', 'with_customer', 'return_due'\)/g;
   assert.equal(
