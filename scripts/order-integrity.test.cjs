@@ -41,7 +41,7 @@ const { ADMIN_MUTATION_HEADER, ADMIN_MUTATION_HEADER_VALUE, adminMutationHeaders
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode } = require('../lib/stripeCheckoutConfig.ts');
 const { stripeWebhookSigningSecret, stripeWebhookSigningSecrets } = require('../lib/stripeWebhookSecret.ts');
 const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
-const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_EXPIRY_CREATION_MARGIN_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, CHECKOUT_ATTEMPT_MAX_FUTURE_MS, STRIPE_HOLD_SCAN_WINDOW_SECONDS, checkoutAttemptExpiresAt, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
+const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_EXPIRY_CREATION_MARGIN_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, CHECKOUT_ATTEMPT_MAX_FUTURE_MS, STRIPE_HOLD_SCAN_WINDOW_SECONDS, STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, checkoutAttemptExpiresAt, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
 const { checkoutSiteOrigin, isProductionQyRoamOrigin, metaPurchaseEventSourceUrl } = require('../lib/siteOrigin.ts');
 const { hasRequiredAdminCredentials, hasRequiredMetaCapiPurchaseConfig, metaPixelId } = require('../lib/runtimeConfig.ts');
 const { metaMeasurementAllowed, metaPageViewAllowed, setMetaMeasurementConsent } = require('../lib/metaClient.ts');
@@ -5105,6 +5105,12 @@ test('Stripe network calls use a bounded shared production client', () => {
     assert.match(route, /createStripeClient\(/);
     assert.doesNotMatch(route, /new Stripe\(/);
   }
+});
+
+test('Pocket WiFi hold scans have one bounded read attempt per page', () => {
+  assert.equal(STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, 5_000);
+  assert.match(wifiCheckoutRoute, /checkout\.sessions\.list\([\s\S]*?timeout:STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS,maxNetworkRetries:0/);
+  assert.match(availabilityRoute, /checkout\.sessions\.list\([\s\S]*?timeout: STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, maxNetworkRetries: 0/);
 });
 
 test('Supabase order-critical requests use a bounded shared transport', async () => {

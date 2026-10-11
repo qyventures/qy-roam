@@ -13,7 +13,7 @@ import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
 import { createCheckoutAttemptLimiter, createGlobalAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { metaAttributionFromRequest } from '@/lib/metaAttribution';
-import { checkoutAttemptExpiresAt, MAX_STRIPE_HOLD_SCAN_PAGES, STRIPE_HOLD_SCAN_WINDOW_SECONDS } from '@/lib/checkoutExpiry';
+import { checkoutAttemptExpiresAt, MAX_STRIPE_HOLD_SCAN_PAGES, STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, STRIPE_HOLD_SCAN_WINDOW_SECONDS } from '@/lib/checkoutExpiry';
 import { checkoutSiteOrigin } from '@/lib/siteOrigin';
 import { pocketWifiRentalCents } from '@/lib/pocketWifiPricing';
 import { safeStripeCheckoutUrl } from '@/lib/stripeCheckoutUrl';
@@ -108,7 +108,14 @@ async function activeStripeHolds(stripe:Stripe,stripeKey:string,start:string,end
       // attempt closed, preserving inventory integrity during account noise.
       throw new Error('Stripe Pocket WiFi hold scan exceeded its safe page limit');
     }
-    const sessions=await stripe.checkout.sessions.list({status:'open',limit:100,created:{gte:cutoff},...(startingAfter?{starting_after:startingAfter}:{})});
+    const sessions=await stripe.checkout.sessions.list(
+      {status:'open',limit:100,created:{gte:cutoff},...(startingAfter?{starting_after:startingAfter}:{})},
+      // A failed read is safe for the shopper to retry. Do not apply the
+      // shared client's payment-oriented network retry independently to each
+      // page or a five-page capacity scan can monopolise a checkout slot for
+      // minutes during a provider incident.
+      {timeout:STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS,maxNetworkRetries:0},
+    );
     pagesScanned+=1;
     for(const session of sessions.data){
       // List results become pagination cursors and, for an idempotent retry,

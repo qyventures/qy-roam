@@ -13,7 +13,7 @@ import {
   hasRequiredStripeCheckoutConfig,
   hasRequiredStripeWebhookConfig,
 } from '@/lib/productionReadiness';
-import { MAX_STRIPE_HOLD_SCAN_PAGES, STRIPE_HOLD_SCAN_WINDOW_SECONDS } from '@/lib/checkoutExpiry';
+import { MAX_STRIPE_HOLD_SCAN_PAGES, STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, STRIPE_HOLD_SCAN_WINDOW_SECONDS } from '@/lib/checkoutExpiry';
 import { AVAILABILITY_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS, createCheckoutAttemptLimiter, createGlobalAttemptLimiter } from '@/lib/checkoutRateLimit';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
@@ -62,7 +62,13 @@ async function activeStripeHolds(stripe: Stripe, stripeKey: string, start: strin
       // provider work or cause the last router to be oversold.
       throw new Error('Stripe Pocket WiFi hold scan exceeded its safe page limit');
     }
-    const sessions = await stripe.checkout.sessions.list({ status: 'open', limit: 100, created: { gte: cutoff }, ...(startingAfter ? { starting_after: startingAfter } : {}) });
+    const sessions = await stripe.checkout.sessions.list(
+      { status: 'open', limit: 100, created: { gte: cutoff }, ...(startingAfter ? { starting_after: startingAfter } : {}) },
+      // Availability is read-only and already fails closed. A prompt retry is
+      // safer than multiplying the shared client's payment retry across every
+      // page and retaining an availability worker for minutes.
+      { timeout: STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, maxNetworkRetries: 0 },
+    );
     pagesScanned += 1;
     for (const session of sessions.data) {
       // The final list row also becomes the next provider pagination cursor.

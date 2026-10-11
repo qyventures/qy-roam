@@ -25,6 +25,14 @@ export const CHECKOUT_HOLD_WINDOW_SECONDS = CHECKOUT_PAYMENT_WINDOW_MINUTES * 60
 // Sessions, far beyond the physical fleet, while leaving an explicit signal
 // for operations to separate or clear noisy shared-account traffic.
 export const MAX_STRIPE_HOLD_SCAN_PAGES = 5;
+// Hold scans are read-only and may traverse every page above. They must not
+// inherit the payment client's network retry: at 15 seconds plus one retry
+// per page, a degraded Stripe API could otherwise retain one public request
+// for roughly 150 seconds and exhaust the route's concurrency budget. Five
+// seconds per page keeps the complete bounded scan within 25 seconds while a
+// transient failure remains safe to retry as a fresh availability/checkout
+// request. Payment creation retains its separate idempotent retry policy.
+export const STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS = 5_000;
 // Expiry webhooks release abandoned holds promptly in healthy operation. Keep
 // a database-only grace through Stripe's retry window so delayed completion
 // delivery cannot create a paid commitment after the router was resold.
