@@ -2354,7 +2354,10 @@ as $$
   -- webhook failure audit transitions.
   -- Version 35 requires one atomic Pocket WiFi availability snapshot across
   -- durable orders, temporary reservations and saleable physical stock.
-  select 35;
+  -- Version 36 certifies the saturating retry-counter contract for Stripe,
+  -- fulfilment-email and Meta delivery claims, including a fresh ownership
+  -- timestamp when an integer counter has reached its storage ceiling.
+  select 36;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
