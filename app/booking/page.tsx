@@ -9,6 +9,7 @@ import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 import { custodyReferenceIssue, normalizeCustodyReference } from '@/lib/custodyReference';
+import { tryAcquireConfirmationConcurrency } from '@/lib/confirmationConcurrency';
 
 export const dynamic = 'force-dynamic';
 
@@ -51,6 +52,19 @@ export default async function BookingPage({ searchParams }: Props) {
         <h1>Open your order from the confirmation link.</h1>
         <p>This page needs the secure reference from your QY Roam checkout confirmation.</p>
         <p>If you need help, contact <a href="tel:+6580327183"><strong>+65 8032 7183</strong></a>.</p>
+        <a className="secondary" href="/">Back to QY Roam</a>
+      </main>
+    );
+  }
+
+  const releaseConfirmation = tryAcquireConfirmationConcurrency();
+  if (!releaseConfirmation) {
+    return (
+      <main className="wrap section legal">
+        <span className="eyebrow">Order status</span>
+        <h1>Order status is busy.</h1>
+        <p>Please wait a moment and refresh this page. Do not place a second order.</p>
+        <p>Need help? Call <a href="tel:+6580327183"><strong>+65 8032 7183</strong></a>.</p>
         <a className="secondary" href="/">Back to QY Roam</a>
       </main>
     );
@@ -199,5 +213,7 @@ export default async function BookingPage({ searchParams }: Props) {
         <a className="secondary" href="/">Back to QY Roam</a>
       </main>
     );
+  } finally {
+    releaseConfirmation();
   }
 }

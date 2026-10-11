@@ -7,6 +7,7 @@ import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import OrderConfirmationRefresh from '@/components/OrderConfirmationRefresh';
 import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
+import { tryAcquireConfirmationConcurrency } from '@/lib/confirmationConcurrency';
 
 export const dynamic = 'force-dynamic';
 export const metadata = {
@@ -32,13 +33,17 @@ export default async function SuccessPage({ searchParams }: Props) {
   let checkoutExpired = false;
   let orderPersisted = false;
   let orderLookupFailed = false;
+  let confirmationBusy = false;
 
   // Keep the confirmation page on the same Stripe credential boundary as
   // checkout and webhook processing. In production, a mistakenly deployed
   // test key must not be able to render a test-mode session as a customer
   // payment confirmation while the real order pipeline is unavailable.
   if (sessionId && key && hasRequiredStripeCheckoutConfig()) {
+    const releaseConfirmation = tryAcquireConfirmationConcurrency();
+    if (!releaseConfirmation) confirmationBusy = true;
     try {
+      if (!releaseConfirmation) throw new Error('Confirmation lookup is busy');
       const stripe = createStripeClient(key);
       const session = await stripe.checkout.sessions.retrieve(sessionId);
       // The URL reference selected this exact Checkout Session. Stripe
@@ -96,8 +101,12 @@ export default async function SuccessPage({ searchParams }: Props) {
       }
     } catch {
       // A customer confirmation page may call Stripe and the database. Keep
-      // third-party failure text out of application logs.
-      console.error('success_session_lookup_error');
+      // third-party failure text out of application logs. Expected admission
+      // shedding is customer-retryable and must not create false provider
+      // incidents in production logs.
+      if (!confirmationBusy) console.error('success_session_lookup_error');
+    } finally {
+      releaseConfirmation?.();
     }
   }
 
@@ -105,8 +114,8 @@ export default async function SuccessPage({ searchParams }: Props) {
     return (
       <main className="wrap section legal">
         <span className="eyebrow">Order status</span>
-        <h1>We couldn’t load this QY Roam order.</h1>
-        <p>Please use the confirmation link from your QY Roam checkout or contact us for help.</p>
+        <h1>{confirmationBusy ? 'Order confirmation is busy.' : 'We couldn’t load this QY Roam order.'}</h1>
+        <p>{confirmationBusy ? 'Please wait a moment and refresh this page. Do not place a second order.' : 'Please use the confirmation link from your QY Roam checkout or contact us for help.'}</p>
         <p><a href="tel:+6580327183"><strong>+65 8032 7183</strong></a></p>
         <a className="secondary" href="/">Back to QY Roam</a>
       </main>

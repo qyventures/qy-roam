@@ -69,6 +69,7 @@ const { MANUAL_ORDER_REFERENCE_MAX_LENGTH, manualOrderReference, manualOrderSess
 const { createConcurrencyLimiter } = require('../lib/concurrencyLimit.ts');
 const { CHECKOUT_MAX_CONCURRENT_REQUESTS, tryAcquireCheckoutConcurrency } = require('../lib/checkoutConcurrency.ts');
 const { AVAILABILITY_MAX_CONCURRENT_REQUESTS, tryAcquireAvailabilityConcurrency } = require('../lib/availabilityConcurrency.ts');
+const { CONFIRMATION_MAX_CONCURRENT_REQUESTS, tryAcquireConfirmationConcurrency } = require('../lib/confirmationConcurrency.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
 const { hasOrderIntegritySecret, hasOrderIntegritySigningConfig, isCanonicalStripeMetadata, signedQyRoamProvenance, validQyRoamProvenance } = require('../lib/orderProvenance.ts');
@@ -5857,4 +5858,23 @@ test('product checkouts share one bounded live-work budget and always release ad
     esimCheckoutRoute.indexOf('releaseCheckout = tryAcquireCheckoutConcurrency()') > esimCheckoutRoute.indexOf('if (globallyLimited())'),
     'eSIM admission must follow cheap validation and rate limiting',
   );
+});
+
+test('customer confirmation views share one bounded provider-work budget', () => {
+  assert.equal(CONFIRMATION_MAX_CONCURRENT_REQUESTS, 12);
+  const releases = [];
+  for (let index = 0; index < CONFIRMATION_MAX_CONCURRENT_REQUESTS; index += 1) {
+    const release = tryAcquireConfirmationConcurrency();
+    assert.equal(typeof release, 'function');
+    releases.push(release);
+  }
+  assert.equal(tryAcquireConfirmationConcurrency(), null);
+  releases.forEach((release) => release());
+
+  assert.match(successPage, /const releaseConfirmation = tryAcquireConfirmationConcurrency\(\)/);
+  assert.match(successPage, /finally \{\s*releaseConfirmation\?\.\(\);\s*\}/);
+  assert.match(successPage, /Do not place a second order/);
+  assert.match(bookingPage, /const releaseConfirmation = tryAcquireConfirmationConcurrency\(\)/);
+  assert.match(bookingPage, /if \(!releaseConfirmation\)[\s\S]*?Order status is busy/);
+  assert.match(bookingPage, /finally \{\s*releaseConfirmation\(\);\s*\}/);
 });
