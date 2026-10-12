@@ -5990,17 +5990,25 @@ test('release verification enforces the complete customer ingress security bound
   assert.match(nginxConfig, /server_name www\.qyroam\.com;[\s\S]*?add_header Referrer-Policy no-referrer always;[\s\S]*?return 301 https:\/\/qyroam\.com\$request_uri;/);
 });
 
-test('Stripe webhook uploads reach the bounded application reader without proxy buffering', () => {
+test('public mutations reach bounded application readers without proxy buffering', () => {
   // `client_body_timeout` only limits inactivity between reads. Keep the
-  // webhook's absolute body deadline and concurrency admission effective by
-  // streaming these two exact route shapes, without changing buffering for
-  // the rest of the storefront and admin ingress.
+  // application's absolute body deadlines and concurrency admission effective
+  // by streaming both the dedicated webhook path and general application
+  // ingress instead of allowing Nginx to wait indefinitely for a complete body.
   const webhookLocation = nginxConfig.match(/location ~ \^\/api\/\(stripe\/webhook\|stripe-webhook\)\$ \{[\s\S]*?\n    \}/)?.[0] || '';
   assert.match(webhookLocation, /proxy_request_buffering off;/);
   assert.match(webhookLocation, /proxy_pass http:\/\/127\.0\.0\.1:3100;/);
   assert.match(webhookLocation, /proxy_set_header X-Real-IP \$remote_addr;/);
   assert.match(webhookLocation, /proxy_read_timeout 120s;/);
-  assert.equal((nginxConfig.match(/proxy_request_buffering off;/g) || []).length, 1, 'only Stripe webhook ingress should bypass request buffering');
+  const generalLocation = nginxConfig.match(/location \/ \{\s*proxy_pass http:\/\/127\.0\.0\.1:3100;[\s\S]*?\n    \}/)?.[0] || '';
+  assert.match(generalLocation, /proxy_request_buffering off;/);
+  assert.equal((nginxConfig.match(/proxy_request_buffering off;/g) || []).length, 2, 'both webhook and general application ingress must bypass request buffering');
+  // Checkout and admin mutation routes all use the same bounded stream reader,
+  // so forwarding their bodies cannot turn a slow upload into unbounded Node
+  // work after moving the absolute deadline through the proxy boundary.
+  for (const route of [wifiCheckoutRoute, esimCheckoutRoute, adminOpsRoute, adminOrderRoute]) {
+    assert.match(route, /readLimitedRequestText\(/);
+  }
   assert.match(webhookRoute, /const STRIPE_WEBHOOK_BODY_TIMEOUT_MS = 15_000/);
   assert.match(webhookRoute, /tryAcquireStripeWebhookUpload/);
   assert.match(stripeWebhookConcurrency, /globalThis as WebhookConcurrencyGlobal/);
