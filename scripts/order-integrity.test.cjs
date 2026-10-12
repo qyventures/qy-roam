@@ -2093,9 +2093,8 @@ test('provider-backed public routes retain an aggregate overload ceiling across 
   assert.equal(afterClockRollback(5_001), true);
 
   for (const source of [wifiCheckoutRoute, esimCheckoutRoute]) {
-    assert.match(source, /const globallyLimited\s*=\s*createGlobalAttemptLimiter\(\)/);
-    assert.match(source, /if\s*\(limited\(req\)\)/);
-    assert.match(source, /if\s*\(globallyLimited\(\)\)/);
+    assert.match(source, /if\s*\(checkoutAttemptLimited\(req\)\)/);
+    assert.match(source, /if\s*\(checkoutGloballyLimited\(\)\)/);
   }
   assert.match(availabilityRoute, /AVAILABILITY_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS/);
   assert.match(availabilityRoute, /if\s*\(limited\(req\)\)/);
@@ -2103,12 +2102,12 @@ test('provider-backed public routes retain an aggregate overload ceiling across 
 });
 
 test('malformed checkout traffic cannot exhaust the shared Stripe work budget', () => {
-  const pocketGlobalLimit = wifiCheckoutRoute.indexOf('if(globallyLimited())');
+  const pocketGlobalLimit = wifiCheckoutRoute.indexOf('if(checkoutGloballyLimited())');
   assert.ok(pocketGlobalLimit > wifiCheckoutRoute.indexOf("if(!wifiPlan||!daily||!startDate||!endDate||endDate<startDate)"));
   assert.ok(pocketGlobalLimit > wifiCheckoutRoute.indexOf('if(days<1||days>90)'));
   assert.ok(pocketGlobalLimit < wifiCheckoutRoute.indexOf('const stripe=createStripeClient(key)'));
 
-  const esimGlobalLimit = esimCheckoutRoute.indexOf('if (globallyLimited())');
+  const esimGlobalLimit = esimCheckoutRoute.indexOf('if (checkoutGloballyLimited())');
   assert.ok(esimGlobalLimit > esimCheckoutRoute.indexOf('const plan = getEsimPlan(body.planId)'));
   assert.ok(esimGlobalLimit > esimCheckoutRoute.indexOf("if (promoCode && promoCode !== ESIM_PROMO.code)"));
   assert.ok(esimGlobalLimit < esimCheckoutRoute.indexOf('if (!await hasRequiredEsimOrderSchema())'));
@@ -6459,13 +6458,40 @@ test('product checkouts share one bounded live-work budget and always release ad
     assert.match(route, /finally\s*\{\s*releaseCheckout\?\.\(\);/);
   }
   assert.ok(
-    wifiCheckoutRoute.indexOf('releaseCheckout=tryAcquireCheckoutConcurrency()') > wifiCheckoutRoute.indexOf('if(globallyLimited())'),
+    wifiCheckoutRoute.indexOf('releaseCheckout=tryAcquireCheckoutConcurrency()') > wifiCheckoutRoute.indexOf('if(checkoutGloballyLimited())'),
     'Pocket WiFi admission must follow cheap validation and rate limiting',
   );
   assert.ok(
-    esimCheckoutRoute.indexOf('releaseCheckout = tryAcquireCheckoutConcurrency()') > esimCheckoutRoute.indexOf('if (globallyLimited())'),
+    esimCheckoutRoute.indexOf('releaseCheckout = tryAcquireCheckoutConcurrency()') > esimCheckoutRoute.indexOf('if (checkoutGloballyLimited())'),
     'eSIM admission must follow cheap validation and rate limiting',
   );
+});
+
+test('paid-product rate limits are shared across routes and duplicate Next module graphs', () => {
+  const first = requireFresh('../lib/checkoutRateLimit.ts');
+  const second = requireFresh('../lib/checkoutRateLimit.ts');
+  assert.notEqual(first, second);
+
+  const client = new Request('https://qyroam.com/api/checkout', {
+    headers: { 'x-real-ip': '198.51.100.211' },
+  });
+  const clientWindow = 9_000_000_000_000;
+  for (let index = 0; index < first.CHECKOUT_RATE_LIMIT_MAX_ATTEMPTS; index += 1) {
+    assert.equal((index % 2 === 0 ? first : second).checkoutAttemptLimited(client, clientWindow), false);
+  }
+  assert.equal(second.checkoutAttemptLimited(client, clientWindow), true);
+
+  const globalWindow = clientWindow + first.CHECKOUT_RATE_LIMIT_WINDOW_MS + 1;
+  for (let index = 0; index < first.CHECKOUT_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS; index += 1) {
+    assert.equal((index % 2 === 0 ? first : second).checkoutGloballyLimited(globalWindow), false);
+  }
+  assert.equal(first.checkoutGloballyLimited(globalWindow), true);
+
+  for (const route of [wifiCheckoutRoute, esimCheckoutRoute]) {
+    assert.match(route, /checkoutAttemptLimited\(req\)/);
+    assert.match(route, /checkoutGloballyLimited\(\)/);
+    assert.doesNotMatch(route, /createCheckoutAttemptLimiter|createGlobalAttemptLimiter/);
+  }
 });
 
 test('slow checkout uploads share a wider bounded pre-validation budget', () => {

@@ -140,3 +140,28 @@ export function createGlobalAttemptLimiter(
     return count > boundedMaxAttempts;
   };
 }
+
+type CheckoutRateLimitGlobal = typeof globalThis & {
+  __qyRoamCheckoutAttemptLimiter?: ReturnType<typeof createCheckoutAttemptLimiter>;
+  __qyRoamCheckoutGlobalAttemptLimiter?: ReturnType<typeof createGlobalAttemptLimiter>;
+};
+
+// Pocket WiFi and eSIM are two entrypoints into one payment system. Next can
+// compile those routes into separate server module graphs, so route-local
+// limiter instances would give one client (and aggregate traffic) a fresh
+// allowance for every product and every loaded copy. Keep the factories above
+// for isolated policies such as availability, but expose one process-wide
+// checkout policy for both paid-product routes.
+const shared = globalThis as CheckoutRateLimitGlobal;
+const checkoutAttemptLimiter = shared.__qyRoamCheckoutAttemptLimiter ??=
+  createCheckoutAttemptLimiter();
+const checkoutGlobalAttemptLimiter = shared.__qyRoamCheckoutGlobalAttemptLimiter ??=
+  createGlobalAttemptLimiter();
+
+export function checkoutAttemptLimited(req: Request, now = Date.now()) {
+  return checkoutAttemptLimiter(req, now);
+}
+
+export function checkoutGloballyLimited(now = Date.now()) {
+  return checkoutGlobalAttemptLimiter(now);
+}

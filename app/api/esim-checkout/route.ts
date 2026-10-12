@@ -7,7 +7,7 @@ import { hasOrderIntegritySigningConfig, QY_ROAM_PROVENANCE_METADATA_KEY, signed
 import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '../../../lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
-import { createCheckoutAttemptLimiter, createGlobalAttemptLimiter } from '@/lib/checkoutRateLimit';
+import { checkoutAttemptLimited, checkoutGloballyLimited } from '@/lib/checkoutRateLimit';
 import { metaAttributionFromRequest } from '@/lib/metaAttribution';
 import { checkoutAttemptExpiresAt } from '@/lib/checkoutExpiry';
 import { checkoutSiteOrigin } from '@/lib/siteOrigin';
@@ -39,8 +39,6 @@ const CHECKOUT_BODY_TIMEOUT_MS = 15_000;
 // short-lived so a customer cannot complete a stale checkout many hours after
 // the selection, pricing and operational readiness checks ran. The client
 // already treats an expired idempotent session as a recoverable fresh attempt.
-const limited = createCheckoutAttemptLimiter();
-const globallyLimited = createGlobalAttemptLimiter();
 
 // Stripe idempotency keys are intentionally durable. If a caller reuses a
 // checkout request id for a different plan, Stripe returns the first session
@@ -76,7 +74,7 @@ export async function POST(req: Request) {
     // Invalid traffic still consumes a bounded per-client ingress allowance,
     // but it must not spend the process-wide Stripe work budget before it has
     // proved that it resembles a real checkout.
-    if (limited(req)) return NextResponse.json({ error: 'Too many checkout attempts. Please try again shortly.' }, { status: 429, headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' } });
+    if (checkoutAttemptLimited(req)) return NextResponse.json({ error: 'Too many checkout attempts. Please try again shortly.' }, { status: 429, headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' } });
     if (!isJsonRequestContentType(req.headers.get('content-type'))) {
       return NextResponse.json({ error: 'Expected JSON request.' }, { status: 415 });
     }
@@ -155,7 +153,7 @@ export async function POST(req: Request) {
     // Only well-formed, currently saleable requests can proceed to provider
     // and persistence readiness calls, so only those requests participate in
     // the allocation-free instance-wide overload guard.
-    if (globallyLimited()) return NextResponse.json({ error: 'Too many checkout attempts. Please try again shortly.' }, { status: 429, headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' } });
+    if (checkoutGloballyLimited()) return NextResponse.json({ error: 'Too many checkout attempts. Please try again shortly.' }, { status: 429, headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' } });
     // Use the same live-work ceiling as Pocket WiFi checkout. The admission
     // guard deliberately sits after cheap validation, so malformed traffic
     // cannot consume the scarce slots used for provider and schema calls.

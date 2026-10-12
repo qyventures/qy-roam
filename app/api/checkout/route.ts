@@ -11,7 +11,7 @@ import { operationalIsoDate, operationalIsoDateAfter } from '../../../lib/operat
 import { hasRequiredFulfilmentEmailConfig, hasRequiredPaymentSchema, hasRequiredPocketWifiFulfilmentSchema, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '../../../lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
-import { createCheckoutAttemptLimiter, createGlobalAttemptLimiter } from '@/lib/checkoutRateLimit';
+import { checkoutAttemptLimited, checkoutGloballyLimited } from '@/lib/checkoutRateLimit';
 import { metaAttributionFromRequest } from '@/lib/metaAttribution';
 import { checkoutAttemptExpiresAt } from '@/lib/checkoutExpiry';
 import { checkoutSiteOrigin } from '@/lib/siteOrigin';
@@ -40,8 +40,6 @@ const NextResponse = {
 
 const MAX_BODY_BYTES=4096;
 const CHECKOUT_BODY_TIMEOUT_MS=15_000;
-const limited=createCheckoutAttemptLimiter();
-const globallyLimited=createGlobalAttemptLimiter();
 
 type RequestedPocketWifi = {
   country:string; start:string; end:string; days:number; daily:number;
@@ -154,7 +152,7 @@ export async function POST(req: Request) {
   // boundary, but do not let it consume the instance-wide Stripe work budget.
   // Running the global limiter before basic validation lets cheap invalid
   // POSTs deny Checkout to every legitimate traveller on this process.
-  if(limited(req)) return NextResponse.json({error:'Too many checkout attempts. Please try again shortly.'},{status:429,headers:{'Cache-Control':'no-store','Retry-After':'60'}});
+  if(checkoutAttemptLimited(req)) return NextResponse.json({error:'Too many checkout attempts. Please try again shortly.'},{status:429,headers:{'Cache-Control':'no-store','Retry-After':'60'}});
   if(!isJsonRequestContentType(req.headers.get('content-type'))) return NextResponse.json({error:'Expected JSON request.'},{status:415});
   // Match the readiness guard, which permits harmless deployment whitespace.
   // Passing the untrimmed secret to Stripe would otherwise make health look
@@ -208,7 +206,7 @@ export async function POST(req: Request) {
   // Everything after this complete cheap request-validation boundary can
   // perform schema, Stripe, or Supabase work and belongs in the shared
   // overload budget. Invalid traffic remains isolated by the limiter above.
-  if(globallyLimited()) return NextResponse.json({error:'Too many checkout attempts. Please try again shortly.'},{status:429,headers:{'Cache-Control':'no-store','Retry-After':'60'}});
+  if(checkoutGloballyLimited()) return NextResponse.json({error:'Too many checkout attempts. Please try again shortly.'},{status:429,headers:{'Cache-Control':'no-store','Retry-After':'60'}});
   // Rate limiting bounds starts over time; it does not bound simultaneous
   // Stripe and database calls when dependencies are slow. Share a small
   // non-queueing admission budget with eSIM checkout so overload sheds work
