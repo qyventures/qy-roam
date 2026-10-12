@@ -6372,7 +6372,7 @@ test('customer confirmation views share one bounded provider-work budget', () =>
   assert.match(bookingPage, /finally \{\s*releaseConfirmation\(\);\s*\}/);
 });
 
-test('cross-route concurrency budgets survive duplicate Next server module graphs', () => {
+test('dependency-work concurrency budgets survive duplicate Next server module graphs', () => {
   const cases = [
     {
       path: '../lib/checkoutConcurrency.ts',
@@ -6388,6 +6388,16 @@ test('cross-route concurrency budgets survive duplicate Next server module graph
       path: '../lib/adminOpsConcurrency.ts',
       maximum: ADMIN_OPS_MAX_CONCURRENT_REQUESTS,
       acquire: 'tryAcquireAdminOpsConcurrency',
+    },
+    {
+      path: '../lib/availabilityConcurrency.ts',
+      maximum: AVAILABILITY_MAX_CONCURRENT_REQUESTS,
+      acquire: 'tryAcquireAvailabilityConcurrency',
+    },
+    {
+      path: '../lib/healthConcurrency.ts',
+      maximum: HEALTH_MAX_CONCURRENT_REQUESTS,
+      acquire: 'tryAcquireHealthConcurrency',
     },
   ];
 
