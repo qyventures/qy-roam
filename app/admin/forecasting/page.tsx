@@ -3,6 +3,7 @@ import { ForecastForm } from '@/components/AdminOpsForms';
 import { validatedForecastRow } from '@/lib/forecastRow';
 import { validatedSalesReportRow } from '@/lib/salesReportRow';
 import { operationalIsoDateAfter } from '@/lib/operationalDate';
+import { runAdminDashboardWork } from '@/lib/adminDashboardConcurrency';
 export const dynamic='force-dynamic';
 const card={border:'1px solid #e4e8ef',borderRadius:16,padding:18,background:'#fff'} as const;
 const FORECAST_MAX_ROWS=5_000;
@@ -10,10 +11,11 @@ const DAILY_MAX_ROWS=60;
 const money=(cents:number)=>`S$${(cents/100).toFixed(2)}`;
 export default async function ForecastingPage(){
  const db=getSupabaseAdmin();
- const [forecastResult,dailyResult]=db?await Promise.all([
+ const busyResult={data:null,error:new Error('Admin dashboard is busy')};
+ const [forecastResult,dailyResult]=db?await runAdminDashboardWork(()=>Promise.all([
   db.from('forecasts').select('id,forecast_month,product_type,forecast_orders,forecast_revenue_sgd,forecast_units,method,notes').order('forecast_month').order('id').limit(FORECAST_MAX_ROWS+1),
   db.from('sales_daily_summary').select('sales_date,product_type,paid_orders,revenue_sgd').gte('sales_date',operationalIsoDateAfter(-29)).order('sales_date',{ascending:false}).order('product_type').limit(DAILY_MAX_ROWS+1),
- ]):[null,null];
+ ]),[busyResult,busyResult]):[null,null];
  const forecastRows=forecastResult?.data??[];
  const dailyRows=dailyResult?.data??[];
  const forecasts=forecastRows.slice(0,FORECAST_MAX_ROWS).map(validatedForecastRow);

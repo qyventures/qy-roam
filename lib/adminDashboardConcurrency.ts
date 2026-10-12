@@ -22,3 +22,17 @@ const adminDashboardConcurrency = shared.__qyRoamAdminDashboardConcurrency ??=
 export function tryAcquireAdminDashboardConcurrency() {
   return adminDashboardConcurrency.tryAcquire();
 }
+
+// Keep the release in one shared boundary so every read-heavy admin page
+// returns its slot after success or failure. Callers provide a typed fallback
+// that lets the page fail closed with its existing "data unavailable" UI
+// instead of throwing a render error when the operational read budget is full.
+export async function runAdminDashboardWork<T, B>(work: () => Promise<T>, busy: B): Promise<T | B> {
+  const release = tryAcquireAdminDashboardConcurrency();
+  if (!release) return busy;
+  try {
+    return await work();
+  } finally {
+    release();
+  }
+}

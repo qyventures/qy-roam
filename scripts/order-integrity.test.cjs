@@ -73,7 +73,7 @@ const { CONFIRMATION_MAX_CONCURRENT_REQUESTS, tryAcquireConfirmationConcurrency 
 const { HEALTH_MAX_CONCURRENT_REQUESTS, tryAcquireHealthConcurrency } = require('../lib/healthConcurrency.ts');
 const { ADMIN_OPS_MAX_CONCURRENT_REQUESTS, tryAcquireAdminOpsConcurrency } = require('../lib/adminOpsConcurrency.ts');
 const { ADMIN_DELIVERY_MAX_CONCURRENT_REQUESTS, tryAcquireAdminDeliveryConcurrency } = require('../lib/adminDeliveryConcurrency.ts');
-const { ADMIN_DASHBOARD_MAX_CONCURRENT_REQUESTS, tryAcquireAdminDashboardConcurrency } = require('../lib/adminDashboardConcurrency.ts');
+const { ADMIN_DASHBOARD_MAX_CONCURRENT_REQUESTS, tryAcquireAdminDashboardConcurrency, runAdminDashboardWork } = require('../lib/adminDashboardConcurrency.ts');
 const { STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS, STRIPE_WEBHOOK_MAX_CONCURRENT_UPLOADS, tryAcquireStripeWebhookProcessing, tryAcquireStripeWebhookUpload } = require('../lib/stripeWebhookConcurrency.ts');
 const { validatedSalesReportRow } = require('../lib/salesReportRow.ts');
 const { validatedForecastRow } = require('../lib/forecastRow.ts');
@@ -738,6 +738,36 @@ test('main admin order visibility has a bounded shared ledger-read budget', () =
   assert.ok(admission > -1 && firstLedgerRead > admission);
   assert.match(adminPage, /if \(!releaseDashboard\)[\s\S]*Operations dashboard is busy/);
   assert.match(adminPage, /try \{\s*return await renderAdminPage\(\);\s*\} finally \{\s*releaseDashboard\(\);\s*\}/);
+});
+
+test('all read-heavy admin views share the bounded dashboard budget and release it after failures', async () => {
+  const releases = Array.from(
+    { length: ADMIN_DASHBOARD_MAX_CONCURRENT_REQUESTS },
+    () => tryAcquireAdminDashboardConcurrency(),
+  );
+  const fallback = { unavailable: true };
+  let called = false;
+  assert.equal(await runAdminDashboardWork(async () => {
+    called = true;
+    return fallback;
+  }, fallback), fallback);
+  assert.equal(called, false, 'work must fail fast instead of queueing when the shared budget is full');
+  for (const release of releases) release();
+
+  await assert.rejects(
+    () => runAdminDashboardWork(async () => { throw new Error('provider failure'); }, fallback),
+    /provider failure/,
+  );
+  const recovered = tryAcquireAdminDashboardConcurrency();
+  assert.equal(typeof recovered, 'function', 'a failed admin read must release its shared slot');
+  recovered();
+
+  for (const source of [inventoryPage, reportsPage, crmPage, forecastingPage, closingPage]) {
+    assert.match(source, /runAdminDashboardWork\(/);
+  }
+  assert.match(inventoryPage, /runAdminDashboardWork\(\(\)=>Promise\.all\(/);
+  assert.match(crmPage, /runAdminDashboardWork\(\(\)=>Promise\.all\(/);
+  assert.match(forecastingPage, /runAdminDashboardWork\(\(\)=>Promise\.all\(/);
 });
 
 test('admin order transitions share the bounded operations database-work budget', () => {
@@ -4339,7 +4369,7 @@ test('deployment stages a complete rollback artifact before replacing the servic
 });
 
 test('inventory visibility distinguishes unavailable data from zero stock and exposes saleable router stock', () => {
-  assert.match(inventoryPage, /await Promise\.all\(\[/);
+  assert.match(inventoryPage, /await runAdminDashboardWork\(\(\)=>Promise\.all\(\[/);
   assert.match(inventoryPage, /const failedPanels=\[itemsResult\.error&&'inventory register',movesResult\.error&&'movement audit trail',reservationsResult\.error&&'checkout reservation register'\]/);
   assert.match(inventoryPage, /Operational inventory data is currently unavailable/);
   assert.match(inventoryPage, /Do not treat empty lists or totals as current stock/);

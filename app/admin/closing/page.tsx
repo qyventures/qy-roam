@@ -1,11 +1,15 @@
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { ClosingForm } from '@/components/AdminOpsForms';
+import { runAdminDashboardWork } from '@/lib/adminDashboardConcurrency';
 export const dynamic='force-dynamic';
 const card={border:'1px solid #e4e8ef',borderRadius:16,padding:18,background:'#fff'} as const;
 const money=(v:any)=>`S$${Number(v||0).toFixed(2)}`;
 export default async function ClosingPage(){
  const db=getSupabaseAdmin();
- const periodsResult=db?await db.from('closing_periods').select('*').order('period_end',{ascending:false}).limit(24):null;
+ const periodsResult=db?await runAdminDashboardWork(
+  async()=>db.from('closing_periods').select('*').order('period_end',{ascending:false}).limit(24),
+  {data:null,error:new Error('Admin dashboard is busy')},
+ ):null;
  const periods:any[]=periodsResult?.data??[];
  const periodsUnavailable=Boolean(periodsResult?.error);
  const open=periods.filter((x:any)=>x.status==='open');

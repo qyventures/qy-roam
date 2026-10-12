@@ -1,5 +1,6 @@
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { validatedSalesReportRow } from '@/lib/salesReportRow';
+import { runAdminDashboardWork } from '@/lib/adminDashboardConcurrency';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,7 +40,10 @@ async function loadReportPages(db: NonNullable<ReturnType<typeof getSupabaseAdmi
 export default async function ReportsPage() {
   const db = getSupabaseAdmin();
   const reportResult: ReportResult = db
-    ? await loadReportPages(db)
+    ? await runAdminDashboardWork(
+      () => loadReportPages(db),
+      { data: [], error: new Error('Admin dashboard is busy'), truncated: false },
+    )
     : { data: [], error: new Error('Sales database is not configured'), truncated: false };
   const rows = reportResult.data;
   const reportUnavailable = Boolean(reportResult.error);

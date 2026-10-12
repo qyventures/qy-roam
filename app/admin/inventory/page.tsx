@@ -1,4 +1,5 @@
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
+import { runAdminDashboardWork } from '@/lib/adminDashboardConcurrency';
 import { InventoryAdjustForm, InventoryCreateForm, InventoryStatusForm } from '@/components/AdminOpsForms';
 export const dynamic='force-dynamic';
 const card={border:'1px solid #e4e8ef',borderRadius:16,padding:18,background:'#fff'} as const;
@@ -106,11 +107,11 @@ export default async function InventoryPage(){
  // silently empty register during a database/schema incident.
  const unavailable={data:[] as any[],error:new Error('Inventory database is not configured'),truncated:false};
  const [itemsResult,movesResult,reservationsResult]=db
-   ?await Promise.all([
+   ?await runAdminDashboardWork(()=>Promise.all([
       loadInventoryItemPages(db),
       loadMovementPages(db),
       loadReservationPages(db),
-    ])
+    ]),[unavailable,unavailable,unavailable])
    :[unavailable,unavailable,unavailable];
  // Page on immutable identities for correctness, then restore the useful
  // operator-facing order after the complete bounded result is in memory.

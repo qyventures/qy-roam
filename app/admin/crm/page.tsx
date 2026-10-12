@@ -1,5 +1,6 @@
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { ActivityForm, CustomerCreateForm, OpportunityForm, OpportunityStage } from '@/components/AdminOpsForms';
+import { runAdminDashboardWork } from '@/lib/adminDashboardConcurrency';
 export const dynamic='force-dynamic';
 const card={border:'1px solid #e4e8ef',borderRadius:16,padding:18,background:'#fff'} as const;
 const money=(v:any)=>`S$${Number(v||0).toFixed(2)}`;
@@ -27,11 +28,12 @@ async function loadCrmPages(fetchPage:(from:number,to:number)=>PromiseLike<{data
 }
 export default async function CrmPage(){
  const db=getSupabaseAdmin();
- const [customersResult,oppsResult,actsResult]=db?await Promise.all([
+ const busyResult={data:[],error:new Error('Admin dashboard is busy'),truncated:false};
+ const [customersResult,oppsResult,actsResult]=db?await runAdminDashboardWork(()=>Promise.all([
   loadCrmPages((from,to)=>db.from('customers').select('*').order('last_order_at',{ascending:false}).order('id',{ascending:false}).range(from,to)),
   loadCrmPages((from,to)=>db.from('sales_opportunities').select('*').order('updated_at',{ascending:false}).order('id',{ascending:false}).range(from,to)),
   loadCrmPages((from,to)=>db.from('crm_activities').select('*').order('created_at',{ascending:false}).order('id',{ascending:false}).range(from,to)),
- ]):[null,null,null];
+ ]),[busyResult,busyResult,busyResult]):[null,null,null];
  const customers:any[]=customersResult?.data??[];
  const opps:any[]=oppsResult?.data??[];
  const acts:any[]=actsResult?.data??[];
