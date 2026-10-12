@@ -74,6 +74,7 @@ const { HEALTH_MAX_CONCURRENT_REQUESTS, tryAcquireHealthConcurrency } = require(
 const { ADMIN_OPS_MAX_CONCURRENT_REQUESTS, tryAcquireAdminOpsConcurrency } = require('../lib/adminOpsConcurrency.ts');
 const { ADMIN_DELIVERY_MAX_CONCURRENT_REQUESTS, tryAcquireAdminDeliveryConcurrency } = require('../lib/adminDeliveryConcurrency.ts');
 const { STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS, STRIPE_WEBHOOK_MAX_CONCURRENT_UPLOADS, tryAcquireStripeWebhookProcessing, tryAcquireStripeWebhookUpload } = require('../lib/stripeWebhookConcurrency.ts');
+const { validatedSalesReportRow } = require('../lib/salesReportRow.ts');
 
 function requireFresh(relativePath) {
   const resolved = require.resolve(relativePath);
@@ -4672,6 +4673,34 @@ test('admin financial reporting fails closed on malformed paid ledger rows', () 
   assert.match(adminPage, /Paid sales ledger needs reconciliation\./);
   assert.match(adminPage, /\{reportingIncomplete \? <p role="status">/);
   assert.doesNotMatch(adminPage, /Number\(o\.amount_sgd \|\| 0\)/);
+});
+
+test('sales reports reject malformed aggregate rows before calculating financial metrics', () => {
+  assert.deepEqual(validatedSalesReportRow({
+    sales_date: '2026-10-12', product_type: 'esim', paid_orders: '2', revenue_sgd: '19.90',
+  }), {
+    sales_date: '2026-10-12', product_type: 'esim', paid_orders: 2, revenue_cents: 1990,
+  });
+  assert.deepEqual(validatedSalesReportRow({
+    sales_date: '2026-10-12', product_type: 'pocket_wifi', paid_orders: 0, revenue_sgd: 0,
+  }), {
+    sales_date: '2026-10-12', product_type: 'pocket_wifi', paid_orders: 0, revenue_cents: 0,
+  });
+
+  for (const row of [
+    null,
+    { sales_date: '2026-02-30', product_type: 'esim', paid_orders: 1, revenue_sgd: 10 },
+    { sales_date: '2026-10-12', product_type: 'router', paid_orders: 1, revenue_sgd: 10 },
+    { sales_date: '2026-10-12', product_type: 'esim', paid_orders: -1, revenue_sgd: 10 },
+    { sales_date: '2026-10-12', product_type: 'esim', paid_orders: 1.5, revenue_sgd: 10 },
+    { sales_date: '2026-10-12', product_type: 'esim', paid_orders: 1, revenue_sgd: -10 },
+    { sales_date: '2026-10-12', product_type: 'esim', paid_orders: 1, revenue_sgd: '10.001' },
+    { sales_date: '2026-10-12', product_type: 'esim', paid_orders: 1, revenue_sgd: 'NaN' },
+  ]) assert.equal(validatedSalesReportRow(row), null);
+
+  assert.match(reportsPage, /const reportIncomplete = reportUnavailable \|\| reportResult\.truncated \|\| invalidRows > 0/);
+  assert.match(reportsPage, /Headline totals are hidden/);
+  assert.doesNotMatch(reportsPage, /Number\(row\.revenue_sgd \|\| 0\)/);
 });
 
 test('admin webhook visibility includes malformed and future-dated leases', () => {
