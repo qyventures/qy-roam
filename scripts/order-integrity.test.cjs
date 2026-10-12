@@ -73,6 +73,12 @@ const { CONFIRMATION_MAX_CONCURRENT_REQUESTS, tryAcquireConfirmationConcurrency 
 const { HEALTH_MAX_CONCURRENT_REQUESTS, tryAcquireHealthConcurrency } = require('../lib/healthConcurrency.ts');
 const { ADMIN_OPS_MAX_CONCURRENT_REQUESTS, tryAcquireAdminOpsConcurrency } = require('../lib/adminOpsConcurrency.ts');
 const { STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS, STRIPE_WEBHOOK_MAX_CONCURRENT_UPLOADS, tryAcquireStripeWebhookProcessing, tryAcquireStripeWebhookUpload } = require('../lib/stripeWebhookConcurrency.ts');
+
+function requireFresh(relativePath) {
+  const resolved = require.resolve(relativePath);
+  delete require.cache[resolved];
+  return require(relativePath);
+}
 const { scanActivePocketWifiStripeHolds } = require('../lib/pocketWifiStripeHolds.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
@@ -6364,6 +6370,43 @@ test('customer confirmation views share one bounded provider-work budget', () =>
   assert.match(bookingPage, /const releaseConfirmation = tryAcquireConfirmationConcurrency\(\)/);
   assert.match(bookingPage, /if \(!releaseConfirmation\)[\s\S]*?Order status is busy/);
   assert.match(bookingPage, /finally \{\s*releaseConfirmation\(\);\s*\}/);
+});
+
+test('cross-route concurrency budgets survive duplicate Next server module graphs', () => {
+  const cases = [
+    {
+      path: '../lib/checkoutConcurrency.ts',
+      maximum: CHECKOUT_MAX_CONCURRENT_REQUESTS,
+      acquire: 'tryAcquireCheckoutConcurrency',
+    },
+    {
+      path: '../lib/confirmationConcurrency.ts',
+      maximum: CONFIRMATION_MAX_CONCURRENT_REQUESTS,
+      acquire: 'tryAcquireConfirmationConcurrency',
+    },
+    {
+      path: '../lib/adminOpsConcurrency.ts',
+      maximum: ADMIN_OPS_MAX_CONCURRENT_REQUESTS,
+      acquire: 'tryAcquireAdminOpsConcurrency',
+    },
+  ];
+
+  for (const entry of cases) {
+    // Evicting the module simulates distinct Next server entrypoint graphs.
+    // Both copies must still resolve to the same process-global limiter.
+    const first = requireFresh(entry.path);
+    const second = requireFresh(entry.path);
+    assert.notEqual(first, second);
+    const releases = [];
+    for (let index = 0; index < entry.maximum; index += 1) {
+      const release = (index % 2 === 0 ? first : second)[entry.acquire]();
+      assert.equal(typeof release, 'function');
+      releases.push(release);
+    }
+    assert.equal(first[entry.acquire](), null);
+    assert.equal(second[entry.acquire](), null);
+    releases.forEach((release) => release());
+  }
 });
 
 test('public Pocket WiFi booking terms stay aligned with the checkout authority', () => {

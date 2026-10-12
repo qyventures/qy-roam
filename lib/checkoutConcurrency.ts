@@ -6,7 +6,18 @@ import { createConcurrencyLimiter } from './concurrencyLimit';
 // is safe because checkout request ids remain stable idempotency keys and the
 // browser can retry without creating a second payment capability.
 export const CHECKOUT_MAX_CONCURRENT_REQUESTS = 12;
-const checkoutConcurrency = createConcurrencyLimiter(CHECKOUT_MAX_CONCURRENT_REQUESTS);
+
+type Limiter = ReturnType<typeof createConcurrencyLimiter>;
+type CheckoutConcurrencyGlobal = typeof globalThis & {
+  __qyRoamCheckoutConcurrency?: Limiter;
+};
+
+// Next can place the two product routes in separate server module graphs.
+// Store the limiter on the process global so those graphs cannot each admit a
+// full checkout budget and silently double the intended Stripe/Supabase load.
+const shared = globalThis as CheckoutConcurrencyGlobal;
+const checkoutConcurrency = shared.__qyRoamCheckoutConcurrency ??=
+  createConcurrencyLimiter(CHECKOUT_MAX_CONCURRENT_REQUESTS);
 
 export function tryAcquireCheckoutConcurrency() {
   return checkoutConcurrency.tryAcquire();
