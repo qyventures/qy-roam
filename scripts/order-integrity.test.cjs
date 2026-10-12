@@ -75,6 +75,7 @@ const { ADMIN_OPS_MAX_CONCURRENT_REQUESTS, tryAcquireAdminOpsConcurrency } = req
 const { ADMIN_DELIVERY_MAX_CONCURRENT_REQUESTS, tryAcquireAdminDeliveryConcurrency } = require('../lib/adminDeliveryConcurrency.ts');
 const { STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS, STRIPE_WEBHOOK_MAX_CONCURRENT_UPLOADS, tryAcquireStripeWebhookProcessing, tryAcquireStripeWebhookUpload } = require('../lib/stripeWebhookConcurrency.ts');
 const { validatedSalesReportRow } = require('../lib/salesReportRow.ts');
+const { validatedForecastRow } = require('../lib/forecastRow.ts');
 
 function requireFresh(relativePath) {
   const resolved = require.resolve(relativePath);
@@ -4034,10 +4035,48 @@ test('admin reporting screens do not present failed database reads as empty oper
   assert.match(forecastingPage, /const unavailablePanels=\[forecastResult\?\.error&&'saved forecast plan',dailyResult\?\.error&&'recent paid sales'\]/);
   assert.match(forecastingPage, /Forecast inputs are currently unavailable/);
   assert.match(forecastingPage, /forecastResult\?\.error\?<p>Forecast plan is unavailable/);
+  assert.match(forecastingPage, /const reportingIncomplete=unavailablePanels\.length>0\|\|forecastMalformed\|\|dailyMalformed\|\|forecastTruncated\|\|dailyTruncated/);
+  assert.match(forecastingPage, /Paid revenue · trailing 30 calendar days/);
+  assert.match(forecastingPage, /\.gte\('sales_date',operationalIsoDateAfter\(-29\)\)/);
+  assert.doesNotMatch(forecastingPage, /recentRevenue\/uniqueDays\*30/);
 
   assert.match(closingPage, /const periodsUnavailable=Boolean\(periodsResult\?\.error\)/);
   assert.match(closingPage, /Closing-period data is currently unavailable/);
   assert.match(closingPage, /periodsUnavailable\?<p>Closing-period data is unavailable/);
+});
+
+test('forecasting rejects malformed financial rows instead of coercing them into planning totals', () => {
+  const valid = {
+    id: '42',
+    forecast_month: '2026-11-01',
+    product_type: 'pocket_wifi',
+    forecast_orders: '12',
+    forecast_revenue_sgd: '1234.50',
+    forecast_units: 8,
+    method: 'management',
+    notes: null,
+  };
+  assert.deepEqual(validatedForecastRow(valid), {
+    id: 42,
+    forecast_month: '2026-11-01',
+    product_type: 'pocket_wifi',
+    forecast_orders: 12,
+    forecast_revenue_cents: 123450,
+    forecast_units: 8,
+    method: 'management',
+    notes: null,
+  });
+  for (const row of [
+    { ...valid, id: '0' },
+    { ...valid, forecast_month: '2026-02-30' },
+    { ...valid, product_type: 'router' },
+    { ...valid, forecast_orders: '1.5' },
+    { ...valid, forecast_revenue_sgd: '12.345' },
+    { ...valid, forecast_revenue_sgd: 'Infinity' },
+    { ...valid, forecast_units: -1 },
+    { ...valid, method: 'x'.repeat(81) },
+    { ...valid, notes: 'unsafe\u0000note' },
+  ]) assert.equal(validatedForecastRow(row), null);
 });
 
 test('CRM headline metrics page through bounded data and warn when totals can be incomplete', () => {
