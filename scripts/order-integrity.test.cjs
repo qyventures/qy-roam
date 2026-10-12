@@ -2570,6 +2570,8 @@ test('production readiness aborts stalled database probes instead of holding che
   assert.match(productionReadiness, /setTimeout\(\(\) => controller\.abort\(\), READINESS_PROBE_TIMEOUT_MS\)/);
   assert.match(productionReadiness, /throw new ReadinessProbeTimeoutError\('Production readiness probe timed out'\)/);
   assert.match(productionReadiness, /\.select\(columns\)\.limit\(1\)\.abortSignal\(signal\)/);
+  assert.match(productionReadiness, /qy_pocket_wifi_availability_snapshot[\s\S]{0,700}\.abortSignal\(signal\)/);
+  assert.match(productionReadiness, /production_payment_availability_snapshot_rpc_check_failed/);
   assert.match(productionReadiness, /qy_reserve_pocket_wifi[\s\S]{0,500}\.abortSignal\(signal\)/);
   assert.match(productionReadiness, /qy_transition_pocket_wifi_order[\s\S]{0,500}\.abortSignal\(signal\)/);
   assert.match(productionReadiness, /qy_adjust_inventory[\s\S]{0,300}\.abortSignal\(signal\)/);

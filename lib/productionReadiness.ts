@@ -285,11 +285,42 @@ async function checkRequiredPaymentSchema() {
       // provider-delivery idempotency safe before exposing a payment URL.
       if (!await hasCurrentOrderIntegritySchema(database, signal)) return false;
 
+      // The browser requires one coherent live-availability quote before it
+      // enables Pocket WiFi payment. The compatibility marker proves the
+      // function body exists, but it cannot prove that this deployment's
+      // service role still has EXECUTE permission or that PostgREST exposes
+      // the expected result shape. Exercise the exact public-availability RPC
+      // with a zero inventory ceiling so this remains read-only and can never
+      // advertise or reserve stock. Without this probe, authenticated health
+      // could promote a release whose checkout authority is healthy while
+      // every shopper is blocked one step earlier by availability.
+      const today = new Date().toISOString().slice(0, 10);
+      const availabilityProbe = await supabase.rpc('qy_pocket_wifi_availability_snapshot', {
+        p_travel_start: today,
+        p_travel_end: today,
+        p_inventory: 0,
+        p_stripe_hold_request_ids: [],
+      }).abortSignal(signal);
+      const availabilityRow = Array.isArray(availabilityProbe.data)
+        ? availabilityProbe.data[0]
+        : availabilityProbe.data;
+      if (
+        availabilityProbe.error ||
+        !availabilityRow ||
+        typeof availabilityRow.committed !== 'number' ||
+        !Number.isSafeInteger(availabilityRow.committed) ||
+        availabilityRow.committed < 0 ||
+        typeof availabilityRow.saleable_inventory !== 'number' ||
+        availabilityRow.saleable_inventory !== 0
+      ) {
+        console.error('production_payment_availability_snapshot_rpc_check_failed');
+        return false;
+      }
+
       // The table checks above are not enough for Pocket WiFi sales: checkout uses
       // this RPC as the atomic inventory boundary. Probe it with zero inventory so
       // it can never create a reservation while still verifying that the function,
       // its current signature, and the service-role grant are all deployed.
-      const today = new Date().toISOString().slice(0, 10);
       const reservationProbe = await supabase.rpc('qy_reserve_pocket_wifi', {
         p_checkout_request_id: `readiness_${crypto.randomUUID().replaceAll('-', '')}`,
         p_travel_start: today,
