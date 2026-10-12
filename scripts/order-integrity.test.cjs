@@ -71,6 +71,7 @@ const { CHECKOUT_MAX_CONCURRENT_REQUESTS, tryAcquireCheckoutConcurrency } = requ
 const { AVAILABILITY_MAX_CONCURRENT_REQUESTS, tryAcquireAvailabilityConcurrency } = require('../lib/availabilityConcurrency.ts');
 const { CONFIRMATION_MAX_CONCURRENT_REQUESTS, tryAcquireConfirmationConcurrency } = require('../lib/confirmationConcurrency.ts');
 const { HEALTH_MAX_CONCURRENT_REQUESTS, tryAcquireHealthConcurrency } = require('../lib/healthConcurrency.ts');
+const { ADMIN_OPS_MAX_CONCURRENT_REQUESTS, tryAcquireAdminOpsConcurrency } = require('../lib/adminOpsConcurrency.ts');
 const { scanActivePocketWifiStripeHolds } = require('../lib/pocketWifiStripeHolds.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
@@ -675,6 +676,33 @@ test('manual paid-order entry is bounded and blocks concurrent duplicate submiss
   assert.match(manualOrderForm, /Check the orders list before retrying with the same payment or sales reference/);
   assert.match(manualOrderForm, /finally\{inFlight\.current=false;setBusy\(false\)\}/);
   assert.doesNotMatch(manualOrderForm, /await fetch\('/);
+});
+
+test('admin operational mutations have a bounded non-queueing database-work budget', () => {
+  // Body parsing has its own byte/time boundary and must happen before work
+  // admission, otherwise slow authenticated uploads could hold every slot.
+  assert.match(
+    adminOpsRoute,
+    /readLimitedRequestText\(req, MAX_ADMIN_OPS_BODY_BYTES, ADMIN_OPS_BODY_TIMEOUT_MS\)[\s\S]*const releaseAdminOps = tryAcquireAdminOpsConcurrency\(\)/,
+  );
+  assert.match(adminOpsRoute, /Operations are busy\. Please try again shortly\./);
+  assert.match(adminOpsRoute, /'Retry-After': '5'/);
+  assert.match(adminOpsRoute, /finally \{\s*releaseAdminOps\(\);\s*\}/);
+
+  const releases = [];
+  for (let index = 0; index < ADMIN_OPS_MAX_CONCURRENT_REQUESTS; index += 1) {
+    const release = tryAcquireAdminOpsConcurrency();
+    assert.equal(typeof release, 'function');
+    releases.push(release);
+  }
+  assert.equal(tryAcquireAdminOpsConcurrency(), null);
+  releases[0]();
+  const recovered = tryAcquireAdminOpsConcurrency();
+  assert.equal(typeof recovered, 'function');
+  releases[0]();
+  assert.equal(tryAcquireAdminOpsConcurrency(), null);
+  recovered();
+  for (const release of releases.slice(1)) release();
 });
 
 test('Pocket WiFi reservation authority validates its complete capacity snapshot', () => {

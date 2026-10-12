@@ -7,6 +7,7 @@ import { InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedReq
 import { isSafeSmtpMailbox } from '@/lib/smtp';
 import { getEsimPlan } from '@/lib/esimPlans';
 import { manualOrderReference, manualOrderSessionId } from '@/lib/manualOrderReference';
+import { tryAcquireAdminOpsConcurrency } from '@/lib/adminOpsConcurrency';
 
 export const dynamic = 'force-dynamic';
 
@@ -185,6 +186,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON request' }, { status: 400 });
   }
   const action = text(body.action, 60);
+
+  // Read and validate the bounded request body before reserving database-work
+  // capacity, so an authenticated slow upload cannot occupy this pool. From
+  // here every supported action can issue mutable Supabase work, and period
+  // closing can perform many bounded ledger reads; reject excess overlap
+  // rather than queueing stale operator mutations behind a long close.
+  const releaseAdminOps = tryAcquireAdminOpsConcurrency();
+  if (!releaseAdminOps) {
+    return NextResponse.json({ error: 'Operations are busy. Please try again shortly.' }, {
+      status: 503,
+      headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' },
+    });
+  }
 
   try {
     if (action === 'order_create') {
@@ -487,5 +501,7 @@ export async function POST(req: NextRequest) {
     // sink for customer and provider data.
     console.error('admin_ops_action_failed', { action });
     return NextResponse.json({ error: 'Operation failed. Please try again or contact an administrator.' }, { status: 500 });
+  } finally {
+    releaseAdminOps();
   }
 }
