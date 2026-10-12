@@ -14,6 +14,7 @@ import { validStripePaymentEventCreated } from '@/lib/stripeEventCreated';
 import { custodyReferenceIssue, normalizeCustodyReference } from '@/lib/custodyReference';
 import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 import { createConcurrencyLimiter } from '@/lib/concurrencyLimit';
+import { tryAcquireAdminOpsConcurrency } from '@/lib/adminOpsConcurrency';
 
 export const runtime = 'nodejs';
 
@@ -143,6 +144,20 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   if (!Number.isSafeInteger(id) || id < 1) return NextResponse.json({ error: 'Invalid order id' }, { status: 400 });
   if (!expectedUpdatedAt || !Number.isFinite(Date.parse(expectedUpdatedAt))) return NextResponse.json({ error: 'Invalid order version. Refresh before updating it.' }, { status: 400 });
 
+  // Fulfilment transitions mutate the same order and inventory ledgers as the
+  // broader admin operations endpoint. Share its small database-work budget
+  // so a burst of dispatch/return saves cannot crowd out inventory or period
+  // close work. Body parsing and cheap identity validation stay outside the
+  // pool so a slow authenticated upload cannot reserve one of these slots.
+  const releaseAdminOps = tryAcquireAdminOpsConcurrency();
+  if (!releaseAdminOps) {
+    return NextResponse.json({ error: 'Operations are busy. Please try again shortly.' }, {
+      status: 503,
+      headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' },
+    });
+  }
+
+  try {
   const existing = await supabase.from('orders').select('product_type,payment_status,fulfilment_status,dispatched_at,returned_at,courier_tracking,return_tracking,digital_delivery_reference,notes').eq('id', id).maybeSingle();
   if (existing.error) return NextResponse.json({ error: 'Unable to load order' }, { status: 500 });
   if (!existing.data) return NextResponse.json({ error: 'Order not found' }, { status: 404 });
@@ -313,6 +328,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const order = Array.isArray(data) ? data[0] : data;
   if (!order?.id) return NextResponse.json({ error: 'Unable to update order' }, { status: 500 });
   return NextResponse.json({ id: order.id, fulfilment_status: order.fulfilment_status, updated_at: order.updated_at }, { headers: { 'Cache-Control': 'no-store' } });
+  } finally {
+    releaseAdminOps();
+  }
 }
 
 // Stripe retries delivery failures for a finite window. This protected recovery

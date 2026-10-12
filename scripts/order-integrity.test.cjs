@@ -705,6 +705,28 @@ test('admin operational mutations have a bounded non-queueing database-work budg
   for (const release of releases.slice(1)) release();
 });
 
+test('admin order transitions share the bounded operations database-work budget', () => {
+  // Parse and validate the bounded request before admission, then retain the
+  // shared slot across both the order snapshot read and atomic transition RPC.
+  const bodyRead = adminOrderRoute.indexOf(
+    'readLimitedRequestText(req, MAX_ADMIN_ORDER_BODY_BYTES, ADMIN_ORDER_BODY_TIMEOUT_MS)',
+  );
+  const idValidation = adminOrderRoute.indexOf("if (!Number.isSafeInteger(id) || id < 1)", bodyRead);
+  const admission = adminOrderRoute.indexOf('const releaseAdminOps = tryAcquireAdminOpsConcurrency()', idValidation);
+  const orderRead = adminOrderRoute.indexOf("supabase.from('orders').select", admission);
+  const wifiTransition = adminOrderRoute.indexOf("supabase.rpc('qy_transition_pocket_wifi_order'", orderRead);
+  const esimTransition = adminOrderRoute.indexOf("supabase.rpc('qy_transition_esim_order'", wifiTransition);
+
+  assert.ok(bodyRead >= 0 && idValidation > bodyRead && admission > idValidation);
+  assert.ok(orderRead > admission && wifiTransition > orderRead && esimTransition > wifiTransition);
+  assert.match(adminOrderRoute, /Operations are busy\. Please try again shortly\./);
+  assert.match(adminOrderRoute, /'Retry-After': '5'/);
+  assert.match(
+    adminOrderRoute.slice(admission, adminOrderRoute.indexOf('async function retryOrderDeliveries')),
+    /finally \{\s*releaseAdminOps\(\);\s*\}/,
+  );
+});
+
 test('Pocket WiFi reservation authority validates its complete capacity snapshot', () => {
   // The app obtains these values from bounded configuration, a short Checkout
   // attempt, and at most five 100-row Stripe pages. The SECURITY DEFINER RPC
