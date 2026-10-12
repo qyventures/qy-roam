@@ -73,6 +73,7 @@ const { CONFIRMATION_MAX_CONCURRENT_REQUESTS, tryAcquireConfirmationConcurrency 
 const { HEALTH_MAX_CONCURRENT_REQUESTS, tryAcquireHealthConcurrency } = require('../lib/healthConcurrency.ts');
 const { ADMIN_OPS_MAX_CONCURRENT_REQUESTS, tryAcquireAdminOpsConcurrency } = require('../lib/adminOpsConcurrency.ts');
 const { ADMIN_DELIVERY_MAX_CONCURRENT_REQUESTS, tryAcquireAdminDeliveryConcurrency } = require('../lib/adminDeliveryConcurrency.ts');
+const { ADMIN_DASHBOARD_MAX_CONCURRENT_REQUESTS, tryAcquireAdminDashboardConcurrency } = require('../lib/adminDashboardConcurrency.ts');
 const { STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS, STRIPE_WEBHOOK_MAX_CONCURRENT_UPLOADS, tryAcquireStripeWebhookProcessing, tryAcquireStripeWebhookUpload } = require('../lib/stripeWebhookConcurrency.ts');
 const { validatedSalesReportRow } = require('../lib/salesReportRow.ts');
 const { validatedForecastRow } = require('../lib/forecastRow.ts');
@@ -715,6 +716,28 @@ test('admin operational mutations have a bounded non-queueing database-work budg
   assert.equal(tryAcquireAdminOpsConcurrency(), null);
   recovered();
   for (const release of releases.slice(1)) release();
+});
+
+test('main admin order visibility has a bounded shared ledger-read budget', () => {
+  assert.equal(ADMIN_DASHBOARD_MAX_CONCURRENT_REQUESTS, 2);
+  const releases = Array.from(
+    { length: ADMIN_DASHBOARD_MAX_CONCURRENT_REQUESTS },
+    () => tryAcquireAdminDashboardConcurrency(),
+  );
+  assert.ok(releases.every((release) => typeof release === 'function'));
+  assert.equal(tryAcquireAdminDashboardConcurrency(), null);
+  releases[0]();
+  const reacquired = tryAcquireAdminDashboardConcurrency();
+  assert.equal(typeof reacquired, 'function');
+  releases[0]();
+  for (const release of releases.slice(1)) release();
+  reacquired();
+
+  const admission = adminPage.indexOf('const releaseDashboard = tryAcquireAdminDashboardConcurrency()');
+  const firstLedgerRead = adminPage.indexOf("supabase.from('orders')");
+  assert.ok(admission > -1 && firstLedgerRead > admission);
+  assert.match(adminPage, /if \(!releaseDashboard\)[\s\S]*Operations dashboard is busy/);
+  assert.match(adminPage, /try \{\s*return await renderAdminPage\(\);\s*\} finally \{\s*releaseDashboard\(\);\s*\}/);
 });
 
 test('admin order transitions share the bounded operations database-work budget', () => {

@@ -6,6 +6,7 @@ import { isSafeDigitalDeliveryReference } from '@/lib/digitalDeliveryReference';
 import { operationalDaysFromToday } from '@/lib/operationalDate';
 import { POCKET_WIFI_RETURN_GRACE_DAYS } from '@/lib/pocketWifiReturns';
 import { stripeSecretKeyMode } from '@/lib/stripeCheckoutConfig';
+import { tryAcquireAdminDashboardConcurrency } from '@/lib/adminDashboardConcurrency';
 
 export const dynamic = 'force-dynamic';
 
@@ -119,6 +120,24 @@ const cardStyle = {border:'1px solid #e4e8ef',borderRadius:16,padding:'18px 20px
 const metricStyle = {fontSize:30,fontWeight:800,lineHeight:1.1,marginTop:6} as const;
 
 export default async function AdminPage() {
+  const releaseDashboard = tryAcquireAdminDashboardConcurrency();
+  if (!releaseDashboard) {
+    return <main className="wrap" style={{padding:'34px 0 70px'}}>
+      <h1>Operations dashboard is busy</h1>
+      <div role="alert" style={{...cardStyle,borderColor:'#f59e0b',background:'#fffbeb'}}>
+        Another dashboard view is loading the order and delivery ledgers. Wait a few seconds, then refresh this page. No order data or operational work has been lost.
+      </div>
+    </main>;
+  }
+
+  try {
+    return await renderAdminPage();
+  } finally {
+    releaseDashboard();
+  }
+}
+
+async function renderAdminPage() {
   const supabase = getSupabaseAdmin();
   // An admin dashboard that quietly turns a failed query into an empty table
   // is dangerous: staff can conclude there are no orders to fulfil. Fetch the
