@@ -138,6 +138,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Invalid eSIM promo code.' }, { status: 400 });
     }
 
+    // The production redirect origin is deployment-controlled and can be
+    // validated without spending a shared checkout slot or probing external
+    // dependencies. Fail here when it drifts: no later database or Stripe
+    // result can make a Checkout Session with an unsafe return URL saleable.
+    const origin = checkoutSiteOrigin(req.url);
+
     // Only well-formed, currently saleable requests can proceed to provider
     // and persistence readiness calls, so only those requests participate in
     // the allocation-free instance-wide overload guard.
@@ -186,7 +192,6 @@ export async function POST(req: Request) {
     }
 
     const stripe = createStripeClient(key);
-    const origin = checkoutSiteOrigin(req.url);
     const amount = Math.max(50, Math.round(plan.qyPriceSgd * 100));
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',

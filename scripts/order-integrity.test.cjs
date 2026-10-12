@@ -5894,6 +5894,17 @@ test('Stripe Checkout redirects fail closed unless production uses a canonical Q
     wifiCheckoutRoute.indexOf('const origin=checkoutSiteOrigin(req.url)') <
       wifiCheckoutRoute.indexOf("supabase.rpc('qy_reserve_pocket_wifi'"),
   );
+  // eSIM does not reserve inventory, but the same deterministic deployment
+  // failure must not consume the shared checkout budget or trigger the full
+  // paid-order schema probe on every customer retry.
+  assert.ok(
+    esimCheckoutRoute.indexOf('const origin = checkoutSiteOrigin(req.url)') <
+      esimCheckoutRoute.indexOf('releaseCheckout = tryAcquireCheckoutConcurrency()'),
+  );
+  assert.ok(
+    esimCheckoutRoute.indexOf('const origin = checkoutSiteOrigin(req.url)') <
+      esimCheckoutRoute.indexOf('await hasRequiredEsimOrderSchema()'),
+  );
   assert.match(healthRoute, /isProductionQyRoamOrigin\(process\.env\.NEXT_PUBLIC_SITE_URL\)/);
   assert.match(launchPage, /isProductionQyRoamOrigin\(process\.env\.NEXT_PUBLIC_SITE_URL\)/);
   assert.doesNotMatch(launchPage, /function isProductionSiteUrl/);
