@@ -4230,7 +4230,8 @@ test('authenticated health readiness separates shared release controls from prod
   assert.match(healthRoute, /error: 'Readiness checks are busy\.'/);
   assert.match(healthRoute, /'Retry-After': '5'/);
   assert.match(healthRoute, /finally \{\s*releaseHealth\(\);\s*\}/);
-  assert.match(healthRoute, /const \[stripeApi, esimOrderSchema, paymentSchema, pocketWifiFulfilmentSchema, operationsSchema, pocketWifiStock\] = await Promise\.all\(\[/);
+  assert.match(healthRoute, /dependencyChecks = await Promise\.all\(\[/);
+  assert.match(healthRoute, /const \[stripeApi, esimOrderSchema, paymentSchema, pocketWifiFulfilmentSchema, operationsSchema, pocketWifiStock\] = dependencyChecks/);
   assert.match(healthRoute, /stripeApi,/);
   assert.match(healthRoute, /esimOrderSchema,/);
   assert.match(healthRoute, /pocketWifiFulfilmentSchema,/);
@@ -6528,6 +6529,22 @@ test('public Pocket WiFi booking terms stay aligned with the checkout authority'
   assert.match(homePage, /setEnd\(current => current === previousDefault \? nextEarliest : current\)/);
   assert.match(faqPage, /operationalConfig\(\)\?\.minDeliveryLeadDays/);
   assert.doesNotMatch(faqPage, /Please book at least 2 days/);
+});
+
+test('authenticated production readiness keeps unexpected dependency failures structured and retryable', () => {
+  const dependencyChecks = healthRoute.indexOf('dependencyChecks = await Promise.all([');
+  const failureBoundary = healthRoute.indexOf("console.error('production_readiness_dependency_check_failed')", dependencyChecks);
+  const normalChecks = healthRoute.indexOf('const checks = {', failureBoundary);
+  assert.ok(dependencyChecks > -1 && failureBoundary > dependencyChecks && normalChecks > failureBoundary);
+  const failureResponse = healthRoute.slice(failureBoundary, normalChecks);
+  assert.match(failureResponse, /ok: false/);
+  assert.match(failureResponse, /launchReady: false/);
+  assert.match(failureResponse, /salesReady: false/);
+  assert.match(failureResponse, /checkoutReady: false/);
+  assert.match(failureResponse, /paidAcquisitionReady: false/);
+  assert.match(failureResponse, /status: 503/);
+  assert.match(failureResponse, /headers: \{ \.\.\.headers, 'Retry-After': '5' \}/);
+  assert.doesNotMatch(failureResponse, /error instanceof|String\(error\)|error\.message/);
 });
 
 test('initial Pocket WiFi booking terms require one coherent cent-precise price snapshot', () => {

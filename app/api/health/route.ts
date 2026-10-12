@@ -66,14 +66,39 @@ export async function GET(req: Request) {
   // Pocket WiFi requirement. Keep the authenticated release signal aligned
   // with both routes so it cannot declare the store ready while eSIM checkout
   // correctly fails closed against a partial migration.
-  const [stripeApi, esimOrderSchema, paymentSchema, pocketWifiFulfilmentSchema, operationsSchema, pocketWifiStock] = await Promise.all([
-    hasRequiredStripeApiAccess(),
-    hasRequiredEsimOrderSchema(),
-    hasRequiredPaymentSchema(),
-    hasRequiredPocketWifiFulfilmentSchema(),
-    hasRequiredOperationsSchema(),
-    hasSaleablePocketWifiInventory(config?.pocketWifiInventory || 0),
-  ]);
+  let dependencyChecks: [boolean, boolean, boolean, boolean, boolean, boolean];
+  try {
+    dependencyChecks = await Promise.all([
+      hasRequiredStripeApiAccess(),
+      hasRequiredEsimOrderSchema(),
+      hasRequiredPaymentSchema(),
+      hasRequiredPocketWifiFulfilmentSchema(),
+      hasRequiredOperationsSchema(),
+      hasSaleablePocketWifiInventory(config?.pocketWifiInventory || 0),
+    ]);
+  } catch {
+    // Every current probe normally converts dependency failures into `false`,
+    // but keep the release authority stable if a provider SDK, runtime, or
+    // future probe rejects unexpectedly. Deployment automation expects JSON;
+    // allowing the exception to reach Next's generic error renderer would
+    // hide which boundary failed and can produce a response without this
+    // route's explicit retry and privacy contract.
+    console.error('production_readiness_dependency_check_failed');
+    return NextResponse.json({
+      ok: false,
+      launchReady: false,
+      salesReady: false,
+      checkoutReady: false,
+      paidAcquisitionReady: false,
+      service: 'qy-roam',
+      error: 'Production readiness checks are temporarily unavailable.',
+      timestamp: new Date().toISOString(),
+    }, {
+      status: 503,
+      headers: { ...headers, 'Retry-After': '5' },
+    });
+  }
+  const [stripeApi, esimOrderSchema, paymentSchema, pocketWifiFulfilmentSchema, operationsSchema, pocketWifiStock] = dependencyChecks;
   const checks = {
     stripe: hasRequiredStripeCheckoutConfig(),
     stripeApi,
