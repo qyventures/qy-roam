@@ -8,6 +8,7 @@ import { healthCheckToken } from '@/lib/healthCheckToken';
 import { hasRequiredSupabaseAdminConfig } from '@/lib/supabaseAdmin';
 import { esimPromoIsActive } from '@/lib/esimPlans';
 import { hasSaleablePocketWifiInventory } from '@/lib/pocketWifiStock';
+import { tryAcquireHealthConcurrency } from '@/lib/healthConcurrency';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -45,6 +46,20 @@ export async function GET(req: Request) {
     return NextResponse.json({ ok: true, service: 'qy-roam' }, { status: 200, headers });
   }
 
+  // A valid probe performs several provider-backed checks in parallel. When
+  // a dependency is slow, overlapping monitor retries must not create an
+  // unbounded readiness stampede or crowd out customer checkout work. Public
+  // liveness remains dependency-free above; excess authenticated probes fail
+  // fast and explicitly ask the monitor to retry.
+  const releaseHealth = tryAcquireHealthConcurrency();
+  if (!releaseHealth) {
+    return NextResponse.json({ ok: false, service: 'qy-roam', error: 'Readiness checks are busy.' }, {
+      status: 503,
+      headers: { ...headers, 'Retry-After': '5' },
+    });
+  }
+
+  try {
   const config = operationalConfig();
   // Checkout has product-specific post-payment contracts. In particular, an
   // eSIM requires its non-secret digital-delivery audit field, which is not a
@@ -161,4 +176,7 @@ export async function GET(req: Request) {
     paidAcquisitionMissing,
     timestamp: new Date().toISOString()
   }, { status: salesReady ? 200 : 503, headers });
+  } finally {
+    releaseHealth();
+  }
 }

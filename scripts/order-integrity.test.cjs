@@ -70,6 +70,7 @@ const { createConcurrencyLimiter } = require('../lib/concurrencyLimit.ts');
 const { CHECKOUT_MAX_CONCURRENT_REQUESTS, tryAcquireCheckoutConcurrency } = require('../lib/checkoutConcurrency.ts');
 const { AVAILABILITY_MAX_CONCURRENT_REQUESTS, tryAcquireAvailabilityConcurrency } = require('../lib/availabilityConcurrency.ts');
 const { CONFIRMATION_MAX_CONCURRENT_REQUESTS, tryAcquireConfirmationConcurrency } = require('../lib/confirmationConcurrency.ts');
+const { HEALTH_MAX_CONCURRENT_REQUESTS, tryAcquireHealthConcurrency } = require('../lib/healthConcurrency.ts');
 const { scanActivePocketWifiStripeHolds } = require('../lib/pocketWifiStripeHolds.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
@@ -4123,6 +4124,10 @@ test('authenticated health readiness separates shared release controls from prod
   assert.match(healthRoute, /hasRequiredEsimOrderSchema/);
   assert.match(healthRoute, /hasRequiredPocketWifiFulfilmentSchema/);
   assert.match(healthRoute, /hasRequiredStripeApiAccess/);
+  assert.match(healthRoute, /const releaseHealth = tryAcquireHealthConcurrency\(\)/);
+  assert.match(healthRoute, /error: 'Readiness checks are busy\.'/);
+  assert.match(healthRoute, /'Retry-After': '5'/);
+  assert.match(healthRoute, /finally \{\s*releaseHealth\(\);\s*\}/);
   assert.match(healthRoute, /const \[stripeApi, esimOrderSchema, paymentSchema, pocketWifiFulfilmentSchema, operationsSchema, pocketWifiStock\] = await Promise\.all\(\[/);
   assert.match(healthRoute, /stripeApi,/);
   assert.match(healthRoute, /esimOrderSchema,/);
@@ -4171,6 +4176,25 @@ test('authenticated health readiness separates shared release controls from prod
   // checkout routes can safely accept and fulfil an order.
   assert.doesNotMatch(healthRoute, /publishableKey:/);
   assert.doesNotMatch(healthRoute, /NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY/);
+});
+
+test('authenticated readiness checks fail fast under concurrency and release every slot', () => {
+  const releases = [];
+  for (let index = 0; index < HEALTH_MAX_CONCURRENT_REQUESTS; index += 1) {
+    const release = tryAcquireHealthConcurrency();
+    assert.equal(typeof release, 'function');
+    releases.push(release);
+  }
+  assert.equal(tryAcquireHealthConcurrency(), null);
+  releases[0]();
+  const recovered = tryAcquireHealthConcurrency();
+  assert.equal(typeof recovered, 'function');
+  // Cleanup must be idempotent so nested response/finally paths cannot create
+  // capacity beyond the reviewed ceiling.
+  releases[0]();
+  assert.equal(tryAcquireHealthConcurrency(), null);
+  recovered();
+  for (const release of releases.slice(1)) release();
 });
 
 test('deployment stages a complete rollback artifact before replacing the service tree', () => {
