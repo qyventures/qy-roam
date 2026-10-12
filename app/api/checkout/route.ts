@@ -20,7 +20,7 @@ import { safeStripeCheckoutUrl } from '@/lib/stripeCheckoutUrl';
 import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhookObject';
-import { tryAcquireCheckoutConcurrency } from '@/lib/checkoutConcurrency';
+import { tryAcquireCheckoutConcurrency, tryAcquireCheckoutUpload } from '@/lib/checkoutConcurrency';
 import { scanActivePocketWifiStripeHolds } from '@/lib/pocketWifiStripeHolds';
 
 export const runtime = 'nodejs';
@@ -164,6 +164,11 @@ export async function POST(req: Request) {
   if(!hasRequiredStripeWebhookConfig()) return NextResponse.json({error:'Pocket WiFi ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
   if(!hasRequiredFulfilmentEmailConfig()) return NextResponse.json({error:'Pocket WiFi ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
   const config=operationalConfig(); if(!config) return NextResponse.json({error:'Order configuration incomplete.'},{status:503});
+  // Nginx streams this body so the absolute application deadline remains
+  // effective. Cap simultaneous pre-validation uploads independently from
+  // the smaller Stripe/Supabase work pool reached after parsing.
+  const releaseUpload=tryAcquireCheckoutUpload();
+  if(!releaseUpload) return NextResponse.json({error:'Checkout is busy. Please try again shortly.'},{status:503,headers:{'Retry-After':'5'}});
   let raw:string;
   try { raw=await readLimitedRequestText(req,MAX_BODY_BYTES,CHECKOUT_BODY_TIMEOUT_MS); }
   catch(error) {
@@ -171,7 +176,7 @@ export async function POST(req: Request) {
     if(error instanceof InvalidRequestBodyLengthError) return NextResponse.json({error:'Invalid request.'},{status:400});
     if(error instanceof RequestBodyTimeoutError) return NextResponse.json({error:'Request timed out. Please try again.'},{status:408});
     return NextResponse.json({error:'Invalid request.'},{status:400});
-  }
+  } finally { releaseUpload(); }
   let body:Record<string,unknown>;
   try {
     const parsed:unknown=JSON.parse(raw);

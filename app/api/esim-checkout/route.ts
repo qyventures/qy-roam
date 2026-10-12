@@ -16,7 +16,7 @@ import { safeStripeCheckoutUrl } from '@/lib/stripeCheckoutUrl';
 import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhookObject';
-import { tryAcquireCheckoutConcurrency } from '@/lib/checkoutConcurrency';
+import { tryAcquireCheckoutConcurrency, tryAcquireCheckoutUpload } from '@/lib/checkoutConcurrency';
 
 export const runtime = 'nodejs';
 
@@ -109,6 +109,14 @@ export async function POST(req: Request) {
       });
     }
 
+    // Nginx streams public mutations to preserve this absolute deadline.
+    // Bound slow uploads before parsing without spending a scarce provider-
+    // work slot on a request that has not yet proved it is a valid checkout.
+    const releaseUpload = tryAcquireCheckoutUpload();
+    if (!releaseUpload) return NextResponse.json({ error: 'Checkout is busy. Please try again shortly.' }, {
+      status: 503,
+      headers: { 'Retry-After': '5' },
+    });
     let raw: string;
     try { raw = await readLimitedRequestText(req, MAX_BODY_BYTES, CHECKOUT_BODY_TIMEOUT_MS); }
     catch (error) {
@@ -116,7 +124,7 @@ export async function POST(req: Request) {
       if (error instanceof InvalidRequestBodyLengthError) return NextResponse.json({ error: 'Invalid request.' }, { status: 400 });
       if (error instanceof RequestBodyTimeoutError) return NextResponse.json({ error: 'Request timed out. Please try again.' }, { status: 408 });
       return NextResponse.json({ error: 'Invalid request.' }, { status: 400 });
-    }
+    } finally { releaseUpload(); }
     let body: Record<string, unknown>;
     try {
       const parsed: unknown = JSON.parse(raw);

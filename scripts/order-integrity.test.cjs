@@ -67,7 +67,7 @@ const { parsePocketWifiAvailability, parsePocketWifiBookingTerms } = require('..
 const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutResponse.ts');
 const { MANUAL_ORDER_REFERENCE_MAX_LENGTH, manualOrderReference, manualOrderSessionId } = require('../lib/manualOrderReference.ts');
 const { createConcurrencyLimiter } = require('../lib/concurrencyLimit.ts');
-const { CHECKOUT_MAX_CONCURRENT_REQUESTS, tryAcquireCheckoutConcurrency } = require('../lib/checkoutConcurrency.ts');
+const { CHECKOUT_MAX_CONCURRENT_REQUESTS, CHECKOUT_MAX_CONCURRENT_UPLOADS, tryAcquireCheckoutConcurrency, tryAcquireCheckoutUpload } = require('../lib/checkoutConcurrency.ts');
 const { AVAILABILITY_MAX_CONCURRENT_REQUESTS, tryAcquireAvailabilityConcurrency } = require('../lib/availabilityConcurrency.ts');
 const { CONFIRMATION_MAX_CONCURRENT_REQUESTS, tryAcquireConfirmationConcurrency } = require('../lib/confirmationConcurrency.ts');
 const { HEALTH_MAX_CONCURRENT_REQUESTS, tryAcquireHealthConcurrency } = require('../lib/healthConcurrency.ts');
@@ -6468,6 +6468,30 @@ test('product checkouts share one bounded live-work budget and always release ad
   );
 });
 
+test('slow checkout uploads share a wider bounded pre-validation budget', () => {
+  assert.equal(CHECKOUT_MAX_CONCURRENT_UPLOADS, 32);
+  assert.ok(CHECKOUT_MAX_CONCURRENT_UPLOADS > CHECKOUT_MAX_CONCURRENT_REQUESTS);
+  const releases = [];
+  for (let index = 0; index < CHECKOUT_MAX_CONCURRENT_UPLOADS; index += 1) {
+    const release = tryAcquireCheckoutUpload();
+    assert.equal(typeof release, 'function');
+    releases.push(release);
+  }
+  assert.equal(tryAcquireCheckoutUpload(), null);
+  releases.forEach((release) => release());
+  const recovered = tryAcquireCheckoutUpload();
+  assert.equal(typeof recovered, 'function');
+  recovered();
+
+  for (const route of [wifiCheckoutRoute, esimCheckoutRoute]) {
+    const admission = route.indexOf('tryAcquireCheckoutUpload()');
+    const bodyRead = route.indexOf('readLimitedRequestText(', admission);
+    const providerAdmission = route.indexOf('tryAcquireCheckoutConcurrency()', bodyRead);
+    assert.ok(admission > 0 && bodyRead > admission && providerAdmission > bodyRead);
+    assert.match(route.slice(admission, providerAdmission), /finally\s*\{\s*releaseUpload\(\);\s*\}/);
+  }
+});
+
 test('customer confirmation views share one bounded provider-work budget', () => {
   assert.equal(CONFIRMATION_MAX_CONCURRENT_REQUESTS, 12);
   const releases = [];
@@ -6493,6 +6517,11 @@ test('dependency-work concurrency budgets survive duplicate Next server module g
       path: '../lib/checkoutConcurrency.ts',
       maximum: CHECKOUT_MAX_CONCURRENT_REQUESTS,
       acquire: 'tryAcquireCheckoutConcurrency',
+    },
+    {
+      path: '../lib/checkoutConcurrency.ts',
+      maximum: CHECKOUT_MAX_CONCURRENT_UPLOADS,
+      acquire: 'tryAcquireCheckoutUpload',
     },
     {
       path: '../lib/confirmationConcurrency.ts',
