@@ -935,7 +935,7 @@ test('failed admin authentication is throttled without limiting valid admin traf
   // Middleware returns before consulting the failed-attempt limiter when the
   // constant-time credential comparison succeeds, so normal operations do not
   // consume this budget.
-  assert.match(middleware, /if \(safeEqual\(givenUser, user\) && safeEqual\(givenPass, pass\)\) return NextResponse\.next\(\);/);
+  assert.match(middleware, /if \(safeEqual\(givenUser, user\) && safeEqual\(givenPass, pass\)\) return authenticatedAdminResponse\(\);/);
   assert.match(middleware, /if \(failedAdminAuthLimited\(req\)\)/);
   assert.match(middleware, /status: 429/);
   assert.match(middleware, /'Retry-After'/);
@@ -5850,6 +5850,18 @@ test('authenticated admin browser mutations reject cross-site request triggering
   assert.match(adminOrderActions, /method: 'PATCH', headers: adminMutationHeaders\(true\)/);
   assert.match(adminOpsForms, /method:'POST',headers:adminMutationHeaders\(true\)/);
   assert.match(manualOrderForm, /method:'POST',headers:adminMutationHeaders\(true\)/);
+});
+
+test('authenticated admin pages and APIs are never stored by browsers or intermediaries', () => {
+  // This belongs at the shared authentication boundary. Individual admin
+  // routes have many validation and dependency-failure exits, while server
+  // component pages do not construct a response object themselves; guarding
+  // only selected success responses can therefore leave customer or
+  // accounting data cacheable after an operator signs out.
+  assert.match(middleware, /function authenticatedAdminResponse\(\)/);
+  assert.match(middleware, /const response = NextResponse\.next\(\)/);
+  assert.match(middleware, /response\.headers\.set\('Cache-Control', 'no-store, max-age=0, private'\)/);
+  assert.match(middleware, /if \(safeEqual\(givenUser, user\) && safeEqual\(givenPass, pass\)\) return authenticatedAdminResponse\(\)/);
 });
 
 test('admin and authenticated health checks bound credential inputs before comparison', () => {

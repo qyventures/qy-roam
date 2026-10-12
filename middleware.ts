@@ -86,6 +86,18 @@ function isUnsafeMethod(method: string) {
   return !['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase());
 }
 
+function authenticatedAdminResponse() {
+  // Admin pages and APIs contain customer identities, order capabilities,
+  // inventory custody, and accounting records. Apply this at the auth
+  // boundary rather than relying on every current and future route to
+  // remember its own cache policy: successful server renders and early API
+  // validation responses must never be retained by a browser shared cache or
+  // intermediary after Basic Auth has granted access.
+  const response = NextResponse.next();
+  response.headers.set('Cache-Control', 'no-store, max-age=0, private');
+  return response;
+}
+
 /**
  * Basic Auth proves who the operator is, but browsers can retain those
  * credentials and attach them to a cross-site form submission. Reject an
@@ -184,7 +196,7 @@ export function middleware(req: NextRequest) {
       if (separator > -1) {
         const givenUser = decoded.slice(0, separator);
         const givenPass = decoded.slice(separator + 1);
-        if (safeEqual(givenUser, user) && safeEqual(givenPass, pass)) return NextResponse.next();
+        if (safeEqual(givenUser, user) && safeEqual(givenPass, pass)) return authenticatedAdminResponse();
       }
     } catch {}
   }
