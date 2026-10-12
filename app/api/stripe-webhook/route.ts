@@ -28,7 +28,10 @@ import { contentLengthMatches, declaredContentLength } from '@/lib/contentLength
 import { paidFulfilmentDetailsIssue } from '@/lib/paidFulfilmentDetails';
 import { isJsonRequestContentType } from '@/lib/requestBody';
 import { exactStripeClaimToken } from '@/lib/stripeClaimToken';
-import { createConcurrencyLimiter } from '@/lib/concurrencyLimit';
+import {
+  tryAcquireStripeWebhookProcessing,
+  tryAcquireStripeWebhookUpload,
+} from '@/lib/stripeWebhookConcurrency';
 
 export const runtime = 'nodejs';
 
@@ -62,16 +65,12 @@ const STRIPE_WEBHOOK_RESPONSE_HEADERS = { 'Cache-Control': 'no-store' } as const
 // consume every standalone Node worker and make checkout/admin unavailable.
 // Stripe retries non-2xx deliveries, and the durable event/delivery ledgers
 // make that retry safe. No queue is retained in this process.
-export const STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS = 16;
-const stripeWebhookConcurrency = createConcurrencyLimiter(STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS);
 // Body reads need their own, slightly wider admission boundary. Acquiring the
 // paid-order processing pool before signature verification lets a caller with
 // only a plausible-looking header occupy every slot for the full upload
 // deadline. Keep memory and slow-upload work bounded here, then release this
 // slot as soon as the signature is verified and compete separately for the
 // smaller pool that protects Stripe, Supabase and delivery dependencies.
-export const STRIPE_WEBHOOK_MAX_CONCURRENT_UPLOADS = 32;
-const stripeWebhookUploadConcurrency = createConcurrencyLimiter(STRIPE_WEBHOOK_MAX_CONCURRENT_UPLOADS);
 
 function webhookJson(body: unknown, init: ResponseInit = {}) {
   return NextResponse.json(body, {
@@ -901,7 +900,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void){
   // paid-order processing slot. Everything above is authenticated, bounded
   // in-memory validation; everything below can call Stripe, Supabase, SMTP or
   // Meta and therefore belongs inside this non-queueing admission boundary.
-  const releaseProcessing=stripeWebhookConcurrency.tryAcquire();
+  const releaseProcessing=tryAcquireStripeWebhookProcessing();
   if(!releaseProcessing){
     return webhookJson({error:'Webhook processing is busy'}, {
       status:503,
@@ -1106,7 +1105,7 @@ export async function POST(req:Request){
   if(!validStripeSignatureHeader(req.headers.get('stripe-signature'))) {
     return webhookJson({error:'Invalid signature'},{status:400});
   }
-  const release=stripeWebhookUploadConcurrency.tryAcquire();
+  const release=tryAcquireStripeWebhookUpload();
   if(!release){
     return webhookJson({error:'Webhook upload capacity is busy'},{
       status:503,

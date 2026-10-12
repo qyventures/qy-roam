@@ -72,6 +72,7 @@ const { AVAILABILITY_MAX_CONCURRENT_REQUESTS, tryAcquireAvailabilityConcurrency 
 const { CONFIRMATION_MAX_CONCURRENT_REQUESTS, tryAcquireConfirmationConcurrency } = require('../lib/confirmationConcurrency.ts');
 const { HEALTH_MAX_CONCURRENT_REQUESTS, tryAcquireHealthConcurrency } = require('../lib/healthConcurrency.ts');
 const { ADMIN_OPS_MAX_CONCURRENT_REQUESTS, tryAcquireAdminOpsConcurrency } = require('../lib/adminOpsConcurrency.ts');
+const { STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS, STRIPE_WEBHOOK_MAX_CONCURRENT_UPLOADS, tryAcquireStripeWebhookProcessing, tryAcquireStripeWebhookUpload } = require('../lib/stripeWebhookConcurrency.ts');
 const { scanActivePocketWifiStripeHolds } = require('../lib/pocketWifiStripeHolds.ts');
 
 process.env.ORDER_INTEGRITY_SECRET = 'order-integrity-test-secret-that-is-at-least-32-characters';
@@ -101,6 +102,8 @@ const stripeWebhookSecret = fs.readFileSync(require.resolve('../lib/stripeWebhoo
 const operationalDate = fs.readFileSync(require.resolve('../lib/operationalDate.ts'), 'utf8');
 const smtpClient = fs.readFileSync(require.resolve('../lib/smtp.ts'), 'utf8');
 const webhookRoute = fs.readFileSync(require.resolve('../app/api/stripe-webhook/route.ts'), 'utf8');
+const canonicalWebhookRoute = fs.readFileSync(require.resolve('../app/api/stripe/webhook/route.ts'), 'utf8');
+const stripeWebhookConcurrency = fs.readFileSync(require.resolve('../lib/stripeWebhookConcurrency.ts'), 'utf8');
 const healthRoute = fs.readFileSync(require.resolve('../app/api/health/route.ts'), 'utf8');
 const pocketWifiStock = fs.readFileSync(require.resolve('../lib/pocketWifiStock.ts'), 'utf8');
 const healthCheckToken = fs.readFileSync(require.resolve('../lib/healthCheckToken.ts'), 'utf8');
@@ -1056,7 +1059,7 @@ test('only authenticated QY Roam events consume paid-order webhook processing ca
   const releaseUpload = webhookRoute.indexOf('releaseUpload();');
   const sourceRouting = webhookRoute.indexOf('if(!hasQyRoamWebhookSource(eventSession.metadata))');
   const provenanceRouting = webhookRoute.indexOf('if(!validQyRoamProvenance(eventSessionId,eventSession.metadata))');
-  const processingAdmission = webhookRoute.indexOf('const releaseProcessing=stripeWebhookConcurrency.tryAcquire()');
+  const processingAdmission = webhookRoute.indexOf('const releaseProcessing=tryAcquireStripeWebhookProcessing()');
   const persistence = webhookRoute.indexOf('const supabase=getSupabaseAdmin()', processingAdmission);
 
   assert.ok(releaseUpload > -1 && releaseUpload < sourceRouting);
@@ -5901,7 +5904,8 @@ test('Stripe webhook uploads reach the bounded application reader without proxy 
   assert.match(webhookLocation, /proxy_read_timeout 120s;/);
   assert.equal((nginxConfig.match(/proxy_request_buffering off;/g) || []).length, 1, 'only Stripe webhook ingress should bypass request buffering');
   assert.match(webhookRoute, /const STRIPE_WEBHOOK_BODY_TIMEOUT_MS = 15_000/);
-  assert.match(webhookRoute, /const stripeWebhookConcurrency = createConcurrencyLimiter\(STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS\)/);
+  assert.match(webhookRoute, /tryAcquireStripeWebhookUpload/);
+  assert.match(stripeWebhookConcurrency, /globalThis as WebhookConcurrencyGlobal/);
 });
 
 test('Stripe webhook bounds event identities before logs or durable idempotency writes', () => {
@@ -6253,18 +6257,43 @@ test('Stripe webhook concurrency is bounded without queueing or leaking admissio
   assert.equal(conservative.tryAcquire(), null);
   releaseOnly();
 
-  assert.match(webhookRoute, /STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS = 16/);
-  assert.match(webhookRoute, /const releaseProcessing=stripeWebhookConcurrency\.tryAcquire\(\)/);
+  assert.equal(STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS, 16);
+  const processingReleases = [];
+  for (let index = 0; index < STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS; index += 1) {
+    const release = tryAcquireStripeWebhookProcessing();
+    assert.equal(typeof release, 'function');
+    processingReleases.push(release);
+  }
+  assert.equal(tryAcquireStripeWebhookProcessing(), null);
+  processingReleases.forEach((release) => release());
+
+  assert.equal(STRIPE_WEBHOOK_MAX_CONCURRENT_UPLOADS, 32);
+  const uploadReleases = [];
+  for (let index = 0; index < STRIPE_WEBHOOK_MAX_CONCURRENT_UPLOADS; index += 1) {
+    const release = tryAcquireStripeWebhookUpload();
+    assert.equal(typeof release, 'function');
+    uploadReleases.push(release);
+  }
+  assert.equal(tryAcquireStripeWebhookUpload(), null);
+  uploadReleases.forEach((release) => release());
+
+  // The canonical route re-exports this handler. The admission state must
+  // live outside either route entrypoint so dual endpoint delivery cannot
+  // instantiate an independent budget for each URL.
+  assert.match(canonicalWebhookRoute, /export \{ POST \} from '\.\.\/\.\.\/stripe-webhook\/route'/);
+  assert.match(stripeWebhookConcurrency, /__qyRoamStripeWebhookProcessingConcurrency/);
+  assert.match(stripeWebhookConcurrency, /__qyRoamStripeWebhookUploadConcurrency/);
+  assert.doesNotMatch(webhookRoute, /createConcurrencyLimiter/);
+  assert.match(webhookRoute, /const releaseProcessing=tryAcquireStripeWebhookProcessing\(\)/);
   assert.match(webhookRoute, /status:503,[\s\S]{0,100}headers:\{'Retry-After':'5'\}/);
   assert.match(webhookRoute, /finally \{\s*releaseProcessing\(\);\s*\}/);
-  assert.match(webhookRoute, /STRIPE_WEBHOOK_MAX_CONCURRENT_UPLOADS = 32/);
-  assert.match(webhookRoute, /const release=stripeWebhookUploadConcurrency\.tryAcquire\(\)/);
+  assert.match(webhookRoute, /const release=tryAcquireStripeWebhookUpload\(\)/);
   assert.match(webhookRoute, /let uploadReleased=false;[\s\S]*if\(uploadReleased\) return;[\s\S]*return await handleStripeWebhook\(req,releaseUpload\);[\s\S]*finally\{\s*releaseUpload\(\);/);
 });
 
 test('obviously invalid webhook traffic cannot consume paid-order processing slots', () => {
   const postBoundary = webhookRoute.slice(webhookRoute.indexOf('export async function POST(req:Request)'));
-  const admissionIndex = postBoundary.indexOf('stripeWebhookUploadConcurrency.tryAcquire()');
+  const admissionIndex = postBoundary.indexOf('tryAcquireStripeWebhookUpload()');
   assert.ok(admissionIndex > 0, 'webhook admission control must remain present');
   const beforeAdmission = postBoundary.slice(0, admissionIndex);
 
@@ -6282,7 +6311,7 @@ test('unauthenticated slow webhook uploads cannot occupy paid-order processing s
     webhookRoute.indexOf('export async function POST(req:Request)'),
   );
   const verificationIndex = handlerBoundary.indexOf('event=verifiedEvent');
-  const processingIndex = handlerBoundary.indexOf('stripeWebhookConcurrency.tryAcquire()');
+  const processingIndex = handlerBoundary.indexOf('tryAcquireStripeWebhookProcessing()');
   assert.ok(verificationIndex > 0);
   assert.ok(processingIndex > verificationIndex, 'paid-order admission must follow signature verification');
   assert.match(handlerBoundary.slice(verificationIndex, processingIndex), /releaseUpload\(\)/);
