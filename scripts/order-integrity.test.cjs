@@ -6006,6 +6006,21 @@ test('Stripe webhook uploads reach the bounded application reader without proxy 
   assert.match(stripeWebhookConcurrency, /globalThis as WebhookConcurrencyGlobal/);
 });
 
+test('production ingress bounds slow clients and avoids false protocol upgrades', () => {
+  assert.match(nginxConfig, /client_header_timeout 15s;/);
+  assert.match(nginxConfig, /client_body_timeout 15s;/);
+  assert.match(nginxConfig, /keepalive_timeout 30s;/);
+  assert.match(nginxConfig, /send_timeout 30s;/);
+  assert.equal((nginxConfig.match(/proxy_connect_timeout 5s;/g) || []).length, 2);
+  assert.equal((nginxConfig.match(/proxy_send_timeout 20s;/g) || []).length, 2);
+  assert.equal((nginxConfig.match(/proxy_set_header Connection "";/g) || []).length, 2);
+  assert.doesNotMatch(nginxConfig, /proxy_set_header Upgrade\b/);
+  assert.doesNotMatch(nginxConfig, /proxy_set_header Connection "upgrade";/);
+  // Paid-order processing has a deliberately longer reviewed response budget
+  // than ordinary request upload and client-response inactivity deadlines.
+  assert.equal((nginxConfig.match(/proxy_read_timeout 120s;/g) || []).length, 2);
+});
+
 test('Stripe webhook bounds event identities before logs or durable idempotency writes', () => {
   assert.match(stripeEventId, /typeof value !== 'string'/);
   assert.match(stripeEventId, /\^evt_\[A-Za-z0-9\]\{8,96\}\$/);
