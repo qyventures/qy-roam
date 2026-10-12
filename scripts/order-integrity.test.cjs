@@ -72,6 +72,7 @@ const { AVAILABILITY_MAX_CONCURRENT_REQUESTS, tryAcquireAvailabilityConcurrency 
 const { CONFIRMATION_MAX_CONCURRENT_REQUESTS, tryAcquireConfirmationConcurrency } = require('../lib/confirmationConcurrency.ts');
 const { HEALTH_MAX_CONCURRENT_REQUESTS, tryAcquireHealthConcurrency } = require('../lib/healthConcurrency.ts');
 const { ADMIN_OPS_MAX_CONCURRENT_REQUESTS, tryAcquireAdminOpsConcurrency } = require('../lib/adminOpsConcurrency.ts');
+const { ADMIN_DELIVERY_MAX_CONCURRENT_REQUESTS, tryAcquireAdminDeliveryConcurrency } = require('../lib/adminDeliveryConcurrency.ts');
 const { STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS, STRIPE_WEBHOOK_MAX_CONCURRENT_UPLOADS, tryAcquireStripeWebhookProcessing, tryAcquireStripeWebhookUpload } = require('../lib/stripeWebhookConcurrency.ts');
 
 function requireFresh(relativePath) {
@@ -4402,9 +4403,18 @@ test('admin recovery only resumes actionable fulfilment while preserving consent
 });
 
 test('admin delivery recovery is bounded without queueing or leaking admission slots', () => {
-  assert.match(adminOrderRoute, /ADMIN_DELIVERY_RETRY_MAX_CONCURRENT_REQUESTS = 4/);
-  assert.match(adminOrderRoute, /createConcurrencyLimiter\(ADMIN_DELIVERY_RETRY_MAX_CONCURRENT_REQUESTS\)/);
-  assert.match(adminOrderRoute, /const release = adminDeliveryRetryConcurrency\.tryAcquire\(\)/);
+  assert.equal(ADMIN_DELIVERY_MAX_CONCURRENT_REQUESTS, 4);
+  const releases = [];
+  for (let index = 0; index < ADMIN_DELIVERY_MAX_CONCURRENT_REQUESTS; index += 1) {
+    const release = tryAcquireAdminDeliveryConcurrency();
+    assert.equal(typeof release, 'function');
+    releases.push(release);
+  }
+  assert.equal(tryAcquireAdminDeliveryConcurrency(), null);
+  releases.forEach((release) => release());
+
+  assert.match(adminOrderRoute, /const release = tryAcquireAdminDeliveryConcurrency\(\)/);
+  assert.doesNotMatch(adminOrderRoute, /createConcurrencyLimiter/);
   assert.match(adminOrderRoute, /Order delivery recovery is busy\. Please try again shortly\./);
   assert.match(adminOrderRoute, /'Retry-After': '5'/);
   assert.match(adminOrderRoute, /try \{\s*return await retryOrderDeliveries\(req, context\);\s*\} finally \{\s*release\(\);\s*\}/);
@@ -6388,6 +6398,11 @@ test('dependency-work concurrency budgets survive duplicate Next server module g
       path: '../lib/adminOpsConcurrency.ts',
       maximum: ADMIN_OPS_MAX_CONCURRENT_REQUESTS,
       acquire: 'tryAcquireAdminOpsConcurrency',
+    },
+    {
+      path: '../lib/adminDeliveryConcurrency.ts',
+      maximum: ADMIN_DELIVERY_MAX_CONCURRENT_REQUESTS,
+      acquire: 'tryAcquireAdminDeliveryConcurrency',
     },
     {
       path: '../lib/availabilityConcurrency.ts',

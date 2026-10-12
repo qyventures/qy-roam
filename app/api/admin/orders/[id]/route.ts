@@ -13,8 +13,8 @@ import { validStripeCheckoutSessionId, validStripeCheckoutSessionIdForMode } fro
 import { validStripePaymentEventCreated } from '@/lib/stripeEventCreated';
 import { custodyReferenceIssue, normalizeCustodyReference } from '@/lib/custodyReference';
 import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
-import { createConcurrencyLimiter } from '@/lib/concurrencyLimit';
 import { tryAcquireAdminOpsConcurrency } from '@/lib/adminOpsConcurrency';
+import { tryAcquireAdminDeliveryConcurrency } from '@/lib/adminDeliveryConcurrency';
 
 export const runtime = 'nodejs';
 
@@ -34,9 +34,6 @@ const MAX_ORDER_NOTES_LENGTH = 2_500;
 // retry loop could still occupy every standalone Node worker. Reject excess
 // work instead of queueing it in memory; the durable delivery ledgers make a
 // later retry safe and remain the authority for provider idempotency.
-const ADMIN_DELIVERY_RETRY_MAX_CONCURRENT_REQUESTS = 4;
-const adminDeliveryRetryConcurrency = createConcurrencyLimiter(ADMIN_DELIVERY_RETRY_MAX_CONCURRENT_REQUESTS);
-
 function trackingValue(value: unknown, existing: string | null) {
   // Keep an already-recorded reference when an older admin client submits no
   // tracking field, but treat whitespace as absent. A physical dispatch or
@@ -462,7 +459,7 @@ async function retryOrderDeliveries(_req: Request, { params }: { params: { id: s
 }
 
 export async function POST(req: Request, context: { params: { id: string } }) {
-  const release = adminDeliveryRetryConcurrency.tryAcquire();
+  const release = tryAcquireAdminDeliveryConcurrency();
   if (!release) {
     return NextResponse.json(
       { error: 'Order delivery recovery is busy. Please try again shortly.' },
