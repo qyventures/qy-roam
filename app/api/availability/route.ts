@@ -13,7 +13,7 @@ import {
   hasRequiredStripeCheckoutConfig,
   hasRequiredStripeWebhookConfig,
 } from '@/lib/productionReadiness';
-import { AVAILABILITY_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS, createCheckoutAttemptLimiter, createGlobalAttemptLimiter } from '@/lib/checkoutRateLimit';
+import { availabilityAttemptLimited, availabilityGloballyLimited } from '@/lib/checkoutRateLimit';
 import { tryAcquireAvailabilityConcurrency } from '@/lib/availabilityConcurrency';
 import { scanActivePocketWifiStripeHolds } from '@/lib/pocketWifiStripeHolds';
 
@@ -24,9 +24,6 @@ export const dynamic = 'force-dynamic';
 // public endpoint from becoming an unbounded provider-work amplifier. This is
 // deliberately separate from the stricter checkout limiter because checking
 // a date range is safe to repeat a little more often than opening payment.
-const limited = createCheckoutAttemptLimiter(60_000, 30);
-const globallyLimited = createGlobalAttemptLimiter(60_000, AVAILABILITY_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS);
-
 // Availability is a purchase promise, rather than a rough stock estimate.
 // Keep its unavailable response identical across prerequisite failures so the
 // endpoint neither leaks configuration detail nor tells a traveller to begin
@@ -79,7 +76,7 @@ export async function GET(req: NextRequest) {
   // the shared provider-work budget below, but returning before this guard
   // would also make them completely unthrottled and leave this public route
   // available as an avoidable CPU/response amplifier.
-  if (limited(req)) {
+  if (availabilityAttemptLimited(req)) {
     return NextResponse.json({ available: false, error: 'Too many availability checks. Please try again shortly.' }, {
       status: 429,
       headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' },
@@ -118,7 +115,7 @@ export async function GET(req: NextRequest) {
   // Stripe, or Supabase checks. Count that provider-capable request against
   // the allocation-free shared ceiling so cheap rejected ranges cannot deny
   // live availability to all shoppers on this process.
-  if (globallyLimited()) {
+  if (availabilityGloballyLimited()) {
     return NextResponse.json({ available: false, error: 'Too many availability checks. Please try again shortly.' }, {
       status: 429,
       headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' },

@@ -166,7 +166,7 @@ test('live availability has a bounded non-queueing dependency-work budget', () =
   for (const release of releases.slice(1)) release();
   reacquired();
 
-  const validationBoundary = availabilityRoute.indexOf('if (globallyLimited())');
+  const validationBoundary = availabilityRoute.indexOf('if (availabilityGloballyLimited())');
   const admission = availabilityRoute.indexOf('releaseAvailability = tryAcquireAvailabilityConcurrency()');
   const firstDependency = availabilityRoute.indexOf('hasRequiredPaymentSchema()');
   assert.ok(validationBoundary > -1 && admission > validationBoundary && firstDependency > admission);
@@ -1704,7 +1704,7 @@ test('Pocket WiFi availability publishes only validated public booking terms for
 test('Pocket WiFi availability rejects ambiguous repeated date parameters before provider work', () => {
   const route = fs.readFileSync(require.resolve('../app/api/availability/route.ts'), 'utf8');
   const repeatedDateBoundary = route.indexOf("const startValues = req.nextUrl.searchParams.getAll('start')");
-  const globalLimit = route.indexOf('if (globallyLimited())');
+  const globalLimit = route.indexOf('if (availabilityGloballyLimited())');
   const stripeScan = route.indexOf('const stripeHolds = await activeStripeHolds');
 
   assert.ok(repeatedDateBoundary > -1, 'availability must inspect every supplied date value');
@@ -2096,9 +2096,8 @@ test('provider-backed public routes retain an aggregate overload ceiling across 
     assert.match(source, /if\s*\(checkoutAttemptLimited\(req\)\)/);
     assert.match(source, /if\s*\(checkoutGloballyLimited\(\)\)/);
   }
-  assert.match(availabilityRoute, /AVAILABILITY_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS/);
-  assert.match(availabilityRoute, /if\s*\(limited\(req\)\)/);
-  assert.match(availabilityRoute, /if\s*\(globallyLimited\(\)\)/);
+  assert.match(availabilityRoute, /if\s*\(availabilityAttemptLimited\(req\)\)/);
+  assert.match(availabilityRoute, /if\s*\(availabilityGloballyLimited\(\)\)/);
 });
 
 test('malformed checkout traffic cannot exhaust the shared Stripe work budget', () => {
@@ -2114,7 +2113,7 @@ test('malformed checkout traffic cannot exhaust the shared Stripe work budget', 
 });
 
 test('rejected availability ranges cannot exhaust the shared provider-work budget', () => {
-  const perClientLimit = availabilityRoute.indexOf('if (limited(req))');
+  const perClientLimit = availabilityRoute.indexOf('if (availabilityAttemptLimited(req))');
   // Availability deliberately inspects every occurrence of each date key so
   // repeated query parameters cannot be interpreted differently by another
   // layer. Keep this ordering assertion tied to that current parsing boundary
@@ -2122,7 +2121,7 @@ test('rejected availability ranges cannot exhaust the shared provider-work budge
   const dateParsing = availabilityRoute.indexOf("const startValues = req.nextUrl.searchParams.getAll('start')");
   const pastDateRejection = availabilityRoute.indexOf("if (start.toISOString().slice(0, 10) < earliest)");
   const rentalLengthRejection = availabilityRoute.indexOf('if (rentalDays < 1 || rentalDays > 90)');
-  const globalLimit = availabilityRoute.indexOf('if (globallyLimited())');
+  const globalLimit = availabilityRoute.indexOf('if (availabilityGloballyLimited())');
   const stripeConfiguration = availabilityRoute.indexOf('const stripeKey = process.env.STRIPE_SECRET_KEY?.trim()');
 
   assert.ok(dateParsing > -1, 'availability date parsing boundary must remain visible to the ingress-ordering check');
@@ -2997,8 +2996,7 @@ test('Pocket WiFi availability does not promise stock when checkout cannot safel
 });
 
 test('Pocket WiFi availability bounds public Stripe and database capacity scans', () => {
-  assert.match(availabilityRoute, /createCheckoutAttemptLimiter, createGlobalAttemptLimiter \} from '@\/lib\/checkoutRateLimit';/);
-  assert.match(availabilityRoute, /const limited = createCheckoutAttemptLimiter\(60_000, 30\)/);
+  assert.match(availabilityRoute, /availabilityAttemptLimited, availabilityGloballyLimited \} from '@\/lib\/checkoutRateLimit';/);
   // One database RPC owns the orders, reservations and saleable-stock
   // snapshot, avoiding both provider row caps and cross-statement handoff
   // races while the Stripe scan retains its independent bounded pagination.
@@ -3006,8 +3004,8 @@ test('Pocket WiFi availability bounds public Stripe and database capacity scans'
   assert.match(schema, /perform pg_advisory_xact_lock\(hashtext\('qy_roam_pocket_wifi_checkout'\)\)/);
   assert.match(schema, /returns table\(committed integer, saleable_inventory integer\)/);
   assert.match(schema, /not \(checkout_request_id = any\(p_stripe_hold_request_ids\)\)/);
-  assert.match(availabilityRoute, /if \(limited\(req\)\)/);
-  assert.match(availabilityRoute, /if \(globallyLimited\(\)\)/);
+  assert.match(availabilityRoute, /if \(availabilityAttemptLimited\(req\)\)/);
+  assert.match(availabilityRoute, /if \(availabilityGloballyLimited\(\)\)/);
   assert.match(availabilityRoute, /Too many availability checks/);
   assert.match(availabilityRoute, /status: 429/);
   assert.match(availabilityRoute, /'Retry-After': '60'/);
@@ -6492,6 +6490,31 @@ test('paid-product rate limits are shared across routes and duplicate Next modul
     assert.match(route, /checkoutGloballyLimited\(\)/);
     assert.doesNotMatch(route, /createCheckoutAttemptLimiter|createGlobalAttemptLimiter/);
   }
+});
+
+test('live availability rate limits survive duplicate Next server module graphs', () => {
+  const first = requireFresh('../lib/checkoutRateLimit.ts');
+  const second = requireFresh('../lib/checkoutRateLimit.ts');
+  assert.notEqual(first, second);
+
+  const client = new Request('https://qyroam.com/api/availability?start=2027-01-01&end=2027-01-05', {
+    headers: { 'x-real-ip': '198.51.100.212' },
+  });
+  const clientWindow = 9_100_000_000_000;
+  for (let index = 0; index < first.AVAILABILITY_RATE_LIMIT_MAX_ATTEMPTS; index += 1) {
+    assert.equal((index % 2 === 0 ? first : second).availabilityAttemptLimited(client, clientWindow), false);
+  }
+  assert.equal(second.availabilityAttemptLimited(client, clientWindow), true);
+
+  const globalWindow = clientWindow + first.CHECKOUT_RATE_LIMIT_WINDOW_MS + 1;
+  for (let index = 0; index < first.AVAILABILITY_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS; index += 1) {
+    assert.equal((index % 2 === 0 ? first : second).availabilityGloballyLimited(globalWindow), false);
+  }
+  assert.equal(first.availabilityGloballyLimited(globalWindow), true);
+
+  assert.match(availabilityRoute, /availabilityAttemptLimited\(req\)/);
+  assert.match(availabilityRoute, /availabilityGloballyLimited\(\)/);
+  assert.doesNotMatch(availabilityRoute, /createCheckoutAttemptLimiter|createGlobalAttemptLimiter/);
 });
 
 test('slow checkout uploads share a wider bounded pre-validation budget', () => {

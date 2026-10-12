@@ -8,6 +8,7 @@ export const CHECKOUT_RATE_LIMIT_WINDOW_MS = 60_000;
 export const CHECKOUT_RATE_LIMIT_MAX_ATTEMPTS = 12;
 export const CHECKOUT_RATE_LIMIT_MAX_CLIENTS = 5_000;
 export const CHECKOUT_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS = 120;
+export const AVAILABILITY_RATE_LIMIT_MAX_ATTEMPTS = 30;
 export const AVAILABILITY_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS = 300;
 
 type Attempt = { count: number; reset: number };
@@ -144,6 +145,8 @@ export function createGlobalAttemptLimiter(
 type CheckoutRateLimitGlobal = typeof globalThis & {
   __qyRoamCheckoutAttemptLimiter?: ReturnType<typeof createCheckoutAttemptLimiter>;
   __qyRoamCheckoutGlobalAttemptLimiter?: ReturnType<typeof createGlobalAttemptLimiter>;
+  __qyRoamAvailabilityAttemptLimiter?: ReturnType<typeof createCheckoutAttemptLimiter>;
+  __qyRoamAvailabilityGlobalAttemptLimiter?: ReturnType<typeof createGlobalAttemptLimiter>;
 };
 
 // Pocket WiFi and eSIM are two entrypoints into one payment system. Next can
@@ -157,6 +160,14 @@ const checkoutAttemptLimiter = shared.__qyRoamCheckoutAttemptLimiter ??=
   createCheckoutAttemptLimiter();
 const checkoutGlobalAttemptLimiter = shared.__qyRoamCheckoutGlobalAttemptLimiter ??=
   createGlobalAttemptLimiter();
+// Availability is one route today, but Next can still evaluate route modules
+// in more than one server graph during a production process lifetime. Keep
+// its provider-work allowance on the same process-wide boundary as checkout:
+// a fresh graph must not grant another set of Stripe inventory scans.
+const availabilityAttemptLimiter = shared.__qyRoamAvailabilityAttemptLimiter ??=
+  createCheckoutAttemptLimiter(CHECKOUT_RATE_LIMIT_WINDOW_MS, AVAILABILITY_RATE_LIMIT_MAX_ATTEMPTS);
+const availabilityGlobalAttemptLimiter = shared.__qyRoamAvailabilityGlobalAttemptLimiter ??=
+  createGlobalAttemptLimiter(CHECKOUT_RATE_LIMIT_WINDOW_MS, AVAILABILITY_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS);
 
 export function checkoutAttemptLimited(req: Request, now = Date.now()) {
   return checkoutAttemptLimiter(req, now);
@@ -164,4 +175,12 @@ export function checkoutAttemptLimited(req: Request, now = Date.now()) {
 
 export function checkoutGloballyLimited(now = Date.now()) {
   return checkoutGlobalAttemptLimiter(now);
+}
+
+export function availabilityAttemptLimited(req: Request, now = Date.now()) {
+  return availabilityAttemptLimiter(req, now);
+}
+
+export function availabilityGloballyLimited(now = Date.now()) {
+  return availabilityGlobalAttemptLimiter(now);
 }
