@@ -29,7 +29,9 @@ function exactNonnegativeMoneyCents(value: unknown) {
   return Number.isSafeInteger(cents) && cents <= MAX_FORECAST_REVENUE_CENTS ? cents : null;
 }
 
-function boundedText(value: unknown, maximum: number, nullable = false) {
+function boundedText(value: unknown, maximum: number): string | undefined;
+function boundedText(value: unknown, maximum: number, nullable: true): string | null | undefined;
+function boundedText(value: unknown, maximum: number, nullable = false): string | null | undefined {
   if (nullable && value === null) return null;
   if (typeof value !== 'string' || value.length > maximum || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value)) return undefined;
   return value;
