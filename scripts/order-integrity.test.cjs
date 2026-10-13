@@ -48,7 +48,7 @@ const { metaMeasurementAllowed, metaPageViewAllowed, setMetaMeasurementConsent }
 const { digitalDeliveryReferenceIssue, isSafeDigitalDeliveryReference } = require('../lib/digitalDeliveryReference.ts');
 const { SUPABASE_REQUEST_TIMEOUT_MS, SUPABASE_REQUEST_TIMEOUT_MAX_MS, SUPABASE_RESPONSE_MAX_BYTES, SUPABASE_RESPONSE_MAX_CHUNKS, canonicalSupabaseProjectUrl, fetchSupabaseWithTimeout, hasRequiredSupabaseAdminConfig, supabaseServiceRoleKey } = require('../lib/supabaseAdmin.ts');
 const { checkoutAttempt, clearCheckoutAttempt, CHECKOUT_ATTEMPT_MAX_AGE_MS } = require('../lib/checkoutAttempt.ts');
-const { CUSTOMER_REQUEST_TIMEOUT_MS, CustomerRequestTimeoutError, fetchCustomerJson, fetchCustomerRequest } = require('../lib/clientRequest.ts');
+const { CUSTOMER_REQUEST_TIMEOUT_MS, CUSTOMER_JSON_RESPONSE_MAX_BYTES, CUSTOMER_JSON_RESPONSE_MAX_CHUNKS, CustomerRequestTimeoutError, fetchCustomerJson, fetchCustomerRequest } = require('../lib/clientRequest.ts');
 const { safeHttpsDeliveryEndpoint } = require('../lib/deliveryEndpoint.ts');
 const { fulfilmentRelayAcknowledged } = require('../lib/deliveryAcknowledgement.ts');
 const { safeProviderDeliveryFailure, safeWebhookProcessingFailure } = require('../lib/deliveryFailure.ts');
@@ -705,7 +705,7 @@ test('customer checkout requests release a stuck browser without rotating their 
     // sales UI must regain control under the same bounded deadline.
     global.fetch = async (_input, init) => {
       receivedSignal = init.signal;
-      return { status: 200, json: async () => new Promise(() => {}) };
+      return new Response(new ReadableStream({ pull: () => new Promise(() => {}) }), { status: 200 });
     };
     await assert.rejects(
       () => fetchCustomerJson('/api/checkout', { method: 'POST' }, 1),
@@ -713,10 +713,50 @@ test('customer checkout requests release a stuck browser without rotating their 
     );
     assert.equal(receivedSignal.aborted, true);
 
-    global.fetch = async () => ({ status: 200, json: async () => ({ url: 'safe' }) });
+    global.fetch = async () => new Response(JSON.stringify({ url: 'safe' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
     const complete = await fetchCustomerJson('/api/checkout', { method: 'POST' }, 100);
     assert.equal(complete.response.status, 200);
     assert.deepEqual(complete.value, { url: 'safe' });
+
+    assert.equal(CUSTOMER_JSON_RESPONSE_MAX_BYTES, 64 * 1024);
+    assert.equal(CUSTOMER_JSON_RESPONSE_MAX_CHUNKS, 1_024);
+    let oversizedCancelled = false;
+    global.fetch = async () => new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new Uint8Array(CUSTOMER_JSON_RESPONSE_MAX_BYTES + 1)); },
+      cancel() { oversizedCancelled = true; },
+    }), { status: 502 });
+    await assert.rejects(
+      () => fetchCustomerJson('/api/checkout', { method: 'POST' }, 100),
+      /Customer response is too large/,
+    );
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(oversizedCancelled, true);
+
+    let declaredCancelled = false;
+    global.fetch = async () => new Response(new ReadableStream({
+      cancel() { declaredCancelled = true; },
+    }), { headers: { 'content-length': String(CUSTOMER_JSON_RESPONSE_MAX_BYTES + 1) } });
+    await assert.rejects(
+      () => fetchCustomerJson('/api/checkout', { method: 'POST' }, 100),
+      /Customer response is too large/,
+    );
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(declaredCancelled, true);
+
+    let fragmentedCancelled = false;
+    global.fetch = async () => new Response(new ReadableStream({
+      pull(controller) { controller.enqueue(new Uint8Array(0)); },
+      cancel() { fragmentedCancelled = true; },
+    }));
+    await assert.rejects(
+      () => fetchCustomerJson('/api/checkout', { method: 'POST' }, 1_000),
+      /Customer response is too fragmented/,
+    );
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(fragmentedCancelled, true);
   } finally {
     global.fetch = originalFetch;
   }

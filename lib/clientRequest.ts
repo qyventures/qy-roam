@@ -1,4 +1,10 @@
 export const CUSTOMER_REQUEST_TIMEOUT_MS = 120_000;
+// Checkout and operations endpoints return compact JSON envelopes. Bound the
+// browser-side response as well as its deadline: an erroneous proxy response
+// must not keep allocating memory before the UI can restore the checkout
+// button and safely retry with the same idempotency key.
+export const CUSTOMER_JSON_RESPONSE_MAX_BYTES = 64 * 1024;
+export const CUSTOMER_JSON_RESPONSE_MAX_CHUNKS = 1_024;
 
 export class CustomerRequestTimeoutError extends Error {
   constructor() {
@@ -11,6 +17,51 @@ type CustomerJsonResponse = {
   response: Response;
   value: unknown;
 };
+
+async function readBoundedJson(response: Response) {
+  const declared = response.headers.get('content-length');
+  if (declared !== null) {
+    // Content-Length is bytes on the wire. Browsers may expose a decoded body
+    // while retaining the encoded length, so it is useful as an early upper
+    // bound but not as an exact decoded-length assertion.
+    if (!/^\d+$/.test(declared.trim())) {
+      void response.body?.cancel().catch(() => undefined);
+      throw new Error('Invalid customer response length');
+    }
+    const declaredBytes = Number(declared);
+    if (!Number.isSafeInteger(declaredBytes) || declaredBytes > CUSTOMER_JSON_RESPONSE_MAX_BYTES) {
+      void response.body?.cancel().catch(() => undefined);
+      throw new Error('Customer response is too large');
+    }
+  }
+  if (!response.body) throw new Error('Customer response body is missing');
+
+  const reader = response.body.getReader();
+  const bytes = new Uint8Array(CUSTOMER_JSON_RESPONSE_MAX_BYTES);
+  let total = 0;
+  let chunks = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks += 1;
+      if (chunks > CUSTOMER_JSON_RESPONSE_MAX_CHUNKS) {
+        void reader.cancel().catch(() => undefined);
+        throw new Error('Customer response is too fragmented');
+      }
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > CUSTOMER_JSON_RESPONSE_MAX_BYTES) {
+        void reader.cancel().catch(() => undefined);
+        throw new Error('Customer response is too large');
+      }
+      bytes.set(value, total - value.byteLength);
+    }
+  } finally {
+    try { reader.releaseLock(); } catch {}
+  }
+  return JSON.parse(new TextDecoder().decode(bytes.subarray(0, total))) as unknown;
+}
 
 async function runCustomerRequest<T>(
   input: RequestInfo | URL,
@@ -82,6 +133,6 @@ export async function fetchCustomerJson(
 ): Promise<CustomerJsonResponse> {
   return runCustomerRequest(input, init, timeoutMs, async (response) => ({
     response,
-    value: await response.json() as unknown,
+    value: await readBoundedJson(response),
   }));
 }
