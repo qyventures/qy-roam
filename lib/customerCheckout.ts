@@ -30,6 +30,24 @@ function wait(milliseconds: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }
 
+function checkoutResponseSupersedesPending(response: CustomerCheckoutResponse) {
+  // Once this browser has received the route's validated payment-pending
+  // envelope, a later reconciliation poll is allowed to replace it only with
+  // another recognised checkout state. A generic 5xx JSON response, a stale
+  // proxy envelope, or a malformed 200 must not make an already-paid customer
+  // think the original attempt disappeared and start over. Explicit attempt-
+  // replacement outcomes are conclusive because the server has established
+  // that the original Session expired, conflicted, or durably failed.
+  return Boolean(
+    response.checkoutUrl ||
+    response.completedSessionId ||
+    response.paymentPending ||
+    response.checkoutExpired ||
+    response.checkoutRequestConflict ||
+    response.paymentFailed
+  );
+}
+
 export async function fetchCustomerCheckout(
   input: RequestInfo | URL,
   init: RequestInit,
@@ -64,7 +82,11 @@ export async function fetchCustomerCheckout(
       if (parsed?.paymentPending) return parsed;
       throw error;
     }
-    parsed = parseCustomerCheckoutResponse(value, response.status);
+    const next = parseCustomerCheckoutResponse(value, response.status);
+    if (parsed?.paymentPending && !checkoutResponseSupersedesPending(next)) {
+      return parsed;
+    }
+    parsed = next;
     if (!parsed.paymentPending || attempt === CUSTOMER_CHECKOUT_MAX_RECONCILIATION_ATTEMPTS - 1) {
       return parsed;
     }

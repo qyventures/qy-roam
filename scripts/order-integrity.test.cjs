@@ -645,6 +645,47 @@ test('checkout reconciliation preserves an authenticated pending payment across 
   }
 });
 
+test('checkout reconciliation preserves pending payment across a later generic server envelope', async () => {
+  const originalFetch = global.fetch;
+  const originalSetTimeout = global.setTimeout;
+  let requests = 0;
+  global.fetch = async () => {
+    requests += 1;
+    if (requests === 1) {
+      return new Response(JSON.stringify({
+        error: 'Payment received. We are confirming your order.',
+        paymentPending: true,
+      }), {
+        status: 409,
+        headers: { 'Content-Type': 'application/json', 'Retry-After': '1' },
+      });
+    }
+    return new Response(JSON.stringify({
+      error: 'Checkout is temporarily unavailable.',
+    }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  global.setTimeout = (callback, delay, ...args) => delay === 1_000
+    ? originalSetTimeout(callback, 0, ...args)
+    : originalSetTimeout(callback, delay, ...args);
+  try {
+    const result = await require('../lib/customerCheckout.ts').fetchCustomerCheckout('/api/checkout', {
+      method: 'POST',
+      body: '{}',
+    });
+    assert.equal(requests, 2);
+    assert.equal(result.paymentPending, true);
+    assert.equal(result.error, 'Payment received. We are confirming your order.');
+    assert.equal(result.checkoutUrl, null);
+    assert.equal(result.completedSessionId, null);
+  } finally {
+    global.fetch = originalFetch;
+    global.setTimeout = originalSetTimeout;
+  }
+});
+
 test('checkout attempt identity survives reloads without becoming permanently stale', () => {
   const previousWindow = global.window;
   const previousCrypto = global.crypto;
