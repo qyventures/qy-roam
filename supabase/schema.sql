@@ -1578,8 +1578,9 @@ as $$
       'qy_enforce_esim_delivery_reference_uniqueness',
       'qy_enforce_esim_fulfilment_transition',
       'qy_enforce_pocket_wifi_fulfilment_transition',
+      'qy_require_paid_order_cancellation_reason',
       'qy_reconcile_customer_from_paid_order'
-    )) = 7 and
+    )) = 8 and
     (select count(*) from pg_trigger where tgrelid = 'public.stripe_events'::regclass and not tgisinternal and tgenabled in ('O', 'A') and tgname in (
       'qy_enforce_stripe_event_identity_immutability',
       'qy_enforce_stripe_event_lifecycle'
@@ -2455,8 +2456,10 @@ as $$
   -- Version 39 prevents one digital-delivery audit reference from settling
   -- multiple eSIM orders, including concurrent service-role transitions.
   -- Version 40 adds a product-specific audit for duplicate hand-offs inherited
-  -- from deployments that predate that transition guard.
-  select 40;
+  -- from deployments that predate that transition guard. Version 41 makes the
+  -- active cancellation-evidence trigger part of the pre-payment readiness
+  -- assertion, so a partial migration cannot silently weaken that audit trail.
+  select 41;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
