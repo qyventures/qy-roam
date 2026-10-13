@@ -2181,6 +2181,19 @@ test('admin mutation body limits cannot be bypassed through content coding', () 
   }
 });
 
+test('bodyless admin delivery retries reject stalled or oversized uploads before recovery admission', () => {
+  const postHandler = adminOrderRoute.slice(adminOrderRoute.indexOf('export async function POST'));
+  const encodingGuard = postHandler.indexOf("hasIdentityRequestContentEncoding(req.headers.get('content-encoding'))");
+  const bodyRead = postHandler.indexOf('readLimitedRequestText(req, 0, ADMIN_DELIVERY_RETRY_BODY_TIMEOUT_MS)');
+  const deliveryAdmission = postHandler.indexOf('tryAcquireAdminDeliveryConcurrency()');
+  assert.ok(encodingGuard >= 0, 'delivery retry must reject encoded request bodies');
+  assert.ok(bodyRead > encodingGuard, 'delivery retry must validate the zero-byte body after its content coding');
+  assert.ok(deliveryAdmission > bodyRead, 'delivery retry must finish body validation before reserving recovery capacity');
+  assert.match(postHandler, /RequestBodyTooLargeError/);
+  assert.match(postHandler, /RequestBodyTimeoutError/);
+  assert.match(postHandler, /Delivery retry requests must not include a body/);
+});
+
 test('admin operational mutations are single-flight and recover from stalled browser requests', () => {
   // Stock adjustments and accounting/CRM writes are not all naturally
   // idempotent. Guard synchronously (React state alone can lag a second click)

@@ -24,6 +24,13 @@ export const runtime = 'nodejs';
 // worker before the request is rejected.
 const MAX_ADMIN_ORDER_BODY_BYTES = 8_192;
 const ADMIN_ORDER_BODY_TIMEOUT_MS = 15_000;
+// Delivery recovery is intentionally a bodyless command: the durable order
+// and its provider ledgers contain every input needed for an idempotent retry.
+// Still consume the request stream with a zero-byte bound before admitting
+// expensive Stripe/SMTP/Meta work. Without this boundary, an authenticated
+// client can send a chunked body indefinitely and occupy every recovery slot
+// even though the handler never uses that body.
+const ADMIN_DELIVERY_RETRY_BODY_TIMEOUT_MS = 5_000;
 // Manual sales can already carry up to 1,500 characters of source/support
 // context plus the application-authored payment reference. Leave enough room
 // to append required cancellation evidence without deleting that audit trail.
@@ -467,6 +474,21 @@ async function retryOrderDeliveries(_req: Request, { params }: { params: { id: s
 }
 
 export async function POST(req: Request, context: { params: { id: string } }) {
+  if (!hasIdentityRequestContentEncoding(req.headers.get('content-encoding'))) {
+    return NextResponse.json({ error: 'Unsupported request content encoding' }, { status: 415, headers: { 'Cache-Control': 'no-store' } });
+  }
+  try {
+    await readLimitedRequestText(req, 0, ADMIN_DELIVERY_RETRY_BODY_TIMEOUT_MS);
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) {
+      return NextResponse.json({ error: 'Delivery retry requests must not include a body' }, { status: 413, headers: { 'Cache-Control': 'no-store' } });
+    }
+    if (error instanceof RequestBodyTimeoutError) {
+      return NextResponse.json({ error: 'Request timed out. Please try again.' }, { status: 408, headers: { 'Cache-Control': 'no-store' } });
+    }
+    return NextResponse.json({ error: 'Invalid request' }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
+  }
+
   const release = tryAcquireAdminDeliveryConcurrency();
   if (!release) {
     return NextResponse.json(
