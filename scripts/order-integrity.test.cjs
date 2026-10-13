@@ -1643,6 +1643,18 @@ test('paid orders fail into the durable webhook recovery ledger when fulfilment 
     null,
     'ordinary surrounding whitespace from an external address snapshot is harmless',
   );
+  for (const address of [
+    { country: 'SG', line1: '1 Airport Boulevard\nLeave unattended', postal_code: '819642' },
+    { country: 'SG', line1: '1 Airport Boulevard', line2: 'Unit 01-01\rOverride', postal_code: '819642' },
+    { country: 'SG', line1: 'A'.repeat(201), postal_code: '819642' },
+    { country: 'SG', line1: '1 Airport Boulevard', city: 'B'.repeat(201), postal_code: '819642' },
+  ]) {
+    assert.equal(
+      paidFulfilmentDetailsIssue({ ...paidWifi, shipping_details: { address } }, 'pocket_wifi'),
+      'Paid Pocket WiFi order is missing a complete Singapore delivery address',
+      'unsafe courier address fields must not enter the durable order or fulfilment message',
+    );
+  }
   assert.equal(
     paidFulfilmentDetailsIssue({ ...paidWifi, payment_status: 'unpaid', customer_details: null, shipping_details: null }, 'pocket_wifi'),
     null,

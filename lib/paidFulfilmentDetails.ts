@@ -17,6 +17,17 @@ function validSingaporePostalCode(value?: string | null) {
   return typeof value === 'string' && /^\d{6}$/.test(value.trim());
 }
 
+const MAX_DELIVERY_ADDRESS_FIELD_LENGTH = 200;
+
+function safeDeliveryAddressField(value: string | null | undefined, required = false) {
+  if (value === null || value === undefined) return !required;
+  if (typeof value !== 'string') return false;
+  const normalized = value.trim();
+  return (!required || normalized.length > 0) &&
+    normalized.length <= MAX_DELIVERY_ADDRESS_FIELD_LENGTH &&
+    !/[\u0000-\u001f\u007f]/.test(normalized);
+}
+
 // Stripe Checkout normally guarantees the fields requested when the Session
 // was created, but the signed completion event is the final hand-off into
 // operations. Keep this boundary executable in isolation so both webhook and
@@ -36,7 +47,17 @@ export function paidFulfilmentDetailsIssue(
     return 'Paid Pocket WiFi order is missing a valid customer phone number';
   }
   const shipping = session.shipping_details?.address;
-  if (shipping?.country !== 'SG' || !shipping.line1?.trim() || !validSingaporePostalCode(shipping.postal_code)) {
+  // Stripe normally applies its own address limits, but the refreshed
+  // Checkout object is still external runtime data. These values are copied
+  // into both the durable order and the human fulfilment message, so reject
+  // control characters and unbounded fields instead of persisting ambiguous
+  // multi-line courier instructions or oversized operational records.
+  if (shipping?.country !== 'SG' ||
+    !safeDeliveryAddressField(shipping.line1, true) ||
+    !safeDeliveryAddressField(shipping.line2) ||
+    !safeDeliveryAddressField(shipping.city) ||
+    !safeDeliveryAddressField(shipping.state) ||
+    !validSingaporePostalCode(shipping.postal_code)) {
     return 'Paid Pocket WiFi order is missing a complete Singapore delivery address';
   }
   return null;
