@@ -5146,6 +5146,7 @@ test('Stripe terminal events must agree with their Checkout Session payment stat
   const webhookRoute = fs.readFileSync(require.resolve('../app/api/stripe-webhook/route.ts'), 'utf8');
   assert.equal(stripeCheckoutEventStateIssue('checkout.session.completed', { status: 'complete', payment_status: 'paid' }), null);
   assert.equal(stripeCheckoutEventStateIssue('checkout.session.completed', { status: 'complete', payment_status: 'unpaid' }), null, 'completed can await a delayed payment method');
+  assert.match(stripeCheckoutEventStateIssue('checkout.session.completed', { status: 'complete', payment_status: 'no_payment_required' }), /unsupported payment state/, 'zero-charge or future payment states fail at the terminal event boundary');
   assert.match(stripeCheckoutEventStateIssue('checkout.session.completed', { status: 'open', payment_status: 'unpaid' }), /complete Checkout Session/);
   assert.equal(stripeCheckoutEventStateIssue('checkout.session.async_payment_succeeded', { status: 'complete', payment_status: 'paid' }), null);
   assert.match(stripeCheckoutEventStateIssue('checkout.session.async_payment_succeeded', { status: 'complete', payment_status: 'unpaid' }), /paid Checkout Session/);

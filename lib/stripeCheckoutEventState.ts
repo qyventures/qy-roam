@@ -33,5 +33,14 @@ export function stripeCheckoutEventStateIssue(
   if (eventType === 'checkout.session.async_payment_failed' && session.payment_status !== 'unpaid') {
     return 'Asynchronous payment failure does not contain an unpaid Checkout Session';
   }
+  // Every QY Roam Checkout Session represents a positive, server-priced
+  // charge. `completed` can legitimately be unpaid while an asynchronous
+  // payment method is pending, but `no_payment_required` is never a valid
+  // commercial outcome for this store. The async branches above retain their
+  // more specific transition diagnostics; this closes the broader completed
+  // path before the paid-order pipeline reaches persistence or fulfilment.
+  if (session.payment_status !== 'paid' && session.payment_status !== 'unpaid') {
+    return 'Terminal checkout event contains an unsupported payment state';
+  }
   return null;
 }
