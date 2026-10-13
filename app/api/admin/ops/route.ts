@@ -3,7 +3,7 @@ import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { initialFulfilmentStatus, validFulfilmentStatus } from '@/lib/orderLifecycle';
 import { parseExactIsoDate } from '@/lib/checkoutValidation';
 import { operationalConfig } from '@/lib/operationalConfig';
-import { InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '@/lib/requestBody';
+import { hasIdentityRequestContentEncoding, InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '@/lib/requestBody';
 import { isSafeSmtpMailbox } from '@/lib/smtp';
 import { getEsimPlan } from '@/lib/esimPlans';
 import { manualOrderReference, manualOrderSessionId } from '@/lib/manualOrderReference';
@@ -167,6 +167,12 @@ export async function POST(req: NextRequest) {
   if (!db) return NextResponse.json({ error: 'Database unavailable' }, { status: 503 });
   if (!isJsonRequestContentType(req.headers.get('content-type'))) {
     return NextResponse.json({ error: 'Expected JSON request' }, { status: 415 });
+  }
+  // The byte and exact Content-Length limits below apply to the representation
+  // exposed by the runtime. Refuse content codings so proxy decompression
+  // cannot turn a small declared admin request into a larger mutation body.
+  if (!hasIdentityRequestContentEncoding(req.headers.get('content-encoding'))) {
+    return NextResponse.json({ error: 'Unsupported request content encoding' }, { status: 415 });
   }
   let raw: string;
   try {

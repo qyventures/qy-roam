@@ -4,7 +4,7 @@ import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { fulfilmentNotificationActionable, validFulfilmentStatus, validFulfilmentTransition } from '@/lib/orderLifecycle';
 import { validateQyRoamSession } from '@/lib/qyRoamSession';
 import { deliverFulfilmentNotification, deliverMetaPurchase } from '@/app/api/stripe-webhook/route';
-import { InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '@/lib/requestBody';
+import { hasIdentityRequestContentEncoding, InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '@/lib/requestBody';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
@@ -124,6 +124,11 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
   if (!isJsonRequestContentType(req.headers.get('content-type'))) {
     return NextResponse.json({ error: 'Expected JSON request' }, { status: 415 });
+  }
+  // Keep the bounded reader's byte accounting independent of whether an
+  // upstream proxy or the application runtime decoded the request stream.
+  if (!hasIdentityRequestContentEncoding(req.headers.get('content-encoding'))) {
+    return NextResponse.json({ error: 'Unsupported request content encoding' }, { status: 415 });
   }
   let body: Record<string, unknown>;
   try {

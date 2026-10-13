@@ -2169,6 +2169,18 @@ test('admin operational mutations bound and validate their JSON request bodies',
   assert.doesNotMatch(adminOpsRoute, /await req\.json\(\)/);
 });
 
+test('admin mutation body limits cannot be bypassed through content coding', () => {
+  for (const source of [adminOpsRoute, adminOrderRoute]) {
+    const encodingGuard = source.indexOf("hasIdentityRequestContentEncoding(req.headers.get('content-encoding'))");
+    const bodyRead = source.indexOf('readLimitedRequestText(req,');
+    const mutationAdmission = source.indexOf('tryAcquireAdminOpsConcurrency()');
+    assert.ok(encodingGuard >= 0, 'admin mutation must validate Content-Encoding');
+    assert.ok(bodyRead > encodingGuard, 'admin mutation must reject encoded bodies before reading them');
+    assert.ok(mutationAdmission > encodingGuard, 'admin mutation must reject encoded bodies before database-work admission');
+    assert.match(source, /Unsupported request content encoding/);
+  }
+});
+
 test('admin operational mutations are single-flight and recover from stalled browser requests', () => {
   // Stock adjustments and accounting/CRM writes are not all naturally
   // idempotent. Guard synchronously (React state alone can lag a second click)
