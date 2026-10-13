@@ -79,6 +79,19 @@ function webhookJson(body: unknown, init: ResponseInit = {}) {
   });
 }
 
+// Every response on this boundary is non-cacheable, but transient failures
+// also need to be unambiguous to Stripe, reverse proxies, and operators. Keep
+// one short retry hint on all deliberate 5xx responses instead of adding it
+// only when an in-process admission pool is full. Stripe owns the durable
+// delivery schedule; this header is merely a bounded hint and never creates
+// an application-side queue or a second delivery mechanism.
+function webhookRetryJson(body: unknown, status: 500 | 503 = 500, retryAfter = '5') {
+  return webhookJson(body, {
+    status,
+    headers: { 'Retry-After': retryAfter },
+  });
+}
+
 class StripeWebhookBodyTimeoutError extends Error {}
 class InvalidStripeWebhookBodyLengthError extends Error {}
 
@@ -776,7 +789,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void){
   // which prevents a configuration outage from being surfaced and retried as
   // a service dependency failure.
   if(!hasRequiredStripeCheckoutConfig()||!hasRequiredStripeWebhookConfig()||!hasOrderIntegritySigningConfig()||!key||!webhookSecrets) {
-    return webhookJson({error:'Webhook configuration incomplete'},{status:503});
+    return webhookRetryJson({error:'Webhook configuration incomplete'},503,'30');
   }
   // Stripe signs JSON Checkout event bytes. A different media type cannot be
   // a legitimate delivery to this endpoint, so reject it before allocating a
@@ -801,7 +814,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void){
   try { payload=await readStripeWebhookBody(req); }
   catch(error) {
     if (error instanceof RangeError) return webhookJson({error:'Webhook payload too large'},{status:413});
-    if (error instanceof StripeWebhookBodyTimeoutError) return webhookJson({error:'Webhook payload timed out'},{status:408});
+    if (error instanceof StripeWebhookBodyTimeoutError) return webhookJson({error:'Webhook payload timed out'},{status:408,headers:{'Retry-After':'5'}});
     return webhookJson({error:'Invalid webhook payload'},{status:400});
   }
   // Stripe can continue delivering attempts signed with the prior endpoint
@@ -902,13 +915,10 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void){
   // Meta and therefore belongs inside this non-queueing admission boundary.
   const releaseProcessing=tryAcquireStripeWebhookProcessing();
   if(!releaseProcessing){
-    return webhookJson({error:'Webhook processing is busy'}, {
-      status:503,
-      headers:{'Retry-After':'5'},
-    });
+    return webhookRetryJson({error:'Webhook processing is busy'},503);
   }
   try {
-  const supabase=getSupabaseAdmin(); if(!supabase) return webhookJson({error:'Persistence unavailable'},{status:503});
+  const supabase=getSupabaseAdmin(); if(!supabase) return webhookRetryJson({error:'Persistence unavailable'},503,'30');
   // Claim every trusted terminal event before the outbound Stripe refresh. If
   // that dependency is unavailable until Stripe exhausts its delivery retry
   // window, operations still need a durable record identifying the affected
@@ -920,11 +930,11 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void){
   try{
     const claim=await claimOnce(supabase,eventClaimId,event.type,eventSessionId);
     if(claim.status==='processed') return webhookJson({received:true,duplicate:true});
-    if(claim.status==='in_progress') return webhookJson({error:'Event is still processing'},{status:500});
+    if(claim.status==='in_progress') return webhookRetryJson({error:'Event is still processing'});
     claimStartedAt=claim.processingStartedAt;
   }catch(error){
     console.error('stripe_webhook_claim_error',{eventId:stripeEventId,sessionId:eventSessionId});
-    return webhookJson({error:'Processing failed'},{status:500});
+    return webhookRetryJson({error:'Processing failed'});
   }
   // Stripe signs the event snapshot, but fetch the Checkout Session again
   // before using it as an order or delivery record. This keeps a delayed
@@ -942,7 +952,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void){
     // safely reconstruct from a complete Checkout Session.
     console.error('stripe_webhook_session_retrieve_error',{eventId:stripeEventId,sessionId:eventSessionId});
     if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error);
-    return webhookJson({error:'Unable to retrieve Checkout Session'},{status:500});
+    return webhookRetryJson({error:'Unable to retrieve Checkout Session'});
   }
   // An authenticated Stripe API response is still deserialised runtime data.
   // Validate the same minimal object boundary used for the signed event before
@@ -954,7 +964,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void){
   if(!session){
     console.error('stripe_webhook_invalid_retrieved_session',{eventId:stripeEventId,sessionId:eventSessionId});
     if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,new Error('Stripe returned an invalid Checkout Session object'));
-    return webhookJson({error:'Invalid retrieved Checkout Session'},{status:500});
+    return webhookRetryJson({error:'Invalid retrieved Checkout Session'});
   }
   // The signed event selects the Checkout Session to process; the refreshed
   // object only supplies its current customer and payment fields. Keep those
@@ -971,7 +981,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void){
       retrievedLivemode:session.livemode,
     });
     if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,new Error('Retrieved Checkout Session does not match webhook event'));
-    return webhookJson({error:'Retrieved Checkout Session does not match webhook event'},{status:500});
+    return webhookRetryJson({error:'Retrieved Checkout Session does not match webhook event'});
   }
   // The retrieved Session is the freshest source for customer, shipping,
   // metadata, and amount fields, but it must not change what this particular
@@ -993,7 +1003,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void){
       console.error('stripe_webhook_expiry_integrity_error',{sessionId:session.id});
       const error=new Error('Refreshed expired Checkout Session failed provenance validation');
       if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error);
-      return webhookJson({error:'Processing failed'},{status:500});
+      return webhookRetryJson({error:'Processing failed'});
     }
     try{
       if(!claimStartedAt) throw new Error('Stripe event claim was not acquired');
@@ -1020,7 +1030,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void){
       // may include provider response text, configuration, or order data.
       console.error('stripe_webhook_expiry_processing_error');
       if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error);
-      return webhookJson({error:'Processing failed'},{status:500});
+      return webhookRetryJson({error:'Processing failed'});
     }
     return webhookJson({received:true});
   }
@@ -1080,7 +1090,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void){
     // intentionally application-authored. Keep logs on the same boundary.
     console.error('stripe_webhook_processing_error');
     if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error);
-    return webhookJson({error:'Processing failed'},{status:500});
+    return webhookRetryJson({error:'Processing failed'});
   }
   return webhookJson({received:true});
   } finally {
@@ -1107,10 +1117,7 @@ export async function POST(req:Request){
   }
   const release=tryAcquireStripeWebhookUpload();
   if(!release){
-    return webhookJson({error:'Webhook upload capacity is busy'},{
-      status:503,
-      headers:{'Retry-After':'5'},
-    });
+    return webhookRetryJson({error:'Webhook upload capacity is busy'},503);
   }
   let uploadReleased=false;
   const releaseUpload=()=>{

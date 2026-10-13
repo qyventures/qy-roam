@@ -1286,6 +1286,23 @@ test('Stripe webhook acknowledgements and retry responses are never cacheable', 
   assert.equal(directJsonResponses.length, 1);
 });
 
+test('Stripe webhook transient failures consistently advertise a bounded retry', () => {
+  assert.match(webhookRoute, /function webhookRetryJson\(body: unknown, status: 500 \| 503 = 500, retryAfter = '5'\)/);
+  assert.match(webhookRoute, /headers: \{ 'Retry-After': retryAfter \}/);
+  assert.match(webhookRoute, /webhookRetryJson\(\{error:'Webhook configuration incomplete'\},503,'30'\)/);
+  assert.match(webhookRoute, /webhookRetryJson\(\{error:'Persistence unavailable'\},503,'30'\)/);
+  assert.match(webhookRoute, /webhookRetryJson\(\{error:'Event is still processing'\}\)/);
+  assert.match(webhookRoute, /webhookRetryJson\(\{error:'Unable to retrieve Checkout Session'\}\)/);
+  assert.match(webhookRoute, /webhookRetryJson\(\{error:'Processing failed'\}\)/);
+  assert.match(webhookRoute, /status:408,headers:\{'Retry-After':'5'\}/);
+
+  // Permanent authentication, shape, and mode failures remain 4xx responses;
+  // a retry hint there would disguise an operator/configuration correction as
+  // ordinary provider backoff and needlessly retain malformed deliveries.
+  assert.match(webhookRoute, /webhookJson\(\{error:'Invalid signature'\},\{status:400\}\)/);
+  assert.match(webhookRoute, /webhookJson\(\{error:'Stripe event mode mismatch'\},\{status:400\}\)/);
+});
+
 test('Stripe webhook failure recording cannot replace the controlled retry response', () => {
   const failureRecorder = webhookRoute.match(/async function recordEventFailure[\s\S]*?\n}\n\n\/\/ An expired Checkout Session/);
   assert.ok(failureRecorder, 'webhook must retain a dedicated event-failure recorder');
@@ -6055,7 +6072,7 @@ test('expired lookalike sessions are ignored before claiming while trusted refre
   const expiryBranch = webhookRoute.slice(webhookRoute.indexOf("if(event.type==='checkout.session.expired')"));
   assert.match(expiryBranch, /stripe_webhook_expiry_integrity_error/);
   assert.match(expiryBranch, /recordEventFailure\(supabase,eventClaimId,claimStartedAt,error\)/);
-  assert.match(expiryBranch, /return webhookJson\(\{error:'Processing failed'\},\{status:500\}\)/);
+  assert.match(expiryBranch, /return webhookRetryJson\(\{error:'Processing failed'\}\)/);
 });
 
 test('expired checkout sessions close only their provisional pending orders', () => {
@@ -6733,7 +6750,8 @@ test('Stripe webhook concurrency is bounded without queueing or leaking admissio
   assert.match(stripeWebhookConcurrency, /__qyRoamStripeWebhookUploadConcurrency/);
   assert.doesNotMatch(webhookRoute, /createConcurrencyLimiter/);
   assert.match(webhookRoute, /const releaseProcessing=tryAcquireStripeWebhookProcessing\(\)/);
-  assert.match(webhookRoute, /status:503,[\s\S]{0,100}headers:\{'Retry-After':'5'\}/);
+  assert.match(webhookRoute, /return webhookRetryJson\(\{error:'Webhook processing is busy'\},503\)/);
+  assert.match(webhookRoute, /return webhookRetryJson\(\{error:'Webhook upload capacity is busy'\},503\)/);
   assert.match(webhookRoute, /finally \{\s*releaseProcessing\(\);\s*\}/);
   assert.match(webhookRoute, /const release=tryAcquireStripeWebhookUpload\(\)/);
   assert.match(webhookRoute, /let uploadReleased=false;[\s\S]*if\(uploadReleased\) return;[\s\S]*return await handleStripeWebhook\(req,releaseUpload\);[\s\S]*finally\{\s*releaseUpload\(\);/);
