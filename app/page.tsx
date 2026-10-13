@@ -202,7 +202,7 @@ export default function Home() {
         // server refuses to create a differently priced Stripe Session; make
         // the next click obtain a fresh live quote and show its total before
         // the customer can try payment again.
-        if (data.priceChanged) setAvailability(null);
+        if (data.priceChanged || data.bookingWindowChanged || data.pricingExpired) setAvailability(null);
         // Keep the idempotency key after ordinary failures: the server may have
         // created a session before a network response was lost. Rotate it only
         // after the server has confirmed that the prior session expired or

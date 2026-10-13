@@ -462,6 +462,8 @@ test('storefront checkout responses cannot redirect through malformed runtime da
     paymentFailed: false,
     paymentPending: false,
     priceChanged: false,
+    bookingWindowChanged: false,
+    pricingExpired: false,
   });
   assert.equal(parseCustomerCheckoutResponse({ completed: true, sessionId: 'cs_test_safe' }, 200).completedSessionId, 'cs_test_safe');
   // A malformed success must never rotate the durable attempt identity. The
@@ -482,6 +484,8 @@ test('storefront checkout responses cannot redirect through malformed runtime da
     paymentFailed: false,
     paymentPending: false,
     priceChanged: false,
+    bookingWindowChanged: false,
+    pricingExpired: false,
   });
   assert.equal(parseCustomerCheckoutResponse({ url: stripeUrl, checkoutExpired: true }, 200).checkoutExpired, false);
   assert.equal(parseCustomerCheckoutResponse({ completed: true, sessionId: 'cs_test_safe', paymentFailed: true }, 200).paymentFailed, false);
@@ -564,6 +568,8 @@ test('storefront checkout responses cannot redirect through malformed runtime da
       paymentFailed: false,
       paymentPending: false,
       priceChanged: false,
+      bookingWindowChanged: false,
+      pricingExpired: false,
     });
   }
 
@@ -2063,9 +2069,38 @@ test('Pocket WiFi checkout cannot charge a total that the customer has not revie
   assert.equal(changed.checkoutExpired, false);
   assert.equal(changed.checkoutRequestConflict, false);
   assert.equal(changed.paymentFailed, false);
-  assert.match(homePage, /if \(data\.priceChanged\) setAvailability\(null\);/);
+  assert.match(homePage, /if \(data\.priceChanged \|\| data\.bookingWindowChanged \|\| data\.pricingExpired\) setAvailability\(null\);/);
   assert.equal(parseCustomerCheckoutResponse({ error: 'Changed.', priceChanged: true }, 400).priceChanged, false);
   assert.equal(parseCustomerCheckoutResponse({ error: 'Changed.', priceChanged: true, checkoutExpired: true }, 409).priceChanged, false);
+});
+
+test('Pocket WiFi checkout invalidates stale quotes at operational pricing and booking boundaries', () => {
+  const bookingWindowChanged = parseCustomerCheckoutResponse({
+    error: 'The booking window changed.',
+    bookingWindowChanged: true,
+  }, 409);
+  assert.equal(bookingWindowChanged.bookingWindowChanged, true);
+  assert.equal(bookingWindowChanged.pricingExpired, false);
+  assert.equal(bookingWindowChanged.checkoutExpired, false);
+
+  const pricingExpired = parseCustomerCheckoutResponse({
+    error: 'This promotion has ended.',
+    pricingExpired: true,
+  }, 409);
+  assert.equal(pricingExpired.pricingExpired, true);
+  assert.equal(pricingExpired.bookingWindowChanged, false);
+  assert.equal(pricingExpired.checkoutExpired, false);
+
+  // A copied marker, ambiguous combination, or generic provider failure must
+  // not alter a reviewed quote or the durable Stripe attempt identity.
+  assert.equal(parseCustomerCheckoutResponse({ error: 'Changed.', bookingWindowChanged: true }, 503).bookingWindowChanged, false);
+  const ambiguous = parseCustomerCheckoutResponse({
+    error: 'Changed.',
+    bookingWindowChanged: true,
+    pricingExpired: true,
+  }, 409);
+  assert.equal(ambiguous.bookingWindowChanged, false);
+  assert.equal(ambiguous.pricingExpired, false);
 });
 
 test('Pocket WiFi availability remains bound to the exact dates that were checked', () => {

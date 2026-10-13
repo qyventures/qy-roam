@@ -10,6 +10,8 @@ export type CustomerCheckoutResponse = {
   paymentFailed: boolean;
   paymentPending: boolean;
   priceChanged: boolean;
+  bookingWindowChanged: boolean;
+  pricingExpired: boolean;
 };
 
 function safeCustomerError(value: unknown) {
@@ -34,6 +36,8 @@ export function parseCustomerCheckoutResponse(value: unknown, responseStatus: nu
     paymentFailed: false,
     paymentPending: false,
     priceChanged: false,
+    bookingWindowChanged: false,
+    pricingExpired: false,
   };
   if (!value || typeof value !== 'object' || Array.isArray(value)) return empty;
   if (!Number.isSafeInteger(responseStatus) || responseStatus < 100 || responseStatus > 599) return empty;
@@ -82,6 +86,11 @@ export function parseCustomerCheckoutResponse(value: unknown, responseStatus: nu
     input.checkoutRequestConflict === true,
     input.paymentFailed === true,
   ];
+  const requestedQuoteInvalidationReasons = [
+    input.priceChanged === true,
+    input.bookingWindowChanged === true,
+    input.pricingExpired === true,
+  ];
   // These states are mutually exclusive outcomes of one server-side
   // reconciliation. Require exactly one deliberate reason and the bounded
   // customer-facing explanation emitted with it before discarding the
@@ -99,15 +108,24 @@ export function parseCustomerCheckoutResponse(value: unknown, responseStatus: nu
   const paymentPending = responseStatus === 409 && Boolean(error) &&
     input.paymentPending === true &&
     requestedReplacementReasons.every((reason) => !reason) &&
-    input.priceChanged !== true;
+    requestedQuoteInvalidationReasons.every((reason) => !reason);
+  // These responses prove that no new Stripe Session was created: checkout
+  // detects each change at its final payment-capability boundary (and Pocket
+  // WiFi releases its still-unlinked reservation). They invalidate the quote
+  // shown in the browser, but deliberately retain the request id in case an
+  // intermediary copied a marker or an earlier ambiguous create exists.
+  const mayInvalidateQuote = responseStatus === 409 && Boolean(error) &&
+    requestedReplacementReasons.every((reason) => !reason) &&
+    requestedQuoteInvalidationReasons.filter(Boolean).length === 1;
   return {
     ...empty,
     error,
     // A price change never rotates the Stripe idempotency identity: checkout
     // rejects it before creating a Session. It only tells the storefront to
     // invalidate its live quote and require another explicit price review.
-    priceChanged: responseStatus === 409 && Boolean(error) && input.priceChanged === true &&
-      requestedReplacementReasons.every((reason) => !reason),
+    priceChanged: mayInvalidateQuote && input.priceChanged === true,
+    bookingWindowChanged: mayInvalidateQuote && input.bookingWindowChanged === true,
+    pricingExpired: mayInvalidateQuote && input.pricingExpired === true,
     checkoutExpired: mayReplaceAttempt && input.checkoutExpired === true,
     checkoutRequestConflict: mayReplaceAttempt && input.checkoutRequestConflict === true,
     paymentFailed: mayReplaceAttempt && input.paymentFailed === true,
