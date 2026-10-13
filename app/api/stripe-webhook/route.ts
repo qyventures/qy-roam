@@ -1115,6 +1115,18 @@ export async function POST(req:Request){
   if(!validStripeSignatureHeader(req.headers.get('stripe-signature'))) {
     return webhookJson({error:'Invalid signature'},{status:400});
   }
+  // Content-Length is only a bounded header hint, so it cannot replace the
+  // exact byte-count check performed while reading the signed payload. It can
+  // nevertheless reject impossible uploads before they consume one of the
+  // scarce slow-body slots. Without this guard, a public caller needs only a
+  // plausible signature header and an oversized/invalid declared length to
+  // briefly crowd authentic Stripe deliveries out of the upload budget.
+  try {
+    declaredContentLength(req.headers.get('content-length'),MAX_STRIPE_WEBHOOK_BODY_BYTES);
+  } catch(error) {
+    if(error instanceof RangeError) return webhookJson({error:'Webhook payload too large'},{status:413});
+    return webhookJson({error:'Invalid webhook payload'},{status:400});
+  }
   const release=tryAcquireStripeWebhookUpload();
   if(!release){
     return webhookRetryJson({error:'Webhook upload capacity is busy'},503);

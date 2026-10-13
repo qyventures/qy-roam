@@ -7259,6 +7259,9 @@ test('obviously invalid webhook traffic cannot consume paid-order processing slo
   assert.match(beforeAdmission, /isJsonRequestContentType\(req\.headers\.get\('content-type'\)\)/);
   assert.match(beforeAdmission, /hasIdentityContentEncoding\(req\.headers\.get\('content-encoding'\)\)/);
   assert.match(beforeAdmission, /validStripeSignatureHeader\(req\.headers\.get\('stripe-signature'\)\)/);
+  assert.match(beforeAdmission, /declaredContentLength\(req\.headers\.get\('content-length'\),MAX_STRIPE_WEBHOOK_BODY_BYTES\)/);
+  assert.match(beforeAdmission, /Webhook payload too large'\},\{status:413\}/);
+  assert.match(beforeAdmission, /Invalid webhook payload'\},\{status:400\}/);
   assert.doesNotMatch(beforeAdmission, /readStripeWebhookBody\(|constructEvent\(/);
 });
 
