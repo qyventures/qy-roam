@@ -10,7 +10,7 @@ import { operationalConfig } from '../../../lib/operationalConfig';
 import { operationalIsoDate, operationalIsoDateAfter } from '../../../lib/operationalDate';
 import { hasRequiredFulfilmentEmailConfig, hasRequiredPaymentSchema, hasRequiredPocketWifiFulfilmentSchema, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '../../../lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
-import { InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
+import { hasIdentityRequestContentEncoding, InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '../../../lib/requestBody';
 import { checkoutAttemptLimited, checkoutGloballyLimited } from '@/lib/checkoutRateLimit';
 import { metaAttributionFromRequest } from '@/lib/metaAttribution';
 import { checkoutAttemptExpiresAt } from '@/lib/checkoutExpiry';
@@ -155,6 +155,10 @@ export async function POST(req: Request) {
   // POSTs deny Checkout to every legitimate traveller on this process.
   if(checkoutAttemptLimited(req)) return NextResponse.json({error:'Too many checkout attempts. Please try again shortly.'},{status:429,headers:{'Cache-Control':'no-store','Retry-After':'60'}});
   if(!isJsonRequestContentType(req.headers.get('content-type'))) return NextResponse.json({error:'Expected JSON request.'},{status:415});
+  // Keep the body-size and exact Content-Length boundary independent of
+  // proxy/runtime decompression behaviour. Checkout clients send a tiny JSON
+  // document and have no reason to use a content coding.
+  if(!hasIdentityRequestContentEncoding(req.headers.get('content-encoding'))) return NextResponse.json({error:'Unsupported request content encoding.'},{status:415});
   // Match the readiness guard, which permits harmless deployment whitespace.
   // Passing the untrimmed secret to Stripe would otherwise make health look
   // ready while every checkout creation fails authentication.

@@ -34,7 +34,7 @@ const { MAX_POCKET_WIFI_INVENTORY, operationalConfig } = require('../lib/operati
 const { validStripeCheckoutSessionId, validStripeCheckoutSessionIdForMode } = require('../lib/stripeSessionId.ts');
 const { validStripeEventCreated, validStripePaymentEventCreated, STRIPE_EVENT_CREATED_MIN_SECONDS, STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS } = require('../lib/stripeEventCreated.ts');
 const { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesEvent, stripeWebhookCheckoutSessionMatchesSnapshot, stripeWebhookEventEnvelope } = require('../lib/stripeWebhookObject.ts');
-const { isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError, InvalidRequestBodyLimitError, MAX_REQUEST_BODY_CHUNKS } = require('../lib/requestBody.ts');
+const { hasIdentityRequestContentEncoding, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError, InvalidRequestBodyLimitError, MAX_REQUEST_BODY_CHUNKS } = require('../lib/requestBody.ts');
 const { checkoutClientKey, createCheckoutAttemptLimiter, createGlobalAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { adminAuthClientKey, createFailedAdminAuthLimiter } = require('../lib/adminAuthRateLimit.ts');
 const { ADMIN_MUTATION_HEADER, ADMIN_MUTATION_HEADER_VALUE, adminMutationHeaders } = require('../lib/adminMutation.ts');
@@ -2130,6 +2130,24 @@ test('both checkout endpoints use the bounded streaming body reader', () => {
     assert.match(source, /readLimitedRequestText\(req,\s*MAX_BODY_BYTES,\s*CHECKOUT_BODY_TIMEOUT_MS\)/);
     assert.match(source, /RequestBodyTimeoutError/);
     assert.doesNotMatch(source, /await req\.text\(\)/);
+  }
+});
+
+test('public checkout rejects encoded bodies before reading or provider work', () => {
+  assert.equal(hasIdentityRequestContentEncoding(null), true);
+  assert.equal(hasIdentityRequestContentEncoding(' identity '), true);
+  assert.equal(hasIdentityRequestContentEncoding('gzip'), false);
+  assert.equal(hasIdentityRequestContentEncoding('br'), false);
+  assert.equal(hasIdentityRequestContentEncoding('identity, gzip'), false);
+
+  for (const source of [wifiCheckoutRoute, esimCheckoutRoute]) {
+    const encodingGuard = source.indexOf("hasIdentityRequestContentEncoding(req.headers.get('content-encoding'))");
+    const bodyRead = source.indexOf('readLimitedRequestText(req,');
+    const stripeConfig = source.indexOf('hasRequiredStripeCheckoutConfig()');
+    assert.ok(encodingGuard >= 0, 'checkout must validate Content-Encoding');
+    assert.ok(bodyRead > encodingGuard, 'checkout must reject encoded bodies before reading them');
+    assert.ok(stripeConfig > encodingGuard, 'checkout must reject encoded bodies before configuration/provider work');
+    assert.match(source, /Unsupported request content encoding\./);
   }
 });
 

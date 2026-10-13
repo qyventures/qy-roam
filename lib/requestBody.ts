@@ -38,6 +38,19 @@ export function isJsonRequestContentType(value: string | null) {
   return value.split(';', 1)[0].trim().toLowerCase() === 'application/json';
 }
 
+/**
+ * The bounded readers account for the exact bytes exposed by the runtime and
+ * compare them with the request's declared Content-Length. Content codings can
+ * make that relationship depend on whether a proxy/runtime has already
+ * decoded the stream, and a compact encoded request can expand well beyond
+ * the intended application work budget. JSON mutation endpoints therefore
+ * accept only the untransformed representation (an explicit identity coding
+ * is equivalent to an omitted header).
+ */
+export function hasIdentityRequestContentEncoding(value: string | null) {
+  return value === null || value.trim().toLowerCase() === 'identity';
+}
+
 export async function readLimitedRequestText(req: Request, maxBytes: number, timeoutMs: number) {
   // Validate the bounds before consulting Content-Length or obtaining a
   // reader. This keeps a programming/configuration error fail-closed instead
