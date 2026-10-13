@@ -357,7 +357,7 @@ export async function POST(req: Request) {
         console.error('checkout_url_invalid',{sessionId:existing.id});
         return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
       }
-      return NextResponse.json({error:'Your payment is still being confirmed. Please wait for confirmation before trying again.',paymentPending:true},{status:409,headers:{'Cache-Control':'no-store'}});
+      return NextResponse.json({error:'Your payment is still being confirmed. Please wait for confirmation before trying again.',paymentPending:true},{status:409,headers:{'Cache-Control':'no-store','Retry-After':'3'}});
     }
     return NextResponse.json({url:existingCheckoutUrl},{headers:{'Cache-Control':'no-store'}});
   }
@@ -550,7 +550,7 @@ export async function POST(req: Request) {
       console.error('checkout_url_invalid',{sessionId:currentSession.id});
       return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
     }
-    return NextResponse.json({error:'Your payment is still being confirmed. Please wait for confirmation before trying again.',paymentPending:true},{status:409,headers:{'Cache-Control':'no-store'}});
+    return NextResponse.json({error:'Your payment is still being confirmed. Please wait for confirmation before trying again.',paymentPending:true},{status:409,headers:{'Cache-Control':'no-store','Retry-After':'3'}});
   }
   if(!await linkReservationToSession(supabase,requestId,currentSession.id,requested)){
     // Fail closed: a payment URL without a durable session-to-reservation

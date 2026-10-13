@@ -458,6 +458,7 @@ test('storefront checkout responses cannot redirect through malformed runtime da
     checkoutExpired: false,
     checkoutRequestConflict: false,
     paymentFailed: false,
+    paymentPending: false,
     priceChanged: false,
   });
   assert.equal(parseCustomerCheckoutResponse({ completed: true, sessionId: 'cs_test_safe' }, 200).completedSessionId, 'cs_test_safe');
@@ -477,6 +478,7 @@ test('storefront checkout responses cannot redirect through malformed runtime da
     checkoutExpired: false,
     checkoutRequestConflict: false,
     paymentFailed: false,
+    paymentPending: false,
     priceChanged: false,
   });
   assert.equal(parseCustomerCheckoutResponse({ url: stripeUrl, checkoutExpired: true }, 200).checkoutExpired, false);
@@ -504,6 +506,21 @@ test('storefront checkout responses cannot redirect through malformed runtime da
   assert.equal(failure.error, 'Payment pending.');
   assert.equal(failure.paymentFailed, true);
   assert.equal(failure.checkoutExpired, false);
+  assert.equal(failure.paymentPending, false);
+  const pending = parseCustomerCheckoutResponse({ error: 'Payment is still being confirmed.', paymentPending: true }, 409);
+  assert.equal(pending.paymentPending, true);
+  assert.equal(pending.checkoutExpired, false);
+  assert.equal(pending.checkoutRequestConflict, false);
+  assert.equal(pending.paymentFailed, false);
+  for (const malformedPending of [
+    { error: 'Conflicting state.', paymentPending: true, checkoutExpired: true },
+    { error: 'Conflicting state.', paymentPending: true, checkoutRequestConflict: true },
+    { error: 'Conflicting state.', paymentPending: true, paymentFailed: true },
+    { error: 'Conflicting state.', paymentPending: true, priceChanged: true },
+  ]) {
+    assert.equal(parseCustomerCheckoutResponse(malformedPending, 409).paymentPending, false);
+  }
+  assert.equal(parseCustomerCheckoutResponse({ error: 'Pending.', paymentPending: true }, 503).paymentPending, false);
   assert.equal(parseCustomerCheckoutResponse({ error: 'bad\nheader' }, 409).error, null);
 
   // A request id is the durable Stripe idempotency boundary. Never rotate it
@@ -543,6 +560,7 @@ test('storefront checkout responses cannot redirect through malformed runtime da
       checkoutExpired: false,
       checkoutRequestConflict: false,
       paymentFailed: false,
+      paymentPending: false,
       priceChanged: false,
     });
   }
@@ -552,6 +570,13 @@ test('storefront checkout responses cannot redirect through malformed runtime da
     assert.match(page, /if \(data\.checkoutUrl\) window\.location\.href = data\.checkoutUrl/);
     assert.match(page, /else if \(data\.completedSessionId\) window\.location\.href = `\/success\?session_id=\$\{encodeURIComponent\(data\.completedSessionId\)\}`/);
     assert.doesNotMatch(page, /if \(data\.url\) window\.location\.href = data\.url/);
+  }
+});
+
+test('checkout payment-confirmation recovery advertises a bounded safe retry', () => {
+  for (const route of [wifiCheckoutRoute, esimCheckoutRoute]) {
+    const pendingResponses = route.match(/paymentPending:\s*true[\s\S]{0,250}['"]Retry-After['"]\s*:\s*['"]3['"]/g) || [];
+    assert.ok(pendingResponses.length > 0, 'payment-pending response must advertise a three-second retry');
   }
 });
 

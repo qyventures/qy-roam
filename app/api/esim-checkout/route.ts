@@ -414,7 +414,7 @@ export async function POST(req: Request) {
       }
       return NextResponse.json({ error: 'Your payment is still being confirmed. Please wait for confirmation before trying again.', paymentPending: true }, {
         status: 409,
-        headers: { 'Cache-Control': 'no-store' }
+        headers: { 'Cache-Control': 'no-store', 'Retry-After': '3' }
       });
     }
     return NextResponse.json({ url: checkoutUrl }, { headers: { 'Cache-Control': 'no-store' } });

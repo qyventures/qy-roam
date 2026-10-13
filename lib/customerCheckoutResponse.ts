@@ -8,6 +8,7 @@ export type CustomerCheckoutResponse = {
   checkoutExpired: boolean;
   checkoutRequestConflict: boolean;
   paymentFailed: boolean;
+  paymentPending: boolean;
   priceChanged: boolean;
 };
 
@@ -31,6 +32,7 @@ export function parseCustomerCheckoutResponse(value: unknown, responseStatus: nu
     checkoutExpired: false,
     checkoutRequestConflict: false,
     paymentFailed: false,
+    paymentPending: false,
     priceChanged: false,
   };
   if (!value || typeof value !== 'object' || Array.isArray(value)) return empty;
@@ -88,6 +90,16 @@ export function parseCustomerCheckoutResponse(value: unknown, responseStatus: nu
   // the original attempt instead of opening a second payable Session.
   const mayReplaceAttempt = responseStatus === 409 && Boolean(error) &&
     requestedReplacementReasons.filter(Boolean).length === 1;
+  // Payment confirmation is deliberately non-terminal. Stripe may already
+  // have accepted this exact Session while its signed webhook is still
+  // persisting the durable order, so the browser must keep the current
+  // checkout request id and retry it rather than opening another payable
+  // Session. Accept this marker only on the route's bounded conflict response
+  // and never alongside a reason that authorises attempt rotation.
+  const paymentPending = responseStatus === 409 && Boolean(error) &&
+    input.paymentPending === true &&
+    requestedReplacementReasons.every((reason) => !reason) &&
+    input.priceChanged !== true;
   return {
     ...empty,
     error,
@@ -99,5 +111,6 @@ export function parseCustomerCheckoutResponse(value: unknown, responseStatus: nu
     checkoutExpired: mayReplaceAttempt && input.checkoutExpired === true,
     checkoutRequestConflict: mayReplaceAttempt && input.checkoutRequestConflict === true,
     paymentFailed: mayReplaceAttempt && input.paymentFailed === true,
+    paymentPending,
   };
 }
