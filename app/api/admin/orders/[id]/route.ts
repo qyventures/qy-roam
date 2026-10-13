@@ -340,6 +340,21 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const order = Array.isArray(data) ? data[0] : data;
   if (!order?.id) return NextResponse.json({ error: 'Unable to update order' }, { status: 500 });
   return NextResponse.json({ id: order.id, fulfilment_status: order.fulfilment_status, updated_at: order.updated_at }, { headers: { 'Cache-Control': 'no-store' } });
+  } catch {
+    // Supabase normally returns PostgREST failures in the result object, but
+    // its bounded transport can still throw on a network timeout, aborted
+    // response, or malformed upstream payload. Keep those dependency faults
+    // inside the same reviewed API contract as returned errors: the admin UI
+    // receives a retryable response, no provider/customer detail reaches the
+    // browser or logs, and the shared operations slot is released below.
+    console.error('admin_order_transition_failed');
+    return NextResponse.json(
+      { error: 'Unable to update order. Please try again shortly.' },
+      {
+        status: 503,
+        headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' },
+      },
+    );
   } finally {
     releaseAdminOps();
   }

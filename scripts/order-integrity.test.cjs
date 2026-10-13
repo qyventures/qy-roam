@@ -892,6 +892,23 @@ test('admin order transitions share the bounded operations database-work budget'
   );
 });
 
+test('admin order transitions contain unexpected dependency failures inside a retryable API response', () => {
+  const transitionHandler = adminOrderRoute.slice(
+    adminOrderRoute.indexOf('export async function PATCH'),
+    adminOrderRoute.indexOf('async function retryOrderDeliveries'),
+  );
+  // Supabase result errors have specific reviewed responses above, while a
+  // thrown transport/runtime failure must not escape into Next's generic
+  // error renderer or log provider/customer details.
+  assert.match(transitionHandler, /catch \{[\s\S]*console\.error\('admin_order_transition_failed'\);/);
+  assert.doesNotMatch(transitionHandler, /console\.error\('admin_order_transition_failed',/);
+  assert.match(transitionHandler, /Unable to update order\. Please try again shortly\./);
+  assert.match(transitionHandler, /status: 503/);
+  assert.match(transitionHandler, /'Cache-Control': 'no-store'/);
+  assert.match(transitionHandler, /'Retry-After': '5'/);
+  assert.match(transitionHandler, /catch \{[\s\S]*finally \{\s*releaseAdminOps\(\);\s*\}/);
+});
+
 test('Pocket WiFi reservation authority validates its complete capacity snapshot', () => {
   // The app obtains these values from bounded configuration, a short Checkout
   // attempt, and at most five 100-row Stripe pages. The SECURITY DEFINER RPC
@@ -1317,6 +1334,8 @@ test('admin and readiness failure paths do not expose raw dependency errors', ()
   // unexpected failures must use a stable message and log event.
   assert.match(adminOrderRoute, /console\.error\('admin_order_notification_retry_error'\);/);
   assert.doesNotMatch(adminOrderRoute, /console\.error\('admin_order_notification_retry_error',/);
+  assert.match(adminOrderRoute, /console\.error\('admin_order_transition_failed'\);/);
+  assert.doesNotMatch(adminOrderRoute, /console\.error\('admin_order_transition_failed',/);
   assert.match(adminOpsRoute, /console\.error\('admin_ops_action_failed', \{ action \}\);/);
   assert.doesNotMatch(adminOpsRoute, /console\.error\('admin ops action failed'/);
   assert.match(adminOpsRoute, /Operation failed\. Please try again or contact an administrator\./);
