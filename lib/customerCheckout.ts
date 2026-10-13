@@ -40,12 +40,30 @@ export async function fetchCustomerCheckout(
   const deadlineAt = performance.now() + CUSTOMER_CHECKOUT_RECONCILIATION_TIMEOUT_MS;
 
   for (let attempt = 0; attempt < CUSTOMER_CHECKOUT_MAX_RECONCILIATION_ATTEMPTS; attempt += 1) {
-    const remainingMs = deadlineAt - performance.now();
+    // performance.now() is sub-millisecond in browsers, while the shared
+    // request boundary deliberately accepts only finite integer deadlines.
+    // Round down so this budget never exceeds the reviewed overall timeout
+    // and does not reject every checkout merely because the clock is precise.
+    const remainingMs = Math.floor(deadlineAt - performance.now());
     // A previous response or backoff can consume the shared budget. Return the
     // last authenticated pending state instead of starting another request
     // that would extend this click beyond its reviewed browser deadline.
     if (remainingMs < 1) return parsed ?? parseCustomerCheckoutResponse(null, 500);
-    const { response, value } = await fetchCustomerJson(input, init, remainingMs);
+    let response: Response;
+    let value: unknown;
+    try {
+      ({ response, value } = await fetchCustomerJson(input, init, remainingMs));
+    } catch (error) {
+      // Once the server has authenticated a paid-but-not-yet-persisted state,
+      // a later reconciliation poll is only an attempt to improve that known
+      // result. A dropped mobile connection, proxy body failure, or exhausted
+      // shared deadline must not replace it with a generic checkout failure:
+      // that can make a paid customer try to buy again. Preserve the pending
+      // envelope (and therefore the same durable checkout attempt) while
+      // still surfacing first-request failures normally.
+      if (parsed?.paymentPending) return parsed;
+      throw error;
+    }
     parsed = parseCustomerCheckoutResponse(value, response.status);
     if (!parsed.paymentPending || attempt === CUSTOMER_CHECKOUT_MAX_RECONCILIATION_ATTEMPTS - 1) {
       return parsed;

@@ -600,9 +600,49 @@ test('checkout payment-confirmation recovery advertises a bounded safe retry', (
   // rotate the checkout identity and create a second payable Session.
   assert.match(customerCheckout, /for \(let attempt = 0; attempt < CUSTOMER_CHECKOUT_MAX_RECONCILIATION_ATTEMPTS; attempt \+= 1\)/);
   assert.match(customerCheckout, /const deadlineAt = performance\.now\(\) \+ CUSTOMER_CHECKOUT_RECONCILIATION_TIMEOUT_MS/);
+  assert.match(customerCheckout, /const remainingMs = Math\.floor\(deadlineAt - performance\.now\(\)\)/);
   assert.match(customerCheckout, /fetchCustomerJson\(input, init, remainingMs\)/);
   assert.match(customerCheckout, /if \(deadlineAt - performance\.now\(\) <= retryAfterMs\) return parsed/);
   assert.doesNotMatch(customerCheckout, /checkoutAttempt|checkoutRequestId|JSON\.stringify/);
+});
+
+test('checkout reconciliation preserves an authenticated pending payment across a later transport failure', async () => {
+  const originalFetch = global.fetch;
+  const originalSetTimeout = global.setTimeout;
+  let requests = 0;
+  global.fetch = async () => {
+    requests += 1;
+    if (requests === 1) {
+      return new Response(JSON.stringify({
+        error: 'Payment received. We are confirming your order.',
+        paymentPending: true,
+      }), {
+        status: 409,
+        headers: { 'Content-Type': 'application/json', 'Retry-After': '1' },
+      });
+    }
+    throw new TypeError('simulated dropped connection');
+  };
+  // Skip only the deliberate reconciliation backoff. Keep the request's
+  // long deadline timer real so this test still exercises the production
+  // fetch/parse path rather than replacing it with a duplicate implementation.
+  global.setTimeout = (callback, delay, ...args) => delay === 1_000
+    ? originalSetTimeout(callback, 0, ...args)
+    : originalSetTimeout(callback, delay, ...args);
+  try {
+    const result = await require('../lib/customerCheckout.ts').fetchCustomerCheckout('/api/checkout', {
+      method: 'POST',
+      body: '{}',
+    });
+    assert.equal(requests, 2);
+    assert.equal(result.paymentPending, true);
+    assert.equal(result.error, 'Payment received. We are confirming your order.');
+    assert.equal(result.checkoutUrl, null);
+    assert.equal(result.completedSessionId, null);
+  } finally {
+    global.fetch = originalFetch;
+    global.setTimeout = originalSetTimeout;
+  }
 });
 
 test('checkout attempt identity survives reloads without becoming permanently stale', () => {
