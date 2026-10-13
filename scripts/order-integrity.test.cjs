@@ -1382,6 +1382,7 @@ function esimSession(plan = ESIM_PLANS[0]) {
     id: 'cs_test_esim',
     mode: 'payment',
     payment_status: 'unpaid',
+    consent: { terms_of_service: 'accepted' },
     currency: 'sgd',
     amount_total: Math.max(50, Math.round(plan.qyPriceSgd * 100)),
     metadata: {
@@ -1410,6 +1411,7 @@ function wifiSession(plan = WIFI_PLANS[0]) {
     id: 'cs_test_wifi',
     mode: 'payment',
     payment_status: 'unpaid',
+    consent: { terms_of_service: 'accepted' },
     currency: 'sgd',
     amount_total: rental - discount,
     metadata: {
@@ -1521,6 +1523,32 @@ test('rejects unsupported Stripe payment states before order persistence', () =>
 
   assert.match(schema, /if p_payment_status not in \('paid', 'unpaid'\) then raise exception 'unsupported Stripe payment status'/);
   assert.match(schema, /if p_payment_failed and p_payment_status <> 'unpaid' then raise exception 'failed payment must be unpaid'/);
+});
+
+test('requires Stripe-recorded terms acceptance at every trusted order boundary', () => {
+  for (const createSession of [esimSession, wifiSession]) {
+    const missing = createSession();
+    delete missing.consent;
+    assert.deepEqual(validateQyRoamSession(missing), {
+      valid: false,
+      reason: 'QY Roam order is missing terms acceptance',
+    });
+
+    const notAccepted = createSession();
+    notAccepted.consent = { terms_of_service: null };
+    assert.equal(validateQyRoamSession(notAccepted).valid, false);
+  }
+
+  // The acceptance evidence only exists because both products require it at
+  // Checkout creation. The shared validator is then reused by webhook,
+  // confirmation, booking status, and protected admin delivery recovery.
+  for (const route of [esimCheckoutRoute, wifiCheckoutRoute]) {
+    assert.match(route, /consent_collection:\s*\{\s*terms_of_service:\s*'required'\s*\}/);
+  }
+  assert.match(webhookRoute, /validateQyRoamSession\(sessionForEvent\)/);
+  assert.match(successPage, /validateQyRoamSession\(session\)/);
+  assert.match(bookingPage, /validateQyRoamSession\(session\)/);
+  assert.match(adminOrderRoute, /validateQyRoamSession\(session\)/);
 });
 
 test('rejects unsigned, copied, and session-id-replayed checkout provenance', () => {

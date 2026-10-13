@@ -111,6 +111,15 @@ export function validateQyRoamSession(session: Stripe.Checkout.Session): QyRoamS
   if (session.payment_status !== 'paid' && session.payment_status !== 'unpaid') {
     return { valid: false, reason: 'QY Roam order has an unsupported payment status' };
   }
+  // Both checkout routes make the published terms mandatory. Treat Stripe's
+  // resulting acceptance record as part of the order authority, rather than
+  // assuming that a `complete`/`paid` state alone proves consent. This keeps
+  // webhook fulfilment, customer confirmation, and admin recovery closed if
+  // a future Checkout configuration regression omits the required consent or
+  // Stripe returns an incomplete Session shape at one of those boundaries.
+  if (session.consent?.terms_of_service !== 'accepted') {
+    return { valid: false, reason: 'QY Roam order is missing terms acceptance' };
+  }
   if (!validCheckoutRequestId(session.metadata?.checkout_request_id)) {
     return { valid: false, reason: 'missing or invalid checkout request id' };
   }
