@@ -98,7 +98,9 @@ export function parseCustomerCheckoutResponse(value: unknown, responseStatus: nu
   // combines flags (or carries only a flag) must remain safely retryable with
   // the original attempt instead of opening a second payable Session.
   const mayReplaceAttempt = responseStatus === 409 && Boolean(error) &&
-    requestedReplacementReasons.filter(Boolean).length === 1;
+    requestedReplacementReasons.filter(Boolean).length === 1 &&
+    requestedQuoteInvalidationReasons.every((reason) => !reason) &&
+    input.paymentPending !== true;
   // Payment confirmation is deliberately non-terminal. Stripe may already
   // have accepted this exact Session while its signed webhook is still
   // persisting the durable order, so the browser must keep the current
@@ -116,6 +118,7 @@ export function parseCustomerCheckoutResponse(value: unknown, responseStatus: nu
   // intermediary copied a marker or an earlier ambiguous create exists.
   const mayInvalidateQuote = responseStatus === 409 && Boolean(error) &&
     requestedReplacementReasons.every((reason) => !reason) &&
+    input.paymentPending !== true &&
     requestedQuoteInvalidationReasons.filter(Boolean).length === 1;
   return {
     ...empty,

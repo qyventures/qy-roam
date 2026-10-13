@@ -2103,6 +2103,33 @@ test('Pocket WiFi checkout invalidates stale quotes at operational pricing and b
   assert.equal(ambiguous.pricingExpired, false);
 });
 
+test('ambiguous checkout conflicts never rotate the durable Stripe attempt identity', () => {
+  const replacementReasons = ['checkoutExpired', 'checkoutRequestConflict', 'paymentFailed'];
+  const quoteReasons = ['priceChanged', 'bookingWindowChanged', 'pricingExpired'];
+
+  for (const replacementReason of replacementReasons) {
+    for (const conflictingReason of [...quoteReasons, 'paymentPending']) {
+      const parsed = parseCustomerCheckoutResponse({
+        error: 'Ambiguous checkout state.',
+        [replacementReason]: true,
+        [conflictingReason]: true,
+      }, 409);
+      assert.equal(parsed[replacementReason], false, `${replacementReason} must conflict with ${conflictingReason}`);
+      assert.equal(parsed[conflictingReason], false, `${conflictingReason} must conflict with ${replacementReason}`);
+    }
+  }
+
+  for (const quoteReason of quoteReasons) {
+    const parsed = parseCustomerCheckoutResponse({
+      error: 'Ambiguous checkout state.',
+      [quoteReason]: true,
+      paymentPending: true,
+    }, 409);
+    assert.equal(parsed[quoteReason], false, `${quoteReason} must conflict with paymentPending`);
+    assert.equal(parsed.paymentPending, false, `paymentPending must conflict with ${quoteReason}`);
+  }
+});
+
 test('Pocket WiFi availability remains bound to the exact dates that were checked', () => {
   // Inputs remain editable while the provider-backed request is in flight.
   // Capture the request window and require it to match the current selection
