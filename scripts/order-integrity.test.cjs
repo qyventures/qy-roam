@@ -752,6 +752,45 @@ test('customer checkout requests release a stuck browser without rotating their 
       /Invalid customer JSON encoding/,
     );
 
+    const shortBody = JSON.stringify({ url: 'https://checkout.stripe.com/c/pay/cs_test_short' });
+    global.fetch = async () => new Response(shortBody, {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+        'content-length': String(Buffer.byteLength(shortBody) + 1),
+      },
+    });
+    await assert.rejects(
+      () => fetchCustomerJson('/api/checkout', { method: 'POST' }, 100),
+      /Customer response body length does not match Content-Length/,
+    );
+
+    const longBody = JSON.stringify({ url: 'https://checkout.stripe.com/c/pay/cs_test_long' });
+    global.fetch = async () => new Response(longBody, {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+        'content-length': String(Buffer.byteLength(longBody) - 1),
+      },
+    });
+    await assert.rejects(
+      () => fetchCustomerJson('/api/checkout', { method: 'POST' }, 100),
+      /Customer response body length does not match Content-Length/,
+    );
+
+    // Browser fetch exposes decoded bytes but may retain the compressed wire
+    // length. It remains bounded above, but cannot be compared exactly.
+    global.fetch = async () => new Response(JSON.stringify({ url: 'safe-compressed' }), {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+        'content-encoding': 'gzip',
+        'content-length': '5',
+      },
+    });
+    const compressed = await fetchCustomerJson('/api/checkout', { method: 'POST' }, 100);
+    assert.deepEqual(compressed.value, { url: 'safe-compressed' });
+
     assert.equal(CUSTOMER_JSON_RESPONSE_MAX_BYTES, 64 * 1024);
     assert.equal(CUSTOMER_JSON_RESPONSE_MAX_CHUNKS, 1_024);
     let oversizedCancelled = false;

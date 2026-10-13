@@ -50,6 +50,7 @@ async function readBoundedJson(response: Response) {
     throw new Error('Invalid customer response content type');
   }
   const declared = response.headers.get('content-length');
+  let declaredBytes: number | null = null;
   if (declared !== null) {
     // Content-Length is bytes on the wire. Browsers may expose a decoded body
     // while retaining the encoded length, so it is useful as an early upper
@@ -58,7 +59,7 @@ async function readBoundedJson(response: Response) {
       void response.body?.cancel().catch(() => undefined);
       throw new Error('Invalid customer response length');
     }
-    const declaredBytes = Number(declared);
+    declaredBytes = Number(declared);
     if (!Number.isSafeInteger(declaredBytes) || declaredBytes > CUSTOMER_JSON_RESPONSE_MAX_BYTES) {
       void response.body?.cancel().catch(() => undefined);
       throw new Error('Customer response is too large');
@@ -89,6 +90,15 @@ async function readBoundedJson(response: Response) {
     }
   } finally {
     try { reader.releaseLock(); } catch {}
+  }
+  // Fetch can expose a decoded stream while retaining the compressed wire
+  // length, so only require byte-for-byte agreement for identity responses.
+  // Same-origin checkout APIs are uncompressed at the application boundary;
+  // a short or overlong body there must not become an authoritative payment
+  // capability merely because its available prefix is still valid JSON.
+  const contentEncoding = response.headers.get('content-encoding')?.trim().toLowerCase();
+  if (declaredBytes !== null && (!contentEncoding || contentEncoding === 'identity') && total !== declaredBytes) {
+    throw new Error('Customer response body length does not match Content-Length');
   }
   let decoded: string;
   try {
