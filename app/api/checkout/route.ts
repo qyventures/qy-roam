@@ -59,6 +59,16 @@ function matchesRequestedPocketWifi(session:Stripe.Checkout.Session,requestId:st
     // before re-signing or returning its URL. Otherwise a legacy open Session
     // could accept payment and then be rejected by the webhook after charge.
     session.consent_collection?.terms_of_service==='required' &&
+    // The paid-order boundary also requires a routable Singapore address and
+    // customer phone number before operations can dispatch a router. A
+    // durable Stripe idempotency key can replay a Session created by an older
+    // release, so prove that capability collected both fields before signing
+    // it, linking scarce inventory, or returning its payment URL. Otherwise a
+    // customer could be charged successfully only for the webhook to reject
+    // the order as undeliverable.
+    session.phone_number_collection?.enabled===true &&
+    session.shipping_address_collection?.allowed_countries?.length===1 &&
+    session.shipping_address_collection.allowed_countries[0]==='SG' &&
     session.metadata?.source==='qyroam.com' &&
     session.metadata?.product_type==='pocket_wifi' &&
     session.metadata?.checkout_request_id===requestId &&

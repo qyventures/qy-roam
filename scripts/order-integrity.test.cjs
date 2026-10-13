@@ -1557,6 +1557,25 @@ test('requires Stripe-recorded terms acceptance at every trusted order boundary'
   assert.match(adminOrderRoute, /validateQyRoamSession\(session\)/);
 });
 
+test('Pocket WiFi payment capabilities must collect the fulfilment details required after charge', () => {
+  // Stripe idempotency can replay a Session created by an older deployment.
+  // The matcher gates both the create response and the fresh recovery read,
+  // so keep phone/address collection aligned with paidFulfilmentDetailsIssue
+  // before an old capability can be signed, linked to inventory, or exposed.
+  const matcher = wifiCheckoutRoute.match(/function matchesRequestedPocketWifi[\s\S]*?\n}/)?.[0] || '';
+  assert.match(matcher, /session\.phone_number_collection\?\.enabled===true/);
+  assert.match(matcher, /session\.shipping_address_collection\?\.allowed_countries\?\.length===1/);
+  assert.match(matcher, /session\.shipping_address_collection\.allowed_countries\[0\]==='SG'/);
+  // The definition plus every fresh/recovered Stripe response check must
+  // remain present; there are currently seven call sites across both paths.
+  assert.equal((wifiCheckoutRoute.match(/matchesRequestedPocketWifi\(/g) || []).length, 8);
+
+  assert.match(wifiCheckoutRoute, /shipping_address_collection:\{allowed_countries:\['SG'\]\}/);
+  assert.match(wifiCheckoutRoute, /phone_number_collection:\{enabled:true\}/);
+  assert.match(paidFulfilmentDetailsIssue.toString(), /Paid Pocket WiFi order is missing a valid customer phone number/);
+  assert.match(paidFulfilmentDetailsIssue.toString(), /shipping\?\.country !== 'SG'/);
+});
+
 test('rejects unsigned, copied, and session-id-replayed checkout provenance', () => {
   const unsigned = esimSession();
   delete unsigned.metadata.qyroam_provenance;
