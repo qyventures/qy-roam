@@ -11,6 +11,7 @@ import { fetchCustomerJson } from '../lib/clientRequest';
 import { esimPromoIsActive } from '../lib/esimPlans';
 import { parsePocketWifiAvailability, parsePocketWifiBookingTerms, type PocketWifiAvailability } from '../lib/pocketWifiAvailability';
 import { parseCustomerCheckoutResponse } from '../lib/customerCheckoutResponse';
+import { pocketWifiCheckoutFingerprint } from '../lib/checkoutFingerprint';
 
 const plans = WIFI_PLANS;
 
@@ -171,7 +172,7 @@ export default function Home() {
       return;
     }
     const measurementConsent = metaMeasurementAllowed();
-    const fingerprint = JSON.stringify({ country, start, end, promoCode, measurementConsent });
+    const fingerprint = pocketWifiCheckoutFingerprint(country, start, end, promoCode);
     activeCheckoutAttempt.current = checkoutAttempt('pocket_wifi', fingerprint, activeCheckoutAttempt.current);
     // A transient browser/network failure can retry this exact Stripe
     // idempotency key. Give Pixel the same stable attempt identity so it does

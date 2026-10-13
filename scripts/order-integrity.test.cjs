@@ -65,6 +65,7 @@ const { durableOrderMatchesPaidSession } = require('../lib/durableOrderSnapshot.
 const { exactStripeClaimToken } = require('../lib/stripeClaimToken.ts');
 const { parsePocketWifiAvailability, parsePocketWifiBookingTerms } = require('../lib/pocketWifiAvailability.ts');
 const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutResponse.ts');
+const { esimCheckoutFingerprint, pocketWifiCheckoutFingerprint } = require('../lib/checkoutFingerprint.ts');
 const { MANUAL_ORDER_REFERENCE_MAX_LENGTH, manualOrderReference, manualOrderSessionId } = require('../lib/manualOrderReference.ts');
 const { createConcurrencyLimiter } = require('../lib/concurrencyLimit.ts');
 const { CHECKOUT_MAX_CONCURRENT_REQUESTS, CHECKOUT_MAX_CONCURRENT_UPLOADS, tryAcquireCheckoutConcurrency, tryAcquireCheckoutUpload } = require('../lib/checkoutConcurrency.ts');
@@ -581,6 +582,26 @@ test('checkout attempt identity survives reloads without becoming permanently st
     if (previousCrypto === undefined) delete global.crypto;
     else global.crypto = previousCrypto;
   }
+});
+
+test('checkout attempt identity follows commercial selections, not optional measurement state', () => {
+  assert.equal(esimCheckoutFingerprint('jp-5d'), esimCheckoutFingerprint('jp-5d'));
+  assert.notEqual(esimCheckoutFingerprint('jp-5d'), esimCheckoutFingerprint('kr-5d'));
+  assert.equal(
+    pocketWifiCheckoutFingerprint('Japan', '2026-11-01', '2026-11-05', ' qy10 '),
+    pocketWifiCheckoutFingerprint('Japan', '2026-11-01', '2026-11-05', 'QY10'),
+  );
+  assert.notEqual(
+    pocketWifiCheckoutFingerprint('Japan', '2026-11-01', '2026-11-05', 'QY10'),
+    pocketWifiCheckoutFingerprint('Japan', '2026-11-02', '2026-11-05', 'QY10'),
+  );
+
+  // Consent remains metadata on the attempt, but changing it must not rotate
+  // the request id after Stripe may already have created a payable Session.
+  assert.match(homePage, /const measurementConsent = metaMeasurementAllowed\(\);[\s\S]*?pocketWifiCheckoutFingerprint\(country, start, end, promoCode\)[\s\S]*?checkoutAttempt\('pocket_wifi'/);
+  assert.match(esimPage, /const measurementConsent = metaMeasurementAllowed\(\);[\s\S]*?esimCheckoutFingerprint\(planId\)[\s\S]*?checkoutAttempt\('esim'/);
+  assert.doesNotMatch(homePage, /JSON\.stringify\(\{ country, start, end, promoCode, measurementConsent \}\)/);
+  assert.doesNotMatch(esimPage, /JSON\.stringify\(\{ planId, measurementConsent \}\)/);
 });
 
 test('customer checkout requests release a stuck browser without rotating their durable attempt identity', async () => {
@@ -2545,8 +2566,8 @@ test('browser InitiateCheckout events share the durable Stripe attempt identity 
   assert.match(metaClient, /fbq\('track', event, params, options\)/);
   assert.match(homePage, /trackMeta\('InitiateCheckout',[\s\S]*?\{ eventID: `checkout_\$\{activeCheckoutAttempt\.current\.requestId\}` \}\);/);
   assert.match(esimPage, /trackMeta\('InitiateCheckout',[\s\S]*?\{ eventID: `checkout_\$\{activeCheckoutAttempt\.current\.requestId\}` \}\);/);
-  assert.match(homePage, /const fingerprint = JSON\.stringify[\s\S]*?checkoutAttempt\('pocket_wifi', fingerprint, activeCheckoutAttempt\.current\)[\s\S]*?trackMeta\('InitiateCheckout'/);
-  assert.match(esimPage, /const fingerprint = JSON\.stringify[\s\S]*?checkoutAttempt\('esim', fingerprint, activeCheckoutAttempt\.current\)[\s\S]*?trackMeta\('InitiateCheckout'/);
+  assert.match(homePage, /const fingerprint = pocketWifiCheckoutFingerprint[\s\S]*?checkoutAttempt\('pocket_wifi', fingerprint, activeCheckoutAttempt\.current\)[\s\S]*?trackMeta\('InitiateCheckout'/);
+  assert.match(esimPage, /const fingerprint = esimCheckoutFingerprint[\s\S]*?checkoutAttempt\('esim', fingerprint, activeCheckoutAttempt\.current\)[\s\S]*?trackMeta\('InitiateCheckout'/);
 });
 
 test('browser checkout funnel uses the same product identity and paid value as Purchase', () => {

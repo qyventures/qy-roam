@@ -6,6 +6,7 @@ import { metaAttribution, metaMeasurementAllowed, trackMeta } from '../../lib/me
 import { checkoutAttempt, clearCheckoutAttempt, type CheckoutAttempt } from '../../lib/checkoutAttempt';
 import { fetchCustomerJson } from '../../lib/clientRequest';
 import { parseCustomerCheckoutResponse } from '../../lib/customerCheckoutResponse';
+import { esimCheckoutFingerprint } from '../../lib/checkoutFingerprint';
 
 export default function EsimPage() {
   const [planId, setPlanId] = useState<string>(ESIM_PLANS[0].id);
@@ -24,7 +25,7 @@ export default function EsimPage() {
     setError('');
     try {
       const measurementConsent = metaMeasurementAllowed();
-      const fingerprint = JSON.stringify({ planId, measurementConsent });
+      const fingerprint = esimCheckoutFingerprint(planId);
       activeCheckoutAttempt.current = checkoutAttempt('esim', fingerprint, activeCheckoutAttempt.current);
       // Keep repeated attempts for the same Stripe idempotency key as one
       // browser checkout-start event. A different plan intentionally creates
