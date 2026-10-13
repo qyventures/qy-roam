@@ -47,6 +47,11 @@ const CHECKOUT_BODY_TIMEOUT_MS = 15_000;
 // (but otherwise valid) purchase.
 function matchesRequestedEsim(session: Stripe.Checkout.Session, requestId: string, plan: NonNullable<ReturnType<typeof getEsimPlan>>, expiresAt: number) {
   return session.mode === 'payment' &&
+    // Idempotency can return a Session created by an older deployment. The
+    // webhook requires the resulting terms acceptance before fulfilment, so
+    // never expose an open payment capability that did not require Stripe to
+    // collect it. Failing here keeps the mismatch on the safe side of charge.
+    session.consent_collection?.terms_of_service === 'required' &&
     session.metadata?.source === 'qyroam.com' &&
     session.metadata?.product_type === 'esim' &&
     session.metadata?.checkout_request_id === requestId &&

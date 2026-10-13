@@ -1545,6 +1545,12 @@ test('requires Stripe-recorded terms acceptance at every trusted order boundary'
   for (const route of [esimCheckoutRoute, wifiCheckoutRoute]) {
     assert.match(route, /consent_collection:\s*\{\s*terms_of_service:\s*'required'\s*\}/);
   }
+  // A durable Stripe idempotency key can replay an open Session created by an
+  // older application release. Both checkout matchers gate every fresh and
+  // recovered payment URL, so require them to reject a capability that would
+  // not produce the acceptance evidence enforced after payment above.
+  assert.match(esimCheckoutRoute, /function matchesRequestedEsim[\s\S]{0,500}session\.consent_collection\?\.terms_of_service === 'required'/);
+  assert.match(wifiCheckoutRoute, /function matchesRequestedPocketWifi[\s\S]{0,700}session\.consent_collection\?\.terms_of_service==='required'/);
   assert.match(webhookRoute, /validateQyRoamSession\(sessionForEvent\)/);
   assert.match(successPage, /validateQyRoamSession\(session\)/);
   assert.match(bookingPage, /validateQyRoamSession\(session\)/);

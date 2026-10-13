@@ -53,6 +53,12 @@ type RequestedPocketWifi = {
 function matchesRequestedPocketWifi(session:Stripe.Checkout.Session,requestId:string,requested:RequestedPocketWifi) {
   const expectedAmount=requested.rentalBeforePromo-requested.promoDiscount+requested.courierFee;
   return session.mode==='payment' &&
+    // The paid-order boundary requires Stripe's recorded terms acceptance.
+    // Stripe can replay an older Session for a durable idempotency key, so
+    // verify that the payment capability actually collects that acceptance
+    // before re-signing or returning its URL. Otherwise a legacy open Session
+    // could accept payment and then be rejected by the webhook after charge.
+    session.consent_collection?.terms_of_service==='required' &&
     session.metadata?.source==='qyroam.com' &&
     session.metadata?.product_type==='pocket_wifi' &&
     session.metadata?.checkout_request_id===requestId &&
