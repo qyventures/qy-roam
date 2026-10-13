@@ -18,7 +18,37 @@ type CustomerJsonResponse = {
   value: unknown;
 };
 
+export function isCustomerJsonResponseContentType(value: string | null) {
+  if (!value) return false;
+  const parts = value.split(';').map((part) => part.trim());
+  if (parts.shift()?.toLowerCase() !== 'application/json') return false;
+
+  let sawCharset = false;
+  for (const parameter of parts) {
+    const separator = parameter.indexOf('=');
+    if (separator < 1) return false;
+    const name = parameter.slice(0, separator).trim().toLowerCase();
+    const raw = parameter.slice(separator + 1).trim().toLowerCase();
+    const parameterValue = raw.startsWith('"') && raw.endsWith('"')
+      ? raw.slice(1, -1)
+      : raw;
+    // The reader below always decodes bytes as UTF-8. Reject additional or
+    // conflicting response parameters instead of silently interpreting a
+    // payment-capability document under different media-type semantics.
+    if (name !== 'charset' || sawCharset || (parameterValue !== 'utf-8' && parameterValue !== 'utf8')) return false;
+    sawCharset = true;
+  }
+  return true;
+}
+
 async function readBoundedJson(response: Response) {
+  // Checkout URLs and completed-session ids are browser capabilities. A
+  // proxy error page or stale service worker must not become authoritative
+  // merely because its body happens to parse as JSON.
+  if (!isCustomerJsonResponseContentType(response.headers.get('content-type'))) {
+    void response.body?.cancel().catch(() => undefined);
+    throw new Error('Invalid customer response content type');
+  }
   const declared = response.headers.get('content-length');
   if (declared !== null) {
     // Content-Length is bytes on the wire. Browsers may expose a decoded body
@@ -60,7 +90,13 @@ async function readBoundedJson(response: Response) {
   } finally {
     try { reader.releaseLock(); } catch {}
   }
-  return JSON.parse(new TextDecoder().decode(bytes.subarray(0, total))) as unknown;
+  let decoded: string;
+  try {
+    decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, total));
+  } catch {
+    throw new Error('Invalid customer JSON encoding');
+  }
+  return JSON.parse(decoded) as unknown;
 }
 
 async function runCustomerRequest<T>(
