@@ -78,6 +78,7 @@ const { ADMIN_DASHBOARD_MAX_CONCURRENT_REQUESTS, tryAcquireAdminDashboardConcurr
 const { STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS, STRIPE_WEBHOOK_MAX_CONCURRENT_UPLOADS, tryAcquireStripeWebhookProcessing, tryAcquireStripeWebhookUpload } = require('../lib/stripeWebhookConcurrency.ts');
 const { validatedSalesReportRow } = require('../lib/salesReportRow.ts');
 const { validatedForecastRow } = require('../lib/forecastRow.ts');
+const { META_ATTRIBUTION_METADATA_KEYS, stripeMeasurementConsentDowngrade } = require('../lib/stripeMeasurementConsent.ts');
 
 function requireFresh(relativePath) {
   const resolved = require.resolve(relativePath);
@@ -602,6 +603,37 @@ test('checkout attempt identity follows commercial selections, not optional meas
   assert.match(esimPage, /const measurementConsent = metaMeasurementAllowed\(\);[\s\S]*?esimCheckoutFingerprint\(planId\)[\s\S]*?checkoutAttempt\('esim'/);
   assert.doesNotMatch(homePage, /JSON\.stringify\(\{ country, start, end, promoCode, measurementConsent \}\)/);
   assert.doesNotMatch(esimPage, /JSON\.stringify\(\{ planId, measurementConsent \}\)/);
+});
+
+test('same-session checkout recovery honours measurement consent revocation', () => {
+  const accepted = {
+    measurement_consent: 'accepted',
+    meta_fbp: 'fb.1.1234567890.browser',
+    meta_fbc: 'fb.1.1234567890.click',
+    meta_client_user_agent: 'Browser',
+    meta_client_ip: '203.0.113.5',
+  };
+  assert.equal(stripeMeasurementConsentDowngrade(accepted, true), null);
+  assert.equal(stripeMeasurementConsentDowngrade({ measurement_consent: 'essential' }, false), null);
+  assert.deepEqual(stripeMeasurementConsentDowngrade(accepted, false), {
+    measurement_consent: 'essential',
+    ...Object.fromEntries(META_ATTRIBUTION_METADATA_KEYS.map((key) => [key, null])),
+  });
+
+  // Both products reuse the original Stripe idempotency key on retry, so both
+  // must narrow an accepted Session before re-signing it or exposing its URL.
+  for (const route of [wifiCheckoutRoute, esimCheckoutRoute]) {
+    assert.match(route, /stripeMeasurementConsentDowngrade\([^\n]+body\.measurementConsent\)/);
+    assert.match(route, /sessions\.update\([^\n]+\{\s*metadata:\s*consentDowngrade\s*\}/);
+  }
+  assert.ok(
+    wifiCheckoutRoute.indexOf('stripeMeasurementConsentDowngrade(existing.metadata,body.measurementConsent)') <
+      wifiCheckoutRoute.indexOf('const metadata={...existing.metadata}'),
+  );
+  assert.ok(
+    esimCheckoutRoute.indexOf('stripeMeasurementConsentDowngrade(session.metadata, body.measurementConsent)') <
+      esimCheckoutRoute.indexOf('const metadata = { ...session.metadata }'),
+  );
 });
 
 test('customer checkout requests release a stuck browser without rotating their durable attempt identity', async () => {
@@ -2443,7 +2475,7 @@ test('admin delivery recovery validates its stored Stripe Checkout Session id be
 });
 
 test('checkout provider responses are bounded before their Session ids become API targets or provenance inputs', () => {
-  const esimCreate = esimCheckoutRoute.indexOf('const session = await stripe.checkout.sessions.create');
+  const esimCreate = esimCheckoutRoute.indexOf('let session = await stripe.checkout.sessions.create');
   const esimId = esimCheckoutRoute.indexOf('const createdSessionId = validStripeCheckoutSessionIdForMode(session.id, session.livemode)', esimCreate);
   const esimUpdate = esimCheckoutRoute.indexOf('stripe.checkout.sessions.update(createdSessionId', esimCreate);
   const esimRetrieve = esimCheckoutRoute.indexOf('stripe.checkout.sessions.retrieve(createdSessionId)', esimCreate);

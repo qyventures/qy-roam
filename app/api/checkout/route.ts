@@ -22,6 +22,7 @@ import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhookObject';
 import { tryAcquireCheckoutConcurrency, tryAcquireCheckoutUpload } from '@/lib/checkoutConcurrency';
 import { scanActivePocketWifiStripeHolds } from '@/lib/pocketWifiStripeHolds';
+import { stripeMeasurementConsentDowngrade } from '@/lib/stripeMeasurementConsent';
 
 export const runtime = 'nodejs';
 
@@ -264,6 +265,17 @@ export async function POST(req: Request) {
     if(!matchesRequestedPocketWifi(existing,requestId,requested)){
       return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.',checkoutRequestConflict:true},{status:409,headers:{'Cache-Control':'no-store'}});
     }
+    const consentDowngrade=stripeMeasurementConsentDowngrade(existing.metadata,body.measurementConsent);
+    if(consentDowngrade){
+      const updated=await stripe.checkout.sessions.update(existing.id,{metadata:consentDowngrade});
+      if(!stripeWebhookCheckoutSessionMatchesSnapshot(existing,updated)||
+        !stripeEventMatchesConfiguredMode(key,updated.livemode)||
+        !matchesRequestedPocketWifi(updated,requestId,requested)){
+        console.error('checkout_consent_downgrade_mismatch',{expectedSessionId:existing.id});
+        return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
+      }
+      existing=updated;
+    }
     const metadata={...existing.metadata} as Record<string,string>;
     const provenance=signedQyRoamProvenance(existing.id,metadata);
     if(metadata[QY_ROAM_PROVENANCE_METADATA_KEY]!==provenance){
@@ -416,6 +428,17 @@ export async function POST(req: Request) {
     const released=await supabase.from('checkout_reservations').delete().eq('checkout_request_id',requestId).is('stripe_session_id',null);
     if(released.error) throw released.error;
     return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.',checkoutRequestConflict:true},{status:409,headers:{'Cache-Control':'no-store'}});
+  }
+  const consentDowngrade=stripeMeasurementConsentDowngrade(session.metadata,body.measurementConsent);
+  if(consentDowngrade){
+    const updated=await stripe.checkout.sessions.update(createdSessionId,{metadata:consentDowngrade});
+    if(!stripeWebhookCheckoutSessionMatchesSnapshot(session,updated)||
+      !stripeEventMatchesConfiguredMode(key,updated.livemode)||
+      !matchesRequestedPocketWifi(updated,requestId,requested)){
+      console.error('checkout_consent_downgrade_mismatch',{expectedSessionId:createdSessionId});
+      return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
+    }
+    session=updated;
   }
   // The id-specific provenance is written before the checkout URL is exposed.
   // Retrying the same idempotency key also repairs a session if a process died

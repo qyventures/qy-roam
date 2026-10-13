@@ -17,6 +17,7 @@ import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhookObject';
 import { tryAcquireCheckoutConcurrency, tryAcquireCheckoutUpload } from '@/lib/checkoutConcurrency';
+import { stripeMeasurementConsentDowngrade } from '@/lib/stripeMeasurementConsent';
 
 export const runtime = 'nodejs';
 
@@ -199,7 +200,7 @@ export async function POST(req: Request) {
 
     const stripe = createStripeClient(key);
     const amount = Math.max(50, Math.round(plan.qyPriceSgd * 100));
-    const session = await stripe.checkout.sessions.create({
+    let session = await stripe.checkout.sessions.create({
       mode: 'payment',
       expires_at: expiresAt,
       line_items: [{
@@ -271,6 +272,21 @@ export async function POST(req: Request) {
         status: 409,
         headers: { 'Cache-Control': 'no-store' }
       });
+    }
+
+    const consentDowngrade = stripeMeasurementConsentDowngrade(session.metadata, body.measurementConsent);
+    if (consentDowngrade) {
+      const updated = await stripe.checkout.sessions.update(createdSessionId, { metadata: consentDowngrade });
+      if (!stripeWebhookCheckoutSessionMatchesSnapshot(session, updated) ||
+        !stripeEventMatchesConfiguredMode(key, updated.livemode) ||
+        !matchesRequestedEsim(updated, requestId, plan, expiresAt)) {
+        console.error('esim_checkout_consent_downgrade_mismatch', { expectedSessionId: createdSessionId });
+        return NextResponse.json({ error: 'Secure checkout confirmation is temporarily unavailable. Please try again shortly.' }, {
+          status: 503,
+          headers: { 'Cache-Control': 'no-store', 'Retry-After': '10' },
+        });
+      }
+      session = updated;
     }
 
     // Stripe assigns the session id during creation. Add a server-only HMAC
