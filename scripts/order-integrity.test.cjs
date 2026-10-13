@@ -3894,7 +3894,7 @@ test('admin fulfilment writes reject stale same-status saves using the exact ord
     assert.match(transition, /raise exception 'order changed since it was loaded'/);
   }
   assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 37/);
-  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 9/);
+  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 10/);
 });
 
 test('eSIM delivery evidence and fulfilment transition share one database authority', () => {
@@ -4062,8 +4062,8 @@ test('generic inventory mutations cannot make a router saleable while it is in c
     'both quantity adjustments and status changes must reject assigned in-custody routers',
   );
   assert.match(schema, /inventory item is assigned to an active Pocket WiFi custody order/);
-  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 9; \$\$/);
-  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 9/);
+  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 10; \$\$/);
+  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 10/);
   assert.match(productionReadiness, /database\.rpc\('qy_pocket_wifi_fulfilment_schema_version', \{\}\)/);
   assert.match(productionReadiness, /versionProbe\.data !== REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION/);
 });
@@ -4140,8 +4140,20 @@ test('Pocket WiFi inventory movements remain append-only audit evidence', () => 
     guard,
     /create trigger qy_enforce_inventory_movement_immutability[\s\S]*before update or delete on public\.inventory_movements/,
   );
-  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 9; \$\$/);
-  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 9/);
+  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 10; \$\$/);
+  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 10/);
+});
+
+test('Pocket WiFi custody movements are exactly-once per order and inventory item', () => {
+  const guard = schema.slice(
+    schema.indexOf('create or replace function public.qy_enforce_inventory_custody_movement_once()'),
+    schema.indexOf('-- Stock movements are the audit evidence'),
+  );
+  assert.match(guard, /pg_advisory_xact_lock\(hashtext\([\s\S]*new\.inventory_item_id::text[\s\S]*new\.reference/);
+  assert.match(guard, /new\.movement_type = 'dispatch'[\s\S]*movement_type = 'dispatch'[\s\S]*dispatch movement already exists/);
+  assert.match(guard, /new\.movement_type in \('return', 'return_quarantined', 'return_damaged'\)[\s\S]*movement_type in \('return', 'return_quarantined', 'return_damaged'\)[\s\S]*return movement already exists/);
+  assert.match(guard, /inventory_item_id = new\.inventory_item_id[\s\S]*reference = new\.reference/);
+  assert.match(guard, /create trigger qy_enforce_inventory_custody_movement_once[\s\S]*before insert on public\.inventory_movements/);
 });
 
 test('Pocket WiFi stock can only be mutated through audited inventory RPCs', () => {
@@ -4166,8 +4178,8 @@ test('Pocket WiFi stock can only be mutated through audited inventory RPCs', () 
     const body = schema.slice(start, schema.indexOf('$$;', start) + 3);
     assert.match(body, /security definer/, `${rpc} must retain owner-authorized writes`);
   }
-  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 9; \$\$/);
-  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 9/);
+  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 10; \$\$/);
+  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 10/);
 });
 
 test('admin actions advance their transition baseline after each save', () => {

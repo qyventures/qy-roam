@@ -2409,6 +2409,55 @@ alter table public.inventory_movements add constraint inventory_movements_refere
 ) not valid;
 alter table public.inventory_movements enable row level security;
 
+-- A paid rental has exactly one outbound stock movement and at most one
+-- receipt movement for its assigned stock item. The order transition RPC
+-- serialises normal writes, but keep the append-only ledger safe from owner
+-- repair scripts and future SECURITY DEFINER routines as well: a second
+-- dispatch would subtract the same router twice, while two return variants
+-- could both restore stock or disagree about the inspection outcome.
+create or replace function public.qy_enforce_inventory_custody_movement_once()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public
+as $$
+begin
+  -- The normal transition RPC already locks the order, but privileged writers
+  -- can race each other outside that path. Serialize this exact custody key
+  -- before checking the append-only ledger so two concurrent inserts cannot
+  -- both observe an empty history and commit duplicates.
+  if new.movement_type in ('dispatch', 'return', 'return_quarantined', 'return_damaged') then
+    perform pg_advisory_xact_lock(hashtext(
+      'qy_roam_custody_movement:' || new.inventory_item_id::text || ':' || new.reference
+    ));
+  end if;
+
+  if new.movement_type = 'dispatch' and exists (
+    select 1 from public.inventory_movements
+    where inventory_item_id = new.inventory_item_id
+      and reference = new.reference
+      and movement_type = 'dispatch'
+  ) then
+    raise exception 'Pocket WiFi dispatch movement already exists for this order and inventory item';
+  end if;
+
+  if new.movement_type in ('return', 'return_quarantined', 'return_damaged') and exists (
+    select 1 from public.inventory_movements
+    where inventory_item_id = new.inventory_item_id
+      and reference = new.reference
+      and movement_type in ('return', 'return_quarantined', 'return_damaged')
+  ) then
+    raise exception 'Pocket WiFi return movement already exists for this order and inventory item';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists qy_enforce_inventory_custody_movement_once on public.inventory_movements;
+create trigger qy_enforce_inventory_custody_movement_once
+before insert on public.inventory_movements
+for each row execute function public.qy_enforce_inventory_custody_movement_once();
+
 -- Stock movements are the audit evidence behind both saleable quantity and
 -- the Pocket WiFi custody checks above. Once recorded, changing or deleting a
 -- movement could make a dispatch/return appear to have happened differently,
@@ -2826,8 +2875,9 @@ set search_path = pg_catalog
 -- Version 8 certifies that a damaged/quarantined return from an aggregate
 -- stock row does not hide the other saleable routers in that row. Version 9
 -- closes the movement-type domain and enforces direction/quantity semantics
--- for every newly written stock-ledger row.
-as $$ select 9; $$;
+-- for every newly written stock-ledger row. Version 10 makes each order/item
+-- custody boundary exactly-once even for privileged database writers.
+as $$ select 10; $$;
 revoke all on function public.qy_pocket_wifi_fulfilment_schema_version() from public;
 grant execute on function public.qy_pocket_wifi_fulfilment_schema_version() to service_role;
 
