@@ -4,8 +4,7 @@ import { useMemo, useRef, useState } from 'react';
 import { ESIM_PLANS, ESIM_PROMO, esimPromoIsActive } from '../../lib/esimPlans';
 import { metaAttribution, metaMeasurementAllowed, trackMeta } from '../../lib/metaClient';
 import { checkoutAttempt, clearCheckoutAttempt, type CheckoutAttempt } from '../../lib/checkoutAttempt';
-import { fetchCustomerJson } from '../../lib/clientRequest';
-import { parseCustomerCheckoutResponse } from '../../lib/customerCheckoutResponse';
+import { fetchCustomerCheckout } from '../../lib/customerCheckout';
 import { esimCheckoutFingerprint } from '../../lib/checkoutFingerprint';
 
 export default function EsimPage() {
@@ -41,12 +40,11 @@ export default function EsimPage() {
         currency: 'SGD',
         num_items: 1
       }, { eventID: `checkout_${activeCheckoutAttempt.current.requestId}` });
-      const { response: res, value: payload } = await fetchCustomerJson('/api/esim-checkout', {
+      const data = await fetchCustomerCheckout('/api/esim-checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ planId, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: activeCheckoutAttempt.current.requestId, checkoutAttemptCreatedAt: activeCheckoutAttempt.current.createdAt })
       });
-      const data = parseCustomerCheckoutResponse(payload, res.status);
       if (data.checkoutUrl) window.location.href = data.checkoutUrl;
       else if (data.completedSessionId) window.location.href = `/success?session_id=${encodeURIComponent(data.completedSessionId)}`;
       else {

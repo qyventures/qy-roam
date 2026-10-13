@@ -65,6 +65,7 @@ const { durableOrderMatchesPaidSession } = require('../lib/durableOrderSnapshot.
 const { exactStripeClaimToken } = require('../lib/stripeClaimToken.ts');
 const { parsePocketWifiAvailability, parsePocketWifiBookingTerms } = require('../lib/pocketWifiAvailability.ts');
 const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutResponse.ts');
+const { CUSTOMER_CHECKOUT_MAX_RECONCILIATION_ATTEMPTS, customerCheckoutRetryAfterMs } = require('../lib/customerCheckout.ts');
 const { esimCheckoutFingerprint, pocketWifiCheckoutFingerprint } = require('../lib/checkoutFingerprint.ts');
 const { MANUAL_ORDER_REFERENCE_MAX_LENGTH, manualOrderReference, manualOrderSessionId } = require('../lib/manualOrderReference.ts');
 const { createConcurrencyLimiter } = require('../lib/concurrencyLimit.ts');
@@ -102,6 +103,7 @@ const availabilityRoute = fs.readFileSync(require.resolve('../app/api/availabili
 const pocketWifiStripeHolds = fs.readFileSync(require.resolve('../lib/pocketWifiStripeHolds.ts'), 'utf8');
 const bookingTermsRoute = fs.readFileSync(require.resolve('../app/api/booking-terms/route.ts'), 'utf8');
 const esimPage = fs.readFileSync(require.resolve('../app/esim/page.tsx'), 'utf8');
+const customerCheckout = fs.readFileSync(require.resolve('../lib/customerCheckout.ts'), 'utf8');
 const esimLayout = fs.readFileSync(require.resolve('../app/esim/layout.tsx'), 'utf8');
 const homePage = fs.readFileSync(require.resolve('../app/page.tsx'), 'utf8');
 const manualOrderForm = fs.readFileSync(require.resolve('../components/ManualOrderForm.tsx'), 'utf8');
@@ -566,7 +568,7 @@ test('storefront checkout responses cannot redirect through malformed runtime da
   }
 
   for (const page of [homePage, esimPage]) {
-    assert.match(page, /parseCustomerCheckoutResponse\(payload, res\.status\)/);
+    assert.match(page, /await fetchCustomerCheckout\(['"]\/api\/(?:checkout|esim-checkout)['"]/);
     assert.match(page, /if \(data\.checkoutUrl\) window\.location\.href = data\.checkoutUrl/);
     assert.match(page, /else if \(data\.completedSessionId\) window\.location\.href = `\/success\?session_id=\$\{encodeURIComponent\(data\.completedSessionId\)\}`/);
     assert.doesNotMatch(page, /if \(data\.url\) window\.location\.href = data\.url/);
@@ -578,6 +580,20 @@ test('checkout payment-confirmation recovery advertises a bounded safe retry', (
     const pendingResponses = route.match(/paymentPending:\s*true[\s\S]{0,250}['"]Retry-After['"]\s*:\s*['"]3['"]/g) || [];
     assert.ok(pendingResponses.length > 0, 'payment-pending response must advertise a three-second retry');
   }
+  assert.equal(CUSTOMER_CHECKOUT_MAX_RECONCILIATION_ATTEMPTS, 4);
+  assert.equal(customerCheckoutRetryAfterMs('1'), 1_000);
+  assert.equal(customerCheckoutRetryAfterMs('3'), 3_000);
+  assert.equal(customerCheckoutRetryAfterMs('30'), 5_000);
+  assert.equal(customerCheckoutRetryAfterMs('0'), 1_000);
+  for (const malformed of [null, '', '1.5', '-1', 'Wed, 21 Oct 2015 07:28:00 GMT', '999999999999999999999']) {
+    assert.equal(customerCheckoutRetryAfterMs(malformed), 3_000);
+  }
+  // Automatic reconciliation must reuse one immutable RequestInit/body and
+  // stop after the finite attempt ceiling. A new request body here could
+  // rotate the checkout identity and create a second payable Session.
+  assert.match(customerCheckout, /for \(let attempt = 0; attempt < CUSTOMER_CHECKOUT_MAX_RECONCILIATION_ATTEMPTS; attempt \+= 1\)/);
+  assert.match(customerCheckout, /fetchCustomerJson\(input, init\)/);
+  assert.doesNotMatch(customerCheckout, /checkoutAttempt|checkoutRequestId|JSON\.stringify/);
 });
 
 test('checkout attempt identity survives reloads without becoming permanently stale', () => {
@@ -697,8 +713,8 @@ test('customer checkout requests release a stuck browser without rotating their 
   }
 
   assert.match(homePage, /fetchCustomerJson\(`\/api\/availability/);
-  assert.match(homePage, /fetchCustomerJson\('\/api\/checkout'/);
-  assert.match(esimPage, /fetchCustomerJson\('\/api\/esim-checkout'/);
+  assert.match(homePage, /fetchCustomerCheckout\('\/api\/checkout'/);
+  assert.match(esimPage, /fetchCustomerCheckout\('\/api\/esim-checkout'/);
   assert.match(homePage, /checkoutAttempt\('pocket_wifi'/);
   assert.match(esimPage, /checkoutAttempt\('esim'/);
 });

@@ -8,9 +8,9 @@ import { metaAttribution, metaMeasurementAllowed, trackMeta } from '../lib/metaC
 import { operationalIsoDateAfter } from '../lib/operationalDate';
 import { checkoutAttempt, clearCheckoutAttempt, type CheckoutAttempt } from '../lib/checkoutAttempt';
 import { fetchCustomerJson } from '../lib/clientRequest';
+import { fetchCustomerCheckout } from '../lib/customerCheckout';
 import { esimPromoIsActive } from '../lib/esimPlans';
 import { parsePocketWifiAvailability, parsePocketWifiBookingTerms, type PocketWifiAvailability } from '../lib/pocketWifiAvailability';
-import { parseCustomerCheckoutResponse } from '../lib/customerCheckoutResponse';
 import { pocketWifiCheckoutFingerprint } from '../lib/checkoutFingerprint';
 
 const plans = WIFI_PLANS;
@@ -194,8 +194,7 @@ export default function Home() {
     }, { eventID: `checkout_${activeCheckoutAttempt.current.requestId}` });
     setCheckingOut(true);
     try {
-      const { response: res, value: payload } = await fetchCustomerJson('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ country, start, end, promoCode, expectedTotalCents: payableTotalCents, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: activeCheckoutAttempt.current.requestId, checkoutAttemptCreatedAt: activeCheckoutAttempt.current.createdAt }) });
-      const data = parseCustomerCheckoutResponse(payload, res.status);
+      const data = await fetchCustomerCheckout('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ country, start, end, promoCode, expectedTotalCents: payableTotalCents, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: activeCheckoutAttempt.current.requestId, checkoutAttemptCreatedAt: activeCheckoutAttempt.current.createdAt }) });
       if (data.checkoutUrl) window.location.href = data.checkoutUrl;
       else if (data.completedSessionId) window.location.href = `/success?session_id=${encodeURIComponent(data.completedSessionId)}`;
       else {
