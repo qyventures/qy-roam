@@ -587,7 +587,26 @@ alter table public.orders add constraint orders_paid_stripe_fulfilment_details_c
         length(regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g')) between 7 and 15 and
         jsonb_typeof(shipping_address) = 'object' and
         shipping_address ->> 'country' = 'SG' and
-        nullif(btrim(shipping_address ->> 'line1'), '') is not null and
+        length(btrim(shipping_address ->> 'line1')) between 1 and 200 and
+        (shipping_address ->> 'line1') !~ '[[:cntrl:]]' and
+        (
+          shipping_address ->> 'line2' is null or (
+            length(btrim(shipping_address ->> 'line2')) <= 200 and
+            (shipping_address ->> 'line2') !~ '[[:cntrl:]]'
+          )
+        ) and
+        (
+          shipping_address ->> 'city' is null or (
+            length(btrim(shipping_address ->> 'city')) <= 200 and
+            (shipping_address ->> 'city') !~ '[[:cntrl:]]'
+          )
+        ) and
+        (
+          shipping_address ->> 'state' is null or (
+            length(btrim(shipping_address ->> 'state')) <= 200 and
+            (shipping_address ->> 'state') !~ '[[:cntrl:]]'
+          )
+        ) and
         -- Match the webhook's courier-routing boundary exactly. A merely
         -- non-empty value can make a privileged repair look deliverable even
         -- though Singapore postcodes are six digits and the application
@@ -2359,7 +2378,9 @@ as $$
   -- timestamp when an integer counter has reached its storage ceiling.
   -- Version 37 additionally certifies that accounting-period reconciliation
   -- locks paid-order mutations until the matching close has been persisted.
-  select 37;
+  -- Version 38 binds privileged paid-order writes to the same bounded,
+  -- single-line courier address contract enforced by webhook fulfilment.
+  select 38;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
