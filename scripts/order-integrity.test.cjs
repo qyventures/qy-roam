@@ -854,6 +854,19 @@ test('Pocket WiFi availability scans the full saleable register with bounded ari
   assert.equal(boundedSaleableSums.length, 3, 'availability, public checkout and manual sales must clamp saleable stock before integer conversion');
 });
 
+test('inventory admin fails closed when the physical register is unavailable or incomplete', () => {
+  // An empty register is a legitimate zero; a failed or truncated read is
+  // unknown. Do not render either condition as zero stock or expose mutation
+  // controls backed by a partial device selector.
+  assert.match(inventoryPage, /const inventoryRegisterComplete=!itemsResult\.error&&!itemsResult\.truncated/);
+  assert.match(inventoryPage, /inventoryRegisterComplete\?saleablePocketWifi:'—'/);
+  assert.match(inventoryPage, /inventoryRegisterComplete\?`S\$\$\{value\.toFixed\(2\)\}`:'—'/);
+  assert.match(inventoryPage, /\{inventoryRegisterComplete&&<><InventoryCreateForm\/><InventoryAdjustForm items=\{items\}\/><InventoryStatusForm items=\{items\}\/><\/>\}/);
+  assert.match(inventoryPage, /inventoryRegisterComplete&&\(items\.length===0\?<p>No inventory items yet\.<\/p>/);
+  assert.match(inventoryPage, /!movesResult\.error&&!movesResult\.truncated&&\(moves\.length===0\?<p>No stock movements yet\.<\/p>/);
+  assert.match(inventoryPage, /reservationsResult\.error\|\|reservationsResult\.truncated\?'—':reservations\.length/);
+});
+
 test('optional Meta consent storage cannot block checkout in privacy-restricted browsers', () => {
   const previousWindow = global.window;
   global.window = {
