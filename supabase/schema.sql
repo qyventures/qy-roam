@@ -293,6 +293,32 @@ create trigger qy_enforce_esim_delivery_reference_uniqueness
 before insert or update of product_type, fulfilment_status, digital_delivery_reference on public.orders
 for each row execute function public.qy_enforce_esim_delivery_reference_uniqueness();
 
+-- The trigger above protects every new hand-off, but additive production
+-- migrations may inherit fulfilled rows from before that guard existed. Keep
+-- that historical audit separate from the shared payment-schema assertion so
+-- an ambiguous eSIM delivery blocks only digital checkout, not otherwise safe
+-- Pocket WiFi sales. This read-only probe intentionally returns false until
+-- operations has reconciled every duplicate reference.
+create or replace function public.qy_esim_delivery_references_ready()
+returns boolean
+language sql
+stable
+security definer
+set search_path = pg_catalog, public
+as $$
+  select not exists (
+    select 1
+    from public.orders
+    where product_type = 'esim'
+      and fulfilment_status in ('fulfilled', 'closed')
+      and digital_delivery_reference is not null
+    group by lower(btrim(digital_delivery_reference))
+    having count(*) > 1
+  );
+$$;
+revoke all on function public.qy_esim_delivery_references_ready() from public;
+grant execute on function public.qy_esim_delivery_references_ready() to service_role;
+
 -- The admin API applies the eSIM fulfilment graph, but service-role scripts
 -- and future operational tools can write the orders table directly. A valid
 -- status label alone is not enough: without this backstop, such a write could
@@ -1484,6 +1510,7 @@ as $$
     to_regclass('public.meta_purchase_deliveries') is not null and
     to_regprocedure('public.qy_claim_stripe_event(text,text,text)') is not null and
     to_regprocedure('public.qy_pocket_wifi_availability_snapshot(date,date,integer,text[])') is not null and
+    to_regprocedure('public.qy_esim_delivery_references_ready()') is not null and
     -- The CRM trigger delegates its ledger-derived totals to this helper.
     -- Check that dependency explicitly: a partial/manual migration must not
     -- pass payment readiness and then fail every paid-order insert when the
@@ -2427,7 +2454,9 @@ as $$
   -- single-line courier address contract enforced by webhook fulfilment.
   -- Version 39 prevents one digital-delivery audit reference from settling
   -- multiple eSIM orders, including concurrent service-role transitions.
-  select 39;
+  -- Version 40 adds a product-specific audit for duplicate hand-offs inherited
+  -- from deployments that predate that transition guard.
+  select 40;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;

@@ -728,9 +728,9 @@ test('delivery ledger claims remain recoverable at the PostgreSQL retry-counter 
   assert.equal((schema.match(/old\.attempts < 2147483647 and new\.attempts = old\.attempts \+ 1/g) || []).length, 3);
   assert.equal((schema.match(/new\.last_attempt_at is not distinct from old\.last_attempt_at/g) || []).length, 2);
   assert.doesNotMatch(schema, /new\.status = 'sending' and \(new\.attempts <= old\.attempts or new\.last_attempt_at is null\)/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 39/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 40/);
   assert.match(schema, /Version 36 certifies the saturating retry-counter contract/);
-  assert.match(schema, /qy_order_integrity_schema_version\(\)[\s\S]*?select 39;/);
+  assert.match(schema, /qy_order_integrity_schema_version\(\)[\s\S]*?select 40;/);
 });
 
 test('durable orders accept only canonical Stripe or protected manual-sale identities', () => {
@@ -744,7 +744,7 @@ test('durable orders accept only canonical Stripe or protected manual-sale ident
     'checkout readiness must reject a deployed schema missing the order identity boundary',
   );
   assert.match(manualOrderSessionId('provider-reference-123'), /^manual_[a-f0-9]{48}$/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 39/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 40/);
 });
 
 test('manual sales cannot create permanent unpaid Pocket WiFi capacity holds', () => {
@@ -885,7 +885,7 @@ test('Pocket WiFi reservation authority validates its complete capacity snapshot
   assert.match(schema, /hold_id is null or hold_id !~ '\^\[A-Za-z0-9_\-\]\{16,80\}\$'/);
   assert.match(schema, /cardinality\(p_stripe_hold_request_ids\) <> \(\s*select count\(distinct hold_id\)/);
   assert.match(schema, /v_existing\.expires_at <> p_expires_at/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 39/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 40/);
 });
 
 test('Pocket WiFi deployment inventory cannot exceed the database reservation boundary', () => {
@@ -2241,8 +2241,8 @@ test('accounting period closes reconcile exact cents against the paid-order ledg
   assert.match(closingFunction, /p_gross_sales_sgd <> v_ledger_gross/);
   assert.match(closingFunction, /p_net_sales_sgd <> p_gross_sales_sgd - p_refunds_sgd/);
   assert.match(closingFunction, /p_gross_profit_sgd <> p_net_sales_sgd - p_fees_sgd - p_cogs_sgd/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 39/);
-  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 39;/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 40/);
+  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 40;/);
 });
 
 test('admin order transitions bound and validate their JSON request bodies', () => {
@@ -2716,11 +2716,11 @@ test('post-payment readiness checks every webhook-persisted delivery field and p
 test('checkout readiness rejects an older order-integrity schema with matching object names', () => {
   // The compatibility marker covers function bodies and privilege boundaries
   // that object-presence probes cannot distinguish during a rolling deploy.
-  assert.match(productionReadiness, /const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 39/);
+  assert.match(productionReadiness, /const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 40/);
   assert.match(productionReadiness, /database\.rpc\('qy_order_integrity_schema_version', \{\}\)\.abortSignal\(signal\)/);
   assert.match(productionReadiness, /versionProbe\.data !== REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION/);
   assert.match(productionReadiness, /if \(!await hasCurrentOrderIntegritySchema\(database, signal\)\) return false/);
-  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 39;/);
+  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 40;/);
   assert.match(schema, /grant execute on function public\.qy_order_integrity_schema_version\(\) to service_role/);
   assert.ok(
     schema.indexOf('create or replace function public.qy_order_integrity_schema_version') >
@@ -3419,7 +3419,7 @@ test('paid order cancellation requires durable reconciliation evidence', () => {
   // the reason while the paid order remains cancelled.
   assert.match(schema, /orders_paid_cancellation_reason_check check \([\s\S]*?payment_status is distinct from 'paid'[\s\S]*?fulfilment_status <> 'cancelled'[\s\S]*?Cancellation reason: \[\^\[\:cntrl\:\]\]\{5,500\}\$[\s\S]*?\) not valid;/);
   assert.match(schema, /'orders_paid_cancellation_reason_check'/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 39/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 40/);
 });
 
 test('admin fulfilment attention and controls exclude orders without confirmed payment', () => {
@@ -3745,8 +3745,8 @@ test('privileged order persistence rejects fractional cents and out-of-range SGD
   // silently records a different amount.
   const amountBoundary = /p_amount_sgd is null or p_amount_sgd <= 0 or p_amount_sgd > 99999999\.99 or p_amount_sgd <> round\(p_amount_sgd, 2\)/g;
   assert.equal([...schema.matchAll(amountBoundary)].length, 4);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 39/);
-  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 39;/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 40/);
+  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 40;/);
 });
 
 test('paid order commercial identity cannot be rewritten after payment', () => {
@@ -3763,8 +3763,8 @@ test('service-role clients cannot erase the paid-order idempotency audit trail',
     schema,
     /revoke delete, truncate\s+on table public\.orders, public\.stripe_events,\s+public\.fulfilment_notifications, public\.meta_purchase_deliveries\s+from service_role;/,
   );
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 39/);
-  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 39;/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 40/);
+  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 40;/);
 });
 
 test('eSIM entitlement snapshots stay bounded and printable at the database boundary', () => {
@@ -3777,7 +3777,7 @@ test('eSIM entitlement snapshots stay bounded and printable at the database boun
   assert.match(schema, /if coalesce\(length\(p_plan_name\), 0\) not between 1 and 200[\s\S]*?raise exception 'invalid eSIM plan name'/);
   assert.match(schema, /if coalesce\(length\(p_data_allowance\), 0\) not between 1 and 200[\s\S]*?raise exception 'invalid eSIM data allowance'/);
   assert.match(schema, /if coalesce\(length\(p_country\), 0\) not between 1 and 100[\s\S]*?raise exception 'invalid eSIM destination'/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 39/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 40/);
 });
 
 test('Stripe order persistence RPCs cannot accept manual identities or cross product types', () => {
@@ -3802,7 +3802,7 @@ test('every paid eSIM order requires a database-enforced delivery email', () => 
   assert.match(schema, /orders_paid_esim_delivery_email_check/);
   assert.match(schema, /orders_paid_esim_delivery_email_check check \([\s\S]*?payment_status is distinct from 'paid' or[\s\S]*?product_type <> 'esim' or[\s\S]*?email is not null and[\s\S]*?email = btrim\(email\) and[\s\S]*?length\(email\) <= 254 and[\s\S]*?email ~ '\^\[\^\[:space:\]@\]\+@\[\^\[:space:\]@\]\+\\\.\[\^\[:space:\]@\]\+\$'/);
   assert.match(adminOpsRoute, /product === 'esim' && !isSafeSmtpMailbox\(row\.email \|\| undefined\)/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 39/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 40/);
 });
 
 test('paid-order measurement consent cannot be broadened after checkout', () => {
@@ -3830,6 +3830,26 @@ test('fulfilled eSIM orders cannot be reopened or cancelled after digital delive
   assert.match(schema, /create trigger qy_enforce_esim_fulfilment_transition\s+before insert or update of product_type, fulfilment_status on public\.orders/);
 });
 
+test('eSIM checkout fails closed on duplicate historical delivery references without blocking Pocket WiFi', () => {
+  assert.match(schema, /create or replace function public\.qy_esim_delivery_references_ready\(\)/);
+  assert.match(schema, /group by lower\(btrim\(digital_delivery_reference\)\)\s+having count\(\*\) > 1/);
+  assert.match(schema, /revoke all on function public\.qy_esim_delivery_references_ready\(\) from public/);
+  assert.match(schema, /grant execute on function public\.qy_esim_delivery_references_ready\(\) to service_role/);
+  assert.match(schema, /to_regprocedure\('public\.qy_esim_delivery_references_ready\(\)'\) is not null/);
+
+  const esimSchemaCheck = productionReadiness.slice(
+    productionReadiness.indexOf('async function checkRequiredEsimOrderSchema()'),
+    productionReadiness.indexOf('export async function hasRequiredEsimOrderSchema()'),
+  );
+  const wifiSchemaCheck = productionReadiness.slice(
+    productionReadiness.indexOf('async function checkRequiredPocketWifiFulfilmentSchema()'),
+    productionReadiness.indexOf('export async function hasRequiredPocketWifiFulfilmentSchema()'),
+  );
+  assert.match(esimSchemaCheck, /rpc\('qy_esim_delivery_references_ready'\)/);
+  assert.match(esimSchemaCheck, /deliveryReferenceProbe\.error \|\| deliveryReferenceProbe\.data !== true/);
+  assert.doesNotMatch(wifiSchemaCheck, /qy_esim_delivery_references_ready/);
+});
+
 test('eSIM fulfilment requires a non-secret delivery audit reference', () => {
   assert.match(adminOrderRoute, /function digitalDeliveryReference\(value: unknown, existing: string \| null\)/);
   assert.match(adminOrderRoute, /status === 'fulfilled' && !deliveryReference/);
@@ -3851,8 +3871,8 @@ test('digital and physical fulfilment evidence cannot cross product boundaries',
   assert.match(schema, /product_type <> 'esim' or \([\s\S]*?inventory_item_id is null[\s\S]*?courier_tracking is null[\s\S]*?return_tracking is null[\s\S]*?return_disposition is null[\s\S]*?dispatched_at is null[\s\S]*?returned_at is null/);
   assert.match(schema, /product_type <> 'pocket_wifi' or digital_delivery_reference is null/);
   assert.match(schema, /'orders_product_fulfilment_evidence_check'[\s\S]*?\)\) = 17/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 39/);
-  assert.match(schema, /qy_order_integrity_schema_version\(\)[\s\S]*?select 39/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 40/);
+  assert.match(schema, /qy_order_integrity_schema_version\(\)[\s\S]*?select 40/);
 });
 
 test('eSIM delivery references are safe audit pointers and remain mandatory and immutable after fulfilment', () => {
@@ -3926,7 +3946,7 @@ test('admin fulfilment writes reject stale same-status saves using the exact ord
     assert.match(transition, /p_expected_updated_at is null or v_order\.updated_at is distinct from p_expected_updated_at/);
     assert.match(transition, /raise exception 'order changed since it was loaded'/);
   }
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 39/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 40/);
   assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 10/);
 });
 
@@ -4857,7 +4877,7 @@ test('delivery retry audit evidence cannot move backwards or be rewritten outsid
   assert.equal((schema.match(/delivery ledger attempts cannot decrease/g) || []).length, 2);
   assert.equal((schema.match(/delivery attempt time can change only while claiming a send/g) || []).length, 2);
   assert.equal((schema.match(/new\.last_attempt_at is distinct from old\.last_attempt_at[\s\S]{0,100}new\.status <> 'sending'/g) || []).length, 2);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 39/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 40/);
   assert.match(schema, /Earlier versions also certify[\s\S]*monotonic delivery retry counts/);
 });
 
@@ -4872,8 +4892,8 @@ test('Stripe webhook claims own their settlement and immutable failure evidence'
   assert.match(schema, /Stripe event failure evidence can change only on failure or reclaim/);
   assert.match(schema, /Stripe event failure timestamp can change only with new failure evidence/);
   assert.match(schema, /Stripe event can settle only under its current claim/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 39/);
-  assert.match(schema, /qy_order_integrity_schema_version\(\)[\s\S]*?select 39;/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 40/);
+  assert.match(schema, /qy_order_integrity_schema_version\(\)[\s\S]*?select 40;/);
 });
 
 test('delivery ledgers cannot claim provider success without an audited send attempt', () => {

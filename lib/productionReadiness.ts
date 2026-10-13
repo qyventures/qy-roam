@@ -25,7 +25,7 @@ const READINESS_PROBE_TIMEOUT_MS = 8_000;
 // probes cannot distinguish an old function body from the current one; this
 // explicit handshake prevents a rolling application deploy from accepting a
 // payment against stale database logic.
-const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 39;
+const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 40;
 const REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 10;
 let paymentSchemaReadyUntil = 0;
 let esimOrderSchemaReadyUntil = 0;
@@ -436,6 +436,18 @@ async function checkRequiredEsimOrderSchema() {
       // are missing or disabled.
       if (!await hasCurrentOrderIntegritySchema(database, signal)) {
         console.error('production_esim_order_integrity_schema_check_failed');
+        return false;
+      }
+      // A newly installed trigger prevents reference reuse going forward, but
+      // an additive migration can inherit ambiguous fulfilled rows. Refuse
+      // only eSIM checkout until operations reconciles those historical
+      // hand-offs; Pocket WiFi readiness deliberately does not run this
+      // product-specific data audit.
+      const deliveryReferenceProbe = await database
+        .rpc('qy_esim_delivery_references_ready')
+        .abortSignal(signal);
+      if (deliveryReferenceProbe.error || deliveryReferenceProbe.data !== true) {
+        console.error('production_esim_delivery_reference_audit_failed');
         return false;
       }
       // Resolve the exact atomic eSIM persistence signature and service-role
