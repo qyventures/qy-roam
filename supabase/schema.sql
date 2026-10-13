@@ -2357,7 +2357,9 @@ as $$
   -- Version 36 certifies the saturating retry-counter contract for Stripe,
   -- fulfilment-email and Meta delivery claims, including a fresh ownership
   -- timestamp when an integer counter has reached its storage ceiling.
-  select 36;
+  -- Version 37 additionally certifies that accounting-period reconciliation
+  -- locks paid-order mutations until the matching close has been persisted.
+  select 37;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
@@ -3142,6 +3144,18 @@ begin
     raise exception 'closed accounting period requires an accountable operator';
   end if;
 
+  -- Period close is a financial snapshot, so its authoritative ledger read
+  -- and the closing-period write must share one transaction boundary with
+  -- every order insert/update. Without this table lock, a Stripe webhook can
+  -- confirm payment after the sum below but before this function records the
+  -- close, leaving a successfully closed period understated. SHARE mode still
+  -- permits ordinary order reads while briefly blocking the ROW EXCLUSIVE
+  -- lock taken by settlements and manual-order writes until this transaction
+  -- commits. Take the per-period advisory lock first so concurrent operators
+  -- do not each hold a table lock while waiting on the same accounting period.
+  perform pg_advisory_xact_lock(hashtext('qy_roam_closing_period:' || p_period_start::text || ':' || p_period_end::text));
+  lock table public.orders in share mode;
+
   -- The paid-order ledger, not a paginated browser calculation, is the
   -- financial authority. The application still submits the figure it showed
   -- to the operator; comparing it here makes a concurrent webhook settlement
@@ -3161,7 +3175,6 @@ begin
     raise exception 'accounting period totals are inconsistent';
   end if;
 
-  perform pg_advisory_xact_lock(hashtext('qy_roam_closing_period:' || p_period_start::text || ':' || p_period_end::text));
   select count(*) into v_matches from public.closing_periods
   where period_start = p_period_start and period_end = p_period_end;
   if v_matches > 1 then
