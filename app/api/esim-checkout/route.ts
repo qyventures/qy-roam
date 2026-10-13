@@ -45,13 +45,19 @@ const CHECKOUT_BODY_TIMEOUT_MS = 15_000;
 // checkout request id for a different plan, Stripe returns the first session
 // instead of creating a new one. Never redirect a customer to that earlier
 // (but otherwise valid) purchase.
-function matchesRequestedEsim(session: Stripe.Checkout.Session, requestId: string, plan: NonNullable<ReturnType<typeof getEsimPlan>>, expiresAt: number) {
+function matchesRequestedEsim(session: Stripe.Checkout.Session, requestId: string, plan: NonNullable<ReturnType<typeof getEsimPlan>>, expiresAt: number, origin: string) {
   return session.mode === 'payment' &&
     // Idempotency can return a Session created by an older deployment. The
     // webhook requires the resulting terms acceptance before fulfilment, so
     // never expose an open payment capability that did not require Stripe to
     // collect it. Failing here keeps the mismatch on the safe side of charge.
     session.consent_collection?.terms_of_service === 'required' &&
+    // Keep an idempotently replayed payment capability bound to QY Roam's
+    // durable confirmation and product-specific cancellation destinations.
+    // A Session edited in Stripe must not be re-signed and exposed when its
+    // successful payment would return the customer somewhere else.
+    session.success_url === `${origin}/success?session_id={CHECKOUT_SESSION_ID}` &&
+    session.cancel_url === `${origin}/esim?checkout=cancelled` &&
     session.metadata?.source === 'qyroam.com' &&
     session.metadata?.product_type === 'esim' &&
     session.metadata?.checkout_request_id === requestId &&
@@ -275,7 +281,7 @@ export async function POST(req: Request) {
         headers: { 'Cache-Control': 'no-store', 'Retry-After': '10' },
       });
     }
-    if (!matchesRequestedEsim(session, requestId, plan, expiresAt)) {
+    if (!matchesRequestedEsim(session, requestId, plan, expiresAt, origin)) {
       // Do not update provenance on a session that belongs to a different
       // selection. The client will create a new idempotency key on its next
       // deliberate checkout attempt.
@@ -290,7 +296,7 @@ export async function POST(req: Request) {
       const updated = await stripe.checkout.sessions.update(createdSessionId, { metadata: consentDowngrade });
       if (!stripeWebhookCheckoutSessionMatchesSnapshot(session, updated) ||
         !stripeEventMatchesConfiguredMode(key, updated.livemode) ||
-        !matchesRequestedEsim(updated, requestId, plan, expiresAt)) {
+        !matchesRequestedEsim(updated, requestId, plan, expiresAt, origin)) {
         console.error('esim_checkout_consent_downgrade_mismatch', { expectedSessionId: createdSessionId });
         return NextResponse.json({ error: 'Secure checkout confirmation is temporarily unavailable. Please try again shortly.' }, {
           status: 503,
@@ -332,7 +338,7 @@ export async function POST(req: Request) {
         headers: { 'Cache-Control': 'no-store', 'Retry-After': '10' },
       });
     }
-    if (!matchesRequestedEsim(currentSession, requestId, plan, expiresAt)) {
+    if (!matchesRequestedEsim(currentSession, requestId, plan, expiresAt, origin)) {
       return NextResponse.json({ error: 'This checkout attempt belongs to a different eSIM plan. Please try again.', checkoutRequestConflict: true }, {
         status: 409,
         headers: { 'Cache-Control': 'no-store' }

@@ -1576,6 +1576,27 @@ test('Pocket WiFi payment capabilities must collect the fulfilment details requi
   assert.match(paidFulfilmentDetailsIssue.toString(), /shipping\?\.country !== 'SG'/);
 });
 
+test('idempotent Checkout Sessions retain QY Roam confirmation and cancellation destinations', () => {
+  // A replayed Session is re-signed before its URL is returned. Bind that
+  // trust decision to the customer navigation contract as well as the price
+  // snapshot, so an old or dashboard-edited capability cannot bypass durable
+  // order confirmation after accepting payment.
+  const wifiMatcher = wifiCheckoutRoute.match(/function matchesRequestedPocketWifi[\s\S]*?\n}/)?.[0] || '';
+  const esimMatcher = esimCheckoutRoute.match(/function matchesRequestedEsim[\s\S]*?\n}/)?.[0] || '';
+
+  assert.match(wifiMatcher, /session\.success_url===`\$\{origin\}\/success\?session_id=\{CHECKOUT_SESSION_ID\}`/);
+  assert.match(wifiMatcher, /session\.cancel_url===`\$\{origin\}\/\?checkout=cancelled`/);
+  assert.match(esimMatcher, /session\.success_url === `\$\{origin\}\/success\?session_id=\{CHECKOUT_SESSION_ID\}`/);
+  assert.match(esimMatcher, /session\.cancel_url === `\$\{origin\}\/esim\?checkout=cancelled`/);
+
+  // Every matcher call, including Stripe hold recovery and fresh post-create
+  // reads, must receive the already validated request/configuration origin.
+  assert.equal((wifiCheckoutRoute.match(/matchesRequestedPocketWifi\(/g) || []).length, 8);
+  assert.equal((wifiCheckoutRoute.match(/matchesRequestedPocketWifi\([^\n]*,origin\)/g) || []).length, 7);
+  assert.equal((esimCheckoutRoute.match(/matchesRequestedEsim\(/g) || []).length, 4);
+  assert.equal((esimCheckoutRoute.match(/matchesRequestedEsim\([^\n]*, origin\)/g) || []).length, 3);
+});
+
 test('rejects unsigned, copied, and session-id-replayed checkout provenance', () => {
   const unsigned = esimSession();
   delete unsigned.metadata.qyroam_provenance;
@@ -2688,8 +2709,8 @@ test('eSIM checkout never redirects a reused idempotency key to another plan', (
   assert.match(esimCheckoutRoute, /session\.metadata\?\.checkout_amount_cents === String\(Math\.max\(50, Math\.round\(plan\.qyPriceSgd \* 100\)\)\)/);
   assert.match(esimCheckoutRoute, /checkoutRequestConflict: true/);
   assert.match(esimCheckoutRoute, /session\.expires_at === expiresAt/);
-  assert.match(esimCheckoutRoute, /if \(!matchesRequestedEsim\(session, requestId, plan, expiresAt\)\)/);
-  assert.match(esimCheckoutRoute, /if \(!matchesRequestedEsim\(currentSession, requestId, plan, expiresAt\)\)/);
+  assert.match(esimCheckoutRoute, /if \(!matchesRequestedEsim\(session, requestId, plan, expiresAt, origin\)\)/);
+  assert.match(esimCheckoutRoute, /if \(!matchesRequestedEsim\(currentSession, requestId, plan, expiresAt, origin\)\)/);
   assert.match(esimPage, /data\.checkoutExpired \|\| data\.checkoutRequestConflict/);
   assert.match(esimCheckoutRoute, /checkout_amount_cents: String\(amount\)/);
 });
@@ -2828,7 +2849,7 @@ test('Pocket WiFi checkout inventory holds enforce the configured Stripe mode bo
   // capacity or become the idempotent recovery Session for this request.
   assert.match(wifiCheckoutRoute, /async function activeStripeHolds\(stripe:Stripe,stripeKey:string,/);
   assert.match(pocketWifiStripeHolds, /if \(!stripeEventMatchesConfiguredMode\(stripeKey, session\.livemode\)\) continue;/);
-  assert.match(wifiCheckoutRoute, /activeStripeHolds\(stripe,key,start,end,requestId,requested\)/);
+  assert.match(wifiCheckoutRoute, /activeStripeHolds\(stripe,key,start,end,requestId,requested,origin\)/);
 });
 
 test('eSIM checkout fails closed when its durable post-payment order boundary is unavailable', () => {
@@ -3361,14 +3382,14 @@ test('Pocket WiFi checkout retries bind the complete server-priced booking', () 
   assert.match(wifiCheckoutRoute, /session\.metadata\?\.checkout_amount_cents===String\(expectedAmount\)/);
   assert.match(wifiCheckoutRoute, /session\.expires_at===requested\.expiresAtSeconds/);
   assert.match(wifiCheckoutRoute, /expiresAtSeconds\};/);
-  assert.match(wifiCheckoutRoute, /const sameBooking=matchesRequestedPocketWifi\(session,requestId,requested\)/);
+  assert.match(wifiCheckoutRoute, /const sameBooking=matchesRequestedPocketWifi\(session,requestId,requested,origin\)/);
   assert.match(wifiCheckoutRoute, /checkoutRequestConflict:true/);
   assert.match(homePage, /data\.checkoutExpired \|\| data\.checkoutRequestConflict/);
   assert.match(wifiCheckoutRoute, /checkout_amount_cents:String\(rentalAmount\+courierFee\)/);
 });
 
 test('idempotent checkout replays recover paid orders without a second payment attempt', () => {
-  assert.match(wifiCheckoutRoute, /if\(!matchesRequestedPocketWifi\(session,requestId,requested\)\)/);
+  assert.match(wifiCheckoutRoute, /if\(!matchesRequestedPocketWifi\(session,requestId,requested,origin\)\)/);
   assert.match(wifiCheckoutRoute, /currentSession\.status==='complete'&&currentSession\.payment_status==='paid'/);
   assert.match(wifiCheckoutRoute, /\{completed:true,sessionId:currentSession\.id\}/);
   assert.match(wifiCheckoutRoute, /\.eq\('stripe_session_id',currentSession\.id\)\.maybeSingle\(\)/);
@@ -3425,7 +3446,7 @@ test('Pocket WiFi open-session retries honor the freshly retrieved Stripe state'
     wifiCheckoutRoute.indexOf('if(holdState.existingUrl&&holdState.existingSessionId&&holdState.existingSessionSnapshot)'),
     wifiCheckoutRoute.indexOf('const expiresAt=', wifiCheckoutRoute.indexOf('if(holdState.existingUrl&&holdState.existingSessionId&&holdState.existingSessionSnapshot)')),
   );
-  assert.match(replayBranch, /matchesRequestedPocketWifi\(existing,requestId,requested\)/);
+  assert.match(replayBranch, /matchesRequestedPocketWifi\(existing,requestId,requested,origin\)/);
   const provenanceUpdate = replayBranch.indexOf('const updated=await stripe.checkout.sessions.update');
   const provenanceGuard = replayBranch.indexOf('if(!validQyRoamProvenance(existing.id,existing.metadata))');
   const firstStateDecision = replayBranch.indexOf("if(existing.status==='complete'&&existing.payment_status==='paid')");
@@ -3433,7 +3454,7 @@ test('Pocket WiFi open-session retries honor the freshly retrieved Stripe state'
   assert.ok(firstStateDecision > provenanceGuard, 'provenance must be confirmed before payment, inventory, or redirect decisions');
   assert.match(replayBranch, /stripeWebhookCheckoutSessionMatchesSnapshot\(existing,updated\)/);
   assert.match(replayBranch, /stripeEventMatchesConfiguredMode\(key,updated\.livemode\)/);
-  assert.match(replayBranch, /matchesRequestedPocketWifi\(updated,requestId,requested\)/);
+  assert.match(replayBranch, /matchesRequestedPocketWifi\(updated,requestId,requested,origin\)/);
   assert.match(replayBranch, /existing=updated/);
   assert.match(replayBranch, /existing\.status==='complete'&&existing\.payment_status==='paid'/);
   assert.match(replayBranch, /existing\.status==='expired'/);

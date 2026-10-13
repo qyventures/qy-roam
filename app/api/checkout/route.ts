@@ -50,7 +50,7 @@ type RequestedPocketWifi = {
 
 // Stripe idempotency keys intentionally outlive a Checkout Session. A retry
 // must identify the full server-priced booking, not merely its travel dates.
-function matchesRequestedPocketWifi(session:Stripe.Checkout.Session,requestId:string,requested:RequestedPocketWifi) {
+function matchesRequestedPocketWifi(session:Stripe.Checkout.Session,requestId:string,requested:RequestedPocketWifi,origin:string) {
   const expectedAmount=requested.rentalBeforePromo-requested.promoDiscount+requested.courierFee;
   return session.mode==='payment' &&
     // The paid-order boundary requires Stripe's recorded terms acceptance.
@@ -69,6 +69,12 @@ function matchesRequestedPocketWifi(session:Stripe.Checkout.Session,requestId:st
     session.phone_number_collection?.enabled===true &&
     session.shipping_address_collection?.allowed_countries?.length===1 &&
     session.shipping_address_collection.allowed_countries[0]==='SG' &&
+    // The Session is also the customer's post-payment navigation contract.
+    // Stripe idempotency can replay an older or dashboard-edited capability;
+    // never re-sign and expose it when success would bypass QY Roam's durable
+    // confirmation flow or cancellation would leave the current storefront.
+    session.success_url===`${origin}/success?session_id={CHECKOUT_SESSION_ID}` &&
+    session.cancel_url===`${origin}/?checkout=cancelled` &&
     session.metadata?.source==='qyroam.com' &&
     session.metadata?.product_type==='pocket_wifi' &&
     session.metadata?.checkout_request_id===requestId &&
@@ -97,7 +103,7 @@ function matchesRequestedPocketWifi(session:Stripe.Checkout.Session,requestId:st
     session.expires_at===requested.expiresAtSeconds;
 }
 
-async function activeStripeHolds(stripe:Stripe,stripeKey:string,start:string,end:string,requestId:string|null,requested:RequestedPocketWifi) {
+async function activeStripeHolds(stripe:Stripe,stripeKey:string,start:string,end:string,requestId:string|null,requested:RequestedPocketWifi,origin:string) {
   let holds=0;
   const requestIds:string[]=[];
   let existingUrl:string|null=null;
@@ -107,7 +113,7 @@ async function activeStripeHolds(stripe:Stripe,stripeKey:string,start:string,end
   let matchingRequestSessions=0;
   await scanActivePocketWifiStripeHolds(stripe,stripeKey,({session,sessionId,start:holdStart,end:holdEnd})=>{
       if(requestId&&session.metadata?.checkout_request_id===requestId){
-        const sameBooking=matchesRequestedPocketWifi(session,requestId,requested);
+        const sameBooking=matchesRequestedPocketWifi(session,requestId,requested,origin);
         matchingRequestSessions+=1;
         // A browser attempt can own exactly one Stripe payment capability.
         // Keep conflict detection monotonic across every page: a later
@@ -259,7 +265,7 @@ export async function POST(req: Request) {
   if(typeof expectedTotalCents!=='number'||!Number.isSafeInteger(expectedTotalCents)||expectedTotalCents<0) return NextResponse.json({error:'Please check live availability and review the current total before payment.'},{status:400});
   if(expectedTotalCents!==rentalAmount+courierFee) return NextResponse.json({error:'The booking price has changed. Please check availability and review the updated total before payment.',priceChanged:true},{status:409,headers:{'Cache-Control':'no-store'}});
   const requested={country,start,end,days,daily,rentalBeforePromo,promoCode:promo.promoCode,promoDiscount:promo.discountCents,courierFee,expiresAtSeconds};
-  const holdState=await activeStripeHolds(stripe,key,start,end,requestId,requested);
+  const holdState=await activeStripeHolds(stripe,key,start,end,requestId,requested,origin);
   if(holdState.requestConflict) return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.',checkoutRequestConflict:true},{status:409,headers:{'Cache-Control':'no-store'}});
   const supabase=getSupabaseAdmin();
   if(!supabase) return NextResponse.json({error:'Live reservation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
@@ -282,7 +288,7 @@ export async function POST(req: Request) {
       console.error('checkout_session_mode_mismatch',{sessionId:existing.id});
       return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
     }
-    if(!matchesRequestedPocketWifi(existing,requestId,requested)){
+    if(!matchesRequestedPocketWifi(existing,requestId,requested,origin)){
       return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.',checkoutRequestConflict:true},{status:409,headers:{'Cache-Control':'no-store'}});
     }
     const consentDowngrade=stripeMeasurementConsentDowngrade(existing.metadata,body.measurementConsent);
@@ -290,7 +296,7 @@ export async function POST(req: Request) {
       const updated=await stripe.checkout.sessions.update(existing.id,{metadata:consentDowngrade});
       if(!stripeWebhookCheckoutSessionMatchesSnapshot(existing,updated)||
         !stripeEventMatchesConfiguredMode(key,updated.livemode)||
-        !matchesRequestedPocketWifi(updated,requestId,requested)){
+        !matchesRequestedPocketWifi(updated,requestId,requested,origin)){
         console.error('checkout_consent_downgrade_mismatch',{expectedSessionId:existing.id});
         return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
       }
@@ -307,7 +313,7 @@ export async function POST(req: Request) {
       const updated=await stripe.checkout.sessions.update(existing.id,{metadata:{[QY_ROAM_PROVENANCE_METADATA_KEY]:provenance}});
       if(!stripeWebhookCheckoutSessionMatchesSnapshot(existing,updated)||
         !stripeEventMatchesConfiguredMode(key,updated.livemode)||
-        !matchesRequestedPocketWifi(updated,requestId,requested)){
+        !matchesRequestedPocketWifi(updated,requestId,requested,origin)){
         console.error('checkout_recovered_session_mismatch',{expectedSessionId:existing.id});
         return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
       }
@@ -444,7 +450,7 @@ export async function POST(req: Request) {
     console.error('checkout_session_mode_mismatch',{sessionId:session.id});
     return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
   }
-  if(!matchesRequestedPocketWifi(session,requestId,requested)){
+  if(!matchesRequestedPocketWifi(session,requestId,requested,origin)){
     const released=await supabase.from('checkout_reservations').delete().eq('checkout_request_id',requestId).is('stripe_session_id',null);
     if(released.error) throw released.error;
     return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.',checkoutRequestConflict:true},{status:409,headers:{'Cache-Control':'no-store'}});
@@ -454,7 +460,7 @@ export async function POST(req: Request) {
     const updated=await stripe.checkout.sessions.update(createdSessionId,{metadata:consentDowngrade});
     if(!stripeWebhookCheckoutSessionMatchesSnapshot(session,updated)||
       !stripeEventMatchesConfiguredMode(key,updated.livemode)||
-      !matchesRequestedPocketWifi(updated,requestId,requested)){
+      !matchesRequestedPocketWifi(updated,requestId,requested,origin)){
       console.error('checkout_consent_downgrade_mismatch',{expectedSessionId:createdSessionId});
       return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
     }
@@ -492,7 +498,7 @@ export async function POST(req: Request) {
     console.error('checkout_session_mode_mismatch',{sessionId:currentSession.id});
     return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
   }
-  if(!matchesRequestedPocketWifi(currentSession,requestId,requested)){
+  if(!matchesRequestedPocketWifi(currentSession,requestId,requested,origin)){
     // The reservation has not been linked yet, so only this unlinked attempt
     // is safe to release. A mismatched Stripe response must never inherit the
     // requested booking's stock hold.
