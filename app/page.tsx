@@ -92,7 +92,8 @@ export default function Home() {
   const promoDiscount = sgdFromCents(promo.discountCents);
   const subtotal = sgdFromCents(promo.amountCents);
   const courierFeeCents = Math.round(courierFeeSgd * 100);
-  const payableTotal = sgdFromCents(promo.amountCents + courierFeeCents);
+  const payableTotalCents = promo.amountCents + courierFeeCents;
+  const payableTotal = sgdFromCents(payableTotalCents);
   const minimumApplied = rentalCents === 1_000 && plan.daily * days * 100 < 1_000;
   // An availability response is a promise for one exact travel window. A
   // shopper can edit either date while the provider-backed request is still
@@ -192,11 +193,16 @@ export default function Home() {
     }, { eventID: `checkout_${activeCheckoutAttempt.current.requestId}` });
     setCheckingOut(true);
     try {
-      const { response: res, value: payload } = await fetchCustomerJson('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ country, start, end, promoCode, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: activeCheckoutAttempt.current.requestId, checkoutAttemptCreatedAt: activeCheckoutAttempt.current.createdAt }) });
+      const { response: res, value: payload } = await fetchCustomerJson('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ country, start, end, promoCode, expectedTotalCents: payableTotalCents, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: activeCheckoutAttempt.current.requestId, checkoutAttemptCreatedAt: activeCheckoutAttempt.current.createdAt }) });
       const data = parseCustomerCheckoutResponse(payload, res.status);
       if (data.checkoutUrl) window.location.href = data.checkoutUrl;
       else if (data.completedSessionId) window.location.href = `/success?session_id=${encodeURIComponent(data.completedSessionId)}`;
       else {
+        // Operations can change courier pricing while a tab is open. The
+        // server refuses to create a differently priced Stripe Session; make
+        // the next click obtain a fresh live quote and show its total before
+        // the customer can try payment again.
+        if (data.priceChanged) setAvailability(null);
         // Keep the idempotency key after ordinary failures: the server may have
         // created a session before a network response was lost. Rotate it only
         // after the server has confirmed that the prior session expired or

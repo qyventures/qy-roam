@@ -456,6 +456,7 @@ test('storefront checkout responses cannot redirect through malformed runtime da
     checkoutExpired: false,
     checkoutRequestConflict: false,
     paymentFailed: false,
+    priceChanged: false,
   });
   assert.equal(parseCustomerCheckoutResponse({ completed: true, sessionId: 'cs_test_safe' }, 200).completedSessionId, 'cs_test_safe');
   // A malformed success must never rotate the durable attempt identity. The
@@ -474,6 +475,7 @@ test('storefront checkout responses cannot redirect through malformed runtime da
     checkoutExpired: false,
     checkoutRequestConflict: false,
     paymentFailed: false,
+    priceChanged: false,
   });
   assert.equal(parseCustomerCheckoutResponse({ url: stripeUrl, checkoutExpired: true }, 200).checkoutExpired, false);
   assert.equal(parseCustomerCheckoutResponse({ completed: true, sessionId: 'cs_test_safe', paymentFailed: true }, 200).paymentFailed, false);
@@ -539,6 +541,7 @@ test('storefront checkout responses cannot redirect through malformed runtime da
       checkoutExpired: false,
       checkoutRequestConflict: false,
       paymentFailed: false,
+      priceChanged: false,
     });
   }
 
@@ -1763,7 +1766,8 @@ test('Pocket WiFi availability publishes only validated public booking terms for
   assert.match(availabilityRoute, /const bookingTerms = \{\s*minDeliveryLeadDays: minLeadDays,\s*courierFeeSgd: config\.courierFeeCents \/ 100,/s);
   assert.match(availabilityRoute, /available: remaining > 0, remaining, inventoryMode: 'live', temporaryHolds: stripeHolds\.holds, \.\.\.bookingTerms/);
   assert.match(homePage, /parsePocketWifiAvailability\(payload, res\.ok\)/);
-  assert.match(homePage, /const payableTotal = sgdFromCents\(promo\.amountCents \+ courierFeeCents\);/);
+  assert.match(homePage, /const payableTotalCents = promo\.amountCents \+ courierFeeCents;/);
+  assert.match(homePage, /const payableTotal = sgdFromCents\(payableTotalCents\);/);
   assert.match(homePage, /Total due today: S\$\{payableTotal\.toFixed\(2\)\}/);
 });
 
@@ -1809,6 +1813,21 @@ test('Pocket WiFi checkout renders live availability terms before opening Stripe
   // time and courier pricing. A first click must not redirect to payment in
   // the same render pass that receives a revised total.
   assert.match(homePage, /if \(!currentAvailability\?\.available \|\| currentAvailability\.checkedCountry !== country \|\| currentAvailability\.checkedStart !== start \|\| currentAvailability\.checkedEnd !== end\) \{[\s\S]*?currentAvailability = await checkAvailability\(\);[\s\S]*?if \(currentAvailability\.available && selectedBooking\.current\.country === currentAvailability\.checkedCountry && selectedBooking\.current\.start === currentAvailability\.checkedStart && selectedBooking\.current\.end === currentAvailability\.checkedEnd\) \{[\s\S]*?setCheckoutError\('Availability confirmed\. Please review the updated total, then select Reserve\.'\);[\s\S]*?checkoutInFlight\.current = false;[\s\S]*?return;/);
+});
+
+test('Pocket WiFi checkout cannot charge a total that the customer has not reviewed', () => {
+  assert.match(homePage, /const payableTotalCents = promo\.amountCents \+ courierFeeCents;/);
+  assert.match(homePage, /expectedTotalCents: payableTotalCents/);
+  assert.match(wifiCheckoutRoute, /if\(typeof expectedTotalCents!==['"]number['"]\|\|!Number\.isSafeInteger\(expectedTotalCents\)\|\|expectedTotalCents<0\)/);
+  assert.match(wifiCheckoutRoute, /if\(expectedTotalCents!==rentalAmount\+courierFee\)[\s\S]*?priceChanged:true/);
+  const changed = parseCustomerCheckoutResponse({ error: 'The booking price has changed.', priceChanged: true }, 409);
+  assert.equal(changed.priceChanged, true);
+  assert.equal(changed.checkoutExpired, false);
+  assert.equal(changed.checkoutRequestConflict, false);
+  assert.equal(changed.paymentFailed, false);
+  assert.match(homePage, /if \(data\.priceChanged\) setAvailability\(null\);/);
+  assert.equal(parseCustomerCheckoutResponse({ error: 'Changed.', priceChanged: true }, 400).priceChanged, false);
+  assert.equal(parseCustomerCheckoutResponse({ error: 'Changed.', priceChanged: true, checkoutExpired: true }, 409).priceChanged, false);
 });
 
 test('Pocket WiFi availability remains bound to the exact dates that were checked', () => {
@@ -2541,7 +2560,7 @@ test('browser checkout funnel uses the same product identity and paid value as P
   // Pocket WiFi's customer promise and Stripe charge include courier fees;
   // its checkout-start event must therefore use the same total, not rental
   // subtotal, whenever operations configures a delivery charge.
-  assert.match(homePage, /const payableTotal = sgdFromCents\(promo\.amountCents \+ courierFeeCents\)/);
+  assert.match(homePage, /const payableTotal = sgdFromCents\(payableTotalCents\)/);
 });
 
 test('Pocket WiFi expiry and inventory scans share the Stripe-safe hold window', () => {

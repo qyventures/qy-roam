@@ -8,6 +8,7 @@ export type CustomerCheckoutResponse = {
   checkoutExpired: boolean;
   checkoutRequestConflict: boolean;
   paymentFailed: boolean;
+  priceChanged: boolean;
 };
 
 function safeCustomerError(value: unknown) {
@@ -30,6 +31,7 @@ export function parseCustomerCheckoutResponse(value: unknown, responseStatus: nu
     checkoutExpired: false,
     checkoutRequestConflict: false,
     paymentFailed: false,
+    priceChanged: false,
   };
   if (!value || typeof value !== 'object' || Array.isArray(value)) return empty;
   if (!Number.isSafeInteger(responseStatus) || responseStatus < 100 || responseStatus > 599) return empty;
@@ -89,6 +91,11 @@ export function parseCustomerCheckoutResponse(value: unknown, responseStatus: nu
   return {
     ...empty,
     error,
+    // A price change never rotates the Stripe idempotency identity: checkout
+    // rejects it before creating a Session. It only tells the storefront to
+    // invalidate its live quote and require another explicit price review.
+    priceChanged: responseStatus === 409 && Boolean(error) && input.priceChanged === true &&
+      requestedReplacementReasons.every((reason) => !reason),
     checkoutExpired: mayReplaceAttempt && input.checkoutExpired === true,
     checkoutRequestConflict: mayReplaceAttempt && input.checkoutRequestConflict === true,
     paymentFailed: mayReplaceAttempt && input.paymentFailed === true,

@@ -229,6 +229,14 @@ export async function POST(req: Request) {
   const promo=applyPromoCents(rentalBeforePromo, body.promoCode);
   const rentalAmount=promo.amountCents;
   const courierFee=config.courierFeeCents;
+  // Availability is the customer's price-review boundary. Bind checkout to
+  // the exact cent total rendered from that quote so a courier-fee or promo
+  // change in a long-lived tab cannot open Stripe at an amount the customer
+  // has not reviewed. This value is not pricing authority: the server still
+  // calculates every component independently and accepts only exact agreement.
+  const expectedTotalCents=body.expectedTotalCents;
+  if(typeof expectedTotalCents!=='number'||!Number.isSafeInteger(expectedTotalCents)||expectedTotalCents<0) return NextResponse.json({error:'Please check live availability and review the current total before payment.'},{status:400});
+  if(expectedTotalCents!==rentalAmount+courierFee) return NextResponse.json({error:'The booking price has changed. Please check availability and review the updated total before payment.',priceChanged:true},{status:409,headers:{'Cache-Control':'no-store'}});
   const requested={country,start,end,days,daily,rentalBeforePromo,promoCode:promo.promoCode,promoDiscount:promo.discountCents,courierFee,expiresAtSeconds};
   const holdState=await activeStripeHolds(stripe,key,start,end,requestId,requested);
   if(holdState.requestConflict) return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.',checkoutRequestConflict:true},{status:409,headers:{'Cache-Control':'no-store'}});
