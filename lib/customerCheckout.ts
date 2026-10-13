@@ -32,19 +32,17 @@ function wait(milliseconds: number) {
 
 function checkoutResponseSupersedesPending(response: CustomerCheckoutResponse) {
   // Once this browser has received the route's validated payment-pending
-  // envelope, a later reconciliation poll is allowed to replace it only with
-  // another recognised checkout state. A generic 5xx JSON response, a stale
-  // proxy envelope, or a malformed 200 must not make an already-paid customer
-  // think the original attempt disappeared and start over. Explicit attempt-
-  // replacement outcomes are conclusive because the server has established
-  // that the original Session expired, conflicted, or durably failed.
+  // envelope, the same reconciliation cycle can only improve it to durable
+  // completion. Stripe cannot legitimately move a completed/pending Session
+  // back to an open payment URL, and a stale but otherwise valid response
+  // must not send an already-paid customer through Checkout again. Terminal
+  // replacement outcomes are deliberately observed on a later customer
+  // retry, which reuses the same attempt id before the storefront rotates it.
+  // This also keeps an ambiguous pending state safe if an async payment fails
+  // while the current bounded reconciliation cycle is still in flight.
   return Boolean(
-    response.checkoutUrl ||
     response.completedSessionId ||
-    response.paymentPending ||
-    response.checkoutExpired ||
-    response.checkoutRequestConflict ||
-    response.paymentFailed
+    response.paymentPending
   );
 }
 
