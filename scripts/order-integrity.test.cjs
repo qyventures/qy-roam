@@ -58,6 +58,7 @@ const { safeStripeCheckoutUrl } = require('../lib/stripeCheckoutUrl.ts');
 const { metaCapiPurchaseAcknowledged } = require('../lib/metaCapiAcknowledgement.ts');
 const { stripeCheckoutEventStateIssue } = require('../lib/stripeCheckoutEventState.ts');
 const { contentLengthMatches, declaredContentLength } = require('../lib/contentLength.ts');
+const { structurallyValidStripeSignatureHeader } = require('../lib/stripeSignatureHeader.ts');
 const { paidFulfilmentDetailsIssue } = require('../lib/paidFulfilmentDetails.ts');
 const { exactNonnegativeCount } = require('../lib/exactCount.ts');
 const { custodyReferenceIssue, normalizeCustodyReference, MAX_CUSTODY_REFERENCE_LENGTH } = require('../lib/custodyReference.ts');
@@ -6006,9 +6007,33 @@ test('Stripe webhook bounds raw payload memory before signature verification', (
   assert.match(webhookRoute, /function validStripeSignatureHeader\(value: string \| null\)/);
   assert.match(webhookRoute, /value\.length <= MAX_STRIPE_SIGNATURE_HEADER_BYTES/);
   assert.match(webhookRoute, /\^\[\\x20-\\x7e\]\+\$/);
+  assert.match(webhookRoute, /structurallyValidStripeSignatureHeader\(value\)/);
   const signatureValidation = webhookRoute.indexOf("const stripeSignature=validStripeSignatureHeader(req.headers.get('stripe-signature'))");
   const signatureCheck = webhookRoute.indexOf('stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS)');
   assert.ok(signatureValidation >= 0 && signatureCheck > signatureValidation, 'Stripe signature header must be bounded before verification');
+});
+
+test('Stripe webhook upload admission requires a structurally usable signature header', () => {
+  const signatureA = 'a'.repeat(64);
+  const signatureB = 'b'.repeat(64);
+
+  assert.equal(structurallyValidStripeSignatureHeader(`t=1720000000,v1=${signatureA}`), true);
+  assert.equal(structurallyValidStripeSignatureHeader(`t=1720000000,v1=${signatureA},v1=${signatureB}`), true);
+  // Preserve forward compatibility with additional Stripe signature schemes
+  // while retaining one usable v1 HMAC for the installed SDK verifier.
+  assert.equal(structurallyValidStripeSignatureHeader(`t=1720000000,v0=${signatureA},v1=${signatureB}`), true);
+
+  for (const invalid of [
+    'plausible but not a Stripe signature',
+    `v1=${signatureA}`,
+    't=1720000000',
+    `t=not-a-time,v1=${signatureA}`,
+    `t=1720000000,t=1720000001,v1=${signatureA}`,
+    `t=1720000000,v1=${'a'.repeat(63)}`,
+    `t=1720000000,v1=${'g'.repeat(64)}`,
+    `t=1720000000, v1=${signatureA}`,
+    `t=1720000000,v1=${signatureA},broken`,
+  ]) assert.equal(structurallyValidStripeSignatureHeader(invalid), false, invalid);
 });
 
 test('Stripe webhook rejects non-JSON payloads before reading request bodies', () => {

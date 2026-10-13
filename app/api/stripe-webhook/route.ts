@@ -26,6 +26,7 @@ import { metaCapiPurchaseAcknowledged } from '@/lib/metaCapiAcknowledgement';
 import { stripeCheckoutEventStateIssue, type QyRoamCheckoutEventType } from '@/lib/stripeCheckoutEventState';
 import { contentLengthMatches, declaredContentLength } from '@/lib/contentLength';
 import { paidFulfilmentDetailsIssue } from '@/lib/paidFulfilmentDetails';
+import { structurallyValidStripeSignatureHeader } from '@/lib/stripeSignatureHeader';
 import { isJsonRequestContentType } from '@/lib/requestBody';
 import { exactStripeClaimToken } from '@/lib/stripeClaimToken';
 import {
@@ -96,7 +97,8 @@ class StripeWebhookBodyTimeoutError extends Error {}
 class InvalidStripeWebhookBodyLengthError extends Error {}
 
 function validStripeSignatureHeader(value: string | null) {
-  return value && value.length <= MAX_STRIPE_SIGNATURE_HEADER_BYTES && /^[\x20-\x7e]+$/.test(value)
+  return value && value.length <= MAX_STRIPE_SIGNATURE_HEADER_BYTES && /^[\x20-\x7e]+$/.test(value) &&
+    structurallyValidStripeSignatureHeader(value)
     ? value
     : null;
 }
