@@ -766,6 +766,40 @@ test('checkout reconciliation defers attempt rotation after a pending payment un
   }
 });
 
+test('checkout reconciliation stops during Retry-After when its caller is cancelled', async () => {
+  const originalFetch = global.fetch;
+  let requests = 0;
+  const controller = new AbortController();
+  global.fetch = async () => {
+    requests += 1;
+    return new Response(JSON.stringify({
+      error: 'Payment received. We are confirming your order.',
+      paymentPending: true,
+    }), {
+      status: 409,
+      headers: { 'Content-Type': 'application/json', 'Retry-After': '5' },
+    });
+  };
+  try {
+    const resultPromise = require('../lib/customerCheckout.ts').fetchCustomerCheckout('/api/checkout', {
+      method: 'POST',
+      body: '{}',
+      signal: controller.signal,
+    });
+    // Let the first compact response finish before cancelling the retry wait.
+    // The assertion also proves cancellation does not make a known paid state
+    // regress into the generic failure returned for a first-request abort.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    controller.abort(new Error('Customer left checkout'));
+    const result = await resultPromise;
+    assert.equal(requests, 1);
+    assert.equal(result.paymentPending, true);
+    assert.equal(result.error, 'Payment received. We are confirming your order.');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test('checkout attempt identity survives reloads without becoming permanently stale', () => {
   const previousWindow = global.window;
   const previousCrypto = global.crypto;

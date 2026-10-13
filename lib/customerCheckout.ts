@@ -26,8 +26,22 @@ export function customerCheckoutRetryAfterMs(value: string | null) {
   return Math.min(MAX_RETRY_AFTER_SECONDS, Math.max(MIN_RETRY_AFTER_SECONDS, seconds)) * 1_000;
 }
 
-function wait(milliseconds: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+function waitForCheckoutRetry(milliseconds: number, signal?: AbortSignal | null) {
+  // The request deadline is recreated for each bounded poll, but the caller's
+  // cancellation owns the complete reconciliation cycle. In particular, a
+  // page navigation during Retry-After must not leave a detached timer that
+  // wakes up and starts one more checkout request in the old document.
+  if (signal?.aborted) return Promise.resolve(false);
+  return new Promise<boolean>((resolve) => {
+    const finish = (completed: boolean) => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+      resolve(completed);
+    };
+    const abort = () => finish(false);
+    const timer = setTimeout(() => finish(true), milliseconds);
+    signal?.addEventListener('abort', abort, { once: true });
+  });
 }
 
 function checkoutResponseSupersedesPending(response: CustomerCheckoutResponse) {
@@ -90,7 +104,7 @@ export async function fetchCustomerCheckout(
     }
     const retryAfterMs = customerCheckoutRetryAfterMs(response.headers.get('Retry-After'));
     if (deadlineAt - performance.now() <= retryAfterMs) return parsed;
-    await wait(retryAfterMs);
+    if (!await waitForCheckoutRetry(retryAfterMs, init.signal)) return parsed;
   }
 
   // The loop always executes at least once. Keep a fail-closed fallback so a
