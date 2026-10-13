@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ESIM_PLANS, ESIM_PROMO, esimPromoIsActive } from '../../lib/esimPlans';
 import { metaAttribution, metaMeasurementAllowed, trackMeta } from '../../lib/metaClient';
 import { checkoutAttempt, clearCheckoutAttempt, type CheckoutAttempt } from '../../lib/checkoutAttempt';
@@ -13,15 +13,26 @@ export default function EsimPage() {
   const [error, setError] = useState('');
   const activeCheckoutAttempt = useRef<CheckoutAttempt | null>(null);
   const checkoutInFlight = useRef(false);
+  const checkoutAbortController = useRef<AbortController | null>(null);
   const plan = useMemo(() => ESIM_PLANS.find((item) => item.id === planId) || ESIM_PLANS[0], [planId]);
   const dailyPrice = plan.qyPriceSgd / plan.days;
   const promoActive = esimPromoIsActive();
+
+  useEffect(() => () => {
+    // A paid-session reconciliation can outlive its first HTTP response.
+    // Stop its backoff and any current request when this storefront leaves
+    // the document so an abandoned eSIM page cannot keep doing checkout work.
+    checkoutAbortController.current?.abort();
+    checkoutAbortController.current = null;
+  }, []);
 
   async function checkout() {
     if (checkoutInFlight.current) return;
     checkoutInFlight.current = true;
     setBusy(true);
     setError('');
+    const controller = new AbortController();
+    checkoutAbortController.current = controller;
     try {
       const measurementConsent = metaMeasurementAllowed();
       const fingerprint = esimCheckoutFingerprint(planId);
@@ -43,7 +54,8 @@ export default function EsimPage() {
       const data = await fetchCustomerCheckout('/api/esim-checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ planId, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: activeCheckoutAttempt.current.requestId, checkoutAttemptCreatedAt: activeCheckoutAttempt.current.createdAt })
+        body: JSON.stringify({ planId, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: activeCheckoutAttempt.current.requestId, checkoutAttemptCreatedAt: activeCheckoutAttempt.current.createdAt }),
+        signal: controller.signal,
       });
       if (data.checkoutUrl) window.location.href = data.checkoutUrl;
       else if (data.completedSessionId) window.location.href = `/success?session_id=${encodeURIComponent(data.completedSessionId)}`;
@@ -60,10 +72,15 @@ export default function EsimPage() {
         setError(data.error || 'Checkout is temporarily unavailable. Please contact +65 8032 7183.');
       }
     } catch {
-      setError('Checkout is temporarily unavailable. Please contact +65 8032 7183.');
+      if (!controller.signal.aborted) setError('Checkout is temporarily unavailable. Please contact +65 8032 7183.');
     } finally {
-      checkoutInFlight.current = false;
-      setBusy(false);
+      // Cleanup clears the ref before aborting an unmounted checkout. Only a
+      // still-mounted request owns the shared submit guard and React state.
+      if (checkoutAbortController.current === controller) {
+        checkoutAbortController.current = null;
+        checkoutInFlight.current = false;
+        setBusy(false);
+      }
     }
   }
 

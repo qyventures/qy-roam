@@ -800,6 +800,19 @@ test('checkout reconciliation stops during Retry-After when its caller is cancel
   }
 });
 
+test('both storefronts cancel the complete checkout reconciliation lifecycle on unmount', () => {
+  for (const [name, page] of [
+    ['Pocket WiFi', homePage],
+    ['eSIM', esimPage],
+  ]) {
+    assert.match(page, /const checkoutAbortController = useRef<AbortController \| null>\(null\)/, `${name} checkout must retain its lifecycle controller`);
+    assert.match(page, /useEffect\(\(\) => \(\) => \{[\s\S]*?checkoutAbortController\.current\?\.abort\(\);[\s\S]*?checkoutAbortController\.current = null;[\s\S]*?\}, \[\]\)/, `${name} checkout must abort on unmount`);
+    assert.match(page, /fetchCustomerCheckout\([\s\S]*?signal: controller\.signal[\s\S]*?\);/, `${name} checkout must pass its lifecycle signal to reconciliation`);
+    assert.match(page, /if \(!controller\.signal\.aborted\) set(?:Checkout)?Error\(/, `${name} checkout must not surface navigation cancellation as a payment failure`);
+    assert.match(page, /if \(checkoutAbortController\.current === controller\) \{[\s\S]*?checkoutInFlight\.current = false;/, `${name} checkout must release only its own mounted submit lifecycle`);
+  }
+});
+
 test('checkout attempt identity survives reloads without becoming permanently stale', () => {
   const previousWindow = global.window;
   const previousCrypto = global.crypto;

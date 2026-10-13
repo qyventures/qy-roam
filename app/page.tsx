@@ -54,6 +54,7 @@ export default function Home() {
   const [checkoutError, setCheckoutError] = useState('');
   const activeCheckoutAttempt = useRef<CheckoutAttempt | null>(null);
   const checkoutInFlight = useRef(false);
+  const checkoutAbortController = useRef<AbortController | null>(null);
   const availabilityRequest = useRef(0);
   const selectedBooking = useRef({ country, start, end });
   selectedBooking.current = { country, start, end };
@@ -79,6 +80,12 @@ export default function Home() {
       setEnd(current => current === previousDefault ? nextEarliest : current);
     }).catch(() => undefined);
     return () => { active = false; };
+  }, []);
+  useEffect(() => () => {
+    // Checkout may be reconciling a paid Session through several bounded
+    // polls. Leaving the storefront owns cancellation of that complete cycle.
+    checkoutAbortController.current?.abort();
+    checkoutAbortController.current = null;
   }, []);
   const plan = useMemo(() => plans.find(p => p.country === country) || plans[0], [country]);
   const datesValid = Boolean(start && end && start >= earliestStart && end >= start);
@@ -193,8 +200,10 @@ export default function Home() {
       num_items: 1
     }, { eventID: `checkout_${activeCheckoutAttempt.current.requestId}` });
     setCheckingOut(true);
+    const controller = new AbortController();
+    checkoutAbortController.current = controller;
     try {
-      const data = await fetchCustomerCheckout('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ country, start, end, promoCode, expectedTotalCents: payableTotalCents, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: activeCheckoutAttempt.current.requestId, checkoutAttemptCreatedAt: activeCheckoutAttempt.current.createdAt }) });
+      const data = await fetchCustomerCheckout('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ country, start, end, promoCode, expectedTotalCents: payableTotalCents, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: activeCheckoutAttempt.current.requestId, checkoutAttemptCreatedAt: activeCheckoutAttempt.current.createdAt }), signal: controller.signal });
       if (data.checkoutUrl) window.location.href = data.checkoutUrl;
       else if (data.completedSessionId) window.location.href = `/success?session_id=${encodeURIComponent(data.completedSessionId)}`;
       else {
@@ -214,8 +223,18 @@ export default function Home() {
         }
         setCheckoutError(data.error || 'Checkout is temporarily unavailable. Please contact +65 8032 7183.');
       }
-    } catch { setCheckoutError('Checkout is temporarily unavailable. Please contact +65 8032 7183.'); }
-    finally { checkoutInFlight.current = false; setCheckingOut(false); }
+    } catch {
+      if (!controller.signal.aborted) setCheckoutError('Checkout is temporarily unavailable. Please contact +65 8032 7183.');
+    }
+    finally {
+      // The unmount cleanup clears this ref before aborting, preventing a
+      // detached request from writing state after its storefront disappears.
+      if (checkoutAbortController.current === controller) {
+        checkoutAbortController.current = null;
+        checkoutInFlight.current = false;
+        setCheckingOut(false);
+      }
+    }
   }
 
   return <main>
