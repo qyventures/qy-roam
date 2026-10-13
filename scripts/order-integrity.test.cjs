@@ -65,7 +65,7 @@ const { durableOrderMatchesPaidSession } = require('../lib/durableOrderSnapshot.
 const { exactStripeClaimToken } = require('../lib/stripeClaimToken.ts');
 const { parsePocketWifiAvailability, parsePocketWifiBookingTerms } = require('../lib/pocketWifiAvailability.ts');
 const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutResponse.ts');
-const { CUSTOMER_CHECKOUT_MAX_RECONCILIATION_ATTEMPTS, customerCheckoutRetryAfterMs } = require('../lib/customerCheckout.ts');
+const { CUSTOMER_CHECKOUT_MAX_RECONCILIATION_ATTEMPTS, CUSTOMER_CHECKOUT_RECONCILIATION_TIMEOUT_MS, customerCheckoutRetryAfterMs } = require('../lib/customerCheckout.ts');
 const { esimCheckoutFingerprint, pocketWifiCheckoutFingerprint } = require('../lib/checkoutFingerprint.ts');
 const { MANUAL_ORDER_REFERENCE_MAX_LENGTH, manualOrderReference, manualOrderSessionId } = require('../lib/manualOrderReference.ts');
 const { createConcurrencyLimiter } = require('../lib/concurrencyLimit.ts');
@@ -581,6 +581,7 @@ test('checkout payment-confirmation recovery advertises a bounded safe retry', (
     assert.ok(pendingResponses.length > 0, 'payment-pending response must advertise a three-second retry');
   }
   assert.equal(CUSTOMER_CHECKOUT_MAX_RECONCILIATION_ATTEMPTS, 4);
+  assert.equal(CUSTOMER_CHECKOUT_RECONCILIATION_TIMEOUT_MS, CUSTOMER_REQUEST_TIMEOUT_MS);
   assert.equal(customerCheckoutRetryAfterMs('1'), 1_000);
   assert.equal(customerCheckoutRetryAfterMs('3'), 3_000);
   assert.equal(customerCheckoutRetryAfterMs('30'), 5_000);
@@ -592,7 +593,9 @@ test('checkout payment-confirmation recovery advertises a bounded safe retry', (
   // stop after the finite attempt ceiling. A new request body here could
   // rotate the checkout identity and create a second payable Session.
   assert.match(customerCheckout, /for \(let attempt = 0; attempt < CUSTOMER_CHECKOUT_MAX_RECONCILIATION_ATTEMPTS; attempt \+= 1\)/);
-  assert.match(customerCheckout, /fetchCustomerJson\(input, init\)/);
+  assert.match(customerCheckout, /const deadlineAt = performance\.now\(\) \+ CUSTOMER_CHECKOUT_RECONCILIATION_TIMEOUT_MS/);
+  assert.match(customerCheckout, /fetchCustomerJson\(input, init, remainingMs\)/);
+  assert.match(customerCheckout, /if \(deadlineAt - performance\.now\(\) <= retryAfterMs\) return parsed/);
   assert.doesNotMatch(customerCheckout, /checkoutAttempt|checkoutRequestId|JSON\.stringify/);
 });
 
