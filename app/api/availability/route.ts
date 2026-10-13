@@ -173,6 +173,16 @@ export async function GET(req: NextRequest) {
     // truthfully show to a customer.
     const effectiveInventory = Math.min(inventory, inventoryState.saleableInventory);
     const remaining = Math.max(0, effectiveInventory - committed);
+    // The Stripe scan and atomic inventory snapshot can straddle Singapore
+    // midnight. Do not publish a positive stock promise after the delivery
+    // lead-time boundary has advanced beyond the requested start date; the
+    // immediately following checkout would correctly reject that promise.
+    if (from < operationalIsoDateAfter(minLeadDays)) {
+      return NextResponse.json({ available: false, ...bookingTerms, bookingWindowChanged: true, error: `Please book at least ${minLeadDays} day${minLeadDays === 1 ? '' : 's'} before departure.` }, {
+        status: 409,
+        headers: { 'Cache-Control': 'no-store' },
+      });
+    }
     return NextResponse.json({ available: remaining > 0, remaining, inventoryMode: 'live', temporaryHolds: stripeHolds.holds, ...bookingTerms }, { headers: { 'Cache-Control': 'no-store' } });
   } catch {
     // Stripe and PostgREST errors can include upstream response text. This is

@@ -402,6 +402,17 @@ export async function POST(req: Request) {
   if(!reserved) return NextResponse.json({error:'Pocket WiFi is sold out or currently reserved for these dates. Please try different dates or contact +65 8032 7183.'},{status:409,headers:{'Cache-Control':'no-store'}});
   const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[]=[{quantity:1,price_data:{currency:'sgd',unit_amount:rentalAmount,product_data:{name:`QY Roam Pocket WiFi — ${country}`,description:`${start} to ${end} · ${days} day${days===1?'':'s'}${promo.discountCents>0?` · ${normalisePromoCode(body.promoCode)} applied`:''}`}}}];
   if(courierFee>0) lineItems.push({quantity:1,price_data:{currency:'sgd',unit_amount:courierFee,product_data:{name:'Singapore courier delivery & return handling'}}});
+  // Stripe and database work above can straddle Singapore midnight. Recheck
+  // the operational booking cutoff after the reservation is acquired and at
+  // the final payment-capability boundary; otherwise a request that was valid
+  // at 23:59 could create a newly ineligible booking after the required lead
+  // date advances. This reservation is still unlinked, so it is safe to
+  // release without touching an earlier Stripe-backed attempt.
+  if(start<operationalIsoDateAfter(minLeadDays)){
+    const released=await supabase.from('checkout_reservations').delete().eq('checkout_request_id',requestId).is('stripe_session_id',null);
+    if(released.error) throw released.error;
+    return NextResponse.json({error:`Please book at least ${minLeadDays} day${minLeadDays===1?'':'s'} before departure so we can arrange delivery. Contact +65 8032 7183 for urgent trips.`,bookingWindowChanged:true},{status:409,headers:{'Cache-Control':'no-store'}});
+  }
   // Readiness, hold scans and the reservation RPC can take time after the
   // original expiry validation. Since `expires_at` must remain stable for
   // Stripe idempotency, fail this attempt cleanly rather than submitting an

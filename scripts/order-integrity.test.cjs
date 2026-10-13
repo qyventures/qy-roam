@@ -1967,6 +1967,25 @@ test('Pocket WiFi booking dates follow the Singapore operational calendar', () =
   assert.match(operationalDate, /OPERATIONAL_TIME_ZONE = 'Asia\/Singapore'/);
 });
 
+test('Pocket WiFi quote and payment boundaries re-authorise the Singapore booking window after provider work', () => {
+  const availabilitySnapshot = availabilityRoute.indexOf("supabase.rpc('qy_pocket_wifi_availability_snapshot'");
+  const availabilityRecheck = availabilityRoute.indexOf('if (from < operationalIsoDateAfter(minLeadDays))');
+  const availabilityResponse = availabilityRoute.indexOf('return NextResponse.json({ available: remaining > 0');
+  assert.ok(availabilitySnapshot >= 0 && availabilityRecheck > availabilitySnapshot && availabilityResponse > availabilityRecheck,
+    'availability must recheck the lead-time cutoff after its live inventory snapshot and before publishing stock');
+  assert.match(availabilityRoute, /bookingWindowChanged: true/);
+
+  const reservation = wifiCheckoutRoute.indexOf("supabase.rpc('qy_reserve_pocket_wifi'");
+  const checkoutRecheck = wifiCheckoutRoute.indexOf('if(start<operationalIsoDateAfter(minLeadDays))', reservation);
+  const stripeCreate = wifiCheckoutRoute.indexOf('session=await stripe.checkout.sessions.create', reservation);
+  assert.ok(reservation >= 0 && checkoutRecheck > reservation && stripeCreate > checkoutRecheck,
+    'checkout must recheck the lead-time cutoff after reserving stock and before creating a Stripe capability');
+  const recheckBlock = wifiCheckoutRoute.slice(checkoutRecheck, stripeCreate);
+  assert.match(recheckBlock, /checkout_reservations'[\s\S]*\.eq\('checkout_request_id',requestId\)\.is\('stripe_session_id',null\)/,
+    'a cutoff-crossing checkout must release only its still-unlinked reservation');
+  assert.match(recheckBlock, /bookingWindowChanged:true/);
+});
+
 test('operations departure and return exceptions use Singapore date boundaries', () => {
   // This clock is still 11 September in UTC, but already 12 September in SG.
   // The result must not depend on the timezone configured on the app server.
