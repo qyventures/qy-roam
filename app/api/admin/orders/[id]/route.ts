@@ -106,6 +106,9 @@ function esimTransitionError(message: string) {
   if (/delivery reference is required/i.test(message)) {
     return { status: 409, error: 'A delivery reference is required before marking this eSIM order fulfilled.' };
   }
+  if (/delivery reference is already assigned to another fulfilled order/i.test(message)) {
+    return { status: 409, error: 'This eSIM delivery reference is already assigned to another fulfilled order. Verify the provider hand-off and enter the reference for this order.' };
+  }
   if (/invalid eSIM fulfilment transition|only paid eSIM orders can be transitioned here|order not found/i.test(message)) {
     return { status: 409, error: 'This eSIM order can no longer make the requested transition. Refresh before updating it.' };
   }

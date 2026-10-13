@@ -249,6 +249,50 @@ create trigger qy_enforce_esim_delivery_reference_immutability
 before update of digital_delivery_reference on public.orders
 for each row execute function public.qy_enforce_esim_delivery_reference_immutability();
 
+-- One provider/email audit reference must identify one completed digital
+-- hand-off. Reusing it can make two paid orders appear fulfilled when only
+-- one entitlement was actually issued. A partial unique index would reject
+-- deployment if historical rows already contain duplicates, so enforce new
+-- transitions with a trigger and leave any legacy conflict visible for
+-- deliberate reconciliation. The advisory lock closes the race between two
+-- operators fulfilling different orders with the same reference at once.
+create or replace function public.qy_enforce_esim_delivery_reference_uniqueness()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  v_reference text;
+begin
+  if new.product_type <> 'esim'
+    or new.fulfilment_status not in ('fulfilled', 'closed')
+    or new.digital_delivery_reference is null then
+    return new;
+  end if;
+
+  v_reference := lower(btrim(new.digital_delivery_reference));
+  perform pg_advisory_xact_lock(hashtext('qy_roam_esim_delivery:' || v_reference));
+
+  if exists (
+    select 1
+    from public.orders
+    where product_type = 'esim'
+      and fulfilment_status in ('fulfilled', 'closed')
+      and lower(btrim(digital_delivery_reference)) = v_reference
+      and id is distinct from new.id
+  ) then
+    raise exception 'eSIM delivery reference is already assigned to another fulfilled order';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists qy_enforce_esim_delivery_reference_uniqueness on public.orders;
+create trigger qy_enforce_esim_delivery_reference_uniqueness
+before insert or update of product_type, fulfilment_status, digital_delivery_reference on public.orders
+for each row execute function public.qy_enforce_esim_delivery_reference_uniqueness();
+
 -- The admin API applies the eSIM fulfilment graph, but service-role scripts
 -- and future operational tools can write the orders table directly. A valid
 -- status label alone is not enough: without this backstop, such a write could
@@ -1504,10 +1548,11 @@ as $$
       'qy_enforce_paid_order_identity_immutability',
       'qy_validate_order_payment_confirmation_time',
       'qy_enforce_esim_delivery_reference_immutability',
+      'qy_enforce_esim_delivery_reference_uniqueness',
       'qy_enforce_esim_fulfilment_transition',
       'qy_enforce_pocket_wifi_fulfilment_transition',
       'qy_reconcile_customer_from_paid_order'
-    )) = 6 and
+    )) = 7 and
     (select count(*) from pg_trigger where tgrelid = 'public.stripe_events'::regclass and not tgisinternal and tgenabled in ('O', 'A') and tgname in (
       'qy_enforce_stripe_event_identity_immutability',
       'qy_enforce_stripe_event_lifecycle'
@@ -2380,7 +2425,9 @@ as $$
   -- locks paid-order mutations until the matching close has been persisted.
   -- Version 38 binds privileged paid-order writes to the same bounded,
   -- single-line courier address contract enforced by webhook fulfilment.
-  select 38;
+  -- Version 39 prevents one digital-delivery audit reference from settling
+  -- multiple eSIM orders, including concurrent service-role transitions.
+  select 39;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
