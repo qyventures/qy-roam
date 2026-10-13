@@ -2128,6 +2128,23 @@ test('ambiguous checkout conflicts never rotate the durable Stripe attempt ident
     assert.equal(parsed[quoteReason], false, `${quoteReason} must conflict with paymentPending`);
     assert.equal(parsed.paymentPending, false, `paymentPending must conflict with ${quoteReason}`);
   }
+
+  for (const conflictReason of [...replacementReasons, ...quoteReasons, 'paymentPending']) {
+    for (const successClaim of [
+      { url: 'https://checkout.stripe.com/c/pay/cs_test_ambiguous' },
+      { completed: true },
+      { sessionId: 'cs_test_ambiguous' },
+    ]) {
+      const parsed = parseCustomerCheckoutResponse({
+        error: 'Ambiguous checkout state.',
+        [conflictReason]: true,
+        ...successClaim,
+      }, 409);
+      assert.equal(parsed[conflictReason], false, `${conflictReason} must conflict with ${Object.keys(successClaim)[0]}`);
+      assert.equal(parsed.checkoutUrl, null);
+      assert.equal(parsed.completedSessionId, null);
+    }
+  }
 });
 
 test('Pocket WiFi availability remains bound to the exact dates that were checked', () => {

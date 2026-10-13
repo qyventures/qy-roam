@@ -91,6 +91,16 @@ export function parseCustomerCheckoutResponse(value: unknown, responseStatus: nu
     input.bookingWindowChanged === true,
     input.pricingExpired === true,
   ];
+  // A conflict response must never also claim either success branch. Even
+  // though success capabilities are ignored on non-200 responses, rotating
+  // the durable attempt after receiving `{ checkoutExpired: true, url: ... }`
+  // (or a completed-session marker) would trust an internally contradictory
+  // envelope. The server may already have created the claimed Session, so
+  // retain the current idempotency identity and fail closed instead.
+  const claimsSuccessCapability =
+    Object.prototype.hasOwnProperty.call(input, 'url') ||
+    Object.prototype.hasOwnProperty.call(input, 'completed') ||
+    Object.prototype.hasOwnProperty.call(input, 'sessionId');
   // These states are mutually exclusive outcomes of one server-side
   // reconciliation. Require exactly one deliberate reason and the bounded
   // customer-facing explanation emitted with it before discarding the
@@ -98,6 +108,7 @@ export function parseCustomerCheckoutResponse(value: unknown, responseStatus: nu
   // combines flags (or carries only a flag) must remain safely retryable with
   // the original attempt instead of opening a second payable Session.
   const mayReplaceAttempt = responseStatus === 409 && Boolean(error) &&
+    !claimsSuccessCapability &&
     requestedReplacementReasons.filter(Boolean).length === 1 &&
     requestedQuoteInvalidationReasons.every((reason) => !reason) &&
     input.paymentPending !== true;
@@ -108,6 +119,7 @@ export function parseCustomerCheckoutResponse(value: unknown, responseStatus: nu
   // Session. Accept this marker only on the route's bounded conflict response
   // and never alongside a reason that authorises attempt rotation.
   const paymentPending = responseStatus === 409 && Boolean(error) &&
+    !claimsSuccessCapability &&
     input.paymentPending === true &&
     requestedReplacementReasons.every((reason) => !reason) &&
     requestedQuoteInvalidationReasons.every((reason) => !reason);
@@ -117,6 +129,7 @@ export function parseCustomerCheckoutResponse(value: unknown, responseStatus: nu
   // shown in the browser, but deliberately retain the request id in case an
   // intermediary copied a marker or an earlier ambiguous create exists.
   const mayInvalidateQuote = responseStatus === 409 && Boolean(error) &&
+    !claimsSuccessCapability &&
     requestedReplacementReasons.every((reason) => !reason) &&
     input.paymentPending !== true &&
     requestedQuoteInvalidationReasons.filter(Boolean).length === 1;
