@@ -5,10 +5,18 @@
  * payload and enforces the timestamp tolerance after the body has been read.
  */
 export function structurallyValidStripeSignatureHeader(value: string) {
+  // The route also caps the complete header, but bound parser work
+  // independently. A comma-heavy lookalike must not turn the unauthenticated
+  // admission check into thousands of token/regex operations before its body
+  // is rejected. Stripe may include multiple signatures during endpoint
+  // secret rotation, so retain a deliberately generous small ceiling.
+  const items = value.split(',');
+  if (items.length < 2 || items.length > 32) return false;
+
   let timestampCount = 0;
   let signatureCount = 0;
 
-  for (const item of value.split(',')) {
+  for (const item of items) {
     const separator = item.indexOf('=');
     if (separator < 1 || separator === item.length - 1 || item.indexOf('=', separator + 1) !== -1) return false;
 
@@ -21,7 +29,10 @@ export function structurallyValidStripeSignatureHeader(value: string) {
 
     if (key === 't') {
       timestampCount += 1;
-      if (!/^\d+$/.test(fieldValue)) return false;
+      // Stripe timestamps are Unix seconds. Twelve digits comfortably covers
+      // the service lifetime while keeping Number conversion and validation
+      // constant-size for unauthenticated input.
+      if (!/^\d{1,12}$/.test(fieldValue)) return false;
       const timestamp = Number(fieldValue);
       if (!Number.isSafeInteger(timestamp) || timestamp < 1) return false;
     } else if (key === 'v1') {
@@ -29,6 +40,7 @@ export function structurallyValidStripeSignatureHeader(value: string) {
       // characters. Multiple v1 values are valid during secret rotation.
       if (!/^[a-f0-9]{64}$/.test(fieldValue)) return false;
       signatureCount += 1;
+      if (signatureCount > 8) return false;
     }
   }
 

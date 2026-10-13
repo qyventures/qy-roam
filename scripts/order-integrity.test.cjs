@@ -6023,6 +6023,9 @@ test('Stripe webhook upload admission requires a structurally usable signature h
   // while retaining one usable v1 HMAC for the installed SDK verifier.
   assert.equal(structurallyValidStripeSignatureHeader(`t=1720000000,v0=${signatureA},v1=${signatureB}`), true);
 
+  const tooManyFields = [`t=1720000000`, `v1=${signatureA}`, ...Array.from({ length: 31 }, (_, index) => `v${index + 2}=a`)];
+  const tooManySignatures = [`t=1720000000`, ...Array.from({ length: 9 }, () => `v1=${signatureA}`)];
+
   for (const invalid of [
     'plausible but not a Stripe signature',
     `v1=${signatureA}`,
@@ -6033,6 +6036,9 @@ test('Stripe webhook upload admission requires a structurally usable signature h
     `t=1720000000,v1=${'g'.repeat(64)}`,
     `t=1720000000, v1=${signatureA}`,
     `t=1720000000,v1=${signatureA},broken`,
+    `t=${'1'.repeat(13)},v1=${signatureA}`,
+    tooManyFields.join(','),
+    tooManySignatures.join(','),
   ]) assert.equal(structurallyValidStripeSignatureHeader(invalid), false, invalid);
 });
 
