@@ -57,7 +57,7 @@ const { completeSmtpResponseCode, isSafeSmtpHost, smtpSecureTransport, waitForRe
 const { safeStripeCheckoutUrl } = require('../lib/stripeCheckoutUrl.ts');
 const { metaCapiPurchaseAcknowledged } = require('../lib/metaCapiAcknowledgement.ts');
 const { stripeCheckoutEventStateIssue } = require('../lib/stripeCheckoutEventState.ts');
-const { contentLengthMatches, declaredContentLength } = require('../lib/contentLength.ts');
+const { contentLengthMatches, declaredContentLength, MAX_CONTENT_LENGTH_HEADER_LENGTH } = require('../lib/contentLength.ts');
 const { structurallyValidStripeSignatureHeader, stripeSignatureTimestampWithinTolerance } = require('../lib/stripeSignatureHeader.ts');
 const { paidFulfilmentDetailsIssue } = require('../lib/paidFulfilmentDetails.ts');
 const { exactNonnegativeCount } = require('../lib/exactCount.ts');
@@ -2545,6 +2545,7 @@ test('checkout request bodies are bounded for chunked, malformed, and slow uploa
 });
 
 test('declared Content-Length values are canonical, safely bounded, and exact', () => {
+  assert.equal(MAX_CONTENT_LENGTH_HEADER_LENGTH, 16);
   assert.equal(declaredContentLength(null, 4096), null);
   assert.equal(declaredContentLength('0', 4096), 0);
   assert.equal(declaredContentLength('4096', 4096), 4096);
@@ -2552,6 +2553,8 @@ test('declared Content-Length values are canonical, safely bounded, and exact', 
     assert.throws(() => declaredContentLength(value, 4096), TypeError);
   }
   assert.throws(() => declaredContentLength('4097', 4096), RangeError);
+  assert.throws(() => declaredContentLength('9'.repeat(MAX_CONTENT_LENGTH_HEADER_LENGTH + 1), 4096), TypeError);
+  assert.throws(() => declaredContentLength('x'.repeat(1_000_000), 4096), TypeError);
   assert.equal(contentLengthMatches(null, 9), true);
   assert.equal(contentLengthMatches(9, 9), true);
   assert.equal(contentLengthMatches(9, 8), false);
