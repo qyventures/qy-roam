@@ -1151,6 +1151,15 @@ export async function POST(req:Request){
   };
   try{
     return await handleStripeWebhook(req,releaseUpload,receivedAtMs);
+  }catch{
+    // Keep the public provider contract intact even when a programming error
+    // or an unexpected SDK/runtime failure escapes the narrower recovery
+    // blocks above. Stripe must receive a retryable, non-cacheable response;
+    // Next.js's generic 500 response does not guarantee either header. Never
+    // attach the raw exception here because it can contain signed payload,
+    // customer, provider, or deployment data.
+    console.error('stripe_webhook_unexpected_error');
+    return webhookRetryJson({error:'Processing failed'});
   }finally{
     releaseUpload();
   }

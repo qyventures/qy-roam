@@ -1646,11 +1646,13 @@ test('Stripe webhook failure logging does not print raw dependency errors', () =
   assert.doesNotMatch(webhookRoute, /console\.error\('meta_purchase_failure_record_error',failed\.error/);
   assert.doesNotMatch(webhookRoute, /console\.error\('stripe_webhook_expiry_processing_error',error\)/);
   assert.doesNotMatch(webhookRoute, /console\.error\('stripe_webhook_processing_error',error\)/);
+  assert.doesNotMatch(webhookRoute, /console\.error\('stripe_webhook_unexpected_error',/);
   assert.match(webhookRoute, /console\.error\('stripe_webhook_failure_record_error'\)/);
   assert.match(webhookRoute, /console\.error\('fulfilment_notification_failure_record_error'\)/);
   assert.match(webhookRoute, /console\.error\('meta_purchase_failure_record_error'\)/);
   assert.match(webhookRoute, /console\.error\('stripe_webhook_expiry_processing_error'\)/);
   assert.match(webhookRoute, /console\.error\('stripe_webhook_processing_error'\)/);
+  assert.match(webhookRoute, /console\.error\('stripe_webhook_unexpected_error'\)/);
 });
 
 test('Stripe webhook acknowledgements and retry responses are never cacheable', () => {
@@ -1687,6 +1689,11 @@ test('Stripe webhook failure recording cannot replace the controlled retry respo
     'the recovery-ledger transport must be guarded');
   assert.match(failureRecorder[0], /catch\s*{[\s\S]*console\.error\('stripe_webhook_failure_record_error'\)/,
     'a secondary recovery-write outage must emit only a stable diagnostic');
+});
+
+test('unexpected Stripe webhook failures retain the provider retry contract', () => {
+  const postBoundary = webhookRoute.slice(webhookRoute.indexOf('export async function POST(req:Request)'));
+  assert.match(postBoundary, /try\{\s*return await handleStripeWebhook\(req,releaseUpload,receivedAtMs\);\s*}catch\{[\s\S]*console\.error\('stripe_webhook_unexpected_error'\);[\s\S]*return webhookRetryJson\(\{error:'Processing failed'\}\);\s*}finally\{\s*releaseUpload\(\);/);
 });
 
 test('public sales and confirmation paths do not log raw provider failures', () => {
@@ -7531,7 +7538,7 @@ test('Stripe webhook concurrency is bounded without queueing or leaking admissio
   assert.match(webhookRoute, /return webhookRetryJson\(\{error:'Webhook upload capacity is busy'\},503\)/);
   assert.match(webhookRoute, /finally \{\s*releaseProcessing\(\);\s*\}/);
   assert.match(webhookRoute, /const release=tryAcquireStripeWebhookUpload\(\)/);
-  assert.match(webhookRoute, /let uploadReleased=false;[\s\S]*if\(uploadReleased\) return;[\s\S]*return await handleStripeWebhook\(req,releaseUpload,receivedAtMs\);[\s\S]*finally\{\s*releaseUpload\(\);/);
+  assert.match(webhookRoute, /let uploadReleased=false;[\s\S]*if\(uploadReleased\) return;[\s\S]*return await handleStripeWebhook\(req,releaseUpload,receivedAtMs\);[\s\S]*catch\{[\s\S]*finally\{\s*releaseUpload\(\);/);
 });
 
 test('obviously invalid webhook traffic cannot consume paid-order processing slots', () => {
