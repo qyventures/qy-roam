@@ -96,10 +96,10 @@ function webhookRetryJson(body: unknown, status: 500 | 503 = 500, retryAfter = '
 class StripeWebhookBodyTimeoutError extends Error {}
 class InvalidStripeWebhookBodyLengthError extends Error {}
 
-function validStripeSignatureHeader(value: string | null) {
+function validStripeSignatureHeader(value: string | null, receivedAtMs = Date.now()) {
   return value && value.length <= MAX_STRIPE_SIGNATURE_HEADER_BYTES && /^[\x20-\x7e]+$/.test(value) &&
     structurallyValidStripeSignatureHeader(value) &&
-    stripeSignatureTimestampWithinTolerance(value, STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS)
+    stripeSignatureTimestampWithinTolerance(value, STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS,receivedAtMs)
     ? value
     : null;
 }
@@ -770,7 +770,7 @@ export async function deliverPaidOrderSideEffects(supabase:NonNullable<ReturnTyp
   if(failures.length) throw new AggregateError(failures.map((failure)=>failure.reason),'One or more paid-order deliveries failed');
 }
 
-async function handleStripeWebhook(req:Request, releaseUpload:()=>void){
+async function handleStripeWebhook(req:Request, releaseUpload:()=>void, receivedAtMs:number){
   // hasRequiredStripeCheckoutConfig canonicalises ordinary deployment
   // whitespace. Use the same value for signature verification and API reads
   // so a health-ready service cannot reject every signed payment event.
@@ -799,7 +799,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void){
   // missing, oversized, or control-character-bearing header has no valid
   // Stripe interpretation and must not be able to occupy a webhook worker for
   // the full body deadline.
-  const stripeSignature=validStripeSignatureHeader(req.headers.get('stripe-signature'));
+  const stripeSignature=validStripeSignatureHeader(req.headers.get('stripe-signature'),receivedAtMs);
   if(!stripeSignature) return webhookJson({error:'Invalid signature'},{status:400});
   const stripe=createStripeClient(key); let event:Stripe.Event;
   let payload:Buffer;
@@ -816,7 +816,12 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void){
   let verifiedEvent:Stripe.Event|undefined;
   for(const webhookSecret of webhookSecrets){
     try{
-      verifiedEvent=stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS);
+      // Use the same request-arrival instant as the cheap admission check.
+      // Otherwise an authentic signature near the tolerance boundary can be
+      // accepted before a bounded upload, then rejected only because the SDK
+      // samples a later clock after reading the body. The 15-second absolute
+      // body deadline still bounds how long this captured instant is usable.
+      verifiedEvent=stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS,undefined,Math.floor(receivedAtMs/1_000));
       break;
     }catch{}
   }
@@ -1091,6 +1096,11 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void){
 }
 
 export async function POST(req:Request){
+  // Capture freshness once at the first application boundary. Both the cheap
+  // pre-upload admission check and Stripe's HMAC verification below use this
+  // instant, so normal streaming time cannot change the verdict for the same
+  // signed request.
+  const receivedAtMs=Date.now();
   // Keep requests that cannot possibly be a Stripe delivery outside the
   // scarce paid-order work budget. Signature verification still requires the
   // exact body below, but these headers are sufficient to reject ordinary
@@ -1104,7 +1114,7 @@ export async function POST(req:Request){
   if(!hasIdentityRequestContentEncoding(req.headers.get('content-encoding'))) {
     return webhookJson({error:'Unsupported webhook content encoding'},{status:415});
   }
-  if(!validStripeSignatureHeader(req.headers.get('stripe-signature'))) {
+  if(!validStripeSignatureHeader(req.headers.get('stripe-signature'),receivedAtMs)) {
     return webhookJson({error:'Invalid signature'},{status:400});
   }
   // Content-Length is only a bounded header hint, so it cannot replace the
@@ -1130,7 +1140,7 @@ export async function POST(req:Request){
     release();
   };
   try{
-    return await handleStripeWebhook(req,releaseUpload);
+    return await handleStripeWebhook(req,releaseUpload,receivedAtMs);
   }finally{
     releaseUpload();
   }

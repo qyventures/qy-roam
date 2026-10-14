@@ -3442,7 +3442,7 @@ test('Stripe webhook signature freshness is an explicit bounded release contract
   assert.match(webhookRoute, /STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS\s*=\s*300/);
   assert.match(
     webhookRoute,
-    /constructEvent\(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS\)/,
+    /constructEvent\(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS,undefined,Math\.floor\(receivedAtMs\/1_000\)\)/,
   );
 });
 
@@ -6011,12 +6011,12 @@ test('Stripe webhook bounds raw payload memory before signature verification', (
   assert.match(webhookRoute, /void reader\.cancel\(\)\.catch\(\(\) => undefined\)/);
   assert.match(webhookRoute, /Webhook payload timed out/);
   assert.match(webhookRoute, /Webhook payload too large/);
-  assert.match(webhookRoute, /function validStripeSignatureHeader\(value: string \| null\)/);
+  assert.match(webhookRoute, /function validStripeSignatureHeader\(value: string \| null, receivedAtMs = Date\.now\(\)\)/);
   assert.match(webhookRoute, /value\.length <= MAX_STRIPE_SIGNATURE_HEADER_BYTES/);
   assert.match(webhookRoute, /\^\[\\x20-\\x7e\]\+\$/);
   assert.match(webhookRoute, /structurallyValidStripeSignatureHeader\(value\)/);
-  const signatureValidation = webhookRoute.indexOf("const stripeSignature=validStripeSignatureHeader(req.headers.get('stripe-signature'))");
-  const signatureCheck = webhookRoute.indexOf('stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS)');
+  const signatureValidation = webhookRoute.indexOf("const stripeSignature=validStripeSignatureHeader(req.headers.get('stripe-signature'),receivedAtMs)");
+  const signatureCheck = webhookRoute.indexOf('stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS');
   assert.ok(signatureValidation >= 0 && signatureCheck > signatureValidation, 'Stripe signature header must be bounded before verification');
 });
 
@@ -6067,8 +6067,11 @@ test('Stripe webhook enforces a symmetric signature freshness window before slow
   assert.equal(stripeSignatureTimestampWithinTolerance(current, 300, Number.NaN), false);
 
   const admission = webhookRoute.slice(webhookRoute.indexOf('export async function POST(req:Request)'), webhookRoute.indexOf('const release=tryAcquireStripeWebhookUpload()'));
-  assert.match(admission, /validStripeSignatureHeader\(req\.headers\.get\('stripe-signature'\)\)/);
-  assert.match(webhookRoute, /stripeSignatureTimestampWithinTolerance\(value, STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS\)/);
+  assert.match(admission, /const receivedAtMs=Date\.now\(\)/);
+  assert.match(admission, /validStripeSignatureHeader\(req\.headers\.get\('stripe-signature'\),receivedAtMs\)/);
+  assert.match(webhookRoute, /stripeSignatureTimestampWithinTolerance\(value, STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS,receivedAtMs\)/);
+  assert.match(webhookRoute, /handleStripeWebhook\(req,releaseUpload,receivedAtMs\)/);
+  assert.match(webhookRoute, /constructEvent\(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS,undefined,Math\.floor\(receivedAtMs\/1_000\)\)/);
 });
 
 test('Stripe webhook rejects non-JSON payloads before reading request bodies', () => {
@@ -6080,9 +6083,9 @@ test('Stripe webhook rejects non-JSON payloads before reading request bodies', (
 });
 
 test('Stripe webhook rejects unusable signature headers before reading request bodies', () => {
-  const signatureBoundary = webhookRoute.indexOf("const stripeSignature=validStripeSignatureHeader(req.headers.get('stripe-signature'))");
+  const signatureBoundary = webhookRoute.indexOf("const stripeSignature=validStripeSignatureHeader(req.headers.get('stripe-signature'),receivedAtMs)");
   const bodyRead = webhookRoute.indexOf('payload=await readStripeWebhookBody(req)');
-  const signatureVerification = webhookRoute.indexOf('stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS)');
+  const signatureVerification = webhookRoute.indexOf('stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS');
 
   assert.ok(signatureBoundary > -1);
   assert.ok(bodyRead > signatureBoundary);
@@ -6098,7 +6101,7 @@ test('Stripe webhook rejects encoded payloads before reading or signature verifi
   assert.match(webhookRoute, /import \{ hasIdentityRequestContentEncoding, isJsonRequestContentType \} from '@\/lib\/requestBody'/);
   const encodingGuard = webhookRoute.indexOf("if(!hasIdentityRequestContentEncoding(req.headers.get('content-encoding'))) ");
   const bodyRead = webhookRoute.indexOf('payload=await readStripeWebhookBody(req)');
-  const signatureVerification = webhookRoute.indexOf('stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS)');
+  const signatureVerification = webhookRoute.indexOf('stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS');
   assert.ok(encodingGuard >= 0 && encodingGuard < bodyRead && bodyRead < signatureVerification);
   assert.match(webhookRoute, /Unsupported webhook content encoding'\},\{status:415\}/);
 });
@@ -7304,7 +7307,7 @@ test('Stripe webhook concurrency is bounded without queueing or leaking admissio
   assert.match(webhookRoute, /return webhookRetryJson\(\{error:'Webhook upload capacity is busy'\},503\)/);
   assert.match(webhookRoute, /finally \{\s*releaseProcessing\(\);\s*\}/);
   assert.match(webhookRoute, /const release=tryAcquireStripeWebhookUpload\(\)/);
-  assert.match(webhookRoute, /let uploadReleased=false;[\s\S]*if\(uploadReleased\) return;[\s\S]*return await handleStripeWebhook\(req,releaseUpload\);[\s\S]*finally\{\s*releaseUpload\(\);/);
+  assert.match(webhookRoute, /let uploadReleased=false;[\s\S]*if\(uploadReleased\) return;[\s\S]*return await handleStripeWebhook\(req,releaseUpload,receivedAtMs\);[\s\S]*finally\{\s*releaseUpload\(\);/);
 });
 
 test('obviously invalid webhook traffic cannot consume paid-order processing slots', () => {
@@ -7317,7 +7320,7 @@ test('obviously invalid webhook traffic cannot consume paid-order processing slo
   // Cryptographic verification still occurs after the exact raw body is read.
   assert.match(beforeAdmission, /isJsonRequestContentType\(req\.headers\.get\('content-type'\)\)/);
   assert.match(beforeAdmission, /hasIdentityRequestContentEncoding\(req\.headers\.get\('content-encoding'\)\)/);
-  assert.match(beforeAdmission, /validStripeSignatureHeader\(req\.headers\.get\('stripe-signature'\)\)/);
+  assert.match(beforeAdmission, /validStripeSignatureHeader\(req\.headers\.get\('stripe-signature'\),receivedAtMs\)/);
   assert.match(beforeAdmission, /declaredContentLength\(req\.headers\.get\('content-length'\),MAX_STRIPE_WEBHOOK_BODY_BYTES\)/);
   assert.match(beforeAdmission, /Webhook payload too large'\},\{status:413\}/);
   assert.match(beforeAdmission, /Invalid webhook payload'\},\{status:400\}/);
