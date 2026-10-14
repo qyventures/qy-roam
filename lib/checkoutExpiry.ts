@@ -33,6 +33,13 @@ export const MAX_STRIPE_HOLD_SCAN_PAGES = 5;
 // transient failure remains safe to retry as a fresh availability/checkout
 // request. Payment creation retains its separate idempotent retry policy.
 export const STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS = 5_000;
+// A per-page timeout alone still permits the complete five-page scan to hold
+// a public checkout worker for roughly 25 seconds. Bound the customer-facing
+// operation as a whole as well: later pages receive only the remaining time,
+// and a scan that has exhausted the budget fails closed before another
+// provider request begins. This remains long enough for two ordinary pages
+// while keeping degraded shared-account scans below the route/proxy budgets.
+export const STRIPE_HOLD_SCAN_TIMEOUT_MS = 12_000;
 // Expiry webhooks release abandoned holds promptly in healthy operation. Keep
 // a database-only grace through Stripe's retry window so delayed completion
 // delivery cannot create a paid commitment after the router was resold.

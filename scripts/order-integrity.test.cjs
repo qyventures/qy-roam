@@ -41,7 +41,7 @@ const { ADMIN_MUTATION_HEADER, ADMIN_MUTATION_HEADER_VALUE, adminMutationHeaders
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode, stripeSecretKeyMode } = require('../lib/stripeCheckoutConfig.ts');
 const { stripeWebhookSigningSecret, stripeWebhookSigningSecrets } = require('../lib/stripeWebhookSecret.ts');
 const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
-const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_EXPIRY_CREATION_MARGIN_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, CHECKOUT_ATTEMPT_MAX_FUTURE_MS, STRIPE_HOLD_SCAN_WINDOW_SECONDS, STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, checkoutAttemptExpiresAt, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
+const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_EXPIRY_CREATION_MARGIN_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, CHECKOUT_ATTEMPT_MAX_FUTURE_MS, STRIPE_HOLD_SCAN_WINDOW_SECONDS, STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, STRIPE_HOLD_SCAN_TIMEOUT_MS, checkoutAttemptExpiresAt, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
 const { checkoutSiteOrigin, isProductionQyRoamOrigin, metaPurchaseEventSourceUrl } = require('../lib/siteOrigin.ts');
 const { hasRequiredAdminCredentials, hasRequiredMetaCapiPurchaseConfig, metaPixelId } = require('../lib/runtimeConfig.ts');
 const { metaMeasurementAllowed, metaPageViewAllowed, setMetaMeasurementConsent } = require('../lib/metaClient.ts');
@@ -6295,7 +6295,9 @@ test('Stripe network calls use a bounded shared production client', () => {
 
 test('Pocket WiFi hold scans have one bounded read attempt per page', () => {
   assert.equal(STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, 5_000);
-  assert.match(pocketWifiStripeHolds, /checkout\.sessions\.list\([\s\S]*?timeout: STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, maxNetworkRetries: 0/);
+  assert.equal(STRIPE_HOLD_SCAN_TIMEOUT_MS, 12_000);
+  assert.match(pocketWifiStripeHolds, /remainingMs = STRIPE_HOLD_SCAN_TIMEOUT_MS - \(Date\.now\(\) - scanStartedAtMs\)/);
+  assert.match(pocketWifiStripeHolds, /checkout\.sessions\.list\([\s\S]*?timeout: Math\.min\(STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, remainingMs\), maxNetworkRetries: 0/);
 });
 
 test('Pocket WiFi hold scans visit only current authenticated holds across every Stripe page', async () => {
@@ -6342,7 +6344,33 @@ test('Pocket WiFi hold scans visit only current authenticated holds across every
   assert.equal(calls.length, 2);
   assert.equal(calls[0].params.starting_after, undefined);
   assert.equal(calls[1].params.starting_after, unrelated.id);
-  assert.deepEqual(calls[0].options, { timeout: STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, maxNetworkRetries: 0 });
+  assert.ok(calls[0].options.timeout > 0 && calls[0].options.timeout <= STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS);
+  assert.equal(calls[0].options.maxNetworkRetries, 0);
+});
+
+test('Pocket WiFi hold scans share one end-to-end deadline across Stripe pages', async () => {
+  const originalNow = Date.now;
+  let elapsedMs = 0;
+  Date.now = () => 2_000_000_000_000 + elapsedMs;
+  const calls = [];
+  const stripe = { checkout: { sessions: { list: async (_params, options) => {
+    calls.push(options);
+    elapsedMs += 4_500;
+    return { data: [{ id: `cs_test_deadline${calls.length}`, livemode: false, metadata: {} }], has_more: true };
+  } } } };
+
+  try {
+    await assert.rejects(
+      () => scanActivePocketWifiStripeHolds(stripe, 'sk_test_inventoryscancredential', () => {}),
+      /time limit/,
+    );
+  } finally {
+    Date.now = originalNow;
+  }
+
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls.map((options) => options.timeout), [5_000, 5_000, 3_000]);
+  assert.ok(calls.every((options) => options.maxNetworkRetries === 0));
 });
 
 test('Pocket WiFi hold scans fail closed on malformed or duplicate Stripe pages', async () => {

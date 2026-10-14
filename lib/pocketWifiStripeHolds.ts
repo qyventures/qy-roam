@@ -3,6 +3,7 @@ import { parseExactIsoDate } from './checkoutValidation';
 import {
   MAX_STRIPE_HOLD_SCAN_PAGES,
   STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS,
+  STRIPE_HOLD_SCAN_TIMEOUT_MS,
   STRIPE_HOLD_SCAN_WINDOW_SECONDS,
 } from './checkoutExpiry';
 import { stripeEventMatchesConfiguredMode } from './stripeCheckoutConfig';
@@ -28,7 +29,8 @@ export async function scanActivePocketWifiStripeHolds(
   stripeKey: string,
   visit: (hold: ActivePocketWifiStripeHold) => void,
 ) {
-  const nowSeconds = Math.floor(Date.now() / 1000);
+  const scanStartedAtMs = Date.now();
+  const nowSeconds = Math.floor(scanStartedAtMs / 1000);
   const cutoff = nowSeconds - STRIPE_HOLD_SCAN_WINDOW_SECONDS;
   let startingAfter: string | undefined;
   let pagesScanned = 0;
@@ -38,9 +40,13 @@ export async function scanActivePocketWifiStripeHolds(
     if (pagesScanned >= MAX_STRIPE_HOLD_SCAN_PAGES) {
       throw new Error('Stripe Pocket WiFi hold scan exceeded its safe page limit');
     }
+    const remainingMs = STRIPE_HOLD_SCAN_TIMEOUT_MS - (Date.now() - scanStartedAtMs);
+    if (remainingMs <= 0) {
+      throw new Error('Stripe Pocket WiFi hold scan exceeded its time limit');
+    }
     const sessions = await stripe.checkout.sessions.list(
       { status: 'open', limit: 100, created: { gte: cutoff }, ...(startingAfter ? { starting_after: startingAfter } : {}) },
-      { timeout: STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, maxNetworkRetries: 0 },
+      { timeout: Math.min(STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, remainingMs), maxNetworkRetries: 0 },
     );
     pagesScanned += 1;
 
