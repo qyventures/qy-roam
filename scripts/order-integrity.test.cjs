@@ -2444,6 +2444,25 @@ test('Pocket WiFi checkout cannot charge a total that the customer has not revie
   assert.equal(parseCustomerCheckoutResponse({ error: 'Changed.', priceChanged: true, checkoutExpired: true }, 409).priceChanged, false);
 });
 
+test('eSIM checkout cannot charge a catalogue price that the customer has not reviewed', () => {
+  assert.match(esimPage, /const expectedAmountCents = Math\.max\(50, Math\.round\(plan\.qyPriceSgd \* 100\)\)/);
+  assert.match(esimPage, /JSON\.stringify\(\{ planId, expectedAmountCents, measurementConsent/);
+  assert.match(esimCheckoutRoute, /const amount = Math\.max\(50, Math\.round\(plan\.qyPriceSgd \* 100\)\)/);
+  assert.match(esimCheckoutRoute, /typeof expectedAmountCents !== 'number' \|\|[\s\S]*?!Number\.isSafeInteger\(expectedAmountCents\) \|\| expectedAmountCents < 0/);
+  assert.match(esimCheckoutRoute, /if \(expectedAmountCents !== amount\) \{[\s\S]*?priceChanged: true/);
+
+  const quoteCheck = esimCheckoutRoute.indexOf('if (expectedAmountCents !== amount)');
+  const globalLimit = esimCheckoutRoute.indexOf('if (checkoutGloballyLimited())');
+  const stripeCreate = esimCheckoutRoute.indexOf('stripe.checkout.sessions.create');
+  assert.ok(quoteCheck >= 0 && quoteCheck < globalLimit && quoteCheck < stripeCreate,
+    'a stale customer quote must be rejected before consuming provider work or creating payment');
+
+  const changed = parseCustomerCheckoutResponse({ error: 'The eSIM price has changed.', priceChanged: true }, 409);
+  assert.equal(changed.priceChanged, true);
+  assert.equal(changed.checkoutExpired, false);
+  assert.equal(changed.checkoutRequestConflict, false);
+});
+
 test('Pocket WiFi checkout invalidates stale quotes at operational pricing and booking boundaries', () => {
   const bookingWindowChanged = parseCustomerCheckoutResponse({
     error: 'The booking window changed.',

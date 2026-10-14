@@ -35,6 +35,10 @@ export default function EsimPage() {
     checkoutAbortController.current = controller;
     try {
       const measurementConsent = metaMeasurementAllowed();
+      // Bind the request to the exact total rendered on this page. The server
+      // remains pricing authority, but a stale browser bundle must not open
+      // Stripe at a newer catalogue price the customer has not reviewed.
+      const expectedAmountCents = Math.max(50, Math.round(plan.qyPriceSgd * 100));
       const fingerprint = esimCheckoutFingerprint(planId);
       activeCheckoutAttempt.current = checkoutAttempt('esim', fingerprint, activeCheckoutAttempt.current);
       // Keep repeated attempts for the same Stripe idempotency key as one
@@ -54,7 +58,7 @@ export default function EsimPage() {
       const data = await fetchCustomerCheckout('/api/esim-checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ planId, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: activeCheckoutAttempt.current.requestId, checkoutAttemptCreatedAt: activeCheckoutAttempt.current.createdAt }),
+        body: JSON.stringify({ planId, expectedAmountCents, measurementConsent, attribution: measurementConsent ? metaAttribution() : undefined, checkoutRequestId: activeCheckoutAttempt.current.requestId, checkoutAttemptCreatedAt: activeCheckoutAttempt.current.createdAt }),
         signal: controller.signal,
       });
       if (data.checkoutUrl) window.location.href = data.checkoutUrl;

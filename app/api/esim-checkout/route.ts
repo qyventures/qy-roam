@@ -157,6 +157,23 @@ export async function POST(req: Request) {
     const plan = getEsimPlan(body.planId);
     if (!plan) return NextResponse.json({ error: 'Please select a valid eSIM plan.' }, { status: 400 });
 
+    // The catalogue is the pricing authority, while this exact integer-cent
+    // value proves what the current browser rendered before the customer
+    // selected Buy. Refuse a stale quote before any Stripe call can create or
+    // recover a payment capability at an unreviewed amount.
+    const amount = Math.max(50, Math.round(plan.qyPriceSgd * 100));
+    const expectedAmountCents = body.expectedAmountCents;
+    if (typeof expectedAmountCents !== 'number' ||
+      !Number.isSafeInteger(expectedAmountCents) || expectedAmountCents < 0) {
+      return NextResponse.json({ error: 'Please refresh and review the current eSIM price before payment.' }, { status: 400 });
+    }
+    if (expectedAmountCents !== amount) {
+      return NextResponse.json({
+        error: 'The eSIM price has changed. Please refresh and review the updated price before payment.',
+        priceChanged: true,
+      }, { status: 409, headers: { 'Cache-Control': 'no-store' } });
+    }
+
     const promoCode = String(body.promoCode || '').trim().toUpperCase();
     if (promoCode && promoCode !== ESIM_PROMO.code) {
       return NextResponse.json({ error: 'Invalid eSIM promo code.' }, { status: 400 });
@@ -216,7 +233,6 @@ export async function POST(req: Request) {
     }
 
     const stripe = createStripeClient(key);
-    const amount = Math.max(50, Math.round(plan.qyPriceSgd * 100));
     let session = await stripe.checkout.sessions.create({
       mode: 'payment',
       expires_at: expiresAt,
