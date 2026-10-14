@@ -71,6 +71,25 @@ function money(value: unknown) {
 function formatCents(cents: number) {
   return Number.isSafeInteger(cents) && cents >= 0 ? `S$${(cents / 100).toFixed(2)}` : '—';
 }
+// Payment settlement is an accounting boundary, so never let the VPS locale
+// or timezone decide how it is presented to Singapore operations. Checkout
+// creation and payment confirmation can be hours or days apart for an
+// asynchronous payment method; showing both timestamps makes that distinction
+// explicit while keeping malformed legacy values visibly unavailable.
+const singaporeTimestamp = new Intl.DateTimeFormat('en-SG', {
+  timeZone: 'Asia/Singapore',
+  year: 'numeric',
+  month: 'short',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+});
+function formatSingaporeTimestamp(value: unknown) {
+  if (typeof value !== 'string') return '—';
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? singaporeTimestamp.format(timestamp) : '—';
+}
 function isStripeCheckoutOrder(order: any) { return typeof order.stripe_session_id === 'string' && order.stripe_session_id.startsWith('cs_'); }
 function stripeEventDashboardUrl(eventId: unknown) {
   const match = typeof eventId === 'string' ? /^stripe:(evt_[A-Za-z0-9]{8,96})$/.exec(eventId) : null;
@@ -436,8 +455,8 @@ async function renderAdminPage() {
     <section id="orders" style={{marginTop:34}}>
       <h2>Orders</h2>
       {ordersUnavailable ? <p><strong>Orders are unavailable.</strong> Restore the database/schema connection and refresh; this is not an empty order ledger.</p> : result.truncated ? <p role="status"><strong>Showing the first {ADMIN_MAX_ROWS.toLocaleString()} orders only.</strong> Use these rows for investigation, not totals or a complete fulfilment queue.</p> : supabase && orders.length === 0 && <p>No orders yet.</p>}
-      {orders.length > 0 && <div style={{overflowX:'auto',...cardStyle,padding:0}}><table style={{width:'100%',borderCollapse:'collapse',minWidth:1040}}>
-        <thead><tr style={{background:'#f8fafc'}}><th align="left" style={{padding:'12px 10px'}}>Order</th><th align="left">Customer</th><th align="left">Product / trip</th><th align="left">Payment</th><th align="left">Amount</th><th align="left">Ops email</th><th align="left">Meta CAPI</th><th align="left">Fulfilment</th></tr></thead>
+      {orders.length > 0 && <div style={{overflowX:'auto',...cardStyle,padding:0}}><table style={{width:'100%',borderCollapse:'collapse',minWidth:1180}}>
+        <thead><tr style={{background:'#f8fafc'}}><th align="left" style={{padding:'12px 10px'}}>Order / created</th><th align="left">Customer</th><th align="left">Product / trip</th><th align="left">Payment / confirmed</th><th align="left">Amount</th><th align="left">Ops email</th><th align="left">Meta CAPI</th><th align="left">Fulfilment</th></tr></thead>
         <tbody>{orders.map((o:any)=>{
           const flag = tripFlag(o);
           const product = isEsim(o) ? 'eSIM' : 'Pocket WiFi';
@@ -452,10 +471,10 @@ async function renderAdminPage() {
             (metaCapiConfigured && o.measurement_consent === 'accepted' && metaDelivery?.status !== 'sent')
           );
           return <tr id={`order-${o.id}`} key={o.id} style={{borderTop:'1px solid #e5e8ed',verticalAlign:'top'}}>
-            <td style={{padding:'14px 10px'}}><strong>{String(o.stripe_session_id || o.id).slice(-10)}</strong><br/><small>{o.created_at ? new Date(o.created_at).toLocaleDateString('en-SG') : ''}</small></td>
+            <td style={{padding:'14px 10px',maxWidth:220}}><code style={{overflowWrap:'anywhere'}}>{String(o.stripe_session_id || o.id)}</code><br/><small>{formatSingaporeTimestamp(o.created_at)} SGT</small></td>
             <td style={{padding:'14px 8px'}}>{o.customer_name || '-'}<br/><small>{o.phone || '-'}</small>{o.email && <><br/><small>{o.email}</small></>}</td>
             <td style={{padding:'14px 8px'}}><strong>{product}</strong>{o.plan_name && <><br/><small>{o.plan_name}</small></>}{isEsim(o) && o.plan_id && <><br/><small>Plan ID: {o.plan_id}</small></>}{isEsim(o) && o.data_allowance && <><br/><small>Data: {o.data_allowance}</small></>}<br/>{o.country || '-'}<br/><small>{o.travel_start || '-'} → {o.travel_end || '-'}</small>{flag && <><br/><small><strong>{flag}</strong></small></>}</td>
-            <td style={{padding:'14px 8px'}}>{o.payment_status || '-'}</td>
+            <td style={{padding:'14px 8px'}}>{o.payment_status || '-'}<br/><small>{o.payment_status === 'paid' ? `${formatSingaporeTimestamp(o.payment_confirmed_at)} SGT` : 'Not confirmed'}</small></td>
             <td style={{padding:'14px 8px'}}><strong>{money(o.amount_sgd)}</strong></td>
             <td style={{padding:'14px 8px'}}>{notification?.status === 'sent' ? '✓ Sent' : notification ? `⚠ ${notification.status}` : o.payment_status === 'paid' && stripeCheckoutOrder ? '⚠ Not recorded' : o.payment_status === 'paid' ? 'Manual sale · operator recorded' : '-'}{notification?.last_error && <><br/><small>{String(notification.last_error).slice(0,120)}</small></>}</td>
             <td style={{padding:'14px 8px'}}>{metaDelivery?.status === 'sent' ? '✓ Sent' : !metaCapiConfigured && o.measurement_consent === 'accepted' ? 'CAPI unavailable' : metaDelivery ? `⚠ ${metaDelivery.status}` : o.payment_status === 'paid' && stripeCheckoutOrder ? 'Not requested / not recorded' : o.payment_status === 'paid' ? 'Manual sale · no measurement consent' : '-'}{metaDelivery?.last_error && <><br/><small>{String(metaDelivery.last_error).slice(0,120)}</small></>}</td>

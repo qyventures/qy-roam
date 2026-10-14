@@ -5635,6 +5635,18 @@ test('admin financial reporting fails closed on malformed paid ledger rows', () 
   assert.doesNotMatch(adminPage, /Number\(o\.amount_sgd \|\| 0\)/);
 });
 
+test('admin order visibility distinguishes creation from Singapore payment settlement', () => {
+  assert.match(adminPage, /timeZone:\s*'Asia\/Singapore'/);
+  assert.match(adminPage, /function formatSingaporeTimestamp\(value: unknown\)/);
+  assert.match(adminPage, /Order \/ created/);
+  assert.match(adminPage, /Payment \/ confirmed/);
+  assert.match(adminPage, /formatSingaporeTimestamp\(o\.payment_confirmed_at\)/);
+  // Reconciliation needs the complete Stripe/manual reference; a shared
+  // trailing suffix is not an authoritative payment identity.
+  assert.match(adminPage, /String\(o\.stripe_session_id \|\| o\.id\)/);
+  assert.doesNotMatch(adminPage, /String\(o\.stripe_session_id \|\| o\.id\)\.slice\(-10\)/);
+});
+
 test('sales reports reject malformed aggregate rows before calculating financial metrics', () => {
   assert.deepEqual(validatedSalesReportRow({
     sales_date: '2026-10-12', product_type: 'esim', paid_orders: '2', revenue_sgd: '19.90',
