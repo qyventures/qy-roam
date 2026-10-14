@@ -1,6 +1,6 @@
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import AdminOrderActions from '@/components/AdminOrderActions';
-import { fulfilmentNotificationActionable, stripeEventClaimInProgress } from '@/lib/orderLifecycle';
+import { fulfilmentNotificationActionable, isPocketWifiProduct, isSupportedProduct, stripeEventClaimInProgress } from '@/lib/orderLifecycle';
 import { hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
 import { isSafeDigitalDeliveryReference } from '@/lib/digitalDeliveryReference';
 import { operationalDaysFromToday } from '@/lib/operationalDate';
@@ -296,12 +296,14 @@ async function renderAdminPage() {
   // from rolling revenue: flag those rows for reconciliation and withhold all
   // financial/customer aggregates until the source ledger is coherent.
   const invalidPaidAmounts = paid.filter((o:any)=>paidAmountCents(o.amount_sgd) === null);
+  const invalidPaidProducts = paid.filter((o:any)=>!isSupportedProduct(o.product_type));
   const invalidPaymentTimes = paid.filter((o:any) => {
     const timestamp = typeof o.payment_confirmed_at === 'string' ? Date.parse(o.payment_confirmed_at) : Number.NaN;
     return !Number.isFinite(timestamp);
   });
   const reportingIntegrityIssues = [
     ...invalidPaidAmounts.map((o:any)=>`order #${o.id} has an invalid paid amount`),
+    ...invalidPaidProducts.map((o:any)=>`order #${o.id} has an unknown product identity`),
     ...invalidPaymentTimes.map((o:any)=>`order #${o.id} has an invalid payment confirmation time`),
   ];
   const reportingIncomplete = ordersIncomplete || reportingIntegrityIssues.length > 0;
@@ -309,7 +311,7 @@ async function renderAdminPage() {
   // fulfilled. Unpaid asynchronous Checkouts remain in the order table below
   // and in Stripe recovery visibility, but must never inflate the fulfilment
   // workload or departure/return exception queues.
-  const active = paid.filter((o:any)=>!['closed','cancelled','payment_failed'].includes(o.fulfilment_status));
+  const active = paid.filter((o:any)=>isSupportedProduct(o.product_type) && !['closed','cancelled','payment_failed'].includes(o.fulfilment_status));
   const revenueCents = paid.reduce((sum:number,o:any)=>sum + (paidAmountCents(o.amount_sgd) || 0), 0);
   // A Checkout Session can be created days before an asynchronous payment is
   // confirmed. Sales recency must follow the immutable payment boundary used
@@ -334,7 +336,7 @@ async function renderAdminPage() {
   const repeatCustomers = customers.filter(c=>c.orders > 1);
 
   const wifiDispatchExceptions = active.filter((o:any) => {
-    if (isEsim(o)) return false;
+    if (!isPocketWifiProduct(o.product_type)) return false;
     const days = daysFromToday(o.travel_start);
     return typeof days === 'number' && days <= 2 && !['dispatched','with_customer','return_due','returned'].includes(o.fulfilment_status);
   });
@@ -344,7 +346,7 @@ async function renderAdminPage() {
     return typeof days === 'number' && days <= 2 && !['fulfilled','closed'].includes(o.fulfilment_status);
   });
   const returnDueOrders = active.filter((o:any) => {
-    if (isEsim(o)) return false;
+    if (!isPocketWifiProduct(o.product_type)) return false;
     const days = daysFromToday(o.travel_end);
     return typeof days === 'number' && days < 0 && !['returned','closed'].includes(o.fulfilment_status);
   }).sort((a:any,b:any) => String(a.travel_end || '').localeCompare(String(b.travel_end || '')) || Number(a.id || 0) - Number(b.id || 0));
@@ -459,14 +461,14 @@ async function renderAdminPage() {
         <thead><tr style={{background:'#f8fafc'}}><th align="left" style={{padding:'12px 10px'}}>Order / created</th><th align="left">Customer</th><th align="left">Product / trip</th><th align="left">Payment / confirmed</th><th align="left">Amount</th><th align="left">Ops email</th><th align="left">Meta CAPI</th><th align="left">Fulfilment</th></tr></thead>
         <tbody>{orders.map((o:any)=>{
           const flag = tripFlag(o);
-          const product = isEsim(o) ? 'eSIM' : 'Pocket WiFi';
+          const product = isEsim(o) ? 'eSIM' : isPocketWifiProduct(o.product_type) ? 'Pocket WiFi' : 'Unknown product';
           const stripeCheckoutOrder = isStripeCheckoutOrder(o);
           const notification:any = notificationBySession.get(o.stripe_session_id);
           const metaDelivery:any = metaDeliveryBySession.get(o.stripe_session_id);
           // The recovery endpoint retries both delivery ledgers idempotently.
           // Expose it for a missing/failed Meta event even after the ops email
           // was successfully sent, which is the common post-Stripe-retry case.
-          const canRetryNotifications = o.payment_status === 'paid' && stripeCheckoutOrder && (
+          const canRetryNotifications = o.payment_status === 'paid' && isSupportedProduct(o.product_type) && stripeCheckoutOrder && (
             (fulfilmentNotificationActionable(o.product_type, o.fulfilment_status) && notification?.status !== 'sent') ||
             (metaCapiConfigured && o.measurement_consent === 'accepted' && metaDelivery?.status !== 'sent')
           );

@@ -51,8 +51,18 @@ export function isEsimProduct(productType?: string | null) {
   return productType === 'esim';
 }
 
+export function isPocketWifiProduct(productType?: string | null) {
+  return productType === 'pocket_wifi';
+}
+
+export function isSupportedProduct(productType?: string | null) {
+  return isEsimProduct(productType) || isPocketWifiProduct(productType);
+}
+
 export function validFulfilmentStatus(productType: string | null | undefined, status: string) {
-  return (isEsimProduct(productType) ? ESIM_FULFILMENT_STATUSES : WIFI_FULFILMENT_STATUSES).includes(status as never);
+  if (isEsimProduct(productType)) return ESIM_FULFILMENT_STATUSES.includes(status as never);
+  if (isPocketWifiProduct(productType)) return WIFI_FULFILMENT_STATUSES.includes(status as never);
+  return false;
 }
 
 // Statuses are operational state, not free-form labels. Keeping the permitted
@@ -115,5 +125,6 @@ export function initialFulfilmentStatus(productType: string | null | undefined, 
  */
 export function fulfilmentNotificationActionable(productType: string | null | undefined, status: string | null | undefined) {
   if (isEsimProduct(productType)) return status === 'awaiting_fulfilment';
-  return status === 'paid' || status === 'packing';
+  if (isPocketWifiProduct(productType)) return status === 'paid' || status === 'packing';
+  return false;
 }

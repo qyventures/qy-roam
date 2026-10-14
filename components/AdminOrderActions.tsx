@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import { allowedFulfilmentStatuses } from '@/lib/orderLifecycle';
+import { allowedFulfilmentStatuses, isSupportedProduct } from '@/lib/orderLifecycle';
 import { adminMutationHeaders } from '@/lib/adminMutation';
 import { CustomerRequestTimeoutError, fetchCustomerJson } from '@/lib/clientRequest';
 
@@ -93,6 +93,17 @@ export default function AdminOrderActions({ id, initialStatus, initialUpdatedAt,
     return <div style={{display:'grid',gap:6,minWidth:190}}>
       <strong>{initialStatus.replaceAll('_', ' ')}</strong>
       <small>Payment is not confirmed. Do not fulfil this order; reconcile it through Stripe.</small>
+    </div>;
+  }
+
+  // A damaged/imported product identity must never inherit the physical
+  // router workflow merely because it is not `esim`. The API and database
+  // remain final authorities, while this keeps operators from being offered
+  // dispatch, return, or delivery-retry controls for an unreconciled row.
+  if (!isSupportedProduct(productType)) {
+    return <div role="alert" style={{display:'grid',gap:6,minWidth:190}}>
+      <strong>Product identity needs reconciliation</strong>
+      <small>No fulfilment action is available until this order is identified as Pocket WiFi or eSIM.</small>
     </div>;
   }
 

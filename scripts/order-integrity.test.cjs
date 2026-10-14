@@ -4088,6 +4088,14 @@ test('fulfilment notification recovery cannot revive completed or cancelled orde
   assert.equal(fulfilmentNotificationActionable('esim', 'awaiting_fulfilment'), true);
   assert.equal(fulfilmentNotificationActionable('esim', 'fulfilled'), false);
   assert.equal(fulfilmentNotificationActionable('esim', 'cancelled'), false);
+  assert.equal(fulfilmentNotificationActionable('unknown_product', 'paid'), false);
+  assert.equal(fulfilmentNotificationActionable(null, 'packing'), false);
+});
+
+test('unknown product identities never inherit the Pocket WiFi fulfilment lifecycle', () => {
+  assert.deepEqual(allowedFulfilmentStatuses('unknown_product', 'paid'), []);
+  assert.deepEqual(allowedFulfilmentStatuses(null, 'dispatched'), []);
+  assert.equal(validFulfilmentTransition('unknown_product', 'paid', 'dispatched'), false);
 });
 
 test('paid order cancellation requires durable reconciliation evidence', () => {
