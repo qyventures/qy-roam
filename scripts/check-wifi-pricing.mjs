@@ -26,7 +26,10 @@ if(!exactIsoDate(promoEnd)) throw new Error('The Pocket WiFi launch promotion ha
 if(today>promoEnd){
   if(!/\{launchPromoActive && <section className="promo-banner">/.test(storefront)||
     !/\{launchPromoActive && <section className="wrap section promo-section">/.test(storefront)||
-    !/useState<string>\(launchPromoActive \? LAUNCH_PROMO\.code : ''\)/.test(storefront)) {
+    !/useState<string>\(launchPromoActive \? LAUNCH_PROMO\.code : ''\)/.test(storefront)||
+    !/\{launchPromoActive && <label>Promo code<input/.test(storefront)||
+    !/minimum booking\{launchPromoActive \? ' before promotion' : ''\}/.test(storefront)||
+    !/rental total\{launchPromoActive \? ' and promotion' : ''\} before payment/.test(storefront)) {
     throw new Error('Expired Pocket WiFi promotion remains advertised or prefilled on the storefront');
   }
 }
