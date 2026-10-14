@@ -6046,19 +6046,20 @@ test('Stripe webhook upload admission requires a structurally usable signature h
   ]) assert.equal(structurallyValidStripeSignatureHeader(invalid), false, invalid);
 });
 
-test('Stripe webhook rejects already-expired signature timestamps before slow-upload admission', () => {
+test('Stripe webhook enforces a symmetric signature freshness window before slow-upload admission', () => {
   const signature = 'a'.repeat(64);
   const nowMs = 1_720_000_000_900;
   const current = `t=1720000000,v1=${signature}`;
   const boundary = `t=1719999700,v1=${signature}`;
   const expired = `t=1719999699,v1=${signature}`;
+  const futureBoundary = `t=1720000300,v1=${signature}`;
+  const tooFarFuture = `t=1720000301,v1=${signature}`;
 
   assert.equal(stripeSignatureTimestampWithinTolerance(current, 300, nowMs), true);
   assert.equal(stripeSignatureTimestampWithinTolerance(boundary, 300, nowMs), true);
   assert.equal(stripeSignatureTimestampWithinTolerance(expired, 300, nowMs), false);
-  // Match stripe-node's authoritative policy during possible clock skew: a
-  // future timestamp is not rejected by this cheap, unauthenticated precheck.
-  assert.equal(stripeSignatureTimestampWithinTolerance(`t=1720000300,v1=${signature}`, 300, nowMs), true);
+  assert.equal(stripeSignatureTimestampWithinTolerance(futureBoundary, 300, nowMs), true);
+  assert.equal(stripeSignatureTimestampWithinTolerance(tooFarFuture, 300, nowMs), false);
   assert.equal(stripeSignatureTimestampWithinTolerance(current, 0, nowMs), false);
   assert.equal(stripeSignatureTimestampWithinTolerance(current, 300, Number.NaN), false);
 

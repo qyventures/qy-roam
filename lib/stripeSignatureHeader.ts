@@ -53,10 +53,12 @@ export function structurallyValidStripeSignatureHeader(value: string) {
  * admission check: the Stripe SDK still verifies the HMAC and repeats the
  * timestamp policy after the exact payload has been read.
  *
- * Match stripe-node's age calculation and deliberately do not reject future
- * timestamps here. The installed verifier treats only an age greater than
- * the tolerance as expired, so this cheap boundary must not become stricter
- * than the authoritative provider verification during clock skew.
+ * Apply the tolerance symmetrically. Ordinary clock skew remains accepted,
+ * but an authenticated payload with an implausibly future timestamp must not
+ * acquire a replay lifetime that lasts until that future time plus the normal
+ * tolerance. stripe-node repeats its own (older-than) check after the body is
+ * read; this application boundary deliberately adds the missing future-skew
+ * half of the freshness policy before slow-upload admission.
  */
 export function stripeSignatureTimestampWithinTolerance(
   value: string,
@@ -75,5 +77,6 @@ export function stripeSignatureTimestampWithinTolerance(
     timestamp = parsedTimestamp;
   }
 
-  return timestamp !== null && Math.floor(receivedAtMs / 1_000) - timestamp <= toleranceSeconds;
+  return timestamp !== null &&
+    Math.abs(Math.floor(receivedAtMs / 1_000) - timestamp) <= toleranceSeconds;
 }
