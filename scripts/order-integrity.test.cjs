@@ -5724,7 +5724,7 @@ test('Stripe terminal events must agree with their Checkout Session payment stat
   assert.match(stripeCheckoutEventStateIssue('checkout.session.expired', { status: 'expired', payment_status: 'paid' }), /expired unpaid Checkout Session/);
   assert.match(stripeCheckoutEventStateIssue('checkout.session.expired', { status: 'expired', payment_status: 'no_payment_required' }), /expired unpaid Checkout Session/, 'unsupported payment states cannot release inventory');
   assert.match(stripeCheckoutEventStateIssue('checkout.session.expired', { status: 'complete', payment_status: 'unpaid' }), /expired unpaid Checkout Session/);
-  const stateCheck = webhookRoute.indexOf('const eventStateIssue=stripeCheckoutEventStateIssue(event.type as QyRoamCheckoutEventType,eventStateSession)');
+  const stateCheck = webhookRoute.indexOf('const eventStateIssue=stripeCheckoutEventStateIssue(event.type as QyRoamCheckoutEventType,eventSession)');
   const expiryMutation = webhookRoute.indexOf("if(event.type==='checkout.session.expired')");
   const paidValidation = webhookRoute.indexOf('const validation=validateQyRoamSession(sessionForEvent)');
   const paidClaim = webhookRoute.lastIndexOf("const eventClaimId=`stripe:${stripeEventId}`", paidValidation);
@@ -5741,6 +5741,18 @@ test('Stripe expiry events validate signed chronology before releasing inventory
   );
   assert.match(expiryBranch, /validStripePaymentEventCreated\(event\.created,session\.created\)/);
   assert.match(expiryBranch, /throw new Error\('Invalid Stripe expiry event timestamp'\)/);
+  assert.match(expiryBranch, /const refreshedExpiryStateIssue=stripeCheckoutEventStateIssue\('checkout\.session\.expired',session\)/);
+  assert.match(expiryBranch, /Refreshed Stripe expiry state validation failed/);
+  assert.ok(
+    webhookRoute.indexOf("const eventStateIssue=stripeCheckoutEventStateIssue(event.type as QyRoamCheckoutEventType,eventSession)") <
+      webhookRoute.indexOf("if(event.type==='checkout.session.expired')"),
+    'the authenticated event snapshot must assert expiry before entering the release branch',
+  );
+  assert.ok(
+    expiryBranch.indexOf("stripeCheckoutEventStateIssue('checkout.session.expired',session)") <
+      expiryBranch.indexOf('await releaseExpiredPocketWifiReservation(supabase,session)'),
+    'the refreshed Session must still be expired and unpaid before inventory is released',
+  );
   assert.ok(
     expiryBranch.indexOf('validStripePaymentEventCreated(event.created,session.created)') <
       expiryBranch.indexOf('await releaseExpiredPocketWifiReservation(supabase,session)'),
@@ -5794,7 +5806,7 @@ test('Stripe terminal events refresh the Checkout Session before persisting or d
   const refresh = processing.indexOf('refreshedSession=await stripe.checkout.sessions.retrieve(eventSessionId)');
   const refreshedObjectBoundary = processing.indexOf('const session=stripeWebhookCheckoutSession(refreshedSession)');
   const identityBoundary = processing.indexOf('if(!stripeWebhookCheckoutSessionMatchesSnapshot(eventSession,session))');
-  const eventState = processing.indexOf('const eventStateIssue=stripeCheckoutEventStateIssue(event.type as QyRoamCheckoutEventType,eventStateSession)');
+  const eventState = processing.indexOf('const eventStateIssue=stripeCheckoutEventStateIssue(event.type as QyRoamCheckoutEventType,eventSession)');
   assert.ok(sourceBoundary >= 0 && sessionIdBoundary > sourceBoundary && refresh > sessionIdBoundary, 'only QY Roam events with a valid bounded Session id should cause a Stripe Session refresh');
   assert.ok(refreshedObjectBoundary > refresh, 'the refreshed Stripe response must be validated before its fields are read');
   assert.ok(identityBoundary > refreshedObjectBoundary, 'the refreshed Session must match the signed event identity, mode, and creation epoch');
@@ -5823,7 +5835,7 @@ test('retried completion events cannot steal a later asynchronous payment timest
   // signed event snapshot remains authoritative for the transition. This
   // prevents an originally-unpaid completion retry from observing a later
   // paid Session and backdating both payment_confirmed_at and Meta Purchase.
-  assert.match(webhookRoute, /const eventStateSession=event\.type==='checkout\.session\.expired'\?session:eventSession/);
+  assert.match(webhookRoute, /const eventStateIssue=stripeCheckoutEventStateIssue\(event\.type as QyRoamCheckoutEventType,eventSession\)/);
   assert.match(webhookRoute, /status:eventSession\.status,[\s\S]*payment_status:eventSession\.payment_status/);
   assert.match(webhookRoute, /persistSession\(sessionForEvent,event\.type,eventCreated\)/);
   assert.match(webhookRoute, /deliverPaidOrderSideEffects\(supabase,sessionForEvent,eventCreated\)/);

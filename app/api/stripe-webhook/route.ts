@@ -986,11 +986,11 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
   // `checkout.session.completed` can arrive after a later asynchronous
   // payment has succeeded; using the refreshed `paid` state would backdate
   // payment_confirmed_at and the Meta Purchase to the older completion event.
-  // Keep the signed snapshot authoritative for transition state. Expiry is
-  // deliberately checked against the refreshed Session as well, because an
-  // out-of-order expiry must never release a reservation that is now paid.
-  const eventStateSession=event.type==='checkout.session.expired'?session:eventSession;
-  const eventStateIssue=stripeCheckoutEventStateIssue(event.type as QyRoamCheckoutEventType,eventStateSession);
+  // Keep the signed snapshot authoritative for every transition. Expiry also
+  // receives a second current-state check below: the signed event must really
+  // assert expiry, while the fresh Session must still be expired and unpaid
+  // before it can release scarce inventory.
+  const eventStateIssue=stripeCheckoutEventStateIssue(event.type as QyRoamCheckoutEventType,eventSession);
   if(event.type==='checkout.session.expired'){
     // The signed snapshot was authenticated before the early event claim, but
     // the refreshed Session is the state used to release inventory. Require it
@@ -1005,6 +1005,8 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
     try{
       if(!claimStartedAt) throw new Error('Stripe event claim was not acquired');
       if(eventStateIssue) throw new Error(`Stripe event state validation failed: ${eventStateIssue}`);
+      const refreshedExpiryStateIssue=stripeCheckoutEventStateIssue('checkout.session.expired',session);
+      if(refreshedExpiryStateIssue) throw new Error(`Refreshed Stripe expiry state validation failed: ${refreshedExpiryStateIssue}`);
       // Expiry releases scarce inventory and can close a provisional order,
       // so it needs the same signed-event chronology boundary as payment
       // transitions. The refreshed Session proves current expiry state; the
