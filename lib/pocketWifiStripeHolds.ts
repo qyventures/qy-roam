@@ -1,5 +1,5 @@
 import type Stripe from 'stripe';
-import { parseExactIsoDate } from './checkoutValidation';
+import { parseExactIsoDate, validCheckoutRequestId } from './checkoutValidation';
 import {
   MAX_STRIPE_HOLD_SCAN_PAGES,
   STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS,
@@ -55,7 +55,8 @@ export async function scanActivePocketWifiStripeHolds(
     // pagination cursor, so an incomplete proxy/SDK response must fail the
     // whole capacity check closed instead of being interpreted as an empty or
     // final page.
-    if (!sessions || !Array.isArray(sessions.data) || typeof sessions.has_more !== 'boolean') {
+    if (!sessions || !Array.isArray(sessions.data) || sessions.data.length > 100 ||
+      typeof sessions.has_more !== 'boolean') {
       throw new Error('Stripe Pocket WiFi hold scan returned an invalid page');
     }
 
@@ -76,7 +77,17 @@ export async function scanActivePocketWifiStripeHolds(
       if (!stripeEventMatchesConfiguredMode(stripeKey, session.livemode)) continue;
       if (session.metadata?.source !== 'qyroam.com' || !validQyRoamProvenance(sessionId, session.metadata)) continue;
       if (session.metadata?.product_type !== 'pocket_wifi') continue;
-      if (session.mode !== 'payment' ||
+      // The list query asks Stripe for open Sessions, but this response is a
+      // runtime inventory authority rather than a typed local value. A stale
+      // proxy page containing a terminal Session must not be folded into a
+      // different capacity snapshot than the reservation database sees.
+      // Likewise, every authenticated hold needs the canonical request id
+      // used by the reservation RPC to deduplicate Stripe and database views.
+      // Failing closed is safer than counting a hold that cannot participate
+      // in that exact identity join.
+      if (session.mode !== 'payment' || session.status !== 'open' ||
+        session.payment_status !== 'unpaid' ||
+        !validCheckoutRequestId(session.metadata?.checkout_request_id) ||
         !Number.isSafeInteger(session.created) || session.created < cutoff ||
         !Number.isSafeInteger(session.expires_at) || session.expires_at! <= session.created) {
         throw new Error('Stripe returned an invalid authenticated Pocket WiFi hold lifecycle');

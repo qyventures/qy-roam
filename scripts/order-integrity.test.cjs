@@ -1886,7 +1886,7 @@ test('rejects non-payment Checkout modes even with valid signed order metadata',
   // while counting short-lived router reservations for availability.
   assert.match(esimCheckoutRoute, /return session\.mode === 'payment' &&/);
   assert.match(wifiCheckoutRoute, /return session\.mode==='payment' &&/);
-  assert.match(pocketWifiStripeHolds, /if \(session\.mode !== 'payment' \|\|\s*!Number\.isSafeInteger\(session\.created\) \|\| session\.created < cutoff/);
+  assert.match(pocketWifiStripeHolds, /if \(session\.mode !== 'payment' \|\| session\.status !== 'open' \|\|[\s\S]*?!Number\.isSafeInteger\(session\.created\) \|\| session\.created < cutoff/);
 });
 
 test('rejects unsupported Stripe payment states before order persistence', () => {
@@ -6316,6 +6316,8 @@ test('Pocket WiFi hold scans visit only current authenticated holds across every
       id,
       livemode: false,
       mode: 'payment',
+      status: 'open',
+      payment_status: 'unpaid',
       created: nowSeconds - 30,
       expires_at: nowSeconds + 1_800,
       ...overrides,
@@ -6384,7 +6386,7 @@ test('Pocket WiFi hold scans fail closed on malformed or duplicate Stripe pages'
     end: '2026-12-05',
   };
   const metadata = { ...unsignedMetadata, [QY_ROAM_PROVENANCE_METADATA_KEY]: signedQyRoamProvenance(id, unsignedMetadata) };
-  const session = { id, livemode: false, mode: 'payment', created: nowSeconds - 30, expires_at: nowSeconds + 1_800, metadata };
+  const session = { id, livemode: false, mode: 'payment', status: 'open', payment_status: 'unpaid', created: nowSeconds - 30, expires_at: nowSeconds + 1_800, metadata };
   let page = 0;
   const duplicateStripe = { checkout: { sessions: { list: async () => {
     page += 1;
@@ -6400,6 +6402,30 @@ test('Pocket WiFi hold scans fail closed on malformed or duplicate Stripe pages'
     () => scanActivePocketWifiStripeHolds(malformedStripe, 'sk_test_inventoryscancredential', () => {}),
     /invalid page/,
   );
+
+  const oversizedStripe = { checkout: { sessions: { list: async () => ({
+    data: Array.from({ length: 101 }, (_, index) => ({ id: `cs_test_oversized${index}`, livemode: false, metadata: {} })),
+    has_more: false,
+  }) } } };
+  await assert.rejects(
+    () => scanActivePocketWifiStripeHolds(oversizedStripe, 'sk_test_inventoryscancredential', () => {}),
+    /invalid page/,
+  );
+
+  for (const invalidSession of [
+    { ...session, status: 'complete' },
+    { ...session, payment_status: 'paid' },
+    { ...session, metadata: (() => {
+      const invalid = { ...unsignedMetadata, checkout_request_id: 'invalid reservation id' };
+      return { ...invalid, [QY_ROAM_PROVENANCE_METADATA_KEY]: signedQyRoamProvenance(id, invalid) };
+    })() },
+  ]) {
+    const invalidLifecycleStripe = { checkout: { sessions: { list: async () => ({ data: [invalidSession], has_more: false }) } } };
+    await assert.rejects(
+      () => scanActivePocketWifiStripeHolds(invalidLifecycleStripe, 'sk_test_inventoryscancredential', () => {}),
+      /invalid authenticated Pocket WiFi hold lifecycle/,
+    );
+  }
 });
 
 test('Supabase order-critical requests use a bounded shared transport', async () => {
