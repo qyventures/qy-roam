@@ -2653,7 +2653,7 @@ test('bounded request readers do not retain one allocation per fragmented chunk'
   assert.equal(await readLimitedRequestText(fragments, 1024, 100), '{"ok":true}');
   assert.match(fs.readFileSync(require.resolve('../lib/requestBody.ts'), 'utf8'), /const body = Buffer\.allocUnsafe\(maxBytes\)/);
   assert.match(webhookRoute, /const body = Buffer\.allocUnsafe\(storageBytes\)/);
-  assert.match(webhookRoute, /const body=Buffer\.allocUnsafe\(MAX_DELIVERY_RESPONSE_BODY_BYTES\)/);
+  assert.match(webhookRoute, /const body=Buffer\.allocUnsafe\(storageBytes\)/);
   assert.doesNotMatch(webhookRoute, /const chunks: Uint8Array\[\] = \[\]/);
 });
 
@@ -6248,6 +6248,8 @@ test('Stripe webhook bounds third-party delivery responses as well as request ti
   assert.match(webhookRoute, /async function readDeliveryResponseBody\(response: Response, deadline: Promise<never>\)/);
   assert.match(webhookRoute, /declaredContentLength\(response\.headers\.get\('content-length'\),MAX_DELIVERY_RESPONSE_BODY_BYTES\)/);
   assert.match(webhookRoute, /const exactLengthExpected=!contentEncoding\|\|contentEncoding==='identity'/);
+  assert.match(webhookRoute, /const storageBytes=exactLengthExpected&&contentLength!==null[\s\S]{0,100}\? contentLength[\s\S]{0,100}: MAX_DELIVERY_RESPONSE_BODY_BYTES/);
+  assert.match(webhookRoute, /if\(total>storageBytes\) \{[\s\S]{0,200}throw new Error\('Delivery response body is incomplete'\)/);
   assert.match(webhookRoute, /exactLengthExpected&&!contentLengthMatches\(contentLength,total\)/);
   assert.match(webhookRoute, /throw new Error\('Delivery response body is incomplete'\)/);
   assert.match(webhookRoute, /total>MAX_DELIVERY_RESPONSE_BODY_BYTES/);

@@ -239,9 +239,14 @@ async function readDeliveryResponseBody(response: Response, deadline: Promise<ne
   const reader=response.body.getReader();
   // Provider bodies are bounded for the same reason as public request bodies:
   // without a fixed buffer, a peer can make chunk-array metadata dominate the
-  // 64 KiB payload ceiling. This endpoint only retains a diagnostic-sized
-  // response, so a single capped buffer is appropriate.
-  const body=Buffer.allocUnsafe(MAX_DELIVERY_RESPONSE_BODY_BYTES);
+  // payload ceiling. Identity-encoded responses can use their already-bounded
+  // declared size; compressed responses may expose decoded bytes while
+  // retaining the encoded Content-Length, and chunked responses have no size,
+  // so those cases retain the full ceiling.
+  const storageBytes=exactLengthExpected&&contentLength!==null
+    ? contentLength
+    : MAX_DELIVERY_RESPONSE_BODY_BYTES;
+  const body=Buffer.allocUnsafe(storageBytes);
   let total=0;
   let chunks=0;
   try {
@@ -264,6 +269,13 @@ async function readDeliveryResponseBody(response: Response, deadline: Promise<ne
         // deadline remains in force and the caller will retry safely.
         void reader.cancel().catch(()=>undefined);
         throw new RangeError('Delivery response body is too large');
+      }
+      // Reject a declared-length overrun before Buffer#set. This keeps a
+      // malformed 2xx acknowledgement in the explicit, durable retry path
+      // instead of surfacing an incidental allocation RangeError.
+      if(total>storageBytes) {
+        void reader.cancel().catch(()=>undefined);
+        throw new Error('Delivery response body is incomplete');
       }
       body.set(value,total-value.byteLength);
     }
