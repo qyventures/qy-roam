@@ -283,6 +283,18 @@ assert.match(nginx, /proxy_set_header X-Real-IP \$remote_addr;/);
 // first hop.
 assert.match(nginx, /proxy_set_header X-Forwarded-For \$remote_addr;/);
 assert.doesNotMatch(nginx, /proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;/);
+// Success and booking URLs contain a Stripe Checkout Session capability in
+// their query string. Keep route/status/timing telemetry, but make the
+// reviewed ingress log format incapable of persisting URL arguments. Assert
+// both the safe request-line reconstruction and its use by every public
+// virtual host: defining a format without selecting it would leave Nginx's
+// default `$request` logging active.
+const accessLogFormat = nginx.match(/log_format qyroam_no_query ([\s\S]*?);/);
+assert.ok(accessLogFormat, 'Nginx must define the query-free QY Roam access-log format');
+assert.match(accessLogFormat[1], /\$request_method \$uri \$server_protocol/);
+assert.doesNotMatch(accessLogFormat[1], /\$(?:request|request_uri|args|query_string)\b/);
+const qyRoamAccessLogs = nginx.match(/^\s*access_log \/var\/log\/nginx\/qyroam\.access\.log qyroam_no_query;$/gm) || [];
+assert.equal(qyRoamAccessLogs.length, 3, 'every QY Roam HTTP/TLS virtual host must use the query-free access log');
 // The public proxy must enforce the same coarse body boundary as the signed
 // Stripe webhook reader. This stops oversized or stalled uploads before they
 // consume an application worker; checkout/admin routes apply narrower limits
