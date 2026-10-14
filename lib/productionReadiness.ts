@@ -27,6 +27,7 @@ const READINESS_PROBE_TIMEOUT_MS = 8_000;
 // payment against stale database logic.
 const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 41;
 const REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 10;
+const REQUIRED_OPERATIONS_SCHEMA_VERSION = 1;
 
 type ProductionReadinessState = {
   stripeApiReadyUntil: number;
@@ -631,16 +632,28 @@ async function checkRequiredOperationsSchema() {
     // runtime schema probes, so keep the query surface untyped here.
     const database: any = supabase;
     return await runReadinessProbe(async (signal) => {
-      const results = await Promise.all(
-        REQUIRED_OPERATIONS_SCHEMA.map(({ table, columns }) =>
-          database.from(table).select(columns).limit(1).abortSignal(signal),
+      const [results, versionProbe] = await Promise.all([
+        Promise.all(
+          REQUIRED_OPERATIONS_SCHEMA.map(({ table, columns }) =>
+            database.from(table).select(columns).limit(1).abortSignal(signal),
+          ),
         ),
-      );
+        database.rpc('qy_operations_schema_version', {}).abortSignal(signal),
+      ]);
       const failures = results
         .map((result, index) => result.error ? REQUIRED_OPERATIONS_SCHEMA[index].table : null)
         .filter(Boolean);
       if (failures.length) {
         console.error('production_operations_schema_check_failed', { tables: failures });
+        return false;
+      }
+
+      // Relation and argument-shape probes cannot distinguish a stale
+      // privileged RPC body from the reviewed operational transaction. Keep
+      // the admin launch gate tied to an explicit migration handshake, just
+      // like paid-order integrity and Pocket WiFi custody readiness.
+      if (versionProbe.error || versionProbe.data !== REQUIRED_OPERATIONS_SCHEMA_VERSION) {
+        console.error('production_operations_schema_version_check_failed');
         return false;
       }
 

@@ -3634,6 +3634,26 @@ test('payment-readiness checks coalesce healthy checkout probes without caching 
   assert.match(productionReadiness, /async function checkRequiredPocketWifiFulfilmentSchema\(\)/);
 });
 
+test('operations readiness requires the reviewed privileged RPC implementation version', () => {
+  assert.match(
+    schema,
+    /create or replace function public\.qy_operations_schema_version\(\)[\s\S]*?as \$\$ select 1; \$\$/,
+  );
+  assert.match(
+    schema,
+    /grant execute on function public\.qy_operations_schema_version\(\) to service_role/,
+  );
+  assert.match(productionReadiness, /const REQUIRED_OPERATIONS_SCHEMA_VERSION = 1/);
+  assert.match(
+    productionReadiness,
+    /database\.rpc\('qy_operations_schema_version', \{\}\)\.abortSignal\(signal\)/,
+  );
+  assert.match(
+    productionReadiness,
+    /versionProbe\.data !== REQUIRED_OPERATIONS_SCHEMA_VERSION/,
+  );
+});
+
 test('stock readiness coalesces deploy probes without caching failures or crossing fleet limits', () => {
   assert.match(pocketWifiStock, /export const STOCK_READINESS_CACHE_MS = 5_000/);
   assert.match(pocketWifiStock, /let stockCheckInFlight: Promise<boolean> \| null = null/);

@@ -3395,3 +3395,17 @@ create index if not exists crm_activities_due_idx on public.crm_activities(due_a
 create index if not exists sales_opportunities_updated_idx on public.sales_opportunities(updated_at desc);
 create index if not exists forecasts_month_product_idx on public.forecasts(forecast_month, product_type);
 create index if not exists closing_periods_end_idx on public.closing_periods(period_end desc);
+
+-- Column and signature probes cannot identify an older privileged operations
+-- function body. This marker is intentionally declared after the complete
+-- inventory, manual-order, CRM, forecasting and accounting contract above so
+-- application readiness can reject a partial or stale operational migration.
+create or replace function public.qy_operations_schema_version()
+returns integer
+language sql
+immutable
+security definer
+set search_path = pg_catalog
+as $$ select 1; $$;
+revoke all on function public.qy_operations_schema_version() from public;
+grant execute on function public.qy_operations_schema_version() to service_role;

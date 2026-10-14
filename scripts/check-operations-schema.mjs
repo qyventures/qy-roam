@@ -433,6 +433,8 @@ const requiredContracts = [
   'closed accounting period cannot be replaced',
   'grant execute on function public.qy_record_closing_period(date,date,boolean,numeric,numeric,numeric,numeric,numeric,numeric,text,text) to service_role',
   'create or replace view public.sales_daily_summary',
+  'create or replace function public.qy_operations_schema_version',
+  'grant execute on function public.qy_operations_schema_version() to service_role',
   'alter table public.inventory_items enable row level security',
   'alter table public.customers enable row level security',
   'grant execute on function public.qy_adjust_inventory(bigint,integer,text,text,text) to service_role',
@@ -478,10 +480,17 @@ const reservationFunction = schema.indexOf('create or replace function public.qy
 const manualOrderFunction = schema.indexOf('create or replace function public.qy_create_manual_pocket_wifi_order');
 const pocketWifiPersistenceFunction = schema.indexOf('create or replace function public.qy_persist_stripe_pocket_wifi_order');
 const integritySchemaVersion = schema.indexOf('create or replace function public.qy_order_integrity_schema_version');
+const operationsSchemaVersion = schema.indexOf('create or replace function public.qy_operations_schema_version');
+const closingFunction = schema.indexOf('create or replace function public.qy_record_closing_period');
+const salesSummaryView = schema.indexOf('create or replace view public.sales_daily_summary');
 assert.ok(inventoryTable >= 0 && inventoryTable < reservationFunction, 'inventory_items must exist before the reservation function');
 assert.ok(orderInventoryColumn > inventoryTable && orderInventoryColumn < reservationFunction, 'orders.inventory_item_id must exist before the reservation function');
 assert.ok(inventoryTable < manualOrderFunction, 'inventory_items must exist before the manual-order function');
 assert.ok(integritySchemaVersion > pocketWifiPersistenceFunction, 'order-integrity schema version must be written after every paid-order function it certifies');
+assert.ok(
+  operationsSchemaVersion > closingFunction && operationsSchemaVersion > salesSummaryView,
+  'operations schema version must be written after every operations contract it certifies',
+);
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure and terminators, function parameters, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
