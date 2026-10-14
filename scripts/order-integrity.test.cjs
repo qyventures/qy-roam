@@ -63,7 +63,7 @@ const { paidFulfilmentDetailsIssue } = require('../lib/paidFulfilmentDetails.ts'
 const { exactNonnegativeCount } = require('../lib/exactCount.ts');
 const { custodyReferenceIssue, normalizeCustodyReference, MAX_CUSTODY_REFERENCE_LENGTH } = require('../lib/custodyReference.ts');
 const { durableOrderMatchesPaidSession } = require('../lib/durableOrderSnapshot.ts');
-const { exactStripeClaimToken } = require('../lib/stripeClaimToken.ts');
+const { exactDatabaseTimestampToken, exactStripeClaimToken } = require('../lib/stripeClaimToken.ts');
 const { parsePocketWifiAvailability, parsePocketWifiBookingTerms } = require('../lib/pocketWifiAvailability.ts');
 const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutResponse.ts');
 const { CUSTOMER_CHECKOUT_MAX_RECONCILIATION_ATTEMPTS, CUSTOMER_CHECKOUT_RECONCILIATION_TIMEOUT_MS, customerCheckoutRetryAfterMs } = require('../lib/customerCheckout.ts');
@@ -273,6 +273,7 @@ const requestId = 'checkout_request_123456';
 test('Stripe claim ownership preserves the database microsecond token exactly', () => {
   const databaseToken = '2026-10-03T07:50:54.123456+00:00';
   assert.equal(exactStripeClaimToken(databaseToken), databaseToken);
+  assert.equal(exactDatabaseTimestampToken(databaseToken), databaseToken);
   // Demonstrate why converting this compare-and-swap token through Date is
   // unsafe: JavaScript silently discards the final three fractional digits.
   assert.equal(new Date(databaseToken).toISOString(), '2026-10-03T07:50:54.123Z');
@@ -5392,10 +5393,15 @@ test('admin delivery recovery is bounded without queueing or leaking admission s
 test('SMTP and Meta delivery settlement retain ownership of their sending leases', () => {
   // A worker can outlive the stale-lease timeout while its provider call is
   // in flight. Its completion or failure must not overwrite the newer retry.
+  // Use the exact timestamp returned by Postgres, not the application value
+  // submitted in the claim update: database microseconds are ownership data.
   assert.match(webhookRoute, /Fulfilment notification delivery lease was lost/);
   assert.match(webhookRoute, /Meta purchase delivery lease was lost/);
-  assert.match(webhookRoute, /from\('fulfilment_notifications'\)[\s\S]{0,700}\.eq\('status','sending'\)\.eq\('updated_at',now\)/);
-  assert.match(webhookRoute, /from\('meta_purchase_deliveries'\)[\s\S]{0,700}\.eq\('status','sending'\)\.eq\('updated_at',now\)/);
+  assert.match(webhookRoute, /from\('fulfilment_notifications'\)[\s\S]{0,700}\.select\('stripe_session_id,updated_at'\)/);
+  assert.match(webhookRoute, /const claimToken=exactDatabaseTimestampToken\(attempt\.data\[0\]\.updated_at\)/);
+  assert.equal((webhookRoute.match(/\.eq\('updated_at',claimToken\)/g) || []).length, 4);
+  assert.doesNotMatch(webhookRoute, /\.eq\('status','sending'\)\.eq\('updated_at',now\)/);
+  assert.match(webhookRoute, /from\('meta_purchase_deliveries'\)[\s\S]{0,700}\.select\('stripe_session_id,event_time,updated_at'\)/);
 });
 
 test('accepted paid-order deliveries are not immediately requeued when local settlement is ambiguous', () => {
