@@ -41,7 +41,7 @@ const { ADMIN_MUTATION_HEADER, ADMIN_MUTATION_HEADER_VALUE, adminMutationHeaders
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode, stripeSecretKeyMode } = require('../lib/stripeCheckoutConfig.ts');
 const { stripeWebhookSigningSecret, stripeWebhookSigningSecrets } = require('../lib/stripeWebhookSecret.ts');
 const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
-const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_EXPIRY_CREATION_MARGIN_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, CHECKOUT_ATTEMPT_MAX_FUTURE_MS, STRIPE_HOLD_SCAN_WINDOW_SECONDS, STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, STRIPE_HOLD_SCAN_TIMEOUT_MS, checkoutAttemptExpiresAt, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
+const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_EXPIRY_CREATION_MARGIN_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, CHECKOUT_ATTEMPT_MAX_FUTURE_MS, STRIPE_HOLD_SCAN_WINDOW_SECONDS, STRIPE_HOLD_CREATED_MAX_FUTURE_SECONDS, STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, STRIPE_HOLD_SCAN_TIMEOUT_MS, checkoutAttemptExpiresAt, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
 const { checkoutSiteOrigin, isProductionQyRoamOrigin, metaPurchaseEventSourceUrl } = require('../lib/siteOrigin.ts');
 const { hasRequiredAdminCredentials, hasRequiredMetaCapiPurchaseConfig, metaPixelId } = require('../lib/runtimeConfig.ts');
 const { metaMeasurementAllowed, metaPageViewAllowed, setMetaMeasurementConsent } = require('../lib/metaClient.ts');
@@ -6415,6 +6415,8 @@ test('Pocket WiFi hold scans fail closed on malformed or duplicate Stripe pages'
   for (const invalidSession of [
     { ...session, status: 'complete' },
     { ...session, payment_status: 'paid' },
+    { ...session, created: nowSeconds + STRIPE_HOLD_CREATED_MAX_FUTURE_SECONDS + 1 },
+    { ...session, expires_at: session.created + STRIPE_HOLD_SCAN_WINDOW_SECONDS + 1 },
     { ...session, metadata: (() => {
       const invalid = { ...unsignedMetadata, checkout_request_id: 'invalid reservation id' };
       return { ...invalid, [QY_ROAM_PROVENANCE_METADATA_KEY]: signedQyRoamProvenance(id, invalid) };
@@ -6426,6 +6428,35 @@ test('Pocket WiFi hold scans fail closed on malformed or duplicate Stripe pages'
       /invalid authenticated Pocket WiFi hold lifecycle/,
     );
   }
+});
+
+test('Pocket WiFi hold lifetimes cannot outlive the Stripe scan window', async () => {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const id = 'cs_test_scanboundedlifetime';
+  const unsignedMetadata = {
+    source: 'qyroam.com',
+    product_type: 'pocket_wifi',
+    checkout_request_id: crypto.randomUUID(),
+    start: '2026-12-01',
+    end: '2026-12-05',
+  };
+  const metadata = { ...unsignedMetadata, [QY_ROAM_PROVENANCE_METADATA_KEY]: signedQyRoamProvenance(id, unsignedMetadata) };
+  const boundarySession = {
+    id,
+    livemode: false,
+    mode: 'payment',
+    status: 'open',
+    payment_status: 'unpaid',
+    created: nowSeconds,
+    expires_at: nowSeconds + STRIPE_HOLD_SCAN_WINDOW_SECONDS,
+    metadata,
+  };
+  const visited = [];
+  const stripe = { checkout: { sessions: { list: async () => ({ data: [boundarySession], has_more: false }) } } };
+
+  await scanActivePocketWifiStripeHolds(stripe, 'sk_test_inventoryscancredential', (hold) => visited.push(hold.sessionId));
+
+  assert.deepEqual(visited, [id]);
 });
 
 test('Supabase order-critical requests use a bounded shared transport', async () => {

@@ -66,6 +66,12 @@ export const CHECKOUT_ATTEMPT_MAX_FUTURE_MS = 60 * 1000;
 // and let the last Pocket WiFi unit be sold twice.
 export const STRIPE_HOLD_SCAN_WINDOW_SECONDS = CHECKOUT_HOLD_WINDOW_SECONDS +
   Math.ceil(CHECKOUT_ATTEMPT_MAX_FUTURE_MS / 1000);
+// Stripe owns `created`, while this process owns the clock used to calculate
+// the scan cutoff. Permit only the same small skew accepted from a browser
+// attempt when validating provider snapshots. A larger future timestamp is
+// not safe to use as an inventory or pagination authority.
+export const STRIPE_HOLD_CREATED_MAX_FUTURE_SECONDS =
+  Math.ceil(CHECKOUT_ATTEMPT_MAX_FUTURE_MS / 1000);
 
 export function checkoutAttemptExpiresAt(value: unknown, nowMs = Date.now()) {
   if (typeof value !== 'number' || !Number.isSafeInteger(value)) return null;

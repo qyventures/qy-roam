@@ -2,6 +2,7 @@ import type Stripe from 'stripe';
 import { parseExactIsoDate, validCheckoutRequestId } from './checkoutValidation';
 import {
   MAX_STRIPE_HOLD_SCAN_PAGES,
+  STRIPE_HOLD_CREATED_MAX_FUTURE_SECONDS,
   STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS,
   STRIPE_HOLD_SCAN_TIMEOUT_MS,
   STRIPE_HOLD_SCAN_WINDOW_SECONDS,
@@ -89,7 +90,9 @@ export async function scanActivePocketWifiStripeHolds(
         session.payment_status !== 'unpaid' ||
         !validCheckoutRequestId(session.metadata?.checkout_request_id) ||
         !Number.isSafeInteger(session.created) || session.created < cutoff ||
-        !Number.isSafeInteger(session.expires_at) || session.expires_at! <= session.created) {
+        session.created > nowSeconds + STRIPE_HOLD_CREATED_MAX_FUTURE_SECONDS ||
+        !Number.isSafeInteger(session.expires_at) || session.expires_at! <= session.created ||
+        session.expires_at! > session.created + STRIPE_HOLD_SCAN_WINDOW_SECONDS) {
         throw new Error('Stripe returned an invalid authenticated Pocket WiFi hold lifecycle');
       }
       if (session.expires_at <= nowSeconds) continue;
