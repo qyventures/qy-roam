@@ -27,16 +27,42 @@ const READINESS_PROBE_TIMEOUT_MS = 8_000;
 // payment against stale database logic.
 const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 41;
 const REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 10;
-let paymentSchemaReadyUntil = 0;
-let esimOrderSchemaReadyUntil = 0;
-let operationsSchemaReadyUntil = 0;
-let pocketWifiFulfilmentSchemaReadyUntil = 0;
-let paymentSchemaCheckInFlight: Promise<boolean> | null = null;
-let esimOrderSchemaCheckInFlight: Promise<boolean> | null = null;
-let operationsSchemaCheckInFlight: Promise<boolean> | null = null;
-let pocketWifiFulfilmentSchemaCheckInFlight: Promise<boolean> | null = null;
-let stripeApiReadyUntil = 0;
-let stripeApiCheckInFlight: Promise<boolean> | null = null;
+
+type ProductionReadinessState = {
+  stripeApiReadyUntil: number;
+  paymentSchemaReadyUntil: number;
+  esimOrderSchemaReadyUntil: number;
+  operationsSchemaReadyUntil: number;
+  pocketWifiFulfilmentSchemaReadyUntil: number;
+  stripeApiCheckInFlight: Promise<boolean> | null;
+  paymentSchemaCheckInFlight: Promise<boolean> | null;
+  esimOrderSchemaCheckInFlight: Promise<boolean> | null;
+  operationsSchemaCheckInFlight: Promise<boolean> | null;
+  pocketWifiFulfilmentSchemaCheckInFlight: Promise<boolean> | null;
+};
+
+type ProductionReadinessGlobal = typeof globalThis & {
+  __qyRoamProductionReadinessState?: ProductionReadinessState;
+};
+
+// Next can compile this helper into several server route graphs. Module-local
+// leases let each graph independently launch the complete Stripe/Supabase
+// probe set when a short cache expires, multiplying dependency load exactly
+// when a provider is slow. Keep the success windows and in-flight promises on
+// the process singleton so availability, health and both checkout routes all
+// await one fail-closed probe. Rejected/false results are still never cached.
+const readinessState = ((globalThis as ProductionReadinessGlobal).__qyRoamProductionReadinessState ??= {
+  stripeApiReadyUntil: 0,
+  paymentSchemaReadyUntil: 0,
+  esimOrderSchemaReadyUntil: 0,
+  operationsSchemaReadyUntil: 0,
+  pocketWifiFulfilmentSchemaReadyUntil: 0,
+  stripeApiCheckInFlight: null,
+  paymentSchemaCheckInFlight: null,
+  esimOrderSchemaCheckInFlight: null,
+  operationsSchemaCheckInFlight: null,
+  pocketWifiFulfilmentSchemaCheckInFlight: null,
+});
 
 class ReadinessProbeTimeoutError extends Error {}
 
@@ -65,17 +91,17 @@ async function checkRequiredStripeApiAccess() {
 }
 
 export async function hasRequiredStripeApiAccess() {
-  if (Date.now() < stripeApiReadyUntil) return true;
-  if (!stripeApiCheckInFlight) {
-    stripeApiCheckInFlight = checkRequiredStripeApiAccess()
+  if (Date.now() < readinessState.stripeApiReadyUntil) return true;
+  if (!readinessState.stripeApiCheckInFlight) {
+    readinessState.stripeApiCheckInFlight = checkRequiredStripeApiAccess()
       .then((ready) => {
-        if (ready) stripeApiReadyUntil = Date.now() + READINESS_CACHE_MS;
+        if (ready) readinessState.stripeApiReadyUntil = Date.now() + READINESS_CACHE_MS;
         return ready;
       })
       .catch(() => false)
-      .finally(() => { stripeApiCheckInFlight = null; });
+      .finally(() => { readinessState.stripeApiCheckInFlight = null; });
   }
-  return stripeApiCheckInFlight;
+  return readinessState.stripeApiCheckInFlight;
 }
 
 async function hasCurrentOrderIntegritySchema(database: any, signal: AbortSignal) {
@@ -382,11 +408,11 @@ async function checkRequiredPaymentSchema() {
 }
 
 export async function hasRequiredPaymentSchema() {
-  if (Date.now() < paymentSchemaReadyUntil) return true;
-  if (!paymentSchemaCheckInFlight) {
-    paymentSchemaCheckInFlight = checkRequiredPaymentSchema()
+  if (Date.now() < readinessState.paymentSchemaReadyUntil) return true;
+  if (!readinessState.paymentSchemaCheckInFlight) {
+    readinessState.paymentSchemaCheckInFlight = checkRequiredPaymentSchema()
       .then((ready) => {
-        if (ready) paymentSchemaReadyUntil = Date.now() + READINESS_CACHE_MS;
+        if (ready) readinessState.paymentSchemaReadyUntil = Date.now() + READINESS_CACHE_MS;
         return ready;
       })
       .catch(() => {
@@ -396,9 +422,9 @@ export async function hasRequiredPaymentSchema() {
         console.error('production_payment_schema_check_unexpected_error');
         return false;
       })
-      .finally(() => { paymentSchemaCheckInFlight = null; });
+      .finally(() => { readinessState.paymentSchemaCheckInFlight = null; });
   }
-  return paymentSchemaCheckInFlight;
+  return readinessState.paymentSchemaCheckInFlight;
 }
 
 /**
@@ -497,20 +523,20 @@ async function checkRequiredEsimOrderSchema() {
 }
 
 export async function hasRequiredEsimOrderSchema() {
-  if (Date.now() < esimOrderSchemaReadyUntil) return true;
-  if (!esimOrderSchemaCheckInFlight) {
-    esimOrderSchemaCheckInFlight = checkRequiredEsimOrderSchema()
+  if (Date.now() < readinessState.esimOrderSchemaReadyUntil) return true;
+  if (!readinessState.esimOrderSchemaCheckInFlight) {
+    readinessState.esimOrderSchemaCheckInFlight = checkRequiredEsimOrderSchema()
       .then((ready) => {
-        if (ready) esimOrderSchemaReadyUntil = Date.now() + READINESS_CACHE_MS;
+        if (ready) readinessState.esimOrderSchemaReadyUntil = Date.now() + READINESS_CACHE_MS;
         return ready;
       })
       .catch(() => {
         console.error('production_esim_order_schema_check_unexpected_error');
         return false;
       })
-      .finally(() => { esimOrderSchemaCheckInFlight = null; });
+      .finally(() => { readinessState.esimOrderSchemaCheckInFlight = null; });
   }
-  return esimOrderSchemaCheckInFlight;
+  return readinessState.esimOrderSchemaCheckInFlight;
 }
 
 /**
@@ -573,20 +599,20 @@ async function checkRequiredPocketWifiFulfilmentSchema() {
 }
 
 export async function hasRequiredPocketWifiFulfilmentSchema() {
-  if (Date.now() < pocketWifiFulfilmentSchemaReadyUntil) return true;
-  if (!pocketWifiFulfilmentSchemaCheckInFlight) {
-    pocketWifiFulfilmentSchemaCheckInFlight = checkRequiredPocketWifiFulfilmentSchema()
+  if (Date.now() < readinessState.pocketWifiFulfilmentSchemaReadyUntil) return true;
+  if (!readinessState.pocketWifiFulfilmentSchemaCheckInFlight) {
+    readinessState.pocketWifiFulfilmentSchemaCheckInFlight = checkRequiredPocketWifiFulfilmentSchema()
       .then((ready) => {
-        if (ready) pocketWifiFulfilmentSchemaReadyUntil = Date.now() + READINESS_CACHE_MS;
+        if (ready) readinessState.pocketWifiFulfilmentSchemaReadyUntil = Date.now() + READINESS_CACHE_MS;
         return ready;
       })
       .catch(() => {
         console.error('production_pocket_wifi_fulfilment_schema_check_unexpected_error');
         return false;
       })
-      .finally(() => { pocketWifiFulfilmentSchemaCheckInFlight = null; });
+      .finally(() => { readinessState.pocketWifiFulfilmentSchemaCheckInFlight = null; });
   }
-  return pocketWifiFulfilmentSchemaCheckInFlight;
+  return readinessState.pocketWifiFulfilmentSchemaCheckInFlight;
 }
 
 /**
@@ -744,18 +770,18 @@ async function checkRequiredOperationsSchema() {
 // it responsive under multiple health-check workers without hiding a failed
 // migration or outage: only a successful result is cached, and only briefly.
 export async function hasRequiredOperationsSchema() {
-  if (Date.now() < operationsSchemaReadyUntil) return true;
-  if (!operationsSchemaCheckInFlight) {
-    operationsSchemaCheckInFlight = checkRequiredOperationsSchema()
+  if (Date.now() < readinessState.operationsSchemaReadyUntil) return true;
+  if (!readinessState.operationsSchemaCheckInFlight) {
+    readinessState.operationsSchemaCheckInFlight = checkRequiredOperationsSchema()
       .then((ready) => {
-        if (ready) operationsSchemaReadyUntil = Date.now() + READINESS_CACHE_MS;
+        if (ready) readinessState.operationsSchemaReadyUntil = Date.now() + READINESS_CACHE_MS;
         return ready;
       })
       .catch(() => {
         console.error('production_operations_schema_check_unexpected_error');
         return false;
       })
-      .finally(() => { operationsSchemaCheckInFlight = null; });
+      .finally(() => { readinessState.operationsSchemaCheckInFlight = null; });
   }
-  return operationsSchemaCheckInFlight;
+  return readinessState.operationsSchemaCheckInFlight;
 }
