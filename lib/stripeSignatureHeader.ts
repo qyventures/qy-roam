@@ -46,3 +46,34 @@ export function structurallyValidStripeSignatureHeader(value: string) {
 
   return timestampCount === 1 && signatureCount >= 1;
 }
+
+/**
+ * Reject a signature timestamp that is already too old before allowing its
+ * unauthenticated request body to occupy a slow-upload slot. This is only an
+ * admission check: the Stripe SDK still verifies the HMAC and repeats the
+ * timestamp policy after the exact payload has been read.
+ *
+ * Match stripe-node's age calculation and deliberately do not reject future
+ * timestamps here. The installed verifier treats only an age greater than
+ * the tolerance as expired, so this cheap boundary must not become stricter
+ * than the authoritative provider verification during clock skew.
+ */
+export function stripeSignatureTimestampWithinTolerance(
+  value: string,
+  toleranceSeconds: number,
+  receivedAtMs = Date.now(),
+) {
+  if (!Number.isSafeInteger(toleranceSeconds) || toleranceSeconds < 1 || !Number.isFinite(receivedAtMs)) return false;
+
+  let timestamp: number | null = null;
+  for (const item of value.split(',')) {
+    if (!item.startsWith('t=')) continue;
+    const rawTimestamp = item.slice(2);
+    if (!/^\d{1,12}$/.test(rawTimestamp)) return false;
+    const parsedTimestamp = Number(rawTimestamp);
+    if (!Number.isSafeInteger(parsedTimestamp) || parsedTimestamp < 1 || timestamp !== null) return false;
+    timestamp = parsedTimestamp;
+  }
+
+  return timestamp !== null && Math.floor(receivedAtMs / 1_000) - timestamp <= toleranceSeconds;
+}

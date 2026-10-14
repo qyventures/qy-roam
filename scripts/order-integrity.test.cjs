@@ -58,7 +58,7 @@ const { safeStripeCheckoutUrl } = require('../lib/stripeCheckoutUrl.ts');
 const { metaCapiPurchaseAcknowledged } = require('../lib/metaCapiAcknowledgement.ts');
 const { stripeCheckoutEventStateIssue } = require('../lib/stripeCheckoutEventState.ts');
 const { contentLengthMatches, declaredContentLength } = require('../lib/contentLength.ts');
-const { structurallyValidStripeSignatureHeader } = require('../lib/stripeSignatureHeader.ts');
+const { structurallyValidStripeSignatureHeader, stripeSignatureTimestampWithinTolerance } = require('../lib/stripeSignatureHeader.ts');
 const { paidFulfilmentDetailsIssue } = require('../lib/paidFulfilmentDetails.ts');
 const { exactNonnegativeCount } = require('../lib/exactCount.ts');
 const { custodyReferenceIssue, normalizeCustodyReference, MAX_CUSTODY_REFERENCE_LENGTH } = require('../lib/custodyReference.ts');
@@ -6040,6 +6040,27 @@ test('Stripe webhook upload admission requires a structurally usable signature h
     tooManyFields.join(','),
     tooManySignatures.join(','),
   ]) assert.equal(structurallyValidStripeSignatureHeader(invalid), false, invalid);
+});
+
+test('Stripe webhook rejects already-expired signature timestamps before slow-upload admission', () => {
+  const signature = 'a'.repeat(64);
+  const nowMs = 1_720_000_000_900;
+  const current = `t=1720000000,v1=${signature}`;
+  const boundary = `t=1719999700,v1=${signature}`;
+  const expired = `t=1719999699,v1=${signature}`;
+
+  assert.equal(stripeSignatureTimestampWithinTolerance(current, 300, nowMs), true);
+  assert.equal(stripeSignatureTimestampWithinTolerance(boundary, 300, nowMs), true);
+  assert.equal(stripeSignatureTimestampWithinTolerance(expired, 300, nowMs), false);
+  // Match stripe-node's authoritative policy during possible clock skew: a
+  // future timestamp is not rejected by this cheap, unauthenticated precheck.
+  assert.equal(stripeSignatureTimestampWithinTolerance(`t=1720000300,v1=${signature}`, 300, nowMs), true);
+  assert.equal(stripeSignatureTimestampWithinTolerance(current, 0, nowMs), false);
+  assert.equal(stripeSignatureTimestampWithinTolerance(current, 300, Number.NaN), false);
+
+  const admission = webhookRoute.slice(webhookRoute.indexOf('export async function POST(req:Request)'), webhookRoute.indexOf('const release=tryAcquireStripeWebhookUpload()'));
+  assert.match(admission, /validStripeSignatureHeader\(req\.headers\.get\('stripe-signature'\)\)/);
+  assert.match(webhookRoute, /stripeSignatureTimestampWithinTolerance\(value, STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS\)/);
 });
 
 test('Stripe webhook rejects non-JSON payloads before reading request bodies', () => {
