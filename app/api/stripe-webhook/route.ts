@@ -27,7 +27,7 @@ import { stripeCheckoutEventStateIssue, type QyRoamCheckoutEventType } from '@/l
 import { contentLengthMatches, declaredContentLength } from '@/lib/contentLength';
 import { paidFulfilmentDetailsIssue } from '@/lib/paidFulfilmentDetails';
 import { structurallyValidStripeSignatureHeader, stripeSignatureTimestampWithinTolerance } from '@/lib/stripeSignatureHeader';
-import { isJsonRequestContentType } from '@/lib/requestBody';
+import { hasIdentityRequestContentEncoding, isJsonRequestContentType } from '@/lib/requestBody';
 import { exactStripeClaimToken } from '@/lib/stripeClaimToken';
 import {
   tryAcquireStripeWebhookProcessing,
@@ -102,17 +102,6 @@ function validStripeSignatureHeader(value: string | null) {
     stripeSignatureTimestampWithinTolerance(value, STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS)
     ? value
     : null;
-}
-
-function hasIdentityContentEncoding(value: string | null) {
-  // Stripe sends webhook JSON without Content-Encoding. Reject compressed or
-  // otherwise transformed bodies before reading them: across proxies and
-  // runtimes, Content-Length can describe either the encoded representation
-  // or the decoded stream. Accepting one here would make the byte limit and
-  // exact-length check ambiguous, and decompression could expand a small
-  // request beyond the memory boundary enforced below. An explicit
-  // `identity` value is harmless and has the same representation semantics.
-  return value === null || value.trim().toLowerCase() === 'identity';
 }
 
 async function readStripeWebhookBody(req: Request): Promise<Buffer> {
@@ -801,7 +790,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void){
   if(!isJsonRequestContentType(req.headers.get('content-type'))) {
     return webhookJson({error:'Expected JSON webhook payload'},{status:415});
   }
-  if(!hasIdentityContentEncoding(req.headers.get('content-encoding'))) {
+  if(!hasIdentityRequestContentEncoding(req.headers.get('content-encoding'))) {
     return webhookJson({error:'Unsupported webhook content encoding'},{status:415});
   }
   // Reject requests that cannot possibly be authenticated before reserving
@@ -1112,7 +1101,7 @@ export async function POST(req:Request){
   if(!isJsonRequestContentType(req.headers.get('content-type'))) {
     return webhookJson({error:'Expected JSON webhook payload'},{status:415});
   }
-  if(!hasIdentityContentEncoding(req.headers.get('content-encoding'))) {
+  if(!hasIdentityRequestContentEncoding(req.headers.get('content-encoding'))) {
     return webhookJson({error:'Unsupported webhook content encoding'},{status:415});
   }
   if(!validStripeSignatureHeader(req.headers.get('stripe-signature'))) {

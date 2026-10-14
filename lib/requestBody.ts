@@ -21,6 +21,14 @@ export const MAX_REQUEST_BODY_TIMEOUT_MS = 60_000;
 // of reads/promises (including zero-length chunks). Real HTTP bodies arrive
 // in far fewer chunks; cap the work independently from the payload size.
 export const MAX_REQUEST_BODY_CHUNKS = 4_096;
+// These headers are parsed before a public request reaches any body or
+// dependency-work admission pool. Reverse proxies normally cap all headers,
+// but the standalone server can also be reached directly in a smoke test or
+// a changed deployment topology. Bound normalization work here so an
+// attacker-controlled value cannot make a cheap media-type check allocate or
+// scan an arbitrarily large string before the route rejects the request.
+export const MAX_JSON_CONTENT_TYPE_HEADER_LENGTH = 256;
+export const MAX_CONTENT_ENCODING_HEADER_LENGTH = 64;
 
 function validRequestBodyLimit(maxBytes: number, timeoutMs: number) {
   return Number.isSafeInteger(maxBytes) && maxBytes >= 0 && maxBytes <= MAX_REQUEST_BODY_LIMIT_BYTES &&
@@ -34,7 +42,7 @@ function validRequestBodyLimit(maxBytes: number, timeoutMs: number) {
  * a request body, keeping their declared and parsed formats aligned.
  */
 export function isJsonRequestContentType(value: string | null) {
-  if (!value) return false;
+  if (!value || value.length > MAX_JSON_CONTENT_TYPE_HEADER_LENGTH) return false;
   return value.split(';', 1)[0].trim().toLowerCase() === 'application/json';
 }
 
@@ -48,7 +56,10 @@ export function isJsonRequestContentType(value: string | null) {
  * is equivalent to an omitted header).
  */
 export function hasIdentityRequestContentEncoding(value: string | null) {
-  return value === null || value.trim().toLowerCase() === 'identity';
+  return value === null || (
+    value.length <= MAX_CONTENT_ENCODING_HEADER_LENGTH &&
+    value.trim().toLowerCase() === 'identity'
+  );
 }
 
 export async function readLimitedRequestText(req: Request, maxBytes: number, timeoutMs: number) {

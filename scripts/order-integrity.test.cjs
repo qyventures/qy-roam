@@ -34,7 +34,7 @@ const { MAX_POCKET_WIFI_INVENTORY, operationalConfig } = require('../lib/operati
 const { validStripeCheckoutSessionId, validStripeCheckoutSessionIdForMode } = require('../lib/stripeSessionId.ts');
 const { validStripeEventCreated, validStripePaymentEventCreated, STRIPE_EVENT_CREATED_MIN_SECONDS, STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS } = require('../lib/stripeEventCreated.ts');
 const { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesEvent, stripeWebhookCheckoutSessionMatchesSnapshot, stripeWebhookEventEnvelope } = require('../lib/stripeWebhookObject.ts');
-const { hasIdentityRequestContentEncoding, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError, InvalidRequestBodyLimitError, MAX_REQUEST_BODY_CHUNKS } = require('../lib/requestBody.ts');
+const { hasIdentityRequestContentEncoding, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError, InvalidRequestBodyLimitError, MAX_REQUEST_BODY_CHUNKS, MAX_JSON_CONTENT_TYPE_HEADER_LENGTH, MAX_CONTENT_ENCODING_HEADER_LENGTH } = require('../lib/requestBody.ts');
 const { checkoutClientKey, createCheckoutAttemptLimiter, createGlobalAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { adminAuthClientKey, createFailedAdminAuthLimiter } = require('../lib/adminAuthRateLimit.ts');
 const { ADMIN_MUTATION_HEADER, ADMIN_MUTATION_HEADER_VALUE, adminMutationHeaders } = require('../lib/adminMutation.ts');
@@ -2505,6 +2505,8 @@ test('JSON request content types require the exact JSON media type', () => {
   for (const value of [null, '', 'text/plain', 'application/jsonp', 'application/json-seq']) {
     assert.equal(isJsonRequestContentType(value), false);
   }
+  assert.equal(isJsonRequestContentType(`application/json;${'a'.repeat(MAX_JSON_CONTENT_TYPE_HEADER_LENGTH)}`), false);
+  assert.equal(MAX_JSON_CONTENT_TYPE_HEADER_LENGTH, 256);
   for (const source of [wifiCheckoutRoute, esimCheckoutRoute, adminOpsRoute, adminOrderRoute]) {
     assert.match(source, /isJsonRequestContentType\(req\.headers\.get\('content-type'\)\)/);
     assert.doesNotMatch(source, /startsWith\('application\/json'\)/);
@@ -2666,6 +2668,8 @@ test('public checkout rejects encoded bodies before reading or provider work', (
   assert.equal(hasIdentityRequestContentEncoding('gzip'), false);
   assert.equal(hasIdentityRequestContentEncoding('br'), false);
   assert.equal(hasIdentityRequestContentEncoding('identity, gzip'), false);
+  assert.equal(hasIdentityRequestContentEncoding('i'.repeat(MAX_CONTENT_ENCODING_HEADER_LENGTH + 1)), false);
+  assert.equal(MAX_CONTENT_ENCODING_HEADER_LENGTH, 64);
 
   for (const source of [wifiCheckoutRoute, esimCheckoutRoute]) {
     const encodingGuard = source.indexOf("hasIdentityRequestContentEncoding(req.headers.get('content-encoding'))");
@@ -6064,7 +6068,7 @@ test('Stripe webhook rejects already-expired signature timestamps before slow-up
 });
 
 test('Stripe webhook rejects non-JSON payloads before reading request bodies', () => {
-  assert.match(webhookRoute, /import \{ isJsonRequestContentType \} from '@\/lib\/requestBody'/);
+  assert.match(webhookRoute, /import \{ hasIdentityRequestContentEncoding, isJsonRequestContentType \} from '@\/lib\/requestBody'/);
   const mediaTypeBoundary = webhookRoute.indexOf("if(!isJsonRequestContentType(req.headers.get('content-type'))) ");
   const bodyRead = webhookRoute.indexOf('payload=await readStripeWebhookBody(req)');
   assert.ok(mediaTypeBoundary > -1 && bodyRead > mediaTypeBoundary);
@@ -6087,9 +6091,8 @@ test('Stripe webhook rejects encoded payloads before reading or signature verifi
   // to Stripe's signature verifier. Compression makes that relationship
   // runtime/proxy-dependent and can expand past the intended memory ceiling,
   // so only the untransformed representation is accepted.
-  assert.match(webhookRoute, /function hasIdentityContentEncoding\(value: string \| null\)/);
-  assert.match(webhookRoute, /value === null \|\| value\.trim\(\)\.toLowerCase\(\) === 'identity'/);
-  const encodingGuard = webhookRoute.indexOf("if(!hasIdentityContentEncoding(req.headers.get('content-encoding'))) ");
+  assert.match(webhookRoute, /import \{ hasIdentityRequestContentEncoding, isJsonRequestContentType \} from '@\/lib\/requestBody'/);
+  const encodingGuard = webhookRoute.indexOf("if(!hasIdentityRequestContentEncoding(req.headers.get('content-encoding'))) ");
   const bodyRead = webhookRoute.indexOf('payload=await readStripeWebhookBody(req)');
   const signatureVerification = webhookRoute.indexOf('stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS)');
   assert.ok(encodingGuard >= 0 && encodingGuard < bodyRead && bodyRead < signatureVerification);
@@ -7309,7 +7312,7 @@ test('obviously invalid webhook traffic cannot consume paid-order processing slo
   // These checks use only bounded headers and must remain ahead of admission.
   // Cryptographic verification still occurs after the exact raw body is read.
   assert.match(beforeAdmission, /isJsonRequestContentType\(req\.headers\.get\('content-type'\)\)/);
-  assert.match(beforeAdmission, /hasIdentityContentEncoding\(req\.headers\.get\('content-encoding'\)\)/);
+  assert.match(beforeAdmission, /hasIdentityRequestContentEncoding\(req\.headers\.get\('content-encoding'\)\)/);
   assert.match(beforeAdmission, /validStripeSignatureHeader\(req\.headers\.get\('stripe-signature'\)\)/);
   assert.match(beforeAdmission, /declaredContentLength\(req\.headers\.get\('content-length'\),MAX_STRIPE_WEBHOOK_BODY_BYTES\)/);
   assert.match(beforeAdmission, /Webhook payload too large'\},\{status:413\}/);
