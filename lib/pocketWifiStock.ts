@@ -18,10 +18,32 @@ export const STOCK_READINESS_TIMEOUT_MS = 8_000;
 // become visible on the very next probe. Keep this shorter than the schema
 // readiness cache because physical stock is operationally more volatile.
 export const STOCK_READINESS_CACHE_MS = 5_000;
-let stockReadyUntil = 0;
-let stockReadyConfiguredInventory: number | null = null;
-let stockCheckInFlight: Promise<boolean> | null = null;
-let stockCheckInFlightConfiguredInventory: number | null = null;
+
+type PocketWifiStockReadinessState = {
+  readyUntil: number;
+  readyConfiguredInventory: number | null;
+  checkInFlight: Promise<boolean> | null;
+  checkInFlightConfiguredInventory: number | null;
+};
+
+type PocketWifiStockReadinessGlobal = typeof globalThis & {
+  __qyRoamPocketWifiStockReadinessState?: PocketWifiStockReadinessState;
+};
+
+// Health and the launch dashboard are separate Next server entrypoints and
+// can evaluate independent copies of this module. Keep their cache and active
+// scan on the process singleton so a deploy cannot start two identical
+// multi-page inventory scans or receive contradictory readiness answers from
+// two route-local success windows. The configured fleet limit remains part of
+// the cache/coalescing identity below.
+const stockReadinessState = (
+  (globalThis as PocketWifiStockReadinessGlobal).__qyRoamPocketWifiStockReadinessState ??= {
+    readyUntil: 0,
+    readyConfiguredInventory: null,
+    checkInFlight: null,
+    checkInFlightConfiguredInventory: null,
+  }
+);
 
 export async function saleablePocketWifiInventory(
   supabase: NonNullable<ReturnType<typeof getSupabaseAdmin>>,
@@ -82,20 +104,20 @@ export async function hasSaleablePocketWifiInventory(configuredInventory: number
   // the underlying scanner would reject immediately.
   if (!Number.isSafeInteger(configuredInventory) || configuredInventory < 1) return false;
   if (
-    stockReadyConfiguredInventory === configuredInventory &&
-    Date.now() < stockReadyUntil
+    stockReadinessState.readyConfiguredInventory === configuredInventory &&
+    Date.now() < stockReadinessState.readyUntil
   ) return true;
 
   // Operational configuration is process-stable, but keep coalescing keyed
   // to its exact inventory ceiling so a hot configuration drift cannot reuse
   // a scan performed under a different capacity boundary.
-  if (!stockCheckInFlight || stockCheckInFlightConfiguredInventory !== configuredInventory) {
-    stockCheckInFlightConfiguredInventory = configuredInventory;
+  if (!stockReadinessState.checkInFlight || stockReadinessState.checkInFlightConfiguredInventory !== configuredInventory) {
+    stockReadinessState.checkInFlightConfiguredInventory = configuredInventory;
     const check = checkSaleablePocketWifiInventory(configuredInventory)
       .then((ready) => {
         if (ready) {
-          stockReadyConfiguredInventory = configuredInventory;
-          stockReadyUntil = Date.now() + STOCK_READINESS_CACHE_MS;
+          stockReadinessState.readyConfiguredInventory = configuredInventory;
+          stockReadinessState.readyUntil = Date.now() + STOCK_READINESS_CACHE_MS;
         }
         return ready;
       })
@@ -103,12 +125,12 @@ export async function hasSaleablePocketWifiInventory(configuredInventory: number
       .finally(() => {
         // A second, differently keyed probe may have replaced this shared
         // promise while it was running. Only its owner may clear the slot.
-        if (stockCheckInFlight === check) {
-          stockCheckInFlight = null;
-          stockCheckInFlightConfiguredInventory = null;
+        if (stockReadinessState.checkInFlight === check) {
+          stockReadinessState.checkInFlight = null;
+          stockReadinessState.checkInFlightConfiguredInventory = null;
         }
       });
-    stockCheckInFlight = check;
+    stockReadinessState.checkInFlight = check;
   }
-  return stockCheckInFlight;
+  return stockReadinessState.checkInFlight;
 }
