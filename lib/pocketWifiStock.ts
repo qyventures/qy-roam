@@ -63,20 +63,32 @@ export async function saleablePocketWifiInventory(
     if (signal) query = query.abortSignal(signal);
     const response = await query;
     if (response.error) throw response.error;
-    const rows = response.data || [];
+    if (!Array.isArray(response.data) || response.data.length > INVENTORY_SCAN_PAGE_SIZE) {
+      throw new Error('Pocket WiFi inventory scan returned an invalid page');
+    }
+    const rows = response.data;
+    let previousId: number | null = afterId;
     for (const row of rows) {
       const id = Number(row.id);
       const quantity = Number(row.quantity_on_hand);
-      if (!Number.isSafeInteger(id) || id < 1 || !Number.isSafeInteger(quantity) || quantity < 1) {
+      // Keyset pagination is safe only while the provider honours the exact
+      // ascending, unique cursor contract requested above. A repeated or
+      // backwards row could otherwise be counted twice and make deployment
+      // readiness claim that more physical routers exist than the register
+      // actually contains.
+      if (!Number.isSafeInteger(id) || id < 1 || (previousId !== null && id <= previousId) ||
+        !Number.isSafeInteger(quantity) || quantity < 1) {
         throw new Error('Pocket WiFi inventory contains an invalid saleable quantity');
       }
+      previousId = id;
       total = Math.min(configuredInventory, total + Math.min(quantity, configuredInventory));
       if (total >= configuredInventory) return total;
     }
     if (rows.length < INVENTORY_SCAN_PAGE_SIZE) return total;
-    const lastId = Number(rows[rows.length - 1].id);
-    if (!Number.isSafeInteger(lastId) || lastId < 1) throw new Error('Pocket WiFi inventory scan returned an invalid cursor');
-    afterId = lastId;
+    // A full page must have advanced to a validated final row. Keeping that
+    // exact cursor is what makes the next page disjoint from this one.
+    if (previousId === null) throw new Error('Pocket WiFi inventory scan returned an invalid cursor');
+    afterId = previousId;
   }
   throw new Error('Pocket WiFi inventory scan exceeded its safe page limit');
 }

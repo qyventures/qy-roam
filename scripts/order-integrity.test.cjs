@@ -81,6 +81,7 @@ const { STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS, STRIPE_WEBHOOK_MAX_CONCURRENT_UP
 const { validatedSalesReportRow } = require('../lib/salesReportRow.ts');
 const { validatedForecastRow } = require('../lib/forecastRow.ts');
 const { META_ATTRIBUTION_METADATA_KEYS, stripeMeasurementConsentDowngrade } = require('../lib/stripeMeasurementConsent.ts');
+const { saleablePocketWifiInventory: scanSaleablePocketWifiInventory } = require('../lib/pocketWifiStock.ts');
 
 function requireFresh(relativePath) {
   const resolved = require.resolve(relativePath);
@@ -1294,6 +1295,56 @@ test('Pocket WiFi availability scans the full saleable register with bounded ari
   assert.match(pocketWifiStock, /finally \{\s*clearTimeout\(timeout\);\s*\}/);
   const boundedSaleableSums = schema.match(/least\(p_inventory::bigint, coalesce\(sum\(quantity_on_hand::bigint\), 0\)\)::integer/g) || [];
   assert.equal(boundedSaleableSums.length, 3, 'availability, public checkout and manual sales must clamp saleable stock before integer conversion');
+});
+
+function inventoryScanClient(pages) {
+  let page = 0;
+  return {
+    from() {
+      const query = {
+        select() { return query; },
+        eq() { return query; },
+        gt() { return query; },
+        order() { return query; },
+        limit() { return query; },
+        abortSignal() { return query; },
+        then(resolve, reject) { return Promise.resolve(pages[page++]).then(resolve, reject); },
+      };
+      return query;
+    },
+  };
+}
+
+test('Pocket WiFi stock pagination fails closed instead of double-counting malformed provider pages', async () => {
+  const firstPage = Array.from({ length: 1_000 }, (_, index) => ({ id: index + 1, quantity_on_hand: 1 }));
+  const completeClient = inventoryScanClient([
+    { data: firstPage, error: null },
+    { data: [{ id: 1_001, quantity_on_hand: 2 }], error: null },
+  ]);
+  assert.equal(await scanSaleablePocketWifiInventory(completeClient, 1_002), 1_002);
+
+  const repeatedCursorClient = inventoryScanClient([
+    { data: firstPage, error: null },
+    { data: [{ id: 1_000, quantity_on_hand: 2 }], error: null },
+  ]);
+  await assert.rejects(
+    scanSaleablePocketWifiInventory(repeatedCursorClient, 1_002),
+    /invalid saleable quantity/,
+  );
+
+  const unorderedClient = inventoryScanClient([
+    { data: [{ id: 2, quantity_on_hand: 1 }, { id: 1, quantity_on_hand: 1 }], error: null },
+  ]);
+  await assert.rejects(
+    scanSaleablePocketWifiInventory(unorderedClient, 3),
+    /invalid saleable quantity/,
+  );
+
+  const malformedClient = inventoryScanClient([{ data: null, error: null }]);
+  await assert.rejects(
+    scanSaleablePocketWifiInventory(malformedClient, 1),
+    /invalid page/,
+  );
 });
 
 test('inventory admin fails closed when the physical register is unavailable or incomplete', () => {
