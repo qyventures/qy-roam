@@ -7072,6 +7072,19 @@ test('release verification enforces the complete customer ingress security bound
   assert.match(nginxConfig, /server_name www\.qyroam\.com;[\s\S]*?add_header Referrer-Policy no-referrer always;[\s\S]*?return 301 https:\/\/qyroam\.com\$request_uri;/);
 });
 
+test('production service contains credential exposure through procfs and crash artifacts', () => {
+  const service = fs.readFileSync(require.resolve('../deploy/qy-roam.service'), 'utf8');
+
+  // The storefront holds Stripe, Supabase, SMTP and analytics credentials in
+  // its environment. A request-handler compromise must not gain an easy view
+  // of unrelated host process metadata, and a Node crash must not serialize
+  // those credentials or paid-order data into a core artifact.
+  assert.match(service, /^LimitCORE=0$/m);
+  assert.match(service, /^UMask=0077$/m);
+  assert.match(service, /^ProtectProc=invisible$/m);
+  assert.match(service, /^ProcSubset=pid$/m);
+});
+
 test('public mutations reach bounded application readers without proxy buffering', () => {
   // `client_body_timeout` only limits inactivity between reads. Keep the
   // application's absolute body deadlines and concurrency admission effective

@@ -37,6 +37,16 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/root/qy-roam/.next/cache
+# Provider credentials and paid-order details live in this process. Prevent a
+# crash from writing them into a core file, keep files it does create private,
+# and hide unrelated host processes (including their command lines and
+# environment metadata) from a compromised request handler. ProcSubset keeps
+# the application-visible procfs surface to process data only; Node does not
+# need kernel tunables from /proc/sys or the other non-process procfs trees.
+LimitCORE=0
+UMask=0077
+ProtectProc=invisible
+ProcSubset=pid
 # The storefront needs ordinary network sockets for Stripe, Supabase, SMTP and
 # Meta, but it never needs device, kernel, namespace, control-group or setuid
 # administration. An empty bounding set is required here: NoNewPrivileges only
