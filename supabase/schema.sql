@@ -284,7 +284,7 @@ begin
   end if;
 
   v_reference := lower(btrim(new.digital_delivery_reference));
-  perform pg_advisory_xact_lock(hashtext('qy_roam_esim_delivery:' || v_reference));
+  perform pg_advisory_xact_lock(hashtextextended('qy_roam_esim_delivery:' || v_reference, 0));
 
   if exists (
     select 1
@@ -2153,7 +2153,7 @@ begin
   if coalesce(length(p_data_allowance), 0) not between 1 and 200 or p_data_allowance <> btrim(p_data_allowance) or p_data_allowance ~ '[[:cntrl:]]' then raise exception 'invalid eSIM data allowance'; end if;
   if coalesce(length(p_country), 0) not between 1 and 100 or p_country <> btrim(p_country) or p_country ~ '[[:cntrl:]]' then raise exception 'invalid eSIM destination'; end if;
 
-  perform pg_advisory_xact_lock(hashtext('qy_roam_esim:' || p_stripe_session_id));
+  perform pg_advisory_xact_lock(hashtextextended('qy_roam_esim:' || p_stripe_session_id, 0));
   select * into v_order from public.orders where stripe_session_id = p_stripe_session_id for update;
 
   if v_order.id is not null and v_order.product_type <> 'esim' then
@@ -2444,7 +2444,7 @@ begin
 
   -- Serialise one offline payment reference so simultaneous browser retries
   -- can neither manufacture two entitlements nor observe an intermediate row.
-  perform pg_advisory_xact_lock(hashtext('qy_roam_manual_esim:' || p_stripe_session_id));
+  perform pg_advisory_xact_lock(hashtextextended('qy_roam_manual_esim:' || p_stripe_session_id, 0));
   select * into v_order from public.orders where stripe_session_id = p_stripe_session_id for update;
   if found then
     if v_order.product_type <> 'esim'
@@ -2609,8 +2609,9 @@ begin
   -- before checking the append-only ledger so two concurrent inserts cannot
   -- both observe an empty history and commit duplicates.
   if new.movement_type in ('dispatch', 'return', 'return_quarantined', 'return_damaged') then
-    perform pg_advisory_xact_lock(hashtext(
-      'qy_roam_custody_movement:' || new.inventory_item_id::text || ':' || new.reference
+    perform pg_advisory_xact_lock(hashtextextended(
+      'qy_roam_custody_movement:' || new.inventory_item_id::text || ':' || new.reference,
+      0
     ));
   end if;
 
@@ -3187,12 +3188,12 @@ begin
   -- identities in lexical order so concurrent checkout/admin updates cannot
   -- deadlock while each recalculates the other's historical totals.
   if v_old_identity is not null and v_old_identity <> v_identity and v_old_identity < v_identity then
-    perform pg_advisory_xact_lock(hashtext('qy_roam_customer:' || v_old_identity));
-    perform pg_advisory_xact_lock(hashtext('qy_roam_customer:' || v_identity));
+    perform pg_advisory_xact_lock(hashtextextended('qy_roam_customer:' || v_old_identity, 0));
+    perform pg_advisory_xact_lock(hashtextextended('qy_roam_customer:' || v_identity, 0));
   else
-    perform pg_advisory_xact_lock(hashtext('qy_roam_customer:' || v_identity));
+    perform pg_advisory_xact_lock(hashtextextended('qy_roam_customer:' || v_identity, 0));
     if v_old_identity is not null and v_old_identity <> v_identity then
-      perform pg_advisory_xact_lock(hashtext('qy_roam_customer:' || v_old_identity));
+      perform pg_advisory_xact_lock(hashtextextended('qy_roam_customer:' || v_old_identity, 0));
     end if;
   end if;
 
@@ -3385,7 +3386,7 @@ begin
   -- lock taken by settlements and manual-order writes until this transaction
   -- commits. Take the per-period advisory lock first so concurrent operators
   -- do not each hold a table lock while waiting on the same accounting period.
-  perform pg_advisory_xact_lock(hashtext('qy_roam_closing_period:' || p_period_start::text || ':' || p_period_end::text));
+  perform pg_advisory_xact_lock(hashtextextended('qy_roam_closing_period:' || p_period_start::text || ':' || p_period_end::text, 0));
   lock table public.orders in share mode;
 
   -- The paid-order ledger, not a paginated browser calculation, is the

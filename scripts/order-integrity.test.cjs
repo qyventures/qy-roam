@@ -3004,7 +3004,7 @@ test('accounting period closes reconcile exact cents against the paid-order ledg
     schema.indexOf('create or replace function public.qy_record_closing_period'),
     schema.indexOf('revoke all on function public.qy_record_closing_period'),
   );
-  const periodLock = closingFunction.indexOf("perform pg_advisory_xact_lock(hashtext('qy_roam_closing_period:'");
+  const periodLock = closingFunction.indexOf("perform pg_advisory_xact_lock(hashtextextended('qy_roam_closing_period:'");
   const orderLock = closingFunction.indexOf('lock table public.orders in share mode;');
   const ledgerRead = closingFunction.indexOf('select coalesce(sum(amount_sgd), 0)::numeric(10,2)');
   const closingWrite = closingFunction.indexOf('insert into public.closing_periods');
@@ -3935,7 +3935,7 @@ test('database rejects paid Stripe orders without their product delivery destina
 test('eSIM payment persistence serializes digital entitlement transitions in the database', () => {
   assert.match(webhookRoute, /qy_persist_stripe_esim_order/);
   assert.match(schema, /create or replace function public\.qy_persist_stripe_esim_order/);
-  assert.match(schema, /pg_advisory_xact_lock\(hashtext\('qy_roam_esim:' \|\| p_stripe_session_id\)\)/);
+  assert.match(schema, /pg_advisory_xact_lock\(hashtextextended\('qy_roam_esim:' \|\| p_stripe_session_id, 0\)\)/);
   assert.match(schema, /when v_paid and v_order\.id is not null and v_order\.fulfilment_status not in \('awaiting_payment','payment_failed'\) then v_order\.fulfilment_status/);
   assert.match(schema, /payment_confirmed_at = case when v_paid then coalesce\(orders\.payment_confirmed_at, p_payment_confirmed_at\)/);
   assert.match(productionReadiness, /production_esim_order_persistence_rpc_check_failed/);
@@ -4402,7 +4402,7 @@ test('manual eSIM sales are created through one atomic exact-idempotency boundar
     schema.indexOf('create or replace function public.qy_create_manual_esim_order'),
     schema.indexOf('revoke all on function public.qy_create_manual_esim_order'),
   );
-  assert.match(manualEsimRpc, /pg_advisory_xact_lock\(hashtext\('qy_roam_manual_esim:' \|\| p_stripe_session_id\)\)/);
+  assert.match(manualEsimRpc, /pg_advisory_xact_lock\(hashtextextended\('qy_roam_manual_esim:' \|\| p_stripe_session_id, 0\)\)/);
   assert.match(manualEsimRpc, /where stripe_session_id = p_stripe_session_id for update;/);
   assert.match(manualEsimRpc, /v_order\.plan_id is distinct from p_plan_id/);
   assert.match(manualEsimRpc, /v_order\.data_allowance is distinct from p_data_allowance/);
@@ -4747,7 +4747,7 @@ test('eSIM delivery references are safe audit pointers and remain mandatory and 
 test('one eSIM delivery audit reference cannot fulfil multiple paid orders', () => {
   assert.match(schema, /create or replace function public\.qy_enforce_esim_delivery_reference_uniqueness\(\)/);
   assert.match(schema, /v_reference := lower\(btrim\(new\.digital_delivery_reference\)\)/);
-  assert.match(schema, /pg_advisory_xact_lock\(hashtext\('qy_roam_esim_delivery:' \|\| v_reference\)\)/);
+  assert.match(schema, /pg_advisory_xact_lock\(hashtextextended\('qy_roam_esim_delivery:' \|\| v_reference, 0\)\)/);
   assert.match(schema, /fulfilment_status in \('fulfilled', 'closed'\)[\s\S]*?lower\(btrim\(digital_delivery_reference\)\) = v_reference[\s\S]*?id is distinct from new\.id/);
   assert.match(schema, /raise exception 'eSIM delivery reference is already assigned to another fulfilled order'/);
   assert.match(schema, /create trigger qy_enforce_esim_delivery_reference_uniqueness\s+before insert or update of product_type, fulfilment_status, digital_delivery_reference on public\.orders/);
@@ -5041,7 +5041,7 @@ test('Pocket WiFi custody movements are exactly-once per order and inventory ite
     schema.indexOf('create or replace function public.qy_enforce_inventory_custody_movement_once()'),
     schema.indexOf('-- Stock movements are the audit evidence'),
   );
-  assert.match(guard, /pg_advisory_xact_lock\(hashtext\([\s\S]*new\.inventory_item_id::text[\s\S]*new\.reference/);
+  assert.match(guard, /pg_advisory_xact_lock\(hashtextextended\([\s\S]*new\.inventory_item_id::text[\s\S]*new\.reference,[\s\S]*0/);
   assert.match(guard, /new\.movement_type = 'dispatch'[\s\S]*movement_type = 'dispatch'[\s\S]*dispatch movement already exists/);
   assert.match(guard, /new\.movement_type in \('return', 'return_quarantined', 'return_damaged'\)[\s\S]*movement_type in \('return', 'return_quarantined', 'return_damaged'\)[\s\S]*return movement already exists/);
   assert.match(guard, /inventory_item_id = new\.inventory_item_id[\s\S]*reference = new\.reference/);
@@ -7094,7 +7094,7 @@ test('paid orders reconcile into CRM records idempotently without overwriting op
   assert.match(schema, /create or replace function public\.qy_reconcile_customer_from_paid_order/);
   assert.match(schema, /after insert or update of payment_status, customer_name, email, phone, amount_sgd on public\.orders/);
   assert.match(schema, /if new\.payment_status <> 'paid' or \(v_email is null and v_phone is null\) then/);
-  assert.match(schema, /pg_advisory_xact_lock\(hashtext\('qy_roam_customer:' \|\| v_identity\)\)/);
+  assert.match(schema, /pg_advisory_xact_lock\(hashtextextended\('qy_roam_customer:' \|\| v_identity, 0\)\)/);
   assert.match(schema, /from public\.orders\s+where payment_status = 'paid'/);
   assert.match(schema, /total_orders = v_orders/);
   assert.match(schema, /lifetime_value_sgd = v_lifetime_value/);
@@ -7117,7 +7117,7 @@ test('paid contact corrections reconcile both the current and previous CRM ident
   assert.match(schema, /v_old_phone text := case when tg_op = 'UPDATE'/);
   assert.match(schema, /v_previous_customer_ids bigint\[\] := array\[\]::bigint\[\]/);
   assert.match(schema, /v_old_identity := coalesce\('email:' \|\| v_old_email, 'phone:' \|\| v_old_phone\)/);
-  assert.match(schema, /pg_advisory_xact_lock\(hashtext\('qy_roam_customer:' \|\| v_old_identity\)\)/);
+  assert.match(schema, /pg_advisory_xact_lock\(hashtextextended\('qy_roam_customer:' \|\| v_old_identity, 0\)\)/);
   assert.match(schema, /foreach v_previous_customer_id in array v_previous_customer_ids loop/);
   assert.match(schema, /perform public\.qy_reconcile_customer_paid_totals\(v_customer_id\)/);
   assert.match(schema, /perform public\.qy_reconcile_customer_paid_totals\(v_previous_customer_id\)/);
@@ -7345,6 +7345,32 @@ test('Stripe event claims enforce webhook identities before taking a per-event l
   const lock = claimFunction.indexOf("pg_advisory_xact_lock(hashtextextended('qy_roam_stripe_event:' || p_event_id, 0))");
   assert.ok(eventValidation > -1 && typeValidation > eventValidation && sessionValidation > typeValidation && lock > sessionValidation);
   assert.doesNotMatch(claimFunction, /pg_advisory_xact_lock\(hashtext\(/);
+});
+
+test('per-identity database locks use 64-bit keys without weakening the global inventory lock', () => {
+  // PostgreSQL's hashtext result is only 32 bits. A collision cannot corrupt
+  // these row-checked workflows, but it can make unrelated payments,
+  // fulfilments, customers, or accounting closes block one another. Retain
+  // the deliberately shared Pocket WiFi fleet lock while giving every
+  // identity-derived lock the larger stable key space.
+  const dynamicThirtyTwoBitLocks = [...schema.matchAll(/pg_advisory_xact_lock\(hashtext\(([\s\S]*?)\)\)/g)]
+    .map((match) => match[0])
+    .filter((lock) => lock.includes('||'));
+  assert.deepEqual(dynamicThirtyTwoBitLocks, []);
+
+  for (const namespace of [
+    'qy_roam_esim_delivery:',
+    'qy_roam_stripe_event:',
+    'qy_roam_esim:',
+    'qy_roam_manual_esim:',
+    'qy_roam_custody_movement:',
+    'qy_roam_customer:',
+    'qy_roam_closing_period:',
+  ]) {
+    const escapedNamespace = namespace.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    assert.match(schema, new RegExp(`hashtextextended\\([\\s\\S]{0,20}'${escapedNamespace}`));
+  }
+  assert.match(schema, /pg_advisory_xact_lock\(hashtext\('qy_roam_pocket_wifi_checkout'\)\)/);
 });
 
 test('deployment rejects structurally broken PL/pgSQL before schema application', async () => {
