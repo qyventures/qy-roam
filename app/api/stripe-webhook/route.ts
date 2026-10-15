@@ -16,6 +16,7 @@ import { fulfilmentNotificationActionable } from '@/lib/orderLifecycle';
 import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { validStripeEventId } from '@/lib/stripeEventId';
 import { validStripePaymentEventCreated } from '@/lib/stripeEventCreated';
+import { acknowledgedExpiredOrderClosure, acknowledgedExpiredReservationRelease } from '@/lib/stripeTerminalMutation';
 import { safeHttpsDeliveryEndpoint } from '@/lib/deliveryEndpoint';
 import { metaPurchaseEventSourceUrl } from '@/lib/siteOrigin';
 import { fulfilmentRelayAcknowledged } from '@/lib/deliveryAcknowledgement';
@@ -626,8 +627,12 @@ async function releaseExpiredPocketWifiReservation(supabase:NonNullable<ReturnTy
   const released=await supabase.from('checkout_reservations')
     .delete()
     .eq('checkout_request_id',requestId)
-    .or(`stripe_session_id.is.null,stripe_session_id.eq.${session.id}`);
+    .or(`stripe_session_id.is.null,stripe_session_id.eq.${session.id}`)
+    .select('checkout_request_id,stripe_session_id');
   if(released.error) throw released.error;
+  if(!acknowledgedExpiredReservationRelease(released.data,requestId,session.id)){
+    throw new Error('Expired checkout reservation release returned an invalid acknowledgement');
+  }
 }
 
 // Delayed payment can create an awaiting-payment order before Stripe later
@@ -642,8 +647,12 @@ async function closeExpiredAwaitingPaymentOrder(supabase:NonNullable<ReturnType<
     .update({fulfilment_status:'payment_failed',updated_at:new Date().toISOString()})
     .eq('stripe_session_id',session.id)
     .eq('fulfilment_status','awaiting_payment')
-    .or('payment_status.is.null,payment_status.neq.paid');
+    .or('payment_status.is.null,payment_status.neq.paid')
+    .select('stripe_session_id,fulfilment_status');
   if(expired.error) throw expired.error;
+  if(!acknowledgedExpiredOrderClosure(expired.data,session.id)){
+    throw new Error('Expired provisional order closure returned an invalid acknowledgement');
+  }
 }
 
 export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session){

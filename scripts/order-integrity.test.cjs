@@ -71,6 +71,7 @@ const { acknowledgedManualOrder } = require('../lib/manualOrderAcknowledgement.t
 const { acknowledgedClosingPeriod } = require('../lib/closingPeriodAcknowledgement.ts');
 const { acknowledgedAdminRecord } = require('../lib/adminRecordAcknowledgement.ts');
 const { acknowledgedUnlinkedReservationRelease } = require('../lib/checkoutReservationAcknowledgement.ts');
+const { acknowledgedExpiredOrderClosure, acknowledgedExpiredReservationRelease } = require('../lib/stripeTerminalMutation.ts');
 const { parsePocketWifiAvailability, parsePocketWifiBookingTerms } = require('../lib/pocketWifiAvailability.ts');
 const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutResponse.ts');
 const { CUSTOMER_CHECKOUT_MAX_RECONCILIATION_ATTEMPTS, CUSTOMER_CHECKOUT_RECONCILIATION_TIMEOUT_MS, customerCheckoutRetryAfterMs } = require('../lib/customerCheckout.ts');
@@ -8443,4 +8444,50 @@ test('aborted Pocket WiFi checkouts prove their exact unlinked reservation was r
   assert.match(helper, /\.delete\(\)[\s\S]*\.eq\('checkout_request_id',requestId\)[\s\S]*\.is\('stripe_session_id',null\)[\s\S]*\.select\('checkout_request_id,stripe_session_id'\)/);
   assert.match(helper, /acknowledgedUnlinkedReservationRelease\(released\.data,requestId\)/);
   assert.equal((wifiCheckoutRoute.match(/await releaseUnlinkedReservation\(supabase,requestId\)/g) || []).length, 6);
+});
+
+test('Stripe expiry cleanup acknowledges only its exact idempotent terminal mutations', () => {
+  const requestId = '01234567-89ab-4cde-8f01-23456789abcd';
+  const sessionId = 'cs_test_expiry123';
+
+  assert.equal(acknowledgedExpiredReservationRelease([], requestId, sessionId), true);
+  assert.equal(acknowledgedExpiredReservationRelease([{
+    checkout_request_id: requestId,
+    stripe_session_id: null,
+  }], requestId, sessionId), true);
+  assert.equal(acknowledgedExpiredReservationRelease([{
+    checkout_request_id: requestId,
+    stripe_session_id: sessionId,
+  }], requestId, sessionId), true);
+  assert.equal(acknowledgedExpiredOrderClosure([], sessionId), true);
+  assert.equal(acknowledgedExpiredOrderClosure([{
+    stripe_session_id: sessionId,
+    fulfilment_status: 'payment_failed',
+  }], sessionId), true);
+
+  for (const malformed of [
+    null,
+    {},
+    [{ checkout_request_id: requestId, stripe_session_id: sessionId }, { checkout_request_id: requestId, stripe_session_id: sessionId }],
+    [{ checkout_request_id: '11234567-89ab-4cde-8f01-23456789abcd', stripe_session_id: sessionId }],
+    [{ checkout_request_id: requestId, stripe_session_id: 'cs_test_other' }],
+  ]) assert.equal(acknowledgedExpiredReservationRelease(malformed, requestId, sessionId), false);
+
+  for (const malformed of [
+    null,
+    {},
+    [{ stripe_session_id: sessionId, fulfilment_status: 'payment_failed' }, { stripe_session_id: sessionId, fulfilment_status: 'payment_failed' }],
+    [{ stripe_session_id: 'cs_test_other', fulfilment_status: 'payment_failed' }],
+    [{ stripe_session_id: sessionId, fulfilment_status: 'awaiting_payment' }],
+  ]) assert.equal(acknowledgedExpiredOrderClosure(malformed, sessionId), false);
+
+  const releaseStart = webhookRoute.indexOf('async function releaseExpiredPocketWifiReservation');
+  const closeStart = webhookRoute.indexOf('async function closeExpiredAwaitingPaymentOrder');
+  const deliverStart = webhookRoute.indexOf('export async function deliverFulfilmentNotification');
+  const release = webhookRoute.slice(releaseStart, closeStart);
+  const close = webhookRoute.slice(closeStart, deliverStart);
+  assert.match(release, /\.delete\(\)[\s\S]*\.select\('checkout_request_id,stripe_session_id'\)/);
+  assert.match(release, /acknowledgedExpiredReservationRelease\(released\.data,requestId,session\.id\)/);
+  assert.match(close, /\.update\([\s\S]*\.select\('stripe_session_id,fulfilment_status'\)/);
+  assert.match(close, /acknowledgedExpiredOrderClosure\(expired\.data,session\.id\)/);
 });
