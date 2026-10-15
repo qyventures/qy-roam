@@ -589,6 +589,31 @@ async function recordEventFailure(supabase:NonNullable<ReturnType<typeof getSupa
   }
 }
 
+async function settleStripeEvent(
+  supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>,
+  eventId:string,
+  processingStartedAt:string,
+) {
+  const processedAt=new Date().toISOString();
+  const completed=await supabase.from('stripe_events')
+    .update({processed_at:processedAt})
+    .eq('event_id',eventId)
+    .eq('processing_started_at',processingStartedAt)
+    .is('processed_at',null)
+    .select('event_id,processing_started_at,processed_at');
+  if(completed.error) throw completed.error;
+  const settled=exactRpcRow(completed.data);
+  // This response is the final durable acknowledgement before Stripe receives
+  // HTTP 200. A one-row array alone is not sufficient: a malformed gateway
+  // response or changed projection could otherwise make this worker report
+  // success without proving that its exact event and lease were settled.
+  if(
+    settled?.event_id!==eventId ||
+    exactDatabaseTimestampToken(settled.processing_started_at)!==processingStartedAt ||
+    !exactDatabaseTimestampToken(settled.processed_at)
+  ) throw new Error('Stripe event settlement returned a mismatched event');
+}
+
 // An expired Checkout Session can otherwise occupy the durable reservation
 // until its original timeout. Stripe's event is signed, but this application
 // may share an account with other products, so require the same server-issued
@@ -1052,9 +1077,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
       }
       await releaseExpiredPocketWifiReservation(supabase,session);
       await closeExpiredAwaitingPaymentOrder(supabase,session);
-      const completed=await supabase.from('stripe_events').update({processed_at:new Date().toISOString()}).eq('event_id',eventClaimId).eq('processing_started_at',claimStartedAt).is('processed_at',null).select('event_id');
-      if(completed.error) throw completed.error;
-      if(completed.data?.length!==1) throw new Error('Stripe event claim ownership was lost');
+      await settleStripeEvent(supabase,eventClaimId,claimStartedAt);
     }catch(error){
       // The signed event id and Checkout Session id are durable on the
       // claimed ledger row. Avoid logging raw dependency errors here: they
@@ -1113,9 +1136,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
       // been created well before an asynchronous payment actually succeeded.
       await deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated);
     }
-    const completed=await supabase.from('stripe_events').update({processed_at:new Date().toISOString()}).eq('event_id',eventClaimId).eq('processing_started_at',claimStartedAt).is('processed_at',null).select('event_id');
-    if(completed.error)throw completed.error;
-    if(completed.data?.length!==1) throw new Error('Stripe event claim ownership was lost');
+    await settleStripeEvent(supabase,eventClaimId,claimStartedAt);
   }catch(error){
     // Recovery uses the claimed Stripe event row, whose failure field is
     // intentionally application-authored. Keep logs on the same boundary.

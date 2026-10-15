@@ -7841,6 +7841,16 @@ test('Stripe webhook side effects require an exact durable persistence acknowled
   assert.ok(paidSideEffects > esimAcknowledgement, 'paid delivery must follow both product persistence guards');
 });
 
+test('Stripe event settlement acknowledges the exact event and database lease', () => {
+  assert.match(webhookRoute, /async function settleStripeEvent\(/);
+  assert.match(webhookRoute, /\.select\('event_id,processing_started_at,processed_at'\)/);
+  assert.match(webhookRoute, /const settled=exactRpcRow\(completed\.data\)/);
+  assert.match(webhookRoute, /settled\?\.event_id!==eventId/);
+  assert.match(webhookRoute, /exactDatabaseTimestampToken\(settled\.processing_started_at\)!==processingStartedAt/);
+  assert.match(webhookRoute, /!exactDatabaseTimestampToken\(settled\.processed_at\)/);
+  assert.equal((webhookRoute.match(/await settleStripeEvent\(supabase,eventClaimId,claimStartedAt\)/g) || []).length, 2);
+});
+
 test('Stripe webhook concurrency is bounded without queueing or leaking admission slots', () => {
   const limiter = createConcurrencyLimiter(2);
   const releaseFirst = limiter.tryAcquire();
