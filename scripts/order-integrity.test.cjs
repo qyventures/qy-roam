@@ -64,7 +64,7 @@ const { paidFulfilmentDetailsIssue } = require('../lib/paidFulfilmentDetails.ts'
 const { exactNonnegativeCount } = require('../lib/exactCount.ts');
 const { custodyReferenceIssue, normalizeCustodyReference, MAX_CUSTODY_REFERENCE_LENGTH } = require('../lib/custodyReference.ts');
 const { durablePaidOrderMatchesPaymentEvent, durableOrderMatchesFailedOrAlreadyPaidSession, durableOrderMatchesFailedSession, durableOrderMatchesPaidSession, durableOrderMatchesUnpaidOrAlreadyPaidSession } = require('../lib/durableOrderSnapshot.ts');
-const { exactDatabaseTimestampToken, exactStripeClaimToken } = require('../lib/stripeClaimToken.ts');
+const { databaseTimestampInstantEquals, exactDatabaseTimestampToken, exactStripeClaimToken } = require('../lib/stripeClaimToken.ts');
 const { exactRpcRow } = require('../lib/exactRpcRow.ts');
 const { parsePocketWifiAvailability, parsePocketWifiBookingTerms } = require('../lib/pocketWifiAvailability.ts');
 const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutResponse.ts');
@@ -291,6 +291,13 @@ test('Stripe claim ownership preserves the database microsecond token exactly', 
   assert.match(webhookRoute, /exactStripeClaimToken\(result\.claim_started_at\)/);
   assert.doesNotMatch(webhookRoute, /new Date\(result\.claim_started_at\)\.toISOString\(\)/);
   assert.match(webhookRoute, /\.eq\('processing_started_at',processingStartedAt\)/);
+});
+
+test('database settlement acknowledgements compare the complete timestamp instant', () => {
+  assert.equal(databaseTimestampInstantEquals('2026-10-16T01:02:03.123Z', '2026-10-16T09:02:03.123000+08:00'), true);
+  assert.equal(databaseTimestampInstantEquals('2026-10-16T01:02:03.123000Z', '2026-10-16T01:02:03.123001Z'), false);
+  assert.equal(databaseTimestampInstantEquals('2026-10-16T01:02:03.123Z', '2026-10-16T01:02:03.124Z'), false);
+  assert.equal(databaseTimestampInstantEquals('not-a-timestamp', '2026-10-16T01:02:03.123Z'), false);
 });
 
 test('admin order transitions preserve exact database versions and verify their commit acknowledgement', () => {
@@ -7847,7 +7854,7 @@ test('Stripe event settlement acknowledges the exact event and database lease', 
   assert.match(webhookRoute, /const settled=exactRpcRow\(completed\.data\)/);
   assert.match(webhookRoute, /settled\?\.event_id!==eventId/);
   assert.match(webhookRoute, /exactDatabaseTimestampToken\(settled\.processing_started_at\)!==processingStartedAt/);
-  assert.match(webhookRoute, /!exactDatabaseTimestampToken\(settled\.processed_at\)/);
+  assert.match(webhookRoute, /!databaseTimestampInstantEquals\(settled\.processed_at,processedAt\)/);
   assert.equal((webhookRoute.match(/await settleStripeEvent\(supabase,eventClaimId,claimStartedAt\)/g) || []).length, 2);
 });
 

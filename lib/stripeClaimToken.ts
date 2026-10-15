@@ -15,6 +15,26 @@ export function exactDatabaseTimestampToken(value: unknown) {
   return Number.isFinite(new Date(value).getTime()) ? value : null;
 }
 
+// PostgreSQL may render the same timestamptz with a different UTC offset and
+// up to microsecond precision. Compare the represented instant without
+// weakening the exact-token rule used for ownership predicates. This is used
+// for write acknowledgements, where accepting merely "some valid timestamp"
+// could let a stale or transformed gateway response appear to confirm the
+// value the application just committed.
+export function databaseTimestampInstantEquals(left: unknown, right: unknown) {
+  const leftToken = exactDatabaseTimestampToken(left);
+  const rightToken = exactDatabaseTimestampToken(right);
+  if (!leftToken || !rightToken) return false;
+
+  const epochMicroseconds = (token: string) => {
+    const fractional = /\.(\d{1,6})/.exec(token)?.[1] || '';
+    const subMillisecond = Number(fractional.padEnd(6, '0').slice(3, 6));
+    return BigInt(new Date(token).getTime()) * BigInt(1_000) + BigInt(subMillisecond);
+  };
+
+  return epochMicroseconds(leftToken) === epochMicroseconds(rightToken);
+}
+
 // Retain the domain-specific name at existing Stripe event call sites while
 // sharing the exact, non-normalising database timestamp boundary with other
 // compare-and-swap leases.

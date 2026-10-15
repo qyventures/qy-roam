@@ -28,7 +28,7 @@ import { contentLengthMatches, declaredContentLength } from '@/lib/contentLength
 import { paidFulfilmentDetailsIssue } from '@/lib/paidFulfilmentDetails';
 import { structurallyValidStripeSignatureHeader, stripeSignatureTimestampWithinTolerance } from '@/lib/stripeSignatureHeader';
 import { hasIdentityRequestContentEncoding, isJsonRequestContentType } from '@/lib/requestBody';
-import { exactDatabaseTimestampToken, exactStripeClaimToken } from '@/lib/stripeClaimToken';
+import { databaseTimestampInstantEquals, exactDatabaseTimestampToken, exactStripeClaimToken } from '@/lib/stripeClaimToken';
 import { exactRpcRow } from '@/lib/exactRpcRow';
 import { durablePaidOrderMatchesPaymentEvent, durableOrderMatchesUnpaidOrAlreadyPaidSession } from '@/lib/durableOrderSnapshot';
 import {
@@ -610,7 +610,7 @@ async function settleStripeEvent(
   if(
     settled?.event_id!==eventId ||
     exactDatabaseTimestampToken(settled.processing_started_at)!==processingStartedAt ||
-    !exactDatabaseTimestampToken(settled.processed_at)
+    !databaseTimestampInstantEquals(settled.processed_at,processedAt)
   ) throw new Error('Stripe event settlement returned a mismatched event');
 }
 
