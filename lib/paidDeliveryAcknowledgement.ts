@@ -39,3 +39,19 @@ export function acknowledgedPaidDeliverySettlement(
     databaseTimestampInstantEquals(row.updated_at, expectedSentAt)
   );
 }
+
+export function acknowledgedPaidDeliveryFailure(
+  data: unknown,
+  expectedSessionId: string,
+  expectedError: string,
+  expectedUpdatedAt: string,
+) {
+  const row = exactRpcRow(data) as DeliveryClaim & { last_error?: unknown } | null;
+  return Boolean(
+    row &&
+    row.stripe_session_id === expectedSessionId &&
+    row.status === 'pending' &&
+    row.last_error === expectedError &&
+    databaseTimestampInstantEquals(row.updated_at, expectedUpdatedAt)
+  );
+}

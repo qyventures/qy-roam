@@ -31,7 +31,7 @@ import { structurallyValidStripeSignatureHeader, stripeSignatureTimestampWithinT
 import { hasIdentityRequestContentEncoding, isJsonRequestContentType } from '@/lib/requestBody';
 import { databaseTimestampInstantEquals, exactDatabaseTimestampToken, exactStripeClaimToken } from '@/lib/stripeClaimToken';
 import { exactRpcRow } from '@/lib/exactRpcRow';
-import { acknowledgedPaidDeliveryClaim, acknowledgedPaidDeliverySettlement } from '@/lib/paidDeliveryAcknowledgement';
+import { acknowledgedPaidDeliveryClaim, acknowledgedPaidDeliveryFailure, acknowledgedPaidDeliverySettlement } from '@/lib/paidDeliveryAcknowledgement';
 import { durablePaidOrderMatchesPaymentEvent, durableOrderMatchesUnpaidOrAlreadyPaidSession } from '@/lib/durableOrderSnapshot';
 import {
   tryAcquireStripeWebhookProcessing,
@@ -751,8 +751,10 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
     const message=safeProviderDeliveryFailure(error,'SMTP fulfilment delivery failed; retry or inspect provider configuration');
     // Keep a newer worker's lease intact if this worker was reclaimed while
     // its provider call was still in flight.
-    const failed=await supabase.from('fulfilment_notifications').update({status:'pending',last_error:message.slice(0,500),updated_at:new Date().toISOString()}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',claimToken).select('stripe_session_id');
-    if(failed.error) console.error('fulfilment_notification_failure_record_error');
+    const failureMessage=message.slice(0,500);
+    const failedAt=new Date().toISOString();
+    const failed=await supabase.from('fulfilment_notifications').update({status:'pending',last_error:failureMessage,updated_at:failedAt}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',claimToken).select('stripe_session_id,status,last_error,updated_at');
+    if(failed.error||!acknowledgedPaidDeliveryFailure(failed.data,session.id,failureMessage,failedAt)) console.error('fulfilment_notification_failure_record_error');
     throw error;
   }
 }
@@ -819,8 +821,10 @@ export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof
     // safe status code when our own transport produced one, otherwise retain
     // a recovery instruction rather than an arbitrary upstream error string.
     const message=safeProviderDeliveryFailure(error,'Meta CAPI delivery failed; retry or inspect provider configuration');
-    const failed=await supabase.from('meta_purchase_deliveries').update({status:'pending',last_error:message.slice(0,500),updated_at:new Date().toISOString()}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',claimToken).select('stripe_session_id');
-    if(failed.error) console.error('meta_purchase_failure_record_error');
+    const failureMessage=message.slice(0,500);
+    const failedAt=new Date().toISOString();
+    const failed=await supabase.from('meta_purchase_deliveries').update({status:'pending',last_error:failureMessage,updated_at:failedAt}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',claimToken).select('stripe_session_id,status,last_error,updated_at');
+    if(failed.error||!acknowledgedPaidDeliveryFailure(failed.data,session.id,failureMessage,failedAt)) console.error('meta_purchase_failure_record_error');
     throw error;
   }
 }

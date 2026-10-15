@@ -72,7 +72,7 @@ const { acknowledgedClosingPeriod } = require('../lib/closingPeriodAcknowledgeme
 const { acknowledgedAdminRecord } = require('../lib/adminRecordAcknowledgement.ts');
 const { acknowledgedUnlinkedReservationRelease } = require('../lib/checkoutReservationAcknowledgement.ts');
 const { acknowledgedExpiredOrderClosure, acknowledgedExpiredReservationRelease } = require('../lib/stripeTerminalMutation.ts');
-const { acknowledgedPaidDeliveryClaim, acknowledgedPaidDeliverySettlement } = require('../lib/paidDeliveryAcknowledgement.ts');
+const { acknowledgedPaidDeliveryClaim, acknowledgedPaidDeliveryFailure, acknowledgedPaidDeliverySettlement } = require('../lib/paidDeliveryAcknowledgement.ts');
 const { parsePocketWifiAvailability, parsePocketWifiBookingTerms } = require('../lib/pocketWifiAvailability.ts');
 const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutResponse.ts');
 const { CUSTOMER_CHECKOUT_MAX_RECONCILIATION_ATTEMPTS, CUSTOMER_CHECKOUT_RECONCILIATION_TIMEOUT_MS, customerCheckoutRetryAfterMs } = require('../lib/customerCheckout.ts');
@@ -5901,6 +5901,32 @@ test('paid-order delivery claims and settlements acknowledge the exact durable r
 
   assert.match(webhookRoute, /acknowledgedPaidDeliverySettlement\(sent\.data,session\.id,sentAt\)/);
   assert.equal((webhookRoute.match(/\.select\('stripe_session_id,status,sent_at,updated_at'\)/g) || []).length, 2);
+});
+
+test('failed paid-order deliveries acknowledge the exact retryable ledger state', () => {
+  const sessionId = 'cs_test_delivery123';
+  const failedAt = '2026-10-16T12:36:00.123456+00:00';
+  const failureMessage = 'SMTP fulfilment delivery failed; retry or inspect provider configuration';
+
+  assert.equal(acknowledgedPaidDeliveryFailure([{
+    stripe_session_id: sessionId,
+    status: 'pending',
+    last_error: failureMessage,
+    updated_at: '2026-10-16T12:36:00.123456Z',
+  }], sessionId, failureMessage, failedAt), true);
+
+  for (const malformed of [
+    null,
+    [],
+    [{ stripe_session_id: sessionId, status: 'pending', last_error: failureMessage, updated_at: failedAt }, { stripe_session_id: sessionId, status: 'pending', last_error: failureMessage, updated_at: failedAt }],
+    [{ stripe_session_id: 'cs_test_other', status: 'pending', last_error: failureMessage, updated_at: failedAt }],
+    [{ stripe_session_id: sessionId, status: 'sending', last_error: failureMessage, updated_at: failedAt }],
+    [{ stripe_session_id: sessionId, status: 'pending', last_error: 'different failure', updated_at: failedAt }],
+    [{ stripe_session_id: sessionId, status: 'pending', last_error: failureMessage, updated_at: '2026-10-16T12:37:00Z' }],
+  ]) assert.equal(acknowledgedPaidDeliveryFailure(malformed, sessionId, failureMessage, failedAt), false);
+
+  assert.equal((webhookRoute.match(/acknowledgedPaidDeliveryFailure\(failed\.data,session\.id,failureMessage,failedAt\)/g) || []).length, 2);
+  assert.equal((webhookRoute.match(/\.select\('stripe_session_id,status,last_error,updated_at'\)/g) || []).length, 2);
 });
 
 test('accepted paid-order deliveries are not immediately requeued when local settlement is ambiguous', () => {
