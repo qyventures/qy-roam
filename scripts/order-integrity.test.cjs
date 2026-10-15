@@ -70,6 +70,7 @@ const { acknowledgedInventoryMutation } = require('../lib/inventoryMutation.ts')
 const { acknowledgedManualOrder } = require('../lib/manualOrderAcknowledgement.ts');
 const { acknowledgedClosingPeriod } = require('../lib/closingPeriodAcknowledgement.ts');
 const { acknowledgedAdminRecord } = require('../lib/adminRecordAcknowledgement.ts');
+const { acknowledgedUnlinkedReservationRelease } = require('../lib/checkoutReservationAcknowledgement.ts');
 const { parsePocketWifiAvailability, parsePocketWifiBookingTerms } = require('../lib/pocketWifiAvailability.ts');
 const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutResponse.ts');
 const { CUSTOMER_CHECKOUT_MAX_RECONCILIATION_ATTEMPTS, CUSTOMER_CHECKOUT_RECONCILIATION_TIMEOUT_MS, customerCheckoutRetryAfterMs } = require('../lib/customerCheckout.ts');
@@ -535,7 +536,7 @@ test('checkout re-authorises promotional prices immediately before Stripe Sessio
   assert.ok(wifiCreate > -1 && wifiReservation > -1 && wifiFinalPromoCheck > wifiReservation && wifiFinalPromoCheck < wifiCreate);
   const wifiBoundary = wifiCheckoutRoute.slice(wifiFinalPromoCheck, wifiCreate);
   assert.match(wifiBoundary, /pricingExpired:true/);
-  assert.match(wifiBoundary, /\.is\('stripe_session_id',null\)/);
+  assert.match(wifiBoundary, /await releaseUnlinkedReservation\(supabase,requestId\)/);
 });
 
 test('privileged Supabase requests use one canonical hosted-project configuration boundary', () => {
@@ -2639,7 +2640,7 @@ test('Pocket WiFi quote and payment boundaries re-authorise the Singapore bookin
   assert.ok(reservation >= 0 && checkoutRecheck > reservation && stripeCreate > checkoutRecheck,
     'checkout must recheck the lead-time cutoff after reserving stock and before creating a Stripe capability');
   const recheckBlock = wifiCheckoutRoute.slice(checkoutRecheck, stripeCreate);
-  assert.match(recheckBlock, /checkout_reservations'[\s\S]*\.eq\('checkout_request_id',requestId\)\.is\('stripe_session_id',null\)/,
+  assert.match(recheckBlock, /await releaseUnlinkedReservation\(supabase,requestId\)/,
     'a cutoff-crossing checkout must release only its still-unlinked reservation');
   assert.match(recheckBlock, /bookingWindowChanged:true/);
 });
@@ -8417,4 +8418,29 @@ test('admin CRM and forecast mutations acknowledge the exact committed record', 
   assert.match(adminOpsRoute, /from\('sales_opportunities'\)\.insert\(row\)\.select\([^)]+\)\.single\(\)/);
   assert.match(adminOpsRoute, /from\('forecasts'\)\.upsert\(row,[\s\S]{0,120}\.select\([^)]+\)\.single\(\)/);
   assert.match(adminOpsRoute, /acknowledgedAdminRecord\(data,/g);
+});
+
+test('aborted Pocket WiFi checkouts prove their exact unlinked reservation was released', () => {
+  const requestId = '01234567-89ab-4cde-8f01-23456789abcd';
+  assert.equal(acknowledgedUnlinkedReservationRelease([{
+    checkout_request_id: requestId,
+    stripe_session_id: null,
+  }], requestId), true);
+
+  for (const malformed of [
+    null,
+    [],
+    [{ checkout_request_id: requestId, stripe_session_id: null }, { checkout_request_id: requestId, stripe_session_id: null }],
+    [{ checkout_request_id: '11234567-89ab-4cde-8f01-23456789abcd', stripe_session_id: null }],
+    [{ checkout_request_id: requestId, stripe_session_id: 'cs_test_123' }],
+    { checkout_request_id: requestId, stripe_session_id: null },
+  ]) assert.equal(acknowledgedUnlinkedReservationRelease(malformed, requestId), false);
+
+  const helperStart = wifiCheckoutRoute.indexOf('async function releaseUnlinkedReservation');
+  const handlerStart = wifiCheckoutRoute.indexOf('export async function POST');
+  const helper = wifiCheckoutRoute.slice(helperStart, handlerStart);
+  assert.ok(helperStart >= 0);
+  assert.match(helper, /\.delete\(\)[\s\S]*\.eq\('checkout_request_id',requestId\)[\s\S]*\.is\('stripe_session_id',null\)[\s\S]*\.select\('checkout_request_id,stripe_session_id'\)/);
+  assert.match(helper, /acknowledgedUnlinkedReservationRelease\(released\.data,requestId\)/);
+  assert.equal((wifiCheckoutRoute.match(/await releaseUnlinkedReservation\(supabase,requestId\)/g) || []).length, 6);
 });
