@@ -7197,7 +7197,9 @@ test('release verification enforces the complete customer ingress security bound
   assert.match(deployScript, /x-robots-tag:\.\*noindex/);
   assert.match(deployScript, /cache-control:\.\*no-store/);
   assert.match(deployScript, /verify_checkout_ingress\(\)/);
-  assert.match(deployScript, /--request POST[\s\S]*?--data '\{\}'[\s\S]*?\/api\/checkout/);
+  assert.match(deployScript, /for checkout_path in \/api\/checkout \/api\/esim-checkout/);
+  assert.match(deployScript, /--request POST[\s\S]*?Content-Type: text\/plain[\s\S]*?\$\{base_url\}\$\{checkout_path\}/);
+  assert.match(deployScript, /value\?\.error!==['"]Expected JSON request\./);
   assert.equal((deployScript.match(/verify_checkout_ingress "/g) || []).length, 2);
   assert.ok(
     deployScript.lastIndexOf('verify_checkout_ingress "$PUBLIC_ORIGIN"') < deployScript.indexOf('release_verified=1'),

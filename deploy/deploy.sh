@@ -267,38 +267,43 @@ verify_customer_response_headers() {
 }
 
 # A healthy page render does not prove that Nginx and the standalone runtime
-# preserve the public mutation contract used by the booking form. Exercise a
-# deliberately invalid, side-effect-free checkout request: it must reach the
-# application as JSON, be rejected before Stripe or Supabase work, and retain
-# the privacy/cache boundary required for every checkout response. This also
-# catches proxy drift that blocks POST, buffers/replaces JSON errors, or routes
-# /api/checkout somewhere other than the smoke-tested application.
+# preserve the public mutation contract used by each sales form. Exercise a
+# deliberately invalid, side-effect-free request against both product routes:
+# it must reach the application, be rejected before configuration, pricing,
+# Stripe or Supabase work, and retain the privacy/cache boundary required for
+# every checkout response. This also catches proxy drift that blocks POST,
+# buffers/replaces JSON errors, or routes either checkout API somewhere other
+# than the smoke-tested application.
 verify_checkout_ingress() {
   local base_url="$1"
   shift
-  local response_headers response_body status
+  local checkout_path response_headers response_body status
   response_headers="$(mktemp /tmp/qyroam-checkout-headers.XXXXXX)"
   response_body="$(mktemp /tmp/qyroam-checkout-body.XXXXXX)"
 
-  status="$("$@" --request POST \
-    --header 'Content-Type: application/json' \
-    --data '{}' \
-    --dump-header "$response_headers" \
-    --output "$response_body" \
-    --write-out '%{http_code}' \
-    "$base_url/api/checkout")" || {
+  for checkout_path in /api/checkout /api/esim-checkout; do
+    : > "$response_headers"
+    : > "$response_body"
+    status="$("$@" --request POST \
+      --header 'Content-Type: text/plain' \
+      --data 'qy-roam-release-probe' \
+      --dump-header "$response_headers" \
+      --output "$response_body" \
+      --write-out '%{http_code}' \
+      "${base_url}${checkout_path}")" || {
+        rm -f "$response_headers" "$response_body"
+        return 1
+      }
+
+    if [[ "$status" != "415" ]] ||
+       ! grep -Eiq '^content-type:[[:space:]]*application/json([[:space:]]*;|[[:space:]]*$)' "$response_headers" ||
+       ! grep -Eiq '^cache-control:.*no-store' "$response_headers" ||
+       ! grep -Eiq '^x-robots-tag:.*noindex' "$response_headers" ||
+       ! node -e "const fs=require('fs');const value=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(value?.error!=='Expected JSON request.')process.exit(1)" "$response_body"; then
       rm -f "$response_headers" "$response_body"
       return 1
-    }
-
-  if [[ "$status" != "400" ]] ||
-     ! grep -Eiq '^content-type:[[:space:]]*application/json([[:space:]]*;|[[:space:]]*$)' "$response_headers" ||
-     ! grep -Eiq '^cache-control:.*no-store' "$response_headers" ||
-     ! grep -Eiq '^x-robots-tag:.*noindex' "$response_headers" ||
-     ! node -e "const fs=require('fs');const value=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(value?.error!=='Invalid checkout request.')process.exit(1)" "$response_body"; then
-    rm -f "$response_headers" "$response_body"
-    return 1
-  fi
+    fi
+  done
 
   rm -f "$response_headers" "$response_body"
 }

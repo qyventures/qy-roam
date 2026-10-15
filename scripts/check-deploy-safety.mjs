@@ -134,8 +134,9 @@ assert.ok(
 );
 assert.match(deploy, /verify_customer_response_headers\(\)/);
 assert.match(deploy, /verify_checkout_ingress\(\)/);
-assert.match(deploy, /--request POST[\s\S]*?--data '\{\}'[\s\S]*?\/api\/checkout/);
-assert.match(deploy, /value\?\.error!==['"]Invalid checkout request\./);
+assert.match(deploy, /for checkout_path in \/api\/checkout \/api\/esim-checkout/);
+assert.match(deploy, /--request POST[\s\S]*?Content-Type: text\/plain[\s\S]*?\$\{base_url\}\$\{checkout_path\}/);
+assert.match(deploy, /value\?\.error!==['"]Expected JSON request\./);
 assert.match(deploy, /content-security-policy:.*frame-ancestors/);
 assert.match(deploy, /content-security-policy:.*unsafe-eval/);
 assert.match(deploy, /cache-control:.*no-store/);
