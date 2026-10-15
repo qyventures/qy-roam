@@ -97,3 +97,45 @@ export function durableOrderMatchesPaidSession(
     // the paid-order authority boundary.
     order.plan_id === null && order.data_allowance === null;
 }
+
+/**
+ * Prove that a terminal asynchronous payment failure belongs to the exact
+ * authenticated Checkout Session before a caller rotates its idempotency key
+ * or tells the customer to try again. A row keyed by the Session id alone is
+ * not sufficient: imports and service-role repairs can still leave a
+ * commercially mismatched row that must remain recoverable by operators.
+ */
+export function durableOrderMatchesFailedSession(
+  order: DurableOrderSnapshot | null | undefined,
+  session: Stripe.Checkout.Session,
+  productType: QyRoamProductType,
+) {
+  const sessionId = validStripeCheckoutSessionIdForMode(session.id, session.livemode);
+  const expectedMeasurementConsent = session.metadata?.measurement_consent === 'accepted'
+    ? 'accepted'
+    : 'essential';
+  if (!order || !sessionId || order.stripe_session_id !== sessionId ||
+    order.payment_status !== 'unpaid' || order.product_type !== productType ||
+    session.metadata?.product_type !== productType ||
+    order.measurement_consent !== expectedMeasurementConsent ||
+    session.mode !== 'payment' || session.status !== 'complete' || session.payment_status !== 'unpaid' ||
+    session.currency?.toLowerCase() !== 'sgd' ||
+    typeof session.amount_total !== 'number' || !Number.isSafeInteger(session.amount_total) || session.amount_total <= 0 ||
+    sgdCents(order.amount_sgd) !== session.amount_total ||
+    order.plan_name !== (session.metadata?.plan_name || null) ||
+    order.country !== (session.metadata?.country || null)) {
+    return false;
+  }
+
+  if (productType === 'esim') {
+    const expectedDataAllowance = session.metadata?.data_allowance ??
+      getEsimPlan(session.metadata?.plan_id)?.data ?? null;
+    return order.plan_id === (session.metadata?.plan_id || null) &&
+      order.data_allowance === expectedDataAllowance &&
+      order.travel_start === null && order.travel_end === null;
+  }
+
+  return order.travel_start === (session.metadata?.start || null) &&
+    order.travel_end === (session.metadata?.end || null) &&
+    order.plan_id === null && order.data_allowance === null;
+}

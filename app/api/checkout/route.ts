@@ -17,7 +17,7 @@ import { checkoutAttemptExpiresAt } from '@/lib/checkoutExpiry';
 import { checkoutSiteOrigin } from '@/lib/siteOrigin';
 import { pocketWifiRentalCents } from '@/lib/pocketWifiPricing';
 import { safeStripeCheckoutUrl } from '@/lib/stripeCheckoutUrl';
-import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
+import { durableOrderMatchesFailedSession, durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhookObject';
 import { tryAcquireCheckoutConcurrency, tryAcquireCheckoutUpload } from '@/lib/checkoutConcurrency';
@@ -351,13 +351,13 @@ export async function POST(req: Request) {
       return NextResponse.json({completed:true,sessionId:existing.id},{headers:{'Cache-Control':'no-store'}});
     }
     if(existing.status==='complete'&&existing.payment_status==='unpaid'){
-      const order=await supabase.from('orders').select('payment_status,fulfilment_status').eq('stripe_session_id',existing.id).maybeSingle();
+      const order=await supabase.from('orders').select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,fulfilment_status').eq('stripe_session_id',existing.id).maybeSingle();
       if(order.error) throw order.error;
       // Stripe's terminal failure state remains `unpaid`; the webhook records
       // the durable outcome in our fulfilment lifecycle as `payment_failed`.
       // Wait for that ledger transition before rotating the browser's
       // idempotency key, otherwise a delayed async success could be abandoned.
-      if(order.data?.payment_status==='unpaid'&&order.data?.fulfilment_status==='payment_failed'){
+      if(order.data?.fulfilment_status==='payment_failed'&&durableOrderMatchesFailedSession(order.data,existing,'pocket_wifi')){
         return NextResponse.json({error:'This payment attempt was unsuccessful. Please try again with a new secure checkout.',paymentFailed:true},{status:409,headers:{'Cache-Control':'no-store'}});
       }
     }

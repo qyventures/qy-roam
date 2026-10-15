@@ -62,7 +62,7 @@ const { structurallyValidStripeSignatureHeader, stripeSignatureTimestampWithinTo
 const { paidFulfilmentDetailsIssue } = require('../lib/paidFulfilmentDetails.ts');
 const { exactNonnegativeCount } = require('../lib/exactCount.ts');
 const { custodyReferenceIssue, normalizeCustodyReference, MAX_CUSTODY_REFERENCE_LENGTH } = require('../lib/custodyReference.ts');
-const { durableOrderMatchesPaidSession } = require('../lib/durableOrderSnapshot.ts');
+const { durableOrderMatchesFailedSession, durableOrderMatchesPaidSession } = require('../lib/durableOrderSnapshot.ts');
 const { exactDatabaseTimestampToken, exactStripeClaimToken } = require('../lib/stripeClaimToken.ts');
 const { parsePocketWifiAvailability, parsePocketWifiBookingTerms } = require('../lib/pocketWifiAvailability.ts');
 const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutResponse.ts');
@@ -2266,7 +2266,10 @@ test('booking status requires a durable paid order before showing fulfilment pro
   assert.match(bookingPage, /const orderLookupFailed = !supabase \|\| Boolean\(orderResult\?\.error\)/);
   assert.match(bookingPage, /select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,fulfilment_status,/);
   assert.match(bookingPage, /const orderPersisted = durableOrderMatchesPaidSession\(storedOrder, session, productType\)/);
+  assert.match(bookingPage, /const paymentFailed = storedOrder\?\.fulfilment_status === 'payment_failed' &&[\s\S]{0,100}durableOrderMatchesFailedSession\(storedOrder, session, productType\)/);
   assert.match(bookingPage, /paid && !orderLifecycleValid/);
+  assert.match(bookingPage, /paymentFailed \? 'Payment unsuccessful'/);
+  assert.match(bookingPage, /!checkoutExpired && !paymentFailed && \(!paid \|\| !orderLifecycleValid\) && <OrderConfirmationRefresh \/>/);
   assert.match(bookingPage, /orderLookupFailed \? 'temporarily unable to verify' : 'still finalising'/);
   assert.match(bookingPage, /Please do not place a second order/);
 });
@@ -4372,13 +4375,32 @@ test('database lifecycle backstop prevents direct eSIM fulfilment inserts and pr
 test('terminal asynchronous payment failures rotate checkout only after durable webhook persistence', () => {
   for (const route of [esimCheckoutRoute, wifiCheckoutRoute]) {
     assert.match(route, /status\s*===?\s*'complete'\s*&&\s*[^\n]*payment_status\s*===?\s*'unpaid'/);
-    assert.match(route, /from\('orders'\)\s*\.select\('payment_status,fulfilment_status'\)\s*\.eq\('stripe_session_id',\s*[^)]+\)\s*\.maybeSingle\(\)/);
-    assert.match(route, /order\.data\?\.payment_status\s*===?\s*'unpaid'\s*&&\s*order\.data\?\.fulfilment_status\s*===?\s*'payment_failed'/);
+    assert.match(route, /from\('orders'\)\s*\.select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,fulfilment_status'\)\s*\.eq\('stripe_session_id',\s*[^)]+\)\s*\.maybeSingle\(\)/);
+    assert.match(route, /order\.data\?\.fulfilment_status\s*===?\s*'payment_failed'\s*&&\s*durableOrderMatchesFailedSession\(order\.data,/);
     assert.doesNotMatch(route, /order\.data\?\.payment_status\s*===?\s*'failed'/);
     assert.match(route, /paymentFailed:\s*true/);
   }
   assert.match(esimPage, /checkoutExpired \|\| data\.checkoutRequestConflict \|\| data\.paymentFailed/);
   assert.match(homePage, /checkoutExpired \|\| data\.checkoutRequestConflict \|\| data\.paymentFailed/);
+});
+
+test('terminal failed-payment authority requires the exact durable commercial snapshot', () => {
+  const session = {
+    id: 'cs_live_failedEsimSnapshot123', livemode: true, mode: 'payment',
+    status: 'complete', payment_status: 'unpaid', currency: 'sgd', amount_total: 1290,
+    metadata: { product_type: 'esim', measurement_consent: 'essential', plan_id: 'jp-7d', plan_name: 'Japan · 7 days', data_allowance: '10 GB', country: 'Japan' },
+  };
+  const order = {
+    stripe_session_id: session.id, payment_status: 'unpaid', product_type: 'esim', amount_sgd: '12.90',
+    plan_id: 'jp-7d', plan_name: 'Japan · 7 days', data_allowance: '10 GB', country: 'Japan',
+    travel_start: null, travel_end: null, measurement_consent: 'essential',
+  };
+
+  assert.equal(durableOrderMatchesFailedSession(order, session, 'esim'), true);
+  assert.equal(durableOrderMatchesFailedSession({ ...order, amount_sgd: '99.99' }, session, 'esim'), false);
+  assert.equal(durableOrderMatchesFailedSession({ ...order, plan_id: 'different-plan' }, session, 'esim'), false);
+  assert.equal(durableOrderMatchesFailedSession({ ...order, payment_status: 'paid' }, session, 'esim'), false);
+  assert.equal(durableOrderMatchesFailedSession(order, { ...session, payment_status: 'paid' }, 'esim'), false);
 });
 
 test('database enforces product-specific fulfilment status domains on new order writes', () => {
@@ -7469,7 +7491,7 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
 
 test('paid checkout replays require the same exact durable commercial snapshot as confirmation', () => {
   for (const route of [esimCheckoutRoute, wifiCheckoutRoute]) {
-    assert.match(route, /import \{ durableOrderMatchesPaidSession \} from '@\/lib\/durableOrderSnapshot';/);
+    assert.match(route, /import \{ durableOrderMatchesFailedSession, durableOrderMatchesPaidSession \} from '@\/lib\/durableOrderSnapshot';/);
     assert.match(route, /select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent'\)/);
   }
   assert.match(esimCheckoutRoute, /!durableOrderMatchesPaidSession\(order\.data, currentSession, 'esim'\)/);

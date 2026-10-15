@@ -7,9 +7,10 @@ import { validStripeCheckoutSessionId, validStripeCheckoutSessionIdForMode } fro
 import { POCKET_WIFI_RETURN_GRACE_DAYS } from '@/lib/pocketWifiReturns';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
-import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
+import { durableOrderMatchesFailedSession, durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 import { custodyReferenceIssue, normalizeCustodyReference } from '@/lib/custodyReference';
 import { tryAcquireConfirmationConcurrency } from '@/lib/confirmationConcurrency';
+import OrderConfirmationRefresh from '@/components/OrderConfirmationRefresh';
 
 export const dynamic = 'force-dynamic';
 
@@ -114,6 +115,8 @@ export default async function BookingPage({ searchParams }: Props) {
     // customer first opens this page. Only a paid order snapshot proves the
     // fulfilment queue has durably received the purchase.
     const orderPersisted = durableOrderMatchesPaidSession(storedOrder, session, productType);
+    const paymentFailed = storedOrder?.fulfilment_status === 'payment_failed' &&
+      durableOrderMatchesFailedSession(storedOrder, session, productType);
     // The commercial snapshot proves which paid order this is, but lifecycle
     // fields can still have been imported or repaired independently through a
     // service-role client. Do not turn an unknown state into the reassuring
@@ -160,11 +163,16 @@ export default async function BookingPage({ searchParams }: Props) {
     return (
       <main className="wrap section legal">
         <span className="eyebrow">Order status</span>
-        <h1>{checkoutExpired ? 'This secure checkout session has expired' : paid ? statusLabels[fulfilment] || 'Order confirmed' : 'Payment not yet confirmed'}</h1>
+        <h1>{checkoutExpired ? 'This secure checkout session has expired' : paymentFailed ? 'Payment unsuccessful' : paid ? statusLabels[fulfilment] || 'Order confirmed' : 'Payment not yet confirmed'}</h1>
         <p><strong>{planName}</strong>{start && end ? ` · ${start} to ${end}` : ''}{amount ? ` · ${amount}` : ''}</p>
 
         {checkoutExpired ? (
           <p>No payment was completed for this session. Return to the plans page to start a new secure checkout.</p>
+        ) : paymentFailed ? (
+          <div role="alert">
+            <p>This payment attempt was unsuccessful and no paid order was created.</p>
+            <p>Please return to the plans page to start a new secure checkout, or contact <a href="tel:+6580327183"><strong>+65 8032 7183</strong></a> if you believe you were charged.</p>
+          </div>
         ) : paid && !orderLifecycleValid ? (
           <div role="alert">
             <p><strong>Your payment is confirmed.</strong> We’re {orderLookupFailed ? 'temporarily unable to verify' : 'still finalising'} the order record, so fulfilment details are not available just yet.</p>
@@ -197,6 +205,7 @@ export default async function BookingPage({ searchParams }: Props) {
           <p>If you just completed PayNow or another payment method, allow a short time for Stripe to confirm it, then refresh this page.</p>
         )}
 
+        {!checkoutExpired && !paymentFailed && (!paid || !orderLifecycleValid) && <OrderConfirmationRefresh />}
         <p>Need help? Call <a href="tel:+6580327183"><strong>+65 8032 7183</strong></a>.</p>
         <a className="secondary" href={isEsim ? '/esim' : '/'}>{checkoutExpired ? 'Choose a plan' : isEsim ? 'Back to eSIM plans' : 'Back to QY Roam'}</a>
       </main>

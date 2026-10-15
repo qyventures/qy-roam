@@ -13,7 +13,7 @@ import { checkoutAttemptExpiresAt } from '@/lib/checkoutExpiry';
 import { checkoutSiteOrigin } from '@/lib/siteOrigin';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { safeStripeCheckoutUrl } from '@/lib/stripeCheckoutUrl';
-import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
+import { durableOrderMatchesFailedSession, durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhookObject';
 import { tryAcquireCheckoutConcurrency, tryAcquireCheckoutUpload } from '@/lib/checkoutConcurrency';
@@ -412,7 +412,7 @@ export async function POST(req: Request) {
       if (!supabase) throw new Error('Order persistence unavailable');
       const order = await supabase
         .from('orders')
-        .select('payment_status,fulfilment_status')
+        .select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,fulfilment_status')
         .eq('stripe_session_id', currentSession.id)
         .maybeSingle();
       if (order.error) throw order.error;
@@ -420,7 +420,7 @@ export async function POST(req: Request) {
       // `unpaid`. The signed webhook makes that terminal outcome durable in
       // QY Roam's lifecycle ledger as `payment_failed`; only then is it safe
       // to rotate this idempotent browser attempt.
-      if (order.data?.payment_status === 'unpaid' && order.data?.fulfilment_status === 'payment_failed') {
+      if (order.data?.fulfilment_status === 'payment_failed' && durableOrderMatchesFailedSession(order.data, currentSession, 'esim')) {
         return NextResponse.json({
           error: 'This payment attempt was unsuccessful. Please try again with a new secure checkout.',
           paymentFailed: true,
