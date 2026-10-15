@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminCredentials, hasRequiredAdminCredentials } from './lib/runtimeConfig';
-import { ADMIN_AUTH_FAILURE_WINDOW_MS, createFailedAdminAuthLimiter } from './lib/adminAuthRateLimit';
+import { ADMIN_AUTH_FAILURE_WINDOW_MS, createFailedAdminAuthLimiter, createGlobalFailedAdminAuthLimiter } from './lib/adminAuthRateLimit';
 import { ADMIN_MUTATION_HEADER, ADMIN_MUTATION_HEADER_VALUE } from './lib/adminMutation';
 import { validStripeCheckoutSessionId } from './lib/stripeSessionId';
 
@@ -11,6 +11,7 @@ import { validStripeCheckoutSessionId } from './lib/stripeSessionId';
 const MAX_BASIC_AUTH_HEADER_LENGTH = 8_192;
 const MAX_BASIC_AUTH_DECODED_LENGTH = 4_096;
 const failedAdminAuthLimited = createFailedAdminAuthLimiter();
+const failedAdminAuthGloballyLimited = createGlobalFailedAdminAuthLimiter();
 
 // The success and booking pages retrieve a Stripe Checkout Session and can
 // also query the paid-order ledger. Unlike API checkout rate limits, this
@@ -205,7 +206,13 @@ export function middleware(req: NextRequest) {
   // are not throttled, while repeated guesses from one trusted proxy identity
   // receive a finite retry boundary. Missing/malformed identities deliberately
   // share one conservative bucket.
-  if (failedAdminAuthLimited(req)) {
+  // Evaluate the aggregate counter for every failed credential, including a
+  // source already over its individual ceiling. Short-circuiting on the
+  // client result would let one noisy address hide the true process-wide
+  // failure rate, then leave a rotating attacker a fresh global allowance.
+  const clientLimited = failedAdminAuthLimited(req);
+  const globallyLimited = failedAdminAuthGloballyLimited();
+  if (clientLimited || globallyLimited) {
     return new NextResponse('Too many authentication attempts. Try again later.', {
       status: 429,
       headers: {

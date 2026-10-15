@@ -37,7 +37,7 @@ const { validStripeEventCreated, validStripePaymentEventCreated, STRIPE_EVENT_CR
 const { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesEvent, stripeWebhookCheckoutSessionMatchesSnapshot, stripeWebhookEventEnvelope } = require('../lib/stripeWebhookObject.ts');
 const { hasIdentityRequestContentEncoding, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError, InvalidRequestBodyLimitError, MAX_REQUEST_BODY_CHUNKS, MAX_JSON_CONTENT_TYPE_HEADER_LENGTH, MAX_CONTENT_ENCODING_HEADER_LENGTH } = require('../lib/requestBody.ts');
 const { checkoutClientKey, createCheckoutAttemptLimiter, createGlobalAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
-const { adminAuthClientKey, createFailedAdminAuthLimiter } = require('../lib/adminAuthRateLimit.ts');
+const { ADMIN_AUTH_GLOBAL_MAX_FAILURES, adminAuthClientKey, createFailedAdminAuthLimiter, createGlobalFailedAdminAuthLimiter } = require('../lib/adminAuthRateLimit.ts');
 const { ADMIN_MUTATION_HEADER, ADMIN_MUTATION_HEADER_VALUE, adminMutationHeaders } = require('../lib/adminMutation.ts');
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode, stripeSecretKeyMode } = require('../lib/stripeCheckoutConfig.ts');
 const { stripeWebhookSigningSecret, stripeWebhookSigningSecrets } = require('../lib/stripeWebhookSecret.ts');
@@ -1533,9 +1533,28 @@ test('failed admin authentication is throttled without limiting valid admin traf
   // constant-time credential comparison succeeds, so normal operations do not
   // consume this budget.
   assert.match(middleware, /if \(safeEqual\(givenUser, user\) && safeEqual\(givenPass, pass\)\) return authenticatedAdminResponse\(\);/);
-  assert.match(middleware, /if \(failedAdminAuthLimited\(req\)\)/);
+  assert.match(middleware, /const clientLimited = failedAdminAuthLimited\(req\);\s*const globallyLimited = failedAdminAuthGloballyLimited\(\);\s*if \(clientLimited \|\| globallyLimited\)/);
   assert.match(middleware, /status: 429/);
   assert.match(middleware, /'Retry-After'/);
+});
+
+test('rotating-address admin authentication failures share an aggregate ceiling', () => {
+  assert.equal(ADMIN_AUTH_GLOBAL_MAX_FAILURES, 100);
+  const limited = createGlobalFailedAdminAuthLimiter(1_000, 3);
+  assert.equal(limited(100), false);
+  assert.equal(limited(101), false);
+  assert.equal(limited(102), false);
+  assert.equal(limited(103), true);
+  assert.equal(limited(1_100), false);
+
+  // A backwards clock correction starts a fresh bounded window instead of
+  // retaining a future reset and locking the admin boundary indefinitely.
+  assert.equal(limited(1_101), false);
+  assert.equal(limited(500), false);
+
+  const conservative = createGlobalFailedAdminAuthLimiter(0, 0);
+  assert.equal(conservative(100), false);
+  assert.equal(conservative(101), true);
 });
 
 test('SMTP relay success is bound to the exact fulfilment message identity', () => {

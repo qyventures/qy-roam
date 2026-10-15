@@ -5,6 +5,7 @@
 export const ADMIN_AUTH_FAILURE_WINDOW_MS = 5 * 60_000;
 export const ADMIN_AUTH_MAX_FAILURES = 10;
 export const ADMIN_AUTH_MAX_CLIENTS = 5_000;
+export const ADMIN_AUTH_GLOBAL_MAX_FAILURES = 100;
 
 type FailureWindow = { count: number; reset: number };
 
@@ -81,5 +82,41 @@ export function createFailedAdminAuthLimiter(
     }
     current.count += 1;
     return current.count > boundedMaxFailures;
+  };
+}
+
+// Per-client windows slow one source, but Basic Auth is still guessable from a
+// rotating address pool. Keep a second allocation-free ceiling for all failed
+// credentials seen by this process. Successful admin requests bypass both
+// limiters in middleware, so this protects the public authentication boundary
+// without consuming the operator's normal page/API budget.
+export function createGlobalFailedAdminAuthLimiter(
+  windowMs = ADMIN_AUTH_FAILURE_WINDOW_MS,
+  maxFailures = ADMIN_AUTH_GLOBAL_MAX_FAILURES,
+) {
+  const boundedWindowMs = Number.isSafeInteger(windowMs) && windowMs > 0
+    ? windowMs
+    : ADMIN_AUTH_FAILURE_WINDOW_MS;
+  const boundedMaxFailures = Number.isSafeInteger(maxFailures) && maxFailures > 0
+    ? maxFailures
+    : 1;
+  let count = 0;
+  let reset = 0;
+  let lastObservedAt = 0;
+
+  return (now = Date.now()) => {
+    if (!Number.isFinite(now)) now = Date.now();
+    if (now < lastObservedAt) {
+      count = 0;
+      reset = 0;
+    }
+    lastObservedAt = now;
+    if (reset <= now) {
+      count = 1;
+      reset = now + boundedWindowMs;
+      return false;
+    }
+    count += 1;
+    return count > boundedMaxFailures;
   };
 }
