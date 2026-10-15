@@ -7196,6 +7196,13 @@ test('release verification enforces the complete customer ingress security bound
   assert.match(deployScript, /\$base_url\/api\/health/);
   assert.match(deployScript, /x-robots-tag:\.\*noindex/);
   assert.match(deployScript, /cache-control:\.\*no-store/);
+  assert.match(deployScript, /verify_checkout_ingress\(\)/);
+  assert.match(deployScript, /--request POST[\s\S]*?--data '\{\}'[\s\S]*?\/api\/checkout/);
+  assert.equal((deployScript.match(/verify_checkout_ingress "/g) || []).length, 2);
+  assert.ok(
+    deployScript.lastIndexOf('verify_checkout_ingress "$PUBLIC_ORIGIN"') < deployScript.indexOf('release_verified=1'),
+    'a side-effect-free checkout POST must cross public TLS before rollback protection is discarded',
+  );
 
   const hstsHeaders = nginxConfig.match(/add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;/g) || [];
   assert.equal(hstsHeaders.length, 2, 'both canonical and www TLS servers must emit HSTS');

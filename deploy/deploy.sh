@@ -266,6 +266,43 @@ verify_customer_response_headers() {
   rm -f "$response_headers"
 }
 
+# A healthy page render does not prove that Nginx and the standalone runtime
+# preserve the public mutation contract used by the booking form. Exercise a
+# deliberately invalid, side-effect-free checkout request: it must reach the
+# application as JSON, be rejected before Stripe or Supabase work, and retain
+# the privacy/cache boundary required for every checkout response. This also
+# catches proxy drift that blocks POST, buffers/replaces JSON errors, or routes
+# /api/checkout somewhere other than the smoke-tested application.
+verify_checkout_ingress() {
+  local base_url="$1"
+  shift
+  local response_headers response_body status
+  response_headers="$(mktemp /tmp/qyroam-checkout-headers.XXXXXX)"
+  response_body="$(mktemp /tmp/qyroam-checkout-body.XXXXXX)"
+
+  status="$("$@" --request POST \
+    --header 'Content-Type: application/json' \
+    --data '{}' \
+    --dump-header "$response_headers" \
+    --output "$response_body" \
+    --write-out '%{http_code}' \
+    "$base_url/api/checkout")" || {
+      rm -f "$response_headers" "$response_body"
+      return 1
+    }
+
+  if [[ "$status" != "400" ]] ||
+     ! grep -Eiq '^content-type:[[:space:]]*application/json([[:space:]]*;|[[:space:]]*$)' "$response_headers" ||
+     ! grep -Eiq '^cache-control:.*no-store' "$response_headers" ||
+     ! grep -Eiq '^x-robots-tag:.*noindex' "$response_headers" ||
+     ! node -e "const fs=require('fs');const value=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(value?.error!=='Invalid checkout request.')process.exit(1)" "$response_body"; then
+    rm -f "$response_headers" "$response_body"
+    return 1
+  fi
+
+  rm -f "$response_headers" "$response_body"
+}
+
 echo "[6/11] Smoke-testing the production artifact"
 # A successful compilation does not prove that the standalone server can boot
 # or accept an order with the deployed runtime configuration. Test the exact
@@ -338,6 +375,10 @@ for sales_page in / /esim; do
 done
 if ! verify_customer_response_headers "http://127.0.0.1:${smoke_port}" curl --fail --silent --show-error --max-time 10; then
   echo "Built QY Roam artifact is missing required customer security or privacy headers" >&2
+  exit 1
+fi
+if ! verify_checkout_ingress "http://127.0.0.1:${smoke_port}" curl --silent --show-error --max-time 10; then
+  echo "Built QY Roam artifact does not preserve the checkout mutation contract" >&2
   exit 1
 fi
 cleanup_smoke
@@ -496,6 +537,11 @@ for sales_page in / /esim; do
 done
 if ! verify_customer_response_headers "$PUBLIC_ORIGIN" "${public_curl[@]}"; then
   echo "QY Roam public TLS ingress is missing required customer security or privacy headers" >&2
+  exit 1
+fi
+public_mutation_curl=(curl --noproxy '*' --resolve qyroam.com:443:127.0.0.1 --silent --show-error --max-time "$READINESS_CURL_TIMEOUT_SECONDS")
+if ! verify_checkout_ingress "$PUBLIC_ORIGIN" "${public_mutation_curl[@]}"; then
+  echo "QY Roam public TLS ingress does not preserve the checkout mutation contract" >&2
   exit 1
 fi
 
