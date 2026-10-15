@@ -9,6 +9,7 @@ import { getEsimPlan } from '@/lib/esimPlans';
 import { manualOrderReference, manualOrderSessionId } from '@/lib/manualOrderReference';
 import { tryAcquireAdminOpsConcurrency } from '@/lib/adminOpsConcurrency';
 import { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } from '@/lib/pocketWifiRentalPeriod';
+import { acknowledgedInventoryMutation } from '@/lib/inventoryMutation';
 
 export const dynamic = 'force-dynamic';
 
@@ -363,7 +364,7 @@ export async function POST(req: NextRequest) {
       // dispatch and return records but not how its original saleable balance
       // entered the fleet. The RPC creates the item and its opening movement
       // in one transaction.
-      const { error } = await db.rpc('qy_create_inventory_item', {
+      const { data, error } = await db.rpc('qy_create_inventory_item', {
         p_sku: row.sku,
         p_name: row.name,
         p_product_type: row.product_type,
@@ -376,6 +377,16 @@ export async function POST(req: NextRequest) {
         p_notes: row.notes,
       });
       if (error) throw error;
+      if (!acknowledgedInventoryMutation(data, {
+        sku: row.sku,
+        status: row.status,
+        quantityOnHand: row.quantity_on_hand,
+      })) {
+        return NextResponse.json({ error: 'Unable to verify the saved inventory item. Refresh the stock register before making another change.' }, {
+          status: 503,
+          headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' },
+        });
+      }
     } else if (action === 'inventory_adjust') {
       const movementType = text(body.movement_type, 40).toLowerCase() || 'adjustment';
       const reference = typeof body.reference === 'string' ? body.reference.trim() : '';
@@ -391,7 +402,14 @@ export async function POST(req: NextRequest) {
       if (movementType === 'write_off' && delta > -1) return NextResponse.json({ error: 'A write-off must decrease stock' }, { status: 400 });
       if (!reference) return NextResponse.json({ error: 'An inventory adjustment reference is required' }, { status: 400 });
       if (!validInventoryReference(reference)) return NextResponse.json({ error: 'Inventory references must be a single line of 120 characters or fewer' }, { status: 400 });
-      const { error } = await db.rpc('qy_adjust_inventory', { p_item_id: itemId, p_delta: delta, p_type: movementType, p_reference: reference, p_notes: text(body.notes, 1000) || null }); if (error) throw error;
+      const { data, error } = await db.rpc('qy_adjust_inventory', { p_item_id: itemId, p_delta: delta, p_type: movementType, p_reference: reference, p_notes: text(body.notes, 1000) || null });
+      if (error) throw error;
+      if (!acknowledgedInventoryMutation(data, { id: itemId })) {
+        return NextResponse.json({ error: 'Unable to verify the inventory adjustment. Refresh the stock register before making another change.' }, {
+          status: 503,
+          headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' },
+        });
+      }
     } else if (action === 'inventory_status') {
       const itemId = positiveSafeInteger(body.item_id);
       const status = text(body.status, 40).toLowerCase();
@@ -408,7 +426,7 @@ export async function POST(req: NextRequest) {
       // Status changes control whether a router can be dispatched. Keep them
       // in the inventory movement ledger instead of making an unaudited table
       // update that could silently restore a quarantined unit to saleable use.
-      const { error } = await db.rpc('qy_set_inventory_status', {
+      const { data, error } = await db.rpc('qy_set_inventory_status', {
         p_item_id: itemId,
         p_status: status,
         p_reference: reference,
@@ -417,6 +435,12 @@ export async function POST(req: NextRequest) {
       if (error) {
         if (/inventory item not found/i.test(error.message || '')) return NextResponse.json({ error: 'Inventory item not found' }, { status: 404 });
         throw error;
+      }
+      if (!acknowledgedInventoryMutation(data, { id: itemId, status })) {
+        return NextResponse.json({ error: 'Unable to verify the inventory status change. Refresh the stock register before making another change.' }, {
+          status: 503,
+          headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' },
+        });
       }
     } else if (action === 'customer_create') {
       const status = text(body.status, 40) || 'lead';

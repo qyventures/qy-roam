@@ -66,6 +66,7 @@ const { custodyReferenceIssue, normalizeCustodyReference, MAX_CUSTODY_REFERENCE_
 const { durablePaidOrderMatchesPaymentEvent, durableOrderMatchesFailedOrAlreadyPaidSession, durableOrderMatchesFailedSession, durableOrderMatchesPaidSession, durableOrderMatchesUnpaidOrAlreadyPaidSession } = require('../lib/durableOrderSnapshot.ts');
 const { databaseTimestampInstantEquals, exactDatabaseTimestampToken, exactStripeClaimToken } = require('../lib/stripeClaimToken.ts');
 const { exactRpcRow } = require('../lib/exactRpcRow.ts');
+const { acknowledgedInventoryMutation } = require('../lib/inventoryMutation.ts');
 const { parsePocketWifiAvailability, parsePocketWifiBookingTerms } = require('../lib/pocketWifiAvailability.ts');
 const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutResponse.ts');
 const { CUSTOMER_CHECKOUT_MAX_RECONCILIATION_ATTEMPTS, CUSTOMER_CHECKOUT_RECONCILIATION_TIMEOUT_MS, customerCheckoutRetryAfterMs } = require('../lib/customerCheckout.ts');
@@ -322,6 +323,36 @@ test('order-critical RPC acknowledgements require exactly one returned row', () 
   assert.equal((webhookRoute.match(/exactRpcRow\((?:persisted|claimed)\.data\)/g) || []).length, 3);
   assert.doesNotMatch(webhookRoute, /Array\.isArray\((?:persisted|claimed)\.data\)\?(?:persisted|claimed)\.data\[0\]/);
   assert.doesNotMatch(adminOrderRoute, /Array\.isArray\(data\) \? data\[0\] : data/);
+});
+
+test('inventory mutations acknowledge the exact item and committed stock state', () => {
+  const committed = {
+    id: 17,
+    sku: 'QY-WIFI-017',
+    status: 'quarantined',
+    quantity_on_hand: 2,
+    updated_at: '2026-10-16T09:02:03.123456+08:00',
+  };
+  assert.deepEqual(
+    acknowledgedInventoryMutation(committed, { id: 17, status: 'quarantined' }),
+    { id: 17, quantity_on_hand: 2, updated_at: committed.updated_at },
+  );
+  assert.deepEqual(
+    acknowledgedInventoryMutation([committed], { sku: 'QY-WIFI-017', quantityOnHand: 2 }),
+    { id: 17, quantity_on_hand: 2, updated_at: committed.updated_at },
+  );
+  for (const [value, expected] of [
+    [[committed, committed], { id: 17 }],
+    [{ ...committed, id: 18 }, { id: 17 }],
+    [{ ...committed, status: 'available' }, { id: 17, status: 'quarantined' }],
+    [{ ...committed, quantity_on_hand: 2.5 }, { id: 17 }],
+    [{ ...committed, updated_at: 'not-a-timestamp' }, { id: 17 }],
+  ]) assert.equal(acknowledgedInventoryMutation(value, expected), null);
+
+  assert.equal((adminOpsRoute.match(/acknowledgedInventoryMutation\(data,/g) || []).length, 3);
+  assert.match(adminOpsRoute, /Unable to verify the saved inventory item/);
+  assert.match(adminOpsRoute, /Unable to verify the inventory adjustment/);
+  assert.match(adminOpsRoute, /Unable to verify the inventory status change/);
 });
 
 test('Pocket WiFi custody references remain exact, single-line audit evidence', () => {
