@@ -273,6 +273,10 @@ test('checkout provenance accepts only bounded canonical Stripe metadata', () =>
 const requestId = 'checkout_request_123456';
 
 test('Stripe claim ownership preserves the database microsecond token exactly', () => {
+  assert.equal(exactDatabaseTimestampToken('2026-02-29T12:00:00Z'), null);
+  assert.equal(exactDatabaseTimestampToken('2026-01-01T24:00:00Z'), null);
+  assert.equal(exactDatabaseTimestampToken('2026-01-01T12:00:00+24:00'), null);
+  assert.equal(exactDatabaseTimestampToken('2024-02-29T12:00:00.123456+00:00'), '2024-02-29T12:00:00.123456+00:00');
   const databaseToken = '2026-10-03T07:50:54.123456+00:00';
   assert.equal(exactStripeClaimToken(databaseToken), databaseToken);
   assert.equal(exactDatabaseTimestampToken(databaseToken), databaseToken);
@@ -286,6 +290,14 @@ test('Stripe claim ownership preserves the database microsecond token exactly', 
   assert.match(webhookRoute, /exactStripeClaimToken\(result\.claim_started_at\)/);
   assert.doesNotMatch(webhookRoute, /new Date\(result\.claim_started_at\)\.toISOString\(\)/);
   assert.match(webhookRoute, /\.eq\('processing_started_at',processingStartedAt\)/);
+});
+
+test('admin order transitions preserve exact database versions and verify their commit acknowledgement', () => {
+  assert.match(adminOrderRoute, /exactDatabaseTimestampToken\(body\.expected_updated_at\)/);
+  assert.doesNotMatch(adminOrderRoute, /Date\.parse\(expectedUpdatedAt\)/);
+  assert.match(adminOrderRoute, /order\.id !== orderId \|\| order\.fulfilment_status !== status \|\| !updatedAt/);
+  assert.equal((adminOrderRoute.match(/acknowledgedOrderTransition\(Array\.isArray\(data\) \? data\[0\] : data, id, status\)/g) || []).length, 2);
+  assert.match(adminOrderRoute, /Unable to verify the saved order\. Refresh before making another change\./);
 });
 
 test('Pocket WiFi custody references remain exact, single-line audit evidence', () => {
@@ -4872,7 +4884,7 @@ test('admin fulfilment writes reject stale same-status saves using the exact ord
   assert.match(adminOrderActions, /expected_updated_at: expectedUpdatedAt/);
   assert.match(adminOrderActions, /setExpectedUpdatedAt\(result\.updated_at\)/);
   assert.match(adminOrderRoute, /p_expected_updated_at: expectedUpdatedAt/g);
-  assert.match(adminOrderRoute, /updated_at: order\.updated_at/g);
+  assert.match(adminOrderRoute, /updated_at: updatedAt/);
 
   const esimTransition = schema.slice(
     schema.indexOf('create or replace function public.qy_transition_esim_order'),

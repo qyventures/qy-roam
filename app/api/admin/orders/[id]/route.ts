@@ -15,6 +15,7 @@ import { custodyReferenceIssue, normalizeCustodyReference } from '@/lib/custodyR
 import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 import { tryAcquireAdminOpsConcurrency } from '@/lib/adminOpsConcurrency';
 import { tryAcquireAdminDeliveryConcurrency } from '@/lib/adminDeliveryConcurrency';
+import { exactDatabaseTimestampToken } from '@/lib/stripeClaimToken';
 
 export const runtime = 'nodejs';
 
@@ -64,6 +65,14 @@ function cancellationReason(value: unknown) {
   const reason = value.trim();
   if (reason.length < 5 || reason.length > 500 || /[\u0000-\u001f\u007f]/.test(reason)) return '';
   return reason;
+}
+
+function acknowledgedOrderTransition(value: unknown, orderId: number, status: string) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const order = value as { id?: unknown; fulfilment_status?: unknown; updated_at?: unknown };
+  const updatedAt = exactDatabaseTimestampToken(order.updated_at);
+  if (order.id !== orderId || order.fulfilment_status !== status || !updatedAt) return null;
+  return { id: orderId, fulfilment_status: status, updated_at: updatedAt };
 }
 
 function notesWithCancellationReason(existing: unknown, reason: string) {
@@ -151,10 +160,13 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   }
 
   const status = String(body.status || '');
-  const expectedUpdatedAt = typeof body.expected_updated_at === 'string' ? body.expected_updated_at : '';
+  // This database-authored value is an optimistic-lock token. Preserve its
+  // microseconds exactly and reject JavaScript-only date spellings before
+  // passing them to PostgREST/Postgres as a timestamptz parameter.
+  const expectedUpdatedAt = exactDatabaseTimestampToken(body.expected_updated_at);
   const id = Number(params.id);
   if (!Number.isSafeInteger(id) || id < 1) return NextResponse.json({ error: 'Invalid order id' }, { status: 400 });
-  if (!expectedUpdatedAt || !Number.isFinite(Date.parse(expectedUpdatedAt))) return NextResponse.json({ error: 'Invalid order version. Refresh before updating it.' }, { status: 400 });
+  if (!expectedUpdatedAt) return NextResponse.json({ error: 'Invalid order version. Refresh before updating it.' }, { status: 400 });
 
   // Fulfilment transitions mutate the same order and inventory ledgers as the
   // broader admin operations endpoint. Share its small database-work budget
@@ -319,9 +331,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       console.error('admin_pocket_wifi_transition_error');
       return NextResponse.json({ error: 'Unable to update order. Please try again or contact an administrator.' }, { status: 500 });
     }
-    const order = Array.isArray(data) ? data[0] : data;
-    if (!order?.id) return NextResponse.json({ error: 'Unable to update order' }, { status: 500 });
-    return NextResponse.json({ id: order.id, fulfilment_status: order.fulfilment_status, updated_at: order.updated_at }, { headers: { 'Cache-Control': 'no-store' } });
+    const order = acknowledgedOrderTransition(Array.isArray(data) ? data[0] : data, id, status);
+    if (!order) return NextResponse.json({ error: 'Unable to verify the saved order. Refresh before making another change.' }, { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' } });
+    return NextResponse.json(order, { headers: { 'Cache-Control': 'no-store' } });
   }
 
   // A digital hand-off is irreversible. Bind the paid-order check, expected
@@ -340,9 +352,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     console.error('admin_esim_transition_error');
     return NextResponse.json({ error: 'Unable to update order. Please try again or contact an administrator.' }, { status: 500 });
   }
-  const order = Array.isArray(data) ? data[0] : data;
-  if (!order?.id) return NextResponse.json({ error: 'Unable to update order' }, { status: 500 });
-  return NextResponse.json({ id: order.id, fulfilment_status: order.fulfilment_status, updated_at: order.updated_at }, { headers: { 'Cache-Control': 'no-store' } });
+  const order = acknowledgedOrderTransition(Array.isArray(data) ? data[0] : data, id, status);
+  if (!order) return NextResponse.json({ error: 'Unable to verify the saved order. Refresh before making another change.' }, { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' } });
+  return NextResponse.json(order, { headers: { 'Cache-Control': 'no-store' } });
   } catch {
     // Supabase normally returns PostgREST failures in the result object, but
     // its bounded transport can still throw on a network timeout, aborted
