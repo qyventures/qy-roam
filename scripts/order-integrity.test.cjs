@@ -314,6 +314,16 @@ test('recorded Pocket WiFi return dispositions stay visible and immutable', () =
   assert.match(adminOrderRoute, /status === 'returned' && existing\.data\.fulfilment_status !== 'returned'/);
 });
 
+test('admin fulfilment transitions refresh every server-owned operations ledger', () => {
+  assert.match(adminOrderActions, /import \{ useRouter \} from 'next\/navigation'/);
+  assert.match(adminOrderActions, /const router = useRouter\(\)/);
+  assert.match(adminOrderActions, /setMessage\('Saved'\);[\s\S]{0,700}router\.refresh\(\)/);
+  // A server refresh can deliver a newer row after another operator's write.
+  // Key the stateful control by the database version so React does not retain
+  // the prior status, evidence, or optimistic-concurrency token.
+  assert.match(adminPage, /<AdminOrderActions key=\{`\$\{o\.id\}:\$\{o\.updated_at\}`\}/);
+});
+
 test('admin fulfilment notes and cancellation evidence are rejected rather than silently truncated', () => {
   assert.match(adminOrderRoute, /const MAX_ORDER_NOTES_LENGTH = 2_500/);
   assert.match(adminOrderRoute, /Object\.prototype\.hasOwnProperty\.call\(body, 'notes'\)/);

@@ -1,11 +1,13 @@
 'use client';
 
 import { useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { allowedFulfilmentStatuses, isSupportedProduct } from '@/lib/orderLifecycle';
 import { adminMutationHeaders } from '@/lib/adminMutation';
 import { CustomerRequestTimeoutError, fetchCustomerJson } from '@/lib/clientRequest';
 
 export default function AdminOrderActions({ id, initialStatus, initialUpdatedAt, paymentStatus, productType = 'pocket_wifi', courierTracking = '', returnTracking = '', initialReturnDisposition = '', digitalDeliveryReference = '', inventoryItemId = null, inventoryItems = [], canRetryNotifications = false }: { id: number; initialStatus: string; initialUpdatedAt: string; paymentStatus: string | null; productType?: string | null; courierTracking?: string | null; returnTracking?: string | null; initialReturnDisposition?: string | null; digitalDeliveryReference?: string | null; inventoryItemId?: number | null; inventoryItems?: { id: number; name: string; sku: string; quantity_on_hand: number; status: string }[]; canRetryNotifications?: boolean }) {
+  const router = useRouter();
   const isEsim = productType === 'esim';
   const [currentStatus, setCurrentStatus] = useState(initialStatus);
   const [expectedUpdatedAt, setExpectedUpdatedAt] = useState(initialUpdatedAt);
@@ -69,6 +71,13 @@ export default function AdminOrderActions({ id, initialStatus, initialUpdatedAt,
       setExpectedUpdatedAt(result.updated_at);
       setStatus(result.fulfilment_status);
       setMessage('Saved');
+      // Dispatch and return transitions atomically change both the order and
+      // inventory ledgers. Revalidate the server-rendered dashboard after the
+      // mutation so stock counts, exception totals, and other operators'
+      // concurrent changes do not remain stale behind this locally updated
+      // control. The version-keyed component on the page remounts from the
+      // authoritative row returned by that refresh.
+      router.refresh();
     } catch (error) { setMessage(error instanceof CustomerRequestTimeoutError ? 'The update timed out. Refresh the order before retrying.' : error instanceof Error ? error.message : 'Could not save'); }
     finally { mutationInFlight.current = false; setSaving(false); }
   }
