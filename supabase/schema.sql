@@ -2479,73 +2479,6 @@ $$;
 revoke all on function public.qy_create_manual_esim_order(text,text,text,text,numeric,text,text,text,text,date,date,text) from public;
 grant execute on function public.qy_create_manual_esim_order(text,text,text,text,numeric,text,text,text,text,date,date,text) to service_role;
 
--- Presence checks cannot tell whether a deployed function or trigger still
--- has an older body with the same name. The application requires this exact
--- compatibility version before exposing Stripe Checkout, so applying new app
--- code without its matching schema fails closed before a customer can pay.
--- Keep this marker after every paid-order function it certifies: a migration
--- that fails partway through must not advertise the new contract. Increment
--- it together with the application constant whenever that contract changes.
-create or replace function public.qy_order_integrity_schema_version()
-returns integer
-language sql
-immutable
-security definer
-set search_path = pg_catalog
-as $$
-  -- Version 18 additionally certifies that a paid cancellation cannot lose
-  -- its operator-authored reconciliation reason through a later notes update.
-  -- Earlier versions also certify product-specific evidence boundaries,
-  -- monotonic delivery retry counts and claim-owned attempt timestamps.
-  -- Version 19 additionally certifies bounded Stripe order identities and
-  -- exact, untruncated Pocket WiFi custody-movement correlation. Version 20
-  -- also certifies insert-safe Stripe failure/settlement lifecycle checks.
-  -- Version 21 certifies the durable payment-confirmation timestamp boundary.
-  -- Version 22 additionally certifies exact Singapore postal codes for paid
-  -- Stripe Pocket WiFi delivery records. Version 23 certifies that readiness
-  -- rejects replica-only integrity triggers which are inert for application
-  -- writes. Version 24 additionally certifies the atomic eSIM delivery
-  -- transition and its service-role-only execution boundary. Version 25
-  -- certifies atomic, exact-idempotency creation for manual paid eSIM sales.
-  -- Version 27 additionally certifies the atomic, live reservation-to-Stripe
-  -- payment-capability hand-off used before a Pocket WiFi URL is exposed.
-  -- Version 28 additionally certifies the five-minute Stripe event recovery
-  -- lease shared by the webhook claim and admin exception classifier.
-  -- Version 29 additionally certifies database-authoritative accounting
-  -- period totals and exact paid-ledger reconciliation before a close.
-  -- Version 30 additionally certifies the closed paid/unpaid domain on every
-  -- newly written durable order payment state. Version 31 certifies that all
-  -- privileged order entry points reject fractional cents and values outside
-  -- the numeric(10,2) ledger range before PostgreSQL can round or overflow.
-  -- Version 32 additionally certifies exact optimistic version checks for
-  -- concurrent admin eSIM fulfilment updates. Version 33 certifies that a
-  -- cancelled paid order retains one immutable terminal cancellation reason.
-  -- Version 34 certifies claim-owned Stripe event settlement and immutable
-  -- webhook failure audit transitions.
-  -- Version 35 requires one atomic Pocket WiFi availability snapshot across
-  -- durable orders, temporary reservations and saleable physical stock.
-  -- Version 36 certifies the saturating retry-counter contract for Stripe,
-  -- fulfilment-email and Meta delivery claims, including a fresh ownership
-  -- timestamp when an integer counter has reached its storage ceiling.
-  -- Version 37 additionally certifies that accounting-period reconciliation
-  -- locks paid-order mutations until the matching close has been persisted.
-  -- Version 38 binds privileged paid-order writes to the same bounded,
-  -- single-line courier address contract enforced by webhook fulfilment.
-  -- Version 39 prevents one digital-delivery audit reference from settling
-  -- multiple eSIM orders, including concurrent service-role transitions.
-  -- Version 40 adds a product-specific audit for duplicate hand-offs inherited
-  -- from deployments that predate that transition guard. Version 41 makes the
-  -- active cancellation-evidence trigger part of the pre-payment readiness
-  -- assertion, so a partial migration cannot silently weaken that audit trail.
-  -- Version 42 binds every later Stripe payment transition to the exact
-  -- commercial snapshot stored by the Session's first durable event.
-  -- Version 43 binds public, manual and direct ledger writes to the supported
-  -- 90-day maximum Pocket WiFi rental period.
-  select 43;
-$$;
-revoke all on function public.qy_order_integrity_schema_version() from public;
-grant execute on function public.qy_order_integrity_schema_version() to service_role;
-
 -- Operations tables backing the protected admin area. Keep these in the same
 -- deployable schema as checkout: an otherwise healthy order database must not
 -- leave the fulfilment, inventory, reporting or CRM screens querying tables
@@ -3237,12 +3170,14 @@ begin
       email = coalesce(v_email, email),
       phone = coalesce(v_phone, phone),
       name = coalesce(nullif(trim(coalesce(new.customer_name, '')), ''), name),
-      total_orders = v_orders,
-      lifetime_value_sgd = v_lifetime_value,
-      last_order_at = v_last_order_at,
       updated_at = now()
     where id = v_customer_id;
   end if;
+  -- Totals and purchase recency are derived from the complete paid-order
+  -- ledger by the dedicated reconciliation function below. Do not duplicate
+  -- those assignments here: its aggregate variables are deliberately scoped
+  -- to qy_reconcile_customer_paid_totals, and referring to them in this
+  -- trigger would abort an existing customer's paid-order transaction.
   perform public.qy_reconcile_customer_paid_totals(v_customer_id);
 
   foreach v_previous_customer_id in array v_previous_customer_ids loop
@@ -3262,6 +3197,75 @@ drop trigger if exists qy_reconcile_customer_from_paid_order on public.orders;
 create trigger qy_reconcile_customer_from_paid_order
 after insert or update of payment_status, customer_name, email, phone, amount_sgd on public.orders
 for each row execute function public.qy_reconcile_customer_from_paid_order();
+
+-- Presence checks cannot tell whether a deployed function or trigger still
+-- has an older body with the same name. The application requires this exact
+-- compatibility version before exposing Stripe Checkout, so applying new app
+-- code without its matching schema fails closed before a customer can pay.
+-- Keep this marker after every paid-order function and trigger it certifies: a
+-- migration that fails partway through must not advertise the new contract.
+create or replace function public.qy_order_integrity_schema_version()
+returns integer
+language sql
+immutable
+security definer
+set search_path = pg_catalog
+as $$
+  -- Version 18 additionally certifies that a paid cancellation cannot lose
+  -- its operator-authored reconciliation reason through a later notes update.
+  -- Earlier versions also certify product-specific evidence boundaries,
+  -- monotonic delivery retry counts and claim-owned attempt timestamps.
+  -- Version 19 additionally certifies bounded Stripe order identities and
+  -- exact, untruncated Pocket WiFi custody-movement correlation. Version 20
+  -- also certifies insert-safe Stripe failure/settlement lifecycle checks.
+  -- Version 21 certifies the durable payment-confirmation timestamp boundary.
+  -- Version 22 additionally certifies exact Singapore postal codes for paid
+  -- Stripe Pocket WiFi delivery records. Version 23 certifies that readiness
+  -- rejects replica-only integrity triggers which are inert for application
+  -- writes. Version 24 additionally certifies the atomic eSIM delivery
+  -- transition and its service-role-only execution boundary. Version 25
+  -- certifies atomic, exact-idempotency creation for manual paid eSIM sales.
+  -- Version 27 additionally certifies the atomic, live reservation-to-Stripe
+  -- payment-capability hand-off used before a Pocket WiFi URL is exposed.
+  -- Version 28 additionally certifies the five-minute Stripe event recovery
+  -- lease shared by the webhook claim and admin exception classifier.
+  -- Version 29 additionally certifies database-authoritative accounting
+  -- period totals and exact paid-ledger reconciliation before a close.
+  -- Version 30 additionally certifies the closed paid/unpaid domain on every
+  -- newly written durable order payment state. Version 31 certifies that all
+  -- privileged order entry points reject fractional cents and values outside
+  -- the numeric(10,2) ledger range before PostgreSQL can round or overflow.
+  -- Version 32 additionally certifies exact optimistic version checks for
+  -- concurrent admin eSIM fulfilment updates. Version 33 certifies that a
+  -- cancelled paid order retains one immutable terminal cancellation reason.
+  -- Version 34 certifies claim-owned Stripe event settlement and immutable
+  -- webhook failure audit transitions.
+  -- Version 35 requires one atomic Pocket WiFi availability snapshot across
+  -- durable orders, temporary reservations and saleable physical stock.
+  -- Version 36 certifies the saturating retry-counter contract for Stripe,
+  -- fulfilment-email and Meta delivery claims, including a fresh ownership
+  -- timestamp when an integer counter has reached its storage ceiling.
+  -- Version 37 additionally certifies that accounting-period reconciliation
+  -- locks paid-order mutations until the matching close has been persisted.
+  -- Version 38 binds privileged paid-order writes to the same bounded,
+  -- single-line courier address contract enforced by webhook fulfilment.
+  -- Version 39 prevents one digital-delivery audit reference from settling
+  -- multiple eSIM orders, including concurrent service-role transitions.
+  -- Version 40 adds a product-specific audit for duplicate hand-offs inherited
+  -- from deployments that predate that transition guard. Version 41 makes the
+  -- active cancellation-evidence trigger part of the pre-payment readiness
+  -- assertion, so a partial migration cannot silently weaken that audit trail.
+  -- Version 42 binds every later Stripe payment transition to the exact
+  -- commercial snapshot stored by the Session's first durable event.
+  -- Version 43 binds public, manual and direct ledger writes to the supported
+  -- 90-day maximum Pocket WiFi rental period.
+  -- Version 44 additionally certifies that existing-customer CRM reconciliation
+  -- delegates ledger aggregates to qy_reconcile_customer_paid_totals instead
+  -- of referencing variables outside their PL/pgSQL scope.
+  select 44;
+$$;
+revoke all on function public.qy_order_integrity_schema_version() from public;
+grant execute on function public.qy_order_integrity_schema_version() to service_role;
 
 create index if not exists customers_normalized_email_idx on public.customers(lower(trim(email))) where email is not null;
 create index if not exists customers_normalized_phone_idx on public.customers(trim(phone)) where phone is not null;
