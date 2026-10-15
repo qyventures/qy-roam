@@ -15,6 +15,7 @@ export type DurableOrderSnapshot = {
   travel_start?: unknown;
   travel_end?: unknown;
   measurement_consent?: unknown;
+  payment_confirmed_at?: unknown;
 };
 
 function sgdCents(value: unknown) {
@@ -96,6 +97,30 @@ export function durableOrderMatchesPaidSession(
     // or partially repaired row instead of silently ignoring those fields at
     // the paid-order authority boundary.
     order.plan_id === null && order.data_allowance === null;
+}
+
+/**
+ * Prove that a paid persistence acknowledgement also retained the signed
+ * Stripe event time that authorized the payment transition. The commercial
+ * join above is necessary but not sufficient for the webhook: fulfilment and
+ * Purchase delivery must not begin when an old database function, malformed
+ * gateway response, or manual repair returned a paid row with a missing or
+ * different accounting timestamp.
+ */
+export function durablePaidOrderMatchesPaymentEvent(
+  order: DurableOrderSnapshot | null | undefined,
+  session: Stripe.Checkout.Session,
+  productType: QyRoamProductType,
+  eventCreated: number,
+) {
+  if (!durableOrderMatchesPaidSession(order, session, productType) ||
+    !Number.isSafeInteger(eventCreated) || eventCreated <= 0 ||
+    typeof order?.payment_confirmed_at !== 'string') {
+    return false;
+  }
+
+  const confirmedAt = Date.parse(order.payment_confirmed_at);
+  return Number.isFinite(confirmedAt) && confirmedAt === eventCreated * 1_000;
 }
 
 /**

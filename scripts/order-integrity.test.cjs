@@ -63,7 +63,7 @@ const { structurallyValidStripeSignatureHeader, stripeSignatureTimestampWithinTo
 const { paidFulfilmentDetailsIssue } = require('../lib/paidFulfilmentDetails.ts');
 const { exactNonnegativeCount } = require('../lib/exactCount.ts');
 const { custodyReferenceIssue, normalizeCustodyReference, MAX_CUSTODY_REFERENCE_LENGTH } = require('../lib/custodyReference.ts');
-const { durableOrderMatchesFailedOrAlreadyPaidSession, durableOrderMatchesFailedSession, durableOrderMatchesPaidSession, durableOrderMatchesUnpaidOrAlreadyPaidSession } = require('../lib/durableOrderSnapshot.ts');
+const { durablePaidOrderMatchesPaymentEvent, durableOrderMatchesFailedOrAlreadyPaidSession, durableOrderMatchesFailedSession, durableOrderMatchesPaidSession, durableOrderMatchesUnpaidOrAlreadyPaidSession } = require('../lib/durableOrderSnapshot.ts');
 const { exactDatabaseTimestampToken, exactStripeClaimToken } = require('../lib/stripeClaimToken.ts');
 const { parsePocketWifiAvailability, parsePocketWifiBookingTerms } = require('../lib/pocketWifiAvailability.ts');
 const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutResponse.ts');
@@ -4544,6 +4544,30 @@ test('an asynchronous-payment commitment acknowledges only its exact durable sna
   assert.equal(durableOrderMatchesUnpaidOrAlreadyPaidSession(pendingOrder, { ...session, status: 'open' }, 'pocket_wifi'), false);
 });
 
+test('paid persistence acknowledgements retain the exact signed payment event time', () => {
+  const eventCreated = 1_792_339_200;
+  const session = {
+    id: 'cs_live_paymentEventAck123', livemode: true, mode: 'payment',
+    status: 'complete', payment_status: 'paid', currency: 'sgd', amount_total: 1290,
+    metadata: {
+      product_type: 'esim', measurement_consent: 'essential', plan_id: 'jp-7d',
+      plan_name: 'Japan 7 Days', data_allowance: '1 GB/day', country: 'Japan',
+    },
+  };
+  const order = {
+    stripe_session_id: session.id, payment_status: 'paid', product_type: 'esim', amount_sgd: '12.90',
+    plan_id: 'jp-7d', plan_name: 'Japan 7 Days', data_allowance: '1 GB/day', country: 'Japan',
+    travel_start: null, travel_end: null, measurement_consent: 'essential',
+    payment_confirmed_at: new Date(eventCreated * 1000).toISOString(),
+  };
+
+  assert.equal(durablePaidOrderMatchesPaymentEvent(order, session, 'esim', eventCreated), true);
+  assert.equal(durablePaidOrderMatchesPaymentEvent({ ...order, payment_confirmed_at: null }, session, 'esim', eventCreated), false);
+  assert.equal(durablePaidOrderMatchesPaymentEvent({ ...order, payment_confirmed_at: new Date((eventCreated + 1) * 1000).toISOString() }, session, 'esim', eventCreated), false);
+  assert.equal(durablePaidOrderMatchesPaymentEvent(order, session, 'esim', eventCreated + 1), false);
+  assert.equal(durablePaidOrderMatchesPaymentEvent(order, session, 'esim', 1.5), false);
+});
+
 test('database enforces product-specific fulfilment status domains on new order writes', () => {
   // API validation is useful feedback for staff, but this constraint is the
   // final persistence boundary for webhook recovery and service-role work.
@@ -7737,16 +7761,16 @@ test('paid checkout replays require the same exact durable commercial snapshot a
 });
 
 test('Stripe webhook side effects require an exact durable persistence acknowledgement', () => {
-  assert.match(webhookRoute, /import \{ durableOrderMatchesPaidSession, durableOrderMatchesUnpaidOrAlreadyPaidSession \} from '@\/lib\/durableOrderSnapshot'/);
-  assert.match(webhookRoute, /paid && !durableOrderMatchesPaidSession\(persistedOrder,session,'pocket_wifi'\)/);
+  assert.match(webhookRoute, /import \{ durablePaidOrderMatchesPaymentEvent, durableOrderMatchesUnpaidOrAlreadyPaidSession \} from '@\/lib\/durableOrderSnapshot'/);
+  assert.match(webhookRoute, /paid && !durablePaidOrderMatchesPaymentEvent\(persistedOrder,session,'pocket_wifi',eventCreated\)/);
   assert.match(webhookRoute, /!paid && !durableOrderMatchesUnpaidOrAlreadyPaidSession\(persistedOrder,session,'pocket_wifi'\)/);
-  assert.match(webhookRoute, /paid && !durableOrderMatchesPaidSession\(persistedOrder,session,'esim'\)/);
+  assert.match(webhookRoute, /paid && !durablePaidOrderMatchesPaymentEvent\(persistedOrder,session,'esim',eventCreated\)/);
   assert.match(webhookRoute, /!paid && !durableOrderMatchesUnpaidOrAlreadyPaidSession\(persistedOrder,session,'esim'\)/);
 
   const persistenceBoundary = webhookRoute.indexOf("async function persistSession");
   const paidSideEffects = webhookRoute.indexOf('await deliverPaidOrderSideEffects', persistenceBoundary);
-  const wifiAcknowledgement = webhookRoute.indexOf("durableOrderMatchesPaidSession(persistedOrder,session,'pocket_wifi')", persistenceBoundary);
-  const esimAcknowledgement = webhookRoute.indexOf("durableOrderMatchesPaidSession(persistedOrder,session,'esim')", persistenceBoundary);
+  const wifiAcknowledgement = webhookRoute.indexOf("durablePaidOrderMatchesPaymentEvent(persistedOrder,session,'pocket_wifi',eventCreated)", persistenceBoundary);
+  const esimAcknowledgement = webhookRoute.indexOf("durablePaidOrderMatchesPaymentEvent(persistedOrder,session,'esim',eventCreated)", persistenceBoundary);
   assert.ok(wifiAcknowledgement > persistenceBoundary && esimAcknowledgement > wifiAcknowledgement);
   assert.ok(paidSideEffects > esimAcknowledgement, 'paid delivery must follow both product persistence guards');
 });
