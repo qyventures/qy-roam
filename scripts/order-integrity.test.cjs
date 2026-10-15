@@ -2703,7 +2703,7 @@ test('Pocket WiFi availability remains bound to the exact dates that were checke
   assert.match(homePage, /selectedBooking\.current = \{ country, start, end \}/);
   assert.match(homePage, /selectedBooking\.current\.country === checkedCountry && selectedBooking\.current\.start === checkedStart && selectedBooking\.current\.end === checkedEnd/);
   assert.match(homePage, /const availabilityMatchesSelection = availability\?\.checkedCountry === country && availability\?\.checkedStart === start && availability\?\.checkedEnd === end;/);
-  assert.match(homePage, /availabilityMatchesSelection && availability\?\.available \? `Reserve for S\$\$\{payableTotal\.toFixed\(2\)\}` : 'Check availability'/);
+  assert.match(homePage, /availabilityMatchesSelection && availability\?\.available && bookingTermsLoaded \? `Reserve for S\$\$\{payableTotal\.toFixed\(2\)\}` : 'Check availability'/);
 });
 
 test('only the latest Pocket WiFi availability request owns booking terms and loading state', () => {
@@ -8172,6 +8172,15 @@ test('initial Pocket WiFi booking terms require one coherent cent-precise price 
   assert.equal(parsePocketWifiBookingTerms({ courierFeeSgd: 4.5 }), null);
   assert.equal(parsePocketWifiBookingTerms({ minDeliveryLeadDays: 3, courierFeeSgd: 1.001 }), null);
   assert.equal(parsePocketWifiBookingTerms({ minDeliveryLeadDays: 366, courierFeeSgd: 0 }), null);
+
+  // The default fee value is only a calculation placeholder. A slow or
+  // failed terms request must not turn it into a customer-facing S$0 delivery
+  // promise or a reservable total.
+  assert.match(homePage, /const \[bookingTermsLoaded, setBookingTermsLoaded\] = useState\(false\)/);
+  assert.match(homePage, /setCourierFeeSgd\(terms\.courierFeeSgd\);\s*setBookingTermsLoaded\(true\)/);
+  assert.match(homePage, /setCourierFeeSgd\(data\.courierFeeSgd\);\s*setBookingTermsLoaded\(true\)/);
+  assert.match(homePage, /bookingTermsLoaded \? <>\{courierFeeSgd > 0/);
+  assert.match(homePage, /availability\?\.available && bookingTermsLoaded \? `Reserve for S\$\$\{payableTotal\.toFixed\(2\)\}` : 'Check availability'/);
 });
 
 test('Pocket WiFi rental duration is one shared customer and paid-order boundary', () => {
