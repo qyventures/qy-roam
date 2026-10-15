@@ -10,6 +10,7 @@ import { manualOrderReference, manualOrderSessionId } from '@/lib/manualOrderRef
 import { tryAcquireAdminOpsConcurrency } from '@/lib/adminOpsConcurrency';
 import { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } from '@/lib/pocketWifiRentalPeriod';
 import { acknowledgedInventoryMutation } from '@/lib/inventoryMutation';
+import { acknowledgedManualOrder } from '@/lib/manualOrderAcknowledgement';
 
 export const dynamic = 'force-dynamic';
 
@@ -295,7 +296,7 @@ export async function POST(req: NextRequest) {
         // oversell an overlapping travel period.
         const config = operationalConfig();
         if (!config) return NextResponse.json({ error: 'Pocket WiFi inventory configuration is unavailable' }, { status: 503 });
-        const { error } = await db.rpc('qy_create_manual_pocket_wifi_order', {
+        const { data, error } = await db.rpc('qy_create_manual_pocket_wifi_order', {
           p_stripe_session_id: row.stripe_session_id,
           p_customer_name: row.customer_name,
           p_email: row.email,
@@ -314,11 +315,18 @@ export async function POST(req: NextRequest) {
           }
           throw error;
         }
+        if (!acknowledgedManualOrder(data, {
+          stripeSessionId: row.stripe_session_id, productType: 'pocket_wifi',
+          fulfilmentStatus: initialStatus, amountCents,
+          customerName: row.customer_name, email: row.email, phone: row.phone,
+          planId: null, planName: row.plan_name, dataAllowance: null,
+          country: row.country, travelStart: row.travel_start, travelEnd: row.travel_end,
+        })) throw new Error('Manual Pocket WiFi order acknowledgement mismatch');
       } else {
         // Manual eSIM creation is an irreversible digital entitlement. Keep
         // first insert and exact retry comparison in one database transaction
         // instead of repairing a uniqueness race with a second API query.
-        const { error } = await db.rpc('qy_create_manual_esim_order', {
+        const { data, error } = await db.rpc('qy_create_manual_esim_order', {
           p_stripe_session_id: row.stripe_session_id,
           p_customer_name: row.customer_name,
           p_email: row.email,
@@ -338,6 +346,13 @@ export async function POST(req: NextRequest) {
           }
           throw error;
         }
+        if (!acknowledgedManualOrder(data, {
+          stripeSessionId: row.stripe_session_id, productType: 'esim',
+          fulfilmentStatus: initialStatus, amountCents,
+          customerName: row.customer_name, email: row.email, phone: row.phone,
+          planId: row.plan_id, planName: row.plan_name, dataAllowance: row.data_allowance,
+          country: row.country, travelStart: row.travel_start, travelEnd: row.travel_end,
+        })) throw new Error('Manual eSIM order acknowledgement mismatch');
       }
     } else if (action === 'inventory_create') {
       const quantityOnHand = nonNegativeInteger(body.quantity_on_hand);

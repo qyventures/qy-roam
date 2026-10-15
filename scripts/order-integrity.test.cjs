@@ -67,6 +67,7 @@ const { durablePaidOrderMatchesPaymentEvent, durableOrderMatchesFailedOrAlreadyP
 const { databaseTimestampInstantEquals, exactDatabaseTimestampToken, exactStripeClaimToken } = require('../lib/stripeClaimToken.ts');
 const { exactRpcRow } = require('../lib/exactRpcRow.ts');
 const { acknowledgedInventoryMutation } = require('../lib/inventoryMutation.ts');
+const { acknowledgedManualOrder } = require('../lib/manualOrderAcknowledgement.ts');
 const { parsePocketWifiAvailability, parsePocketWifiBookingTerms } = require('../lib/pocketWifiAvailability.ts');
 const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutResponse.ts');
 const { CUSTOMER_CHECKOUT_MAX_RECONCILIATION_ATTEMPTS, CUSTOMER_CHECKOUT_RECONCILIATION_TIMEOUT_MS, customerCheckoutRetryAfterMs } = require('../lib/customerCheckout.ts');
@@ -353,6 +354,47 @@ test('inventory mutations acknowledge the exact item and committed stock state',
   assert.match(adminOpsRoute, /Unable to verify the saved inventory item/);
   assert.match(adminOpsRoute, /Unable to verify the inventory adjustment/);
   assert.match(adminOpsRoute, /Unable to verify the inventory status change/);
+});
+
+test('manual paid sales acknowledge the exact durable commercial order', () => {
+  const expected = {
+    stripeSessionId: 'manual_0123456789abcdef0123456789abcdef0123456789abcdef',
+    productType: 'esim', fulfilmentStatus: 'awaiting_fulfilment', amountCents: 750,
+    customerName: 'Test Traveller', email: 'traveller@example.com', phone: null,
+    planId: 'jp-5d', planName: 'Japan · 5 days', dataAllowance: '1 GB/day',
+    country: 'Japan', travelStart: null, travelEnd: null,
+  };
+  const committed = {
+    id: 91, stripe_session_id: expected.stripeSessionId,
+    payment_status: 'paid', product_type: expected.productType,
+    fulfilment_status: expected.fulfilmentStatus, measurement_consent: 'essential',
+    amount_sgd: '7.50', customer_name: expected.customerName,
+    email: expected.email, phone: expected.phone, plan_id: expected.planId,
+    plan_name: expected.planName, data_allowance: expected.dataAllowance,
+    country: expected.country, travel_start: null, travel_end: null,
+    payment_confirmed_at: '2026-10-16T01:02:03.123456Z',
+    updated_at: '2026-10-16T09:02:03.123456+08:00',
+  };
+  assert.deepEqual(acknowledgedManualOrder([committed], expected), {
+    id: 91,
+    payment_confirmed_at: committed.payment_confirmed_at,
+    updated_at: committed.updated_at,
+  });
+  for (const changed of [
+    null,
+    [committed, committed],
+    { ...committed, stripe_session_id: `${expected.stripeSessionId}0` },
+    { ...committed, payment_status: 'pending' },
+    { ...committed, product_type: 'pocket_wifi' },
+    { ...committed, amount_sgd: '7.51' },
+    { ...committed, plan_id: 'jp-10d' },
+    { ...committed, measurement_consent: 'accepted' },
+    { ...committed, payment_confirmed_at: null },
+  ]) assert.equal(acknowledgedManualOrder(changed, expected), null);
+
+  assert.equal((adminOpsRoute.match(/acknowledgedManualOrder\(data,/g) || []).length, 2);
+  assert.match(adminOpsRoute, /Manual Pocket WiFi order acknowledgement mismatch/);
+  assert.match(adminOpsRoute, /Manual eSIM order acknowledgement mismatch/);
 });
 
 test('Pocket WiFi custody references remain exact, single-line audit evidence', () => {
