@@ -308,6 +308,45 @@ verify_checkout_ingress() {
   rm -f "$response_headers" "$response_body"
 }
 
+# Readiness proves that webhook secrets are configured, but not that Stripe's
+# POST routes exist in the standalone artifact or survive the public proxy.
+# Probe both the canonical endpoint and its migration alias with inert,
+# unsigned JSON. Rejection must happen at signature verification, before any
+# event parsing, durable claim, provider read, or order side effect.
+verify_webhook_ingress() {
+  local base_url="$1"
+  shift
+  local webhook_path response_headers response_body status
+  response_headers="$(mktemp /tmp/qyroam-webhook-headers.XXXXXX)"
+  response_body="$(mktemp /tmp/qyroam-webhook-body.XXXXXX)"
+
+  for webhook_path in /api/stripe/webhook /api/stripe-webhook; do
+    : > "$response_headers"
+    : > "$response_body"
+    status="$("$@" --request POST \
+      --header 'Content-Type: application/json' \
+      --data '{}' \
+      --dump-header "$response_headers" \
+      --output "$response_body" \
+      --write-out '%{http_code}' \
+      "${base_url}${webhook_path}")" || {
+        rm -f "$response_headers" "$response_body"
+        return 1
+      }
+
+    if [[ "$status" != "400" ]] ||
+       ! grep -Eiq '^content-type:[[:space:]]*application/json([[:space:]]*;|[[:space:]]*$)' "$response_headers" ||
+       ! grep -Eiq '^cache-control:.*no-store' "$response_headers" ||
+       ! grep -Eiq '^x-robots-tag:.*noindex' "$response_headers" ||
+       ! node -e "const fs=require('fs');const value=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(value?.error!=='Invalid signature')process.exit(1)" "$response_body"; then
+      rm -f "$response_headers" "$response_body"
+      return 1
+    fi
+  done
+
+  rm -f "$response_headers" "$response_body"
+}
+
 echo "[6/11] Smoke-testing the production artifact"
 # A successful compilation does not prove that the standalone server can boot
 # or accept an order with the deployed runtime configuration. Test the exact
@@ -384,6 +423,10 @@ if ! verify_customer_response_headers "http://127.0.0.1:${smoke_port}" curl --fa
 fi
 if ! verify_checkout_ingress "http://127.0.0.1:${smoke_port}" curl --silent --show-error --max-time 10; then
   echo "Built QY Roam artifact does not preserve the checkout mutation contract" >&2
+  exit 1
+fi
+if ! verify_webhook_ingress "http://127.0.0.1:${smoke_port}" curl --silent --show-error --max-time 10; then
+  echo "Built QY Roam artifact does not preserve the Stripe webhook ingress contract" >&2
   exit 1
 fi
 cleanup_smoke
@@ -547,6 +590,10 @@ fi
 public_mutation_curl=(curl --noproxy '*' --resolve qyroam.com:443:127.0.0.1 --silent --show-error --max-time "$READINESS_CURL_TIMEOUT_SECONDS")
 if ! verify_checkout_ingress "$PUBLIC_ORIGIN" "${public_mutation_curl[@]}"; then
   echo "QY Roam public TLS ingress does not preserve the checkout mutation contract" >&2
+  exit 1
+fi
+if ! verify_webhook_ingress "$PUBLIC_ORIGIN" "${public_mutation_curl[@]}"; then
+  echo "QY Roam public TLS ingress does not preserve the Stripe webhook ingress contract" >&2
   exit 1
 fi
 

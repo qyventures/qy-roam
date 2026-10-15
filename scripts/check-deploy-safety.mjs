@@ -137,6 +137,10 @@ assert.match(deploy, /verify_checkout_ingress\(\)/);
 assert.match(deploy, /for checkout_path in \/api\/checkout \/api\/esim-checkout/);
 assert.match(deploy, /--request POST[\s\S]*?Content-Type: text\/plain[\s\S]*?\$\{base_url\}\$\{checkout_path\}/);
 assert.match(deploy, /value\?\.error!==['"]Expected JSON request\./);
+assert.match(deploy, /verify_webhook_ingress\(\)/);
+assert.match(deploy, /for webhook_path in \/api\/stripe\/webhook \/api\/stripe-webhook/);
+assert.match(deploy, /--request POST[\s\S]*?Content-Type: application\/json[\s\S]*?--data '\{\}'[\s\S]*?\$\{base_url\}\$\{webhook_path\}/);
+assert.match(deploy, /value\?\.error!==['"]Invalid signature['"]/);
 assert.match(deploy, /content-security-policy:.*frame-ancestors/);
 assert.match(deploy, /content-security-policy:.*unsafe-eval/);
 assert.match(deploy, /cache-control:.*no-store/);
@@ -154,12 +158,20 @@ assert.ok(
   'the isolated artifact checkout mutation contract must be verified before restart',
 );
 assert.ok(
+  deploy.indexOf('verify_webhook_ingress "http://127.0.0.1:${smoke_port}"') < deploy.indexOf('echo "[10/11] Restarting service"'),
+  'the isolated artifact webhook ingress contract must be verified before restart',
+);
+assert.ok(
   deploy.lastIndexOf('verify_customer_response_headers "$PUBLIC_ORIGIN"') < deploy.indexOf('release_verified=1'),
   'public ingress response headers must be verified before the rollback artifact is discarded',
 );
 assert.ok(
   deploy.lastIndexOf('verify_checkout_ingress "$PUBLIC_ORIGIN"') < deploy.indexOf('release_verified=1'),
   'the public checkout mutation contract must be verified before the rollback artifact is discarded',
+);
+assert.ok(
+  deploy.lastIndexOf('verify_webhook_ingress "$PUBLIC_ORIGIN"') < deploy.indexOf('release_verified=1'),
+  'the public webhook ingress contract must be verified before the rollback artifact is discarded',
 );
 assert.ok(
   deploy.indexOf('Smoke-testing the production artifact') < deploy.indexOf('echo "[10/11] Restarting service"'),
