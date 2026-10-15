@@ -304,6 +304,16 @@ test('Pocket WiFi custody references remain exact, single-line audit evidence', 
   assert.match(schema, /trim\(p_return_tracking\) ~ '\[\[:cntrl:\]\]'/);
 });
 
+test('recorded Pocket WiFi return dispositions stay visible and immutable', () => {
+  assert.match(adminPage, /initialReturnDisposition=\{o\.return_disposition\}/);
+  assert.match(adminOrderActions, /useState\(initialReturnDisposition \|\| ''\)/);
+  assert.match(adminOrderActions, /disabled=\{\['returned','closed'\]\.includes\(currentStatus\)\}/);
+  assert.match(adminOrderRoute, /return_tracking,return_disposition,digital_delivery_reference/);
+  assert.match(adminOrderRoute, /returnDisposition !== existing\.data\.return_disposition/);
+  assert.match(adminOrderRoute, /return inspection disposition is immutable/);
+  assert.match(adminOrderRoute, /status === 'returned' && existing\.data\.fulfilment_status !== 'returned'/);
+});
+
 test('admin fulfilment notes and cancellation evidence are rejected rather than silently truncated', () => {
   assert.match(adminOrderRoute, /const MAX_ORDER_NOTES_LENGTH = 2_500/);
   assert.match(adminOrderRoute, /Object\.prototype\.hasOwnProperty\.call\(body, 'notes'\)/);

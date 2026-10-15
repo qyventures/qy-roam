@@ -170,7 +170,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   }
 
   try {
-  const existing = await supabase.from('orders').select('product_type,payment_status,fulfilment_status,dispatched_at,returned_at,courier_tracking,return_tracking,digital_delivery_reference,notes').eq('id', id).maybeSingle();
+  const existing = await supabase.from('orders').select('product_type,payment_status,fulfilment_status,dispatched_at,returned_at,courier_tracking,return_tracking,return_disposition,digital_delivery_reference,notes').eq('id', id).maybeSingle();
   if (existing.error) return NextResponse.json({ error: 'Unable to load order' }, { status: 500 });
   if (!existing.data) return NextResponse.json({ error: 'Order not found' }, { status: 404 });
   if (!validFulfilmentStatus(existing.data.product_type, status)) return NextResponse.json({ error: 'Invalid fulfilment status for this order' }, { status: 400 });
@@ -247,6 +247,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   if (existing.data.product_type === 'pocket_wifi' && existing.data.returned_at && typeof body.return_tracking === 'string' && returnTracking !== trackingValue(undefined, existing.data.return_tracking)) {
     return NextResponse.json({ error: 'The return receipt reference is immutable after a Pocket WiFi order is received. Record corrections in the order notes.' }, { status: 409 });
   }
+  if (existing.data.product_type === 'pocket_wifi' && existing.data.returned_at && typeof body.return_disposition === 'string' && returnDisposition !== existing.data.return_disposition) {
+    return NextResponse.json({ error: 'The return inspection disposition is immutable after a Pocket WiFi order is received. Record corrections in the order notes.' }, { status: 409 });
+  }
   if (existing.data.product_type === 'pocket_wifi' && typeof body.courier_tracking === 'string' && courierTracking) {
     const referenceIssue = custodyReferenceIssue(courierTracking);
     if (referenceIssue) return NextResponse.json({ error: referenceIssue }, { status: 400 });
@@ -282,7 +285,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   if (existing.data.product_type === 'pocket_wifi' && status === 'returned' && !returnTracking) {
     return NextResponse.json({ error: 'Return tracking or receipt reference is required before marking a Pocket WiFi order returned' }, { status: 400 });
   }
-  if (existing.data.product_type === 'pocket_wifi' && status === 'returned' && !['restock', 'quarantine', 'damaged'].includes(returnDisposition)) {
+  if (existing.data.product_type === 'pocket_wifi' && status === 'returned' && existing.data.fulfilment_status !== 'returned' && !['restock', 'quarantine', 'damaged'].includes(returnDisposition)) {
     return NextResponse.json({ error: 'Choose whether the returned Pocket WiFi unit is restocked, quarantined, or damaged' }, { status: 400 });
   }
 

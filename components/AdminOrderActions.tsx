@@ -5,7 +5,7 @@ import { allowedFulfilmentStatuses, isSupportedProduct } from '@/lib/orderLifecy
 import { adminMutationHeaders } from '@/lib/adminMutation';
 import { CustomerRequestTimeoutError, fetchCustomerJson } from '@/lib/clientRequest';
 
-export default function AdminOrderActions({ id, initialStatus, initialUpdatedAt, paymentStatus, productType = 'pocket_wifi', courierTracking = '', returnTracking = '', digitalDeliveryReference = '', inventoryItemId = null, inventoryItems = [], canRetryNotifications = false }: { id: number; initialStatus: string; initialUpdatedAt: string; paymentStatus: string | null; productType?: string | null; courierTracking?: string | null; returnTracking?: string | null; digitalDeliveryReference?: string | null; inventoryItemId?: number | null; inventoryItems?: { id: number; name: string; sku: string; quantity_on_hand: number; status: string }[]; canRetryNotifications?: boolean }) {
+export default function AdminOrderActions({ id, initialStatus, initialUpdatedAt, paymentStatus, productType = 'pocket_wifi', courierTracking = '', returnTracking = '', initialReturnDisposition = '', digitalDeliveryReference = '', inventoryItemId = null, inventoryItems = [], canRetryNotifications = false }: { id: number; initialStatus: string; initialUpdatedAt: string; paymentStatus: string | null; productType?: string | null; courierTracking?: string | null; returnTracking?: string | null; initialReturnDisposition?: string | null; digitalDeliveryReference?: string | null; inventoryItemId?: number | null; inventoryItems?: { id: number; name: string; sku: string; quantity_on_hand: number; status: string }[]; canRetryNotifications?: boolean }) {
   const isEsim = productType === 'esim';
   const [currentStatus, setCurrentStatus] = useState(initialStatus);
   const [expectedUpdatedAt, setExpectedUpdatedAt] = useState(initialUpdatedAt);
@@ -17,7 +17,7 @@ export default function AdminOrderActions({ id, initialStatus, initialUpdatedAt,
   // Returning a unit is the point at which capacity can be restored. Leave
   // this unset until staff consciously decide what inspection found instead
   // of silently treating an omitted field as a restock instruction.
-  const [returnDisposition, setReturnDisposition] = useState('');
+  const [returnDisposition, setReturnDisposition] = useState(initialReturnDisposition || '');
   const [cancellationReason, setCancellationReason] = useState('');
   const [inventoryItem, setInventoryItem] = useState(inventoryItemId ? String(inventoryItemId) : '');
   const [saving, setSaving] = useState(false);
@@ -112,7 +112,7 @@ export default function AdminOrderActions({ id, initialStatus, initialUpdatedAt,
     {!isEsim && <>
       <input aria-label="Courier tracking" placeholder="Courier tracking / delivery reference" value={courier} onChange={e=>setCourier(e.target.value)} readOnly={['dispatched','with_customer','return_due','returned','closed'].includes(currentStatus)} />
       <input aria-label="Return tracking" placeholder="Return tracking / receipt reference" value={returned} onChange={e=>setReturned(e.target.value)} readOnly={['returned','closed'].includes(currentStatus)} />
-      {status === 'returned' && <select aria-label="Return disposition" value={returnDisposition} onChange={e=>setReturnDisposition(e.target.value)}>
+      {status === 'returned' && <select aria-label="Return disposition" value={returnDisposition} onChange={e=>setReturnDisposition(e.target.value)} disabled={['returned','closed'].includes(currentStatus)}>
         <option value="" disabled>Choose inspection disposition</option>
         <option value="restock">Restock after receipt</option>
         <option value="quarantine">Quarantine for inspection</option>
