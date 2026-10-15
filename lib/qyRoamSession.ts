@@ -6,6 +6,7 @@ import { parseExactIsoDate, validCheckoutRequestId } from './checkoutValidation'
 import { validQyRoamProvenance } from './orderProvenance';
 import { operationalConfig } from './operationalConfig';
 import { pocketWifiRentalCents } from './pocketWifiPricing';
+import { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } from './pocketWifiRentalPeriod';
 
 export type QyRoamProductType = 'esim' | 'pocket_wifi';
 
@@ -136,8 +137,8 @@ export function validateQyRoamSession(session: Stripe.Checkout.Session): QyRoamS
     const start = parseExactIsoDate(session.metadata?.start);
     const end = parseExactIsoDate(session.metadata?.end);
     if (!start || !end || end < start) return { valid: false, reason: 'invalid Pocket WiFi travel dates' };
-    const days = Math.floor((end.getTime() - start.getTime()) / 86_400_000) + 1;
-    if (days < 1 || days > 90 || session.metadata?.days !== String(days)) {
+    const days = pocketWifiRentalDays(start, end);
+    if (days < 1 || days > MAX_POCKET_WIFI_RENTAL_DAYS || session.metadata?.days !== String(days)) {
       return { valid: false, reason: 'Pocket WiFi rental duration does not match its dates' };
     }
 

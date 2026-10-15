@@ -16,6 +16,7 @@ import {
 import { availabilityAttemptLimited, availabilityGloballyLimited } from '@/lib/checkoutRateLimit';
 import { tryAcquireAvailabilityConcurrency } from '@/lib/availabilityConcurrency';
 import { scanActivePocketWifiStripeHolds } from '@/lib/pocketWifiStripeHolds';
+import { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } from '@/lib/pocketWifiRentalPeriod';
 
 export const dynamic = 'force-dynamic';
 
@@ -98,7 +99,7 @@ export async function GET(req: NextRequest) {
   if (!config) return NextResponse.json({ available: false, remaining: 0, inventoryMode: 'unavailable', error: 'Live availability is temporarily unavailable. Please try again shortly or contact +65 8032 7183.' }, { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '30' } });
   const minLeadDays = config.minDeliveryLeadDays;
   const earliest = operationalIsoDateAfter(minLeadDays);
-  const rentalDays = Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
+  const rentalDays = pocketWifiRentalDays(start, end);
   // These two values are public booking terms rather than secrets. Return
   // them even for an invalid date request so a browser built with an older
   // default can immediately correct its picker after operations changes a
@@ -109,7 +110,7 @@ export async function GET(req: NextRequest) {
     courierFeeSgd: config.courierFeeCents / 100,
   };
   if (start.toISOString().slice(0, 10) < earliest) return NextResponse.json({ available: false, ...bookingTerms, error: `Please book at least ${minLeadDays} day${minLeadDays === 1 ? '' : 's'} before departure.` }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
-  if (rentalDays < 1 || rentalDays > 90) return NextResponse.json({ available: false, ...bookingTerms, error: 'Bookings must be between 1 and 90 days.' }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
+  if (rentalDays < 1 || rentalDays > MAX_POCKET_WIFI_RENTAL_DAYS) return NextResponse.json({ available: false, ...bookingTerms, error: `Bookings must be between 1 and ${MAX_POCKET_WIFI_RENTAL_DAYS} days.` }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
 
   // Only a currently bookable range can proceed to configuration, schema,
   // Stripe, or Supabase checks. Count that provider-capable request against

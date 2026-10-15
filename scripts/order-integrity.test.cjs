@@ -29,6 +29,7 @@ const { operationalIsoDate, operationalIsoDateAfter, operationalDaysFromToday } 
 const { POCKET_WIFI_RETURN_GRACE_DAYS } = require('../lib/pocketWifiReturns.ts');
 const { WIFI_BENCHMARK, WIFI_PLANS } = require('../lib/wifiPlans.ts');
 const { pocketWifiRentalCents, sgdFromCents } = require('../lib/pocketWifiPricing.ts');
+const { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } = require('../lib/pocketWifiRentalPeriod.ts');
 const { allowedFulfilmentStatuses, fulfilmentNotificationActionable, validFulfilmentTransition, STRIPE_EVENT_CLAIM_STALE_MS, STRIPE_EVENT_CLAIM_CLOCK_SKEW_MS, stripeEventClaimInProgress } = require('../lib/orderLifecycle.ts');
 const { MAX_POCKET_WIFI_INVENTORY, operationalConfig } = require('../lib/operationalConfig.ts');
 const { validStripeCheckoutSessionId, validStripeCheckoutSessionIdForMode } = require('../lib/stripeSessionId.ts');
@@ -108,6 +109,7 @@ const esimPage = fs.readFileSync(require.resolve('../app/esim/page.tsx'), 'utf8'
 const customerCheckout = fs.readFileSync(require.resolve('../lib/customerCheckout.ts'), 'utf8');
 const esimLayout = fs.readFileSync(require.resolve('../app/esim/layout.tsx'), 'utf8');
 const homePage = fs.readFileSync(require.resolve('../app/page.tsx'), 'utf8');
+const qyRoamSessionSource = fs.readFileSync(require.resolve('../lib/qyRoamSession.ts'), 'utf8');
 const manualOrderForm = fs.readFileSync(require.resolve('../components/ManualOrderForm.tsx'), 'utf8');
 const adminOpsForms = fs.readFileSync(require.resolve('../components/AdminOpsForms.tsx'), 'utf8');
 const adminOpsRoute = fs.readFileSync(require.resolve('../app/api/admin/ops/route.ts'), 'utf8');
@@ -3061,7 +3063,7 @@ test('provider-backed public routes retain an aggregate overload ceiling across 
 test('malformed checkout traffic cannot exhaust the shared Stripe work budget', () => {
   const pocketGlobalLimit = wifiCheckoutRoute.indexOf('if(checkoutGloballyLimited())');
   assert.ok(pocketGlobalLimit > wifiCheckoutRoute.indexOf("if(!wifiPlan||!daily||!startDate||!endDate||endDate<startDate)"));
-  assert.ok(pocketGlobalLimit > wifiCheckoutRoute.indexOf('if(days<1||days>90)'));
+  assert.ok(pocketGlobalLimit > wifiCheckoutRoute.indexOf('if(days<1||days>MAX_POCKET_WIFI_RENTAL_DAYS)'));
   assert.ok(pocketGlobalLimit < wifiCheckoutRoute.indexOf('const stripe=createStripeClient(key)'));
 
   const esimGlobalLimit = esimCheckoutRoute.indexOf('if (checkoutGloballyLimited())');
@@ -3078,7 +3080,7 @@ test('rejected availability ranges cannot exhaust the shared provider-work budge
   // rather than the older URLSearchParams#get implementation it replaced.
   const dateParsing = availabilityRoute.indexOf("const startValues = req.nextUrl.searchParams.getAll('start')");
   const pastDateRejection = availabilityRoute.indexOf("if (start.toISOString().slice(0, 10) < earliest)");
-  const rentalLengthRejection = availabilityRoute.indexOf('if (rentalDays < 1 || rentalDays > 90)');
+  const rentalLengthRejection = availabilityRoute.indexOf('if (rentalDays < 1 || rentalDays > MAX_POCKET_WIFI_RENTAL_DAYS)');
   const globalLimit = availabilityRoute.indexOf('if (availabilityGloballyLimited())');
   const stripeConfiguration = availabilityRoute.indexOf('const stripeKey = process.env.STRIPE_SECRET_KEY?.trim()');
 
@@ -7972,4 +7974,16 @@ test('initial Pocket WiFi booking terms require one coherent cent-precise price 
   assert.equal(parsePocketWifiBookingTerms({ courierFeeSgd: 4.5 }), null);
   assert.equal(parsePocketWifiBookingTerms({ minDeliveryLeadDays: 3, courierFeeSgd: 1.001 }), null);
   assert.equal(parsePocketWifiBookingTerms({ minDeliveryLeadDays: 366, courierFeeSgd: 0 }), null);
+});
+
+test('Pocket WiFi rental duration is one shared customer and paid-order boundary', () => {
+  assert.equal(MAX_POCKET_WIFI_RENTAL_DAYS, 90);
+  const start = new Date('2026-10-15T00:00:00Z');
+  assert.equal(pocketWifiRentalDays(start, new Date('2027-01-12T00:00:00Z')), 90);
+  assert.equal(pocketWifiRentalDays(start, new Date('2027-01-13T00:00:00Z')), 91);
+
+  assert.match(homePage, /days > MAX_POCKET_WIFI_RENTAL_DAYS/);
+  assert.match(wifiCheckoutRoute, /days>MAX_POCKET_WIFI_RENTAL_DAYS/);
+  assert.match(availabilityRoute, /rentalDays > MAX_POCKET_WIFI_RENTAL_DAYS/);
+  assert.match(qyRoamSessionSource, /days > MAX_POCKET_WIFI_RENTAL_DAYS/);
 });

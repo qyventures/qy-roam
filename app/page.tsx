@@ -12,6 +12,7 @@ import { fetchCustomerCheckout } from '../lib/customerCheckout';
 import { esimPromoIsActive } from '../lib/esimPlans';
 import { parsePocketWifiAvailability, parsePocketWifiBookingTerms, type PocketWifiAvailability } from '../lib/pocketWifiAvailability';
 import { pocketWifiCheckoutFingerprint } from '../lib/checkoutFingerprint';
+import { MAX_POCKET_WIFI_RENTAL_DAYS } from '../lib/pocketWifiRentalPeriod';
 
 const plans = WIFI_PLANS;
 
@@ -193,6 +194,7 @@ export default function Home() {
     if (!start || !end) return 'Choose both travel dates.';
     if (start < earliestStart) return `Please book at least ${deliveryLeadDays} day${deliveryLeadDays === 1 ? '' : 's'} before departure.`;
     if (end < start) return 'End date must be on or after the start date.';
+    if (days > MAX_POCKET_WIFI_RENTAL_DAYS) return `Bookings must be between 1 and ${MAX_POCKET_WIFI_RENTAL_DAYS} days.`;
     return '';
   }
 

@@ -23,6 +23,7 @@ import { stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhook
 import { tryAcquireCheckoutConcurrency, tryAcquireCheckoutUpload } from '@/lib/checkoutConcurrency';
 import { scanActivePocketWifiStripeHolds } from '@/lib/pocketWifiStripeHolds';
 import { stripeMeasurementConsentDowngrade } from '@/lib/stripeMeasurementConsent';
+import { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } from '@/lib/pocketWifiRentalPeriod';
 
 export const runtime = 'nodejs';
 
@@ -222,7 +223,7 @@ export async function POST(req: Request) {
   if(start<today) return NextResponse.json({error:'Travel start date cannot be in the past.'},{status:400});
   const minLeadDays=config.minDeliveryLeadDays, earliest=operationalIsoDateAfter(minLeadDays);
   if(start<earliest) return NextResponse.json({error:`Please book at least ${minLeadDays} day${minLeadDays===1?'':'s'} before departure so we can arrange delivery. Contact +65 8032 7183 for urgent trips.`},{status:400});
-  const days=Math.floor((endDate.getTime()-startDate.getTime())/86400000)+1; if(days<1||days>90) return NextResponse.json({error:'Bookings must be between 1 and 90 days.'},{status:400});
+  const days=pocketWifiRentalDays(startDate,endDate); if(days<1||days>MAX_POCKET_WIFI_RENTAL_DAYS) return NextResponse.json({error:`Bookings must be between 1 and ${MAX_POCKET_WIFI_RENTAL_DAYS} days.`},{status:400});
   // Resolve the deployment-controlled redirect origin before any Stripe read
   // or inventory reservation. A malformed production URL is deterministic:
   // no Checkout Session can be created safely. Discovering it only after the
