@@ -120,3 +120,27 @@ export function createGlobalFailedAdminAuthLimiter(
     return count > boundedMaxFailures;
   };
 }
+
+type AdminAuthRateLimitGlobal = typeof globalThis & {
+  __qyRoamFailedAdminAuthLimiter?: ReturnType<typeof createFailedAdminAuthLimiter>;
+  __qyRoamGlobalFailedAdminAuthLimiter?: ReturnType<typeof createGlobalFailedAdminAuthLimiter>;
+};
+
+// Next can evaluate a module in more than one graph during a process lifetime.
+// Keep the public Basic Auth failure budget on globalThis so re-evaluating the
+// middleware dependency does not hand an attacker another complete allowance.
+// This remains instance-local protection; production ingress should still be
+// the deployment-wide boundary if the service is scaled to multiple workers.
+const shared = globalThis as AdminAuthRateLimitGlobal;
+const failedAdminAuthLimiter = shared.__qyRoamFailedAdminAuthLimiter ??=
+  createFailedAdminAuthLimiter();
+const globalFailedAdminAuthLimiter = shared.__qyRoamGlobalFailedAdminAuthLimiter ??=
+  createGlobalFailedAdminAuthLimiter();
+
+export function failedAdminAuthLimited(req: Request, now = Date.now()) {
+  return failedAdminAuthLimiter(req, now);
+}
+
+export function failedAdminAuthGloballyLimited(now = Date.now()) {
+  return globalFailedAdminAuthLimiter(now);
+}

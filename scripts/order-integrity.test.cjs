@@ -1557,6 +1557,30 @@ test('rotating-address admin authentication failures share an aggregate ceiling'
   assert.equal(conservative(101), true);
 });
 
+test('admin authentication failure budgets survive duplicate Next module graphs', () => {
+  const first = requireFresh('../lib/adminAuthRateLimit.ts');
+  const second = requireFresh('../lib/adminAuthRateLimit.ts');
+  assert.notEqual(first, second);
+
+  const client = new Request('https://qyroam.com/admin', {
+    headers: { 'x-real-ip': '198.51.100.213' },
+  });
+  const clientWindow = 9_200_000_000_000;
+  for (let index = 0; index < first.ADMIN_AUTH_MAX_FAILURES; index += 1) {
+    assert.equal((index % 2 === 0 ? first : second).failedAdminAuthLimited(client, clientWindow), false);
+  }
+  assert.equal(second.failedAdminAuthLimited(client, clientWindow), true);
+
+  const globalWindow = clientWindow + first.ADMIN_AUTH_FAILURE_WINDOW_MS + 1;
+  for (let index = 0; index < first.ADMIN_AUTH_GLOBAL_MAX_FAILURES; index += 1) {
+    assert.equal((index % 2 === 0 ? first : second).failedAdminAuthGloballyLimited(globalWindow), false);
+  }
+  assert.equal(first.failedAdminAuthGloballyLimited(globalWindow), true);
+
+  assert.match(middleware, /failedAdminAuthGloballyLimited, failedAdminAuthLimited/);
+  assert.doesNotMatch(middleware, /createGlobalFailedAdminAuthLimiter/);
+});
+
 test('SMTP relay success is bound to the exact fulfilment message identity', () => {
   const messageId = '<qyroam-order@example.com>';
   assert.equal(fulfilmentRelayAcknowledged(JSON.stringify({ delivered: true, message_id: messageId }), messageId), true);

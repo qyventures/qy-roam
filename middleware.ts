@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminCredentials, hasRequiredAdminCredentials } from './lib/runtimeConfig';
-import { ADMIN_AUTH_FAILURE_WINDOW_MS, createFailedAdminAuthLimiter, createGlobalFailedAdminAuthLimiter } from './lib/adminAuthRateLimit';
+import { ADMIN_AUTH_FAILURE_WINDOW_MS, createFailedAdminAuthLimiter, failedAdminAuthGloballyLimited, failedAdminAuthLimited } from './lib/adminAuthRateLimit';
 import { ADMIN_MUTATION_HEADER, ADMIN_MUTATION_HEADER_VALUE } from './lib/adminMutation';
 import { validStripeCheckoutSessionId } from './lib/stripeSessionId';
 
@@ -10,9 +10,6 @@ import { validStripeCheckoutSessionId } from './lib/stripeSessionId';
 // leaves substantially more room than a normal username/password pair.
 const MAX_BASIC_AUTH_HEADER_LENGTH = 8_192;
 const MAX_BASIC_AUTH_DECODED_LENGTH = 4_096;
-const failedAdminAuthLimited = createFailedAdminAuthLimiter();
-const failedAdminAuthGloballyLimited = createGlobalFailedAdminAuthLimiter();
-
 // The success and booking pages retrieve a Stripe Checkout Session and can
 // also query the paid-order ledger. Unlike API checkout rate limits, this
 // boundary must run before a server component is rendered; otherwise even a
