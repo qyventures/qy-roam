@@ -68,6 +68,7 @@ const { databaseTimestampInstantEquals, exactDatabaseTimestampToken, exactStripe
 const { exactRpcRow } = require('../lib/exactRpcRow.ts');
 const { acknowledgedInventoryMutation } = require('../lib/inventoryMutation.ts');
 const { acknowledgedManualOrder } = require('../lib/manualOrderAcknowledgement.ts');
+const { acknowledgedClosingPeriod } = require('../lib/closingPeriodAcknowledgement.ts');
 const { parsePocketWifiAvailability, parsePocketWifiBookingTerms } = require('../lib/pocketWifiAvailability.ts');
 const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutResponse.ts');
 const { CUSTOMER_CHECKOUT_MAX_RECONCILIATION_ATTEMPTS, CUSTOMER_CHECKOUT_RECONCILIATION_TIMEOUT_MS, customerCheckoutRetryAfterMs } = require('../lib/customerCheckout.ts');
@@ -3161,6 +3162,54 @@ test('accounting period saves are idempotent while open and immutable once close
   assert.match(schema, /qy_roam_closing_period:/);
   assert.match(schema, /closed accounting period cannot be replaced/);
   assert.match(productionReadiness, /qy_record_closing_period/);
+});
+
+test('accounting period saves acknowledge the exact committed financial snapshot', () => {
+  const expected = {
+    periodStart: '2026-09-01', periodEnd: '2026-09-30', locked: true,
+    grossSalesCents: 125050, refundsCents: 5100, netSalesCents: 119950,
+    feesCents: 3750, cogsCents: 80000, grossProfitCents: 36200,
+    closedBy: 'Finance Operator', notes: 'September close',
+  };
+  const committed = {
+    id: 12, period_start: expected.periodStart, period_end: expected.periodEnd,
+    status: 'closed', gross_sales_sgd: '1250.50', refunds_sgd: '51.00',
+    net_sales_sgd: '1199.50', fees_sgd: '37.50', cogs_sgd: '800.00',
+    gross_profit_sgd: '362.00', closed_by: expected.closedBy,
+    closed_at: '2026-10-01T01:02:03.123456Z', notes: expected.notes,
+    created_at: '2026-10-01T01:02:03.123456Z',
+    updated_at: '2026-10-01T01:02:03.123456Z',
+  };
+  assert.deepEqual(acknowledgedClosingPeriod([committed], expected), {
+    id: 12, status: 'closed', created_at: committed.created_at,
+    updated_at: committed.updated_at, closed_at: committed.closed_at,
+  });
+  assert.deepEqual(acknowledgedClosingPeriod({
+    ...committed, status: 'open', closed_by: null, closed_at: null,
+  }, { ...expected, locked: false, closedBy: null }), {
+    id: 12, status: 'open', created_at: committed.created_at,
+    updated_at: committed.updated_at, closed_at: null,
+  });
+  for (const changed of [
+    null,
+    [committed, committed],
+    { ...committed, period_end: '2026-10-01' },
+    { ...committed, gross_sales_sgd: '1250.51' },
+    { ...committed, gross_profit_sgd: '362.01' },
+    { ...committed, closed_at: null },
+    { ...committed, notes: 'different close' },
+    { ...committed, updated_at: 'not-a-timestamp' },
+  ]) assert.equal(acknowledgedClosingPeriod(changed, expected), null);
+
+  // Loss-making periods are valid accounting records and still require an
+  // exact signed-cent acknowledgement rather than a non-negative parser.
+  assert.ok(acknowledgedClosingPeriod({
+    ...committed, net_sales_sgd: '-10.00', gross_profit_sgd: '-847.50',
+  }, { ...expected, netSalesCents: -1000, grossProfitCents: -84750 }));
+
+  assert.match(adminOpsRoute, /const \{ data, error \} = await db\.rpc\('qy_record_closing_period'/);
+  assert.match(adminOpsRoute, /acknowledgedClosingPeriod\(data,/);
+  assert.match(adminOpsRoute, /Accounting period acknowledgement mismatch/);
 });
 
 test('accounting period closes reconcile exact cents against the paid-order ledger', () => {

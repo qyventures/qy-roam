@@ -11,6 +11,7 @@ import { tryAcquireAdminOpsConcurrency } from '@/lib/adminOpsConcurrency';
 import { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } from '@/lib/pocketWifiRentalPeriod';
 import { acknowledgedInventoryMutation } from '@/lib/inventoryMutation';
 import { acknowledgedManualOrder } from '@/lib/manualOrderAcknowledgement';
+import { acknowledgedClosingPeriod } from '@/lib/closingPeriodAcknowledgement';
 
 export const dynamic = 'force-dynamic';
 
@@ -533,11 +534,12 @@ export async function POST(req: NextRequest) {
       const closedBy = text(body.closed_by, 100);
       if (lock && !closedBy) return NextResponse.json({ error: 'Closed accounting periods require an accountable operator name' }, { status: 400 });
       const gross = await paidOrderGrossForPeriod(db, dates.start!, dates.end!); const refunds = refundsCents / 100, fees = feesCents / 100, cogs = cogsCents / 100, net = gross - refunds, gp = net - fees - cogs;
-      const { error } = await db.rpc('qy_record_closing_period', {
+      const notes = text(body.notes, 1500) || null;
+      const { data, error } = await db.rpc('qy_record_closing_period', {
         p_period_start: start, p_period_end: end, p_lock: lock,
         p_gross_sales_sgd: gross, p_refunds_sgd: refunds, p_net_sales_sgd: net,
         p_fees_sgd: fees, p_cogs_sgd: cogs, p_gross_profit_sgd: gp,
-        p_closed_by: closedBy || null, p_notes: text(body.notes, 1500) || null,
+        p_closed_by: closedBy || null, p_notes: notes,
       });
       if (error) {
         if (/closed accounting period|multiple accounting records/i.test(error.message || '')) return NextResponse.json({ error: error.message }, { status: 409 });
@@ -546,6 +548,13 @@ export async function POST(req: NextRequest) {
         }
         throw error;
       }
+      if (!acknowledgedClosingPeriod(data, {
+        periodStart: start, periodEnd: end, locked: lock,
+        grossSalesCents: Math.round(gross * 100), refundsCents,
+        netSalesCents: Math.round(net * 100), feesCents, cogsCents,
+        grossProfitCents: Math.round(gp * 100),
+        closedBy: lock ? closedBy : null, notes,
+      })) throw new Error('Accounting period acknowledgement mismatch');
     } else return NextResponse.json({ error: 'Unsupported action' }, { status: 400 });
 
     return NextResponse.json({ ok: true });
