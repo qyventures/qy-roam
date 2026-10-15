@@ -2053,6 +2053,22 @@ test('Pocket WiFi checkout cancellation restores only a bounded same-tab booking
   assert.doesNotMatch(homePage, /url\.searchParams\.get\('(country|start|end|promoCode)'\)/);
 });
 
+test('eSIM checkout cancellation restores only a bounded same-tab catalogue choice', () => {
+  // Keep cancellation recovery symmetrical across products without allowing
+  // query parameters or browser storage to become plan or pricing authority.
+  assert.match(esimPage, /const ESIM_CHECKOUT_DRAFT_KEY = 'qyroam:esim-checkout-draft:v1'/);
+  assert.match(esimPage, /const MAX_ESIM_CHECKOUT_DRAFT_BYTES = 256/);
+  assert.match(esimPage, /function restoredEsimPlanId\(value: string \| null\)/);
+  assert.match(esimPage, /value\.length > MAX_ESIM_CHECKOUT_DRAFT_BYTES/);
+  assert.match(esimPage, /ESIM_PLANS\.some\(\(plan\) => plan\.id === planId\)/);
+  assert.match(esimPage, /window\.sessionStorage\.setItem\(ESIM_CHECKOUT_DRAFT_KEY, JSON\.stringify\(\{ planId \}\)\)/);
+  assert.match(esimPage, /url\.searchParams\.get\('checkout'\) !== 'cancelled'/);
+  assert.match(esimPage, /window\.sessionStorage\.removeItem\(ESIM_CHECKOUT_DRAFT_KEY\)/);
+  assert.match(esimPage, /if \(restoredPlanId\) setPlanId\(restoredPlanId\)/);
+  assert.match(esimPage, /if you completed payment, do not pay again/);
+  assert.doesNotMatch(esimPage, /url\.searchParams\.get\('(plan|planId|price|amount)'\)/);
+});
+
 test('rejects unsigned, copied, and session-id-replayed checkout provenance', () => {
   const unsigned = esimSession();
   delete unsigned.metadata.qyroam_provenance;

@@ -7,16 +7,52 @@ import { checkoutAttempt, clearCheckoutAttempt, type CheckoutAttempt } from '../
 import { fetchCustomerCheckout } from '../../lib/customerCheckout';
 import { esimCheckoutFingerprint } from '../../lib/checkoutFingerprint';
 
+const ESIM_CHECKOUT_DRAFT_KEY = 'qyroam:esim-checkout-draft:v1';
+const MAX_ESIM_CHECKOUT_DRAFT_BYTES = 256;
+
+function restoredEsimPlanId(value: string | null) {
+  if (!value || value.length > MAX_ESIM_CHECKOUT_DRAFT_BYTES) return null;
+  try {
+    const draft: unknown = JSON.parse(value);
+    if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return null;
+    const planId = (draft as Record<string, unknown>).planId;
+    return typeof planId === 'string' && ESIM_PLANS.some((plan) => plan.id === planId) ? planId : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function EsimPage() {
   const [planId, setPlanId] = useState<string>(ESIM_PLANS[0].id);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [checkoutCancelled, setCheckoutCancelled] = useState(false);
   const activeCheckoutAttempt = useRef<CheckoutAttempt | null>(null);
   const checkoutInFlight = useRef(false);
   const checkoutAbortController = useRef<AbortController | null>(null);
   const plan = useMemo(() => ESIM_PLANS.find((item) => item.id === planId) || ESIM_PLANS[0], [planId]);
   const dailyPrice = plan.qyPriceSgd / plan.days;
   const promoActive = esimPromoIsActive();
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('checkout') !== 'cancelled') return;
+    setCheckoutCancelled(true);
+    // Stripe's cancel URL carries no plan or price fields. Restore only the
+    // bounded same-tab catalogue identity saved immediately before Checkout;
+    // the server still revalidates the active offer, plan and exact amount.
+    let saved: string | null = null;
+    try {
+      saved = window.sessionStorage.getItem(ESIM_CHECKOUT_DRAFT_KEY);
+      window.sessionStorage.removeItem(ESIM_CHECKOUT_DRAFT_KEY);
+    } catch {}
+    const restoredPlanId = restoredEsimPlanId(saved);
+    if (restoredPlanId) setPlanId(restoredPlanId);
+    // Consume the cancellation marker so refresh/back navigation cannot keep
+    // replaying an old draft. The in-memory notice remains for this visit.
+    url.searchParams.delete('checkout');
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  }, []);
 
   useEffect(() => () => {
     // A paid-session reconciliation can outlive its first HTTP response.
@@ -41,6 +77,12 @@ export default function EsimPage() {
       const expectedAmountCents = Math.max(50, Math.round(plan.qyPriceSgd * 100));
       const fingerprint = esimCheckoutFingerprint(planId);
       activeCheckoutAttempt.current = checkoutAttempt('esim', fingerprint, activeCheckoutAttempt.current);
+      // Preserve the non-sensitive catalogue choice only in this tab so a
+      // deliberate Stripe cancellation returns the shopper to the plan they
+      // reviewed. Never trust this draft for price or offer eligibility.
+      try {
+        window.sessionStorage.setItem(ESIM_CHECKOUT_DRAFT_KEY, JSON.stringify({ planId }));
+      } catch {}
       // Keep repeated attempts for the same Stripe idempotency key as one
       // browser checkout-start event. A different plan intentionally creates
       // a new request id and therefore a new funnel event.
@@ -89,6 +131,7 @@ export default function EsimPage() {
   }
 
   return <main>
+    {checkoutCancelled && <div className="wrap" role="status"><p className="muted">Secure checkout was closed before this page received payment confirmation. Your eSIM selection has been restored where possible. Review the plan before trying again; if you completed payment, do not pay again—use your confirmation link or contact +65 8032 7183.</p></div>}
     {promoActive && <section className="promo-banner"><div className="wrap promo-inner"><div><span className="promo-kicker">{ESIM_PROMO.label}</span><strong>Competitive travel data from S$0.48/day</strong><span>Verified benchmark discount is applied automatically at checkout</span></div><a href="#esim-plans" className="promo-cta">Shop eSIM</a></div></section>}
 
     <section className="hero esim-hero"><div className="wrap hero-grid"><div><span className="eyebrow">Travel eSIM</span><h1>Land connected. No SIM swapping required.</h1><p className="lead">Choose a destination and install your travel eSIM by QR code. Online ordering is available only while the displayed offer and plan availability are current.</p><div className="trust-row"><span>QR-code setup</span><span>No physical SIM swap</span><span>Hotspot on supported plans</span></div></div><div className="search-card"><span className="promo-kicker esim-kicker">{promoActive ? 'LAUNCH PRICE' : 'eSIM PLANS'}</span><h2>Choose your eSIM</h2><label>Plan<select value={planId} onChange={(e) => setPlanId(e.target.value)}>{ESIM_PLANS.map((item) => <option value={item.id} key={item.id}>{item.destination} · {item.days} days</option>)}</select></label>{promoActive ? <div className="promo-applied">✓ Launch discount already included · no code needed</div> : <p className="muted">This launch offer has ended. Contact us for current availability.</p>}{promoActive && <p className="muted">Effective price: S${dailyPrice.toFixed(2)}/day</p>}<button className="primary" onClick={checkout} disabled={busy || !promoActive}>{busy ? 'Opening secure checkout…' : promoActive ? `Buy for S$${plan.qyPriceSgd.toFixed(2)}` : 'Offer ended'}</button>{error && <p className="muted">{error}</p>}<small>Card & PayNow where available. eSIM-compatible, carrier-unlocked device required.</small></div></div></section>
