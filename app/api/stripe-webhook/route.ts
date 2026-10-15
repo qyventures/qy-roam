@@ -29,6 +29,7 @@ import { paidFulfilmentDetailsIssue } from '@/lib/paidFulfilmentDetails';
 import { structurallyValidStripeSignatureHeader, stripeSignatureTimestampWithinTolerance } from '@/lib/stripeSignatureHeader';
 import { hasIdentityRequestContentEncoding, isJsonRequestContentType } from '@/lib/requestBody';
 import { exactDatabaseTimestampToken, exactStripeClaimToken } from '@/lib/stripeClaimToken';
+import { exactRpcRow } from '@/lib/exactRpcRow';
 import { durablePaidOrderMatchesPaymentEvent, durableOrderMatchesUnpaidOrAlreadyPaidSession } from '@/lib/durableOrderSnapshot';
 import {
   tryAcquireStripeWebhookProcessing,
@@ -485,7 +486,7 @@ async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.E
       p_checkout_request_id:session.metadata?.checkout_request_id||null,
     });
     if(persisted.error) throw persisted.error;
-    const persistedOrder=Array.isArray(persisted.data)?persisted.data[0]:persisted.data;
+    const persistedOrder=exactRpcRow(persisted.data);
     // The RPC response is the commit acknowledgement for this exact order,
     // not merely evidence that some row was returned. A malformed gateway
     // response or stale privileged function must not let the webhook continue
@@ -521,7 +522,7 @@ async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.E
     p_payment_failed:failed,
   });
   if(persisted.error) throw persisted.error;
-  const persistedOrder=Array.isArray(persisted.data)?persisted.data[0]:persisted.data;
+  const persistedOrder=exactRpcRow(persisted.data);
   if(
     (paid && !durablePaidOrderMatchesPaymentEvent(persistedOrder,session,'esim',eventCreated)) ||
     (!paid && !durableOrderMatchesUnpaidOrAlreadyPaidSession(persistedOrder,session,'esim'))
@@ -541,7 +542,7 @@ async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string
     p_stripe_session_id:sessionId,
   });
   if(claimed.error) throw claimed.error;
-  const result=Array.isArray(claimed.data)?claimed.data[0]:claimed.data;
+  const result=exactRpcRow(claimed.data);
   if(result?.claim_status==='processed') return {status:'processed'};
   if(result?.claim_status==='in_progress') return {status:'in_progress'};
   if(result?.claim_status==='claimed'){

@@ -16,6 +16,7 @@ import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 import { tryAcquireAdminOpsConcurrency } from '@/lib/adminOpsConcurrency';
 import { tryAcquireAdminDeliveryConcurrency } from '@/lib/adminDeliveryConcurrency';
 import { exactDatabaseTimestampToken } from '@/lib/stripeClaimToken';
+import { exactRpcRow } from '@/lib/exactRpcRow';
 
 export const runtime = 'nodejs';
 
@@ -331,7 +332,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       console.error('admin_pocket_wifi_transition_error');
       return NextResponse.json({ error: 'Unable to update order. Please try again or contact an administrator.' }, { status: 500 });
     }
-    const order = acknowledgedOrderTransition(Array.isArray(data) ? data[0] : data, id, status);
+    const order = acknowledgedOrderTransition(exactRpcRow(data), id, status);
     if (!order) return NextResponse.json({ error: 'Unable to verify the saved order. Refresh before making another change.' }, { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' } });
     return NextResponse.json(order, { headers: { 'Cache-Control': 'no-store' } });
   }
@@ -352,7 +353,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     console.error('admin_esim_transition_error');
     return NextResponse.json({ error: 'Unable to update order. Please try again or contact an administrator.' }, { status: 500 });
   }
-  const order = acknowledgedOrderTransition(Array.isArray(data) ? data[0] : data, id, status);
+  const order = acknowledgedOrderTransition(exactRpcRow(data), id, status);
   if (!order) return NextResponse.json({ error: 'Unable to verify the saved order. Refresh before making another change.' }, { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' } });
   return NextResponse.json(order, { headers: { 'Cache-Control': 'no-store' } });
   } catch {

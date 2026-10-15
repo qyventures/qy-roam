@@ -65,6 +65,7 @@ const { exactNonnegativeCount } = require('../lib/exactCount.ts');
 const { custodyReferenceIssue, normalizeCustodyReference, MAX_CUSTODY_REFERENCE_LENGTH } = require('../lib/custodyReference.ts');
 const { durablePaidOrderMatchesPaymentEvent, durableOrderMatchesFailedOrAlreadyPaidSession, durableOrderMatchesFailedSession, durableOrderMatchesPaidSession, durableOrderMatchesUnpaidOrAlreadyPaidSession } = require('../lib/durableOrderSnapshot.ts');
 const { exactDatabaseTimestampToken, exactStripeClaimToken } = require('../lib/stripeClaimToken.ts');
+const { exactRpcRow } = require('../lib/exactRpcRow.ts');
 const { parsePocketWifiAvailability, parsePocketWifiBookingTerms } = require('../lib/pocketWifiAvailability.ts');
 const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutResponse.ts');
 const { CUSTOMER_CHECKOUT_MAX_RECONCILIATION_ATTEMPTS, CUSTOMER_CHECKOUT_RECONCILIATION_TIMEOUT_MS, customerCheckoutRetryAfterMs } = require('../lib/customerCheckout.ts');
@@ -296,8 +297,24 @@ test('admin order transitions preserve exact database versions and verify their 
   assert.match(adminOrderRoute, /exactDatabaseTimestampToken\(body\.expected_updated_at\)/);
   assert.doesNotMatch(adminOrderRoute, /Date\.parse\(expectedUpdatedAt\)/);
   assert.match(adminOrderRoute, /order\.id !== orderId \|\| order\.fulfilment_status !== status \|\| !updatedAt/);
-  assert.equal((adminOrderRoute.match(/acknowledgedOrderTransition\(Array\.isArray\(data\) \? data\[0\] : data, id, status\)/g) || []).length, 2);
+  assert.equal((adminOrderRoute.match(/acknowledgedOrderTransition\(exactRpcRow\(data\), id, status\)/g) || []).length, 2);
   assert.match(adminOrderRoute, /Unable to verify the saved order\. Refresh before making another change\./);
+});
+
+test('order-critical RPC acknowledgements require exactly one returned row', () => {
+  const row = { id: 42 };
+  assert.equal(exactRpcRow(row), row);
+  assert.equal(exactRpcRow([row]), row);
+  for (const malformed of [null, undefined, 0, 'row', [], [row, row], [[]]]) {
+    assert.equal(exactRpcRow(malformed), null);
+  }
+
+  // Payment persistence, event claiming, and staff fulfilment transitions
+  // all precede irreversible or externally visible work. None may recover an
+  // ambiguous multi-row provider response by selecting its first element.
+  assert.equal((webhookRoute.match(/exactRpcRow\((?:persisted|claimed)\.data\)/g) || []).length, 3);
+  assert.doesNotMatch(webhookRoute, /Array\.isArray\((?:persisted|claimed)\.data\)\?(?:persisted|claimed)\.data\[0\]/);
+  assert.doesNotMatch(adminOrderRoute, /Array\.isArray\(data\) \? data\[0\] : data/);
 });
 
 test('Pocket WiFi custody references remain exact, single-line audit evidence', () => {
