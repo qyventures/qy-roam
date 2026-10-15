@@ -12,6 +12,7 @@ import { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } from '@/lib/pocketW
 import { acknowledgedInventoryMutation } from '@/lib/inventoryMutation';
 import { acknowledgedManualOrder } from '@/lib/manualOrderAcknowledgement';
 import { acknowledgedClosingPeriod } from '@/lib/closingPeriodAcknowledgement';
+import { acknowledgedAdminRecord } from '@/lib/adminRecordAcknowledgement';
 
 export const dynamic = 'force-dynamic';
 
@@ -463,7 +464,11 @@ export async function POST(req: NextRequest) {
       if (!['lead', 'active', 'inactive'].includes(status)) return NextResponse.json({ error: 'Choose a valid customer status' }, { status: 400 });
       const row = { email: text(body.email, 200).toLowerCase() || null, phone: text(body.phone, 60) || null, name: text(body.name, 120) || null, status, source: text(body.source, 80) || 'manual', notes: text(body.notes, 1500) || null, updated_at: new Date().toISOString() };
       if (!row.email && !row.phone) return NextResponse.json({ error: 'Email or phone is required' }, { status: 400 });
-      const { error } = await db.from('customers').insert(row); if (error) throw error;
+      const { data, error } = await db.from('customers').insert(row).select('id,email,phone,name,status,source').single();
+      if (error) throw error;
+      if (!acknowledgedAdminRecord(data, {
+        email: row.email, phone: row.phone, name: row.name, status: row.status, source: row.source,
+      })) throw new Error('Customer acknowledgement mismatch');
     } else if (action === 'activity_create') {
       const customerId = optionalPositiveSafeInteger(body.customer_id);
       const activityType = text(body.activity_type, 40) || 'note';
@@ -471,13 +476,18 @@ export async function POST(req: NextRequest) {
       if (body.customer_id !== undefined && body.customer_id !== null && body.customer_id !== '' && customerId === null) return NextResponse.json({ error: 'Choose a valid customer' }, { status: 400 });
       if (!['note', 'call', 'whatsapp', 'email', 'task'].includes(activityType)) return NextResponse.json({ error: 'Choose a valid activity type' }, { status: 400 });
       if (dueAt === undefined) return NextResponse.json({ error: 'Choose a valid follow-up date and time' }, { status: 400 });
-      const { error } = await db.from('crm_activities').insert({ customer_id: customerId, activity_type: activityType, subject: text(body.subject, 160) || null, detail: text(body.detail, 2000) || null, due_at: dueAt, owner: text(body.owner, 100) || null }); if (error) throw error;
+      const row = { customer_id: customerId, activity_type: activityType, subject: text(body.subject, 160) || null, detail: text(body.detail, 2000) || null, due_at: dueAt, owner: text(body.owner, 100) || null };
+      const { data, error } = await db.from('crm_activities').insert(row).select('id,customer_id,activity_type,subject,detail,due_at,owner').single();
+      if (error) throw error;
+      if (!acknowledgedAdminRecord(data, row)) throw new Error('CRM activity acknowledgement mismatch');
     } else if (action === 'activity_complete') {
       const activityId = positiveSafeInteger(body.id);
       if (activityId === null) return NextResponse.json({ error: 'Choose a valid activity' }, { status: 400 });
-      const { data, error } = await db.from('crm_activities').update({ completed_at: new Date().toISOString() }).eq('id', activityId).select('id').maybeSingle();
+      const completedAt = new Date().toISOString();
+      const { data, error } = await db.from('crm_activities').update({ completed_at: completedAt }).eq('id', activityId).select('id,completed_at').maybeSingle();
       if (error) throw error;
       if (!data) return NextResponse.json({ error: 'Activity not found' }, { status: 404 });
+      if (!acknowledgedAdminRecord(data, { completed_at: completedAt }, activityId)) throw new Error('CRM activity completion acknowledgement mismatch');
     } else if (action === 'opportunity_create') {
       const customerId = optionalPositiveSafeInteger(body.customer_id);
       const productType = text(body.product_type, 40) || null;
@@ -498,7 +508,13 @@ export async function POST(req: NextRequest) {
       if (expectedCloseDate !== null && !parseExactIsoDate(expectedCloseDate)) return NextResponse.json({ error: 'Choose a valid expected close date' }, { status: 400 });
       const row = { customer_id: customerId, title: text(body.title, 180), product_type: productType, stage, probability, expected_value_sgd: expectedValueCents / 100, expected_close_date: expectedCloseDate, source: text(body.source, 80) || null, owner: text(body.owner, 100) || null, notes: text(body.notes, 1500) || null, updated_at: new Date().toISOString() };
       if (!row.title) return NextResponse.json({ error: 'Opportunity title is required' }, { status: 400 });
-      const { error } = await db.from('sales_opportunities').insert(row); if (error) throw error;
+      const { data, error } = await db.from('sales_opportunities').insert(row).select('id,customer_id,title,product_type,stage,probability,expected_value_sgd,expected_close_date,source,owner').single();
+      if (error) throw error;
+      if (!acknowledgedAdminRecord(data, {
+        customer_id: row.customer_id, title: row.title, product_type: row.product_type,
+        stage: row.stage, probability: row.probability, expected_value_sgd: row.expected_value_sgd,
+        expected_close_date: row.expected_close_date, source: row.source, owner: row.owner,
+      })) throw new Error('Sales opportunity acknowledgement mismatch');
     } else if (action === 'opportunity_stage') {
       const opportunityId = positiveSafeInteger(body.id);
       const stage = text(body.stage, 40);
@@ -506,9 +522,10 @@ export async function POST(req: NextRequest) {
       if (opportunityId === null) return NextResponse.json({ error: 'Choose a valid opportunity' }, { status: 400 });
       if (!['lead', 'qualified', 'proposal', 'negotiation', 'won', 'lost'].includes(stage)) return NextResponse.json({ error: 'Choose a valid opportunity stage' }, { status: 400 });
       if (probability === null) return NextResponse.json({ error: 'Probability must be a whole percentage from 0 to 100' }, { status: 400 });
-      const { data, error } = await db.from('sales_opportunities').update({ stage, probability, updated_at: new Date().toISOString() }).eq('id', opportunityId).select('id').maybeSingle();
+      const { data, error } = await db.from('sales_opportunities').update({ stage, probability, updated_at: new Date().toISOString() }).eq('id', opportunityId).select('id,stage,probability').maybeSingle();
       if (error) throw error;
       if (!data) return NextResponse.json({ error: 'Opportunity not found' }, { status: 404 });
+      if (!acknowledgedAdminRecord(data, { stage, probability }, opportunityId)) throw new Error('Opportunity stage acknowledgement mismatch');
     } else if (action === 'forecast_upsert') {
       const month = text(body.forecast_month, 10); const product = text(body.product_type, 40);
       const forecastOrders = nonNegativeInteger(body.forecast_orders);
@@ -519,7 +536,14 @@ export async function POST(req: NextRequest) {
       // The schema owns this natural key. Use its atomic conflict boundary
       // rather than deleting the previous forecast before inserting a new
       // one: an interrupted request must retain the last approved forecast.
-      const { error } = await db.from('forecasts').upsert({ forecast_month: month, product_type: product, forecast_orders: forecastOrders, forecast_revenue_sgd: forecastRevenueCents / 100, forecast_units: forecastUnits, method: text(body.method, 80) || 'management', notes: text(body.notes, 1200) || null, updated_at: new Date().toISOString() }, { onConflict: 'forecast_month,product_type' }); if (error) throw error;
+      const row = { forecast_month: month, product_type: product, forecast_orders: forecastOrders, forecast_revenue_sgd: forecastRevenueCents / 100, forecast_units: forecastUnits, method: text(body.method, 80) || 'management', notes: text(body.notes, 1200) || null, updated_at: new Date().toISOString() };
+      const { data, error } = await db.from('forecasts').upsert(row, { onConflict: 'forecast_month,product_type' }).select('id,forecast_month,product_type,forecast_orders,forecast_revenue_sgd,forecast_units,method,notes').single();
+      if (error) throw error;
+      if (!acknowledgedAdminRecord(data, {
+        forecast_month: row.forecast_month, product_type: row.product_type,
+        forecast_orders: row.forecast_orders, forecast_revenue_sgd: row.forecast_revenue_sgd,
+        forecast_units: row.forecast_units, method: row.method, notes: row.notes,
+      })) throw new Error('Forecast acknowledgement mismatch');
     } else if (action === 'close_period') {
       const start = text(body.period_start, 10), end = text(body.period_end, 10); if (!start || !end) return NextResponse.json({ error: 'Period dates are required' }, { status: 400 });
       const dates = optionalTravelDates({ travel_start: start, travel_end: end });

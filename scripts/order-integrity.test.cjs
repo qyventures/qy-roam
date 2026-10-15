@@ -69,6 +69,7 @@ const { exactRpcRow } = require('../lib/exactRpcRow.ts');
 const { acknowledgedInventoryMutation } = require('../lib/inventoryMutation.ts');
 const { acknowledgedManualOrder } = require('../lib/manualOrderAcknowledgement.ts');
 const { acknowledgedClosingPeriod } = require('../lib/closingPeriodAcknowledgement.ts');
+const { acknowledgedAdminRecord } = require('../lib/adminRecordAcknowledgement.ts');
 const { parsePocketWifiAvailability, parsePocketWifiBookingTerms } = require('../lib/pocketWifiAvailability.ts');
 const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutResponse.ts');
 const { CUSTOMER_CHECKOUT_MAX_RECONCILIATION_ATTEMPTS, CUSTOMER_CHECKOUT_RECONCILIATION_TIMEOUT_MS, customerCheckoutRetryAfterMs } = require('../lib/customerCheckout.ts');
@@ -5233,9 +5234,9 @@ test('admin CRM writes reject malformed commercial data and missing mutation tar
   assert.match(adminOpsRoute, /expectedCloseDate !== null && !parseExactIsoDate\(expectedCloseDate\)/);
   assert.doesNotMatch(adminOpsRoute, /expected_value_sgd: Math\.max\(0, num\(/);
   assert.doesNotMatch(adminOpsRoute, /probability = Math\.min\(100, Math\.max\(0, num\(/);
-  assert.match(adminOpsRoute, /from\('crm_activities'\)\.update\([\s\S]*?\.select\('id'\)\.maybeSingle\(\)/);
+  assert.match(adminOpsRoute, /from\('crm_activities'\)\.update\([\s\S]*?\.select\('id,completed_at'\)\.maybeSingle\(\)/);
   assert.match(adminOpsRoute, /if \(!data\) return NextResponse\.json\(\{ error: 'Activity not found' \}, \{ status: 404 \}\)/);
-  assert.match(adminOpsRoute, /from\('sales_opportunities'\)\.update\([\s\S]*?\.select\('id'\)\.maybeSingle\(\)/);
+  assert.match(adminOpsRoute, /from\('sales_opportunities'\)\.update\([\s\S]*?\.select\('id,stage,probability'\)\.maybeSingle\(\)/);
   assert.match(adminOpsRoute, /if \(!data\) return NextResponse\.json\(\{ error: 'Opportunity not found' \}, \{ status: 404 \}\)/);
 });
 
@@ -8388,4 +8389,32 @@ test('Pocket WiFi rental duration is one shared customer and paid-order boundary
   assert.match(schema, /'orders_pocket_wifi_rental_duration_check'/);
   assert.match(schema, /'checkout_reservations_rental_duration_check'/);
   assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 45/);
+});
+
+test('admin CRM and forecast mutations acknowledge the exact committed record', () => {
+  assert.equal(acknowledgedAdminRecord({
+    id: 17, stage: 'qualified', probability: 45, owner: null,
+  }, { stage: 'qualified', probability: 45, owner: null }, 17), true);
+  assert.equal(acknowledgedAdminRecord([{
+    id: 17, stage: 'qualified', probability: 45, owner: null,
+  }], { stage: 'qualified', probability: 45, owner: null }, 17), true);
+
+  for (const malformed of [
+    null,
+    [],
+    [{ id: 17 }, { id: 18 }],
+    { id: 0, stage: 'qualified', probability: 45, owner: null },
+    { id: 18, stage: 'qualified', probability: 45, owner: null },
+    { id: 17, stage: 'won', probability: 45, owner: null },
+    { id: 17, stage: 'qualified', probability: '45', owner: null },
+    { id: 17, stage: 'qualified', probability: 45, owner: '' },
+  ]) assert.equal(acknowledgedAdminRecord(malformed, {
+    stage: 'qualified', probability: 45, owner: null,
+  }, 17), false);
+
+  assert.match(adminOpsRoute, /from\('customers'\)\.insert\(row\)\.select\([^)]+\)\.single\(\)/);
+  assert.match(adminOpsRoute, /from\('crm_activities'\)\.insert\(row\)\.select\([^)]+\)\.single\(\)/);
+  assert.match(adminOpsRoute, /from\('sales_opportunities'\)\.insert\(row\)\.select\([^)]+\)\.single\(\)/);
+  assert.match(adminOpsRoute, /from\('forecasts'\)\.upsert\(row,[\s\S]{0,120}\.select\([^)]+\)\.single\(\)/);
+  assert.match(adminOpsRoute, /acknowledgedAdminRecord\(data,/g);
 });
