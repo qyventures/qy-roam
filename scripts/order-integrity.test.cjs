@@ -5853,7 +5853,7 @@ test('Stripe event idempotency records stay bound to one event type and Checkout
   // processed, in-flight, or eligible for stale-lease takeover solely because
   // its event_id collides with the ledger primary key.
   assert.match(webhookRoute, /supabase\.rpc\('qy_claim_stripe_event'/);
-  assert.match(schema, /perform pg_advisory_xact_lock\(hashtext\('qy_roam_stripe_event:' \|\| p_event_id\)\)/);
+  assert.match(schema, /perform pg_advisory_xact_lock\(hashtextextended\('qy_roam_stripe_event:' \|\| p_event_id, 0\)\)/);
   const atomicClaim = schema.slice(
     schema.indexOf('create or replace function public.qy_claim_stripe_event'),
     schema.indexOf('-- Durable human-fulfilment notification ledger'),
@@ -7332,6 +7332,19 @@ test('Stripe webhook bounds event identities before logs or durable idempotency 
   assert.match(webhookRoute, /if\(!stripeEventId\)[\s\S]{0,180}Invalid Stripe event identifier/);
   assert.doesNotMatch(webhookRoute, /eventId:event\.id/);
   assert.doesNotMatch(webhookRoute, /`stripe:\$\{event\.id\}`/);
+});
+
+test('Stripe event claims enforce webhook identities before taking a per-event lock', () => {
+  const claimFunction = schema.match(/create or replace function public\.qy_claim_stripe_event\([\s\S]*?\n\$\$;/)?.[0] || '';
+  assert.match(claimFunction, /p_event_id !~ '\^stripe:evt_\[A-Za-z0-9\]\{8,96\}\$'/);
+  assert.match(claimFunction, /p_event_type is null or p_event_type not in \(\s*'checkout\.session\.completed',\s*'checkout\.session\.async_payment_succeeded',\s*'checkout\.session\.async_payment_failed',\s*'checkout\.session\.expired'\s*\)/);
+  assert.match(claimFunction, /p_stripe_session_id !~ '\^cs_\(test\|live\)_\[A-Za-z0-9\]\+\$'/);
+  const eventValidation = claimFunction.indexOf("raise exception 'invalid Stripe event id'");
+  const typeValidation = claimFunction.indexOf("raise exception 'unsupported Stripe event type'");
+  const sessionValidation = claimFunction.indexOf("raise exception 'invalid Stripe Checkout Session id'");
+  const lock = claimFunction.indexOf("pg_advisory_xact_lock(hashtextextended('qy_roam_stripe_event:' || p_event_id, 0))");
+  assert.ok(eventValidation > -1 && typeValidation > eventValidation && sessionValidation > typeValidation && lock > sessionValidation);
+  assert.doesNotMatch(claimFunction, /pg_advisory_xact_lock\(hashtext\(/);
 });
 
 test('deployment rejects structurally broken PL/pgSQL before schema application', async () => {

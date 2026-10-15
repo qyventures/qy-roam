@@ -1181,13 +1181,36 @@ declare
   v_event public.stripe_events%rowtype;
   v_now timestamptz := clock_timestamp();
 begin
-  if coalesce(length(btrim(p_event_id)), 0) = 0
-    or coalesce(length(btrim(p_event_type)), 0) = 0
-    or coalesce(length(btrim(p_stripe_session_id)), 0) = 0 then
-    raise exception 'Stripe event claim identity is required';
+  -- Mirror the public webhook's exact identity boundary here. This function
+  -- is restricted to service_role, but it is also the authority used by
+  -- recovery jobs and future workers: accepting merely non-empty values lets
+  -- a malformed caller occupy a real event id or create a ledger row that no
+  -- webhook retry can safely reconcile. Validate before taking the lock so
+  -- bad recovery traffic cannot serialize healthy paid-order processing.
+  if p_event_id is null
+    or length(p_event_id) not between 19 and 107
+    or p_event_id !~ '^stripe:evt_[A-Za-z0-9]{8,96}$' then
+    raise exception 'invalid Stripe event id';
+  end if;
+  if p_event_type is null or p_event_type not in (
+    'checkout.session.completed',
+    'checkout.session.async_payment_succeeded',
+    'checkout.session.async_payment_failed',
+    'checkout.session.expired'
+  ) then
+    raise exception 'unsupported Stripe event type';
+  end if;
+  if p_stripe_session_id is null
+    or length(p_stripe_session_id) not between 12 and 255
+    or p_stripe_session_id !~ '^cs_(test|live)_[A-Za-z0-9]+$' then
+    raise exception 'invalid Stripe Checkout Session id';
   end if;
 
-  perform pg_advisory_xact_lock(hashtext('qy_roam_stripe_event:' || p_event_id));
+  -- Use PostgreSQL's 64-bit extended hash for the per-event transaction
+  -- lock. A 32-bit hash collision does not corrupt the ledger, but it can
+  -- make two unrelated payments block each other during a retry burst. The
+  -- fixed seed keeps every application instance on the same lock identity.
+  perform pg_advisory_xact_lock(hashtextextended('qy_roam_stripe_event:' || p_event_id, 0));
   select * into v_event from public.stripe_events where event_id = p_event_id for update;
 
   if not found then
