@@ -5762,7 +5762,7 @@ test('admin visibility detects abandoned Stripe claims using the webhook recover
   // no last_error, but it is just as actionable once the webhook lease expires.
   assert.equal(STRIPE_EVENT_CLAIM_STALE_MS, 5 * 60_000);
   assert.match(schema, /v_event\.processing_started_at >= v_now - interval '5 minutes'/);
-  assert.match(adminPage, /select\('event_id,event_type,stripe_session_id,attempts,processing_started_at,last_failed_at,last_error'\)/);
+  assert.match(adminPage, /select\('event_id,event_type,stripe_session_id,received_at,attempts,processing_started_at,last_failed_at,last_error'\)/);
   assert.match(adminPage, /\.is\('processed_at', null\)/);
   assert.doesNotMatch(adminPage, /last_error\.not\.is\.null,processing_started_at\.lt/);
   assert.match(adminPage, /!stripeEventClaimInProgress\(event\.processing_started_at, event\.last_error\)/);
@@ -5846,6 +5846,13 @@ test('admin webhook visibility includes malformed and future-dated leases', () =
   assert.match(webhookQuery, /\.is\('processed_at', null\)/);
   assert.doesNotMatch(webhookQuery, /\.or\(/);
   assert.match(adminPage, /stripeEventClaimInProgress/);
+});
+
+test('admin webhook exceptions expose their durable incident timeline', () => {
+  assert.match(adminPage, /select\('event_id,event_type,stripe_session_id,received_at,attempts,processing_started_at,last_failed_at,last_error'\)/);
+  assert.match(adminPage, /received \{formatSingaporeTimestamp\(failure\.received_at\)\} SGT/);
+  assert.match(adminPage, /last failed \{formatSingaporeTimestamp\(failure\.last_failed_at\)\} SGT/);
+  assert.match(productionReadiness, /columns: 'event_id,event_type,stripe_session_id,received_at,processing_started_at,processed_at,attempts,last_failed_at,last_error'/);
 });
 
 test('Stripe event idempotency records stay bound to one event type and Checkout Session', () => {
@@ -6034,11 +6041,11 @@ test('retried completion events cannot steal a later asynchronous payment timest
 
 test('failed Stripe webhook records identify the affected Checkout Session for recovery', () => {
   assert.match(schema, /stripe_session_id text/);
-  assert.match(productionReadiness, /event_id,event_type,stripe_session_id,processing_started_at/);
+  assert.match(productionReadiness, /event_id,event_type,stripe_session_id,received_at,processing_started_at/);
   assert.match(webhookRoute, /claimOnce\(supabase:ReturnType<[^>]+>, id:string, type:string, sessionId:string\)/);
   assert.match(webhookRoute, /p_stripe_session_id:sessionId/);
   assert.match(webhookRoute, /claimOnce\(supabase,eventClaimId,event\.type,eventSessionId\)/);
-  assert.match(adminPage, /event_id,event_type,stripe_session_id,attempts/);
+  assert.match(adminPage, /event_id,event_type,stripe_session_id,received_at,attempts/);
   assert.match(adminPage, /failure\.stripe_session_id/);
 });
 

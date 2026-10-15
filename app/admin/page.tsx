@@ -207,7 +207,7 @@ async function renderAdminPage() {
         // failed/abandoned events after the first 100 rows.
         loadKeysetPages((after, limit) => {
           let query = supabase.from('stripe_events')
-          .select('event_id,event_type,stripe_session_id,attempts,processing_started_at,last_failed_at,last_error')
+          .select('event_id,event_type,stripe_session_id,received_at,attempts,processing_started_at,last_failed_at,last_error')
           .is('processed_at', null)
           .order('event_id')
           .limit(limit);
@@ -440,6 +440,8 @@ async function renderAdminPage() {
               <code>{failure.event_type}</code>
               {failure.stripe_session_id && <> · session <code>{failure.stripe_session_id}</code></>}
               {' · '}attempt {failure.attempts}
+              {' · '}received {formatSingaporeTimestamp(failure.received_at)} SGT
+              {failure.last_failed_at && <> · last failed {formatSingaporeTimestamp(failure.last_failed_at)} SGT</>}
               {' · '}{ordersIncomplete
                 ? <strong> order persistence lookup unavailable</strong>
                 : persistedOrder
