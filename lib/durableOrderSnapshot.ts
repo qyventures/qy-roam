@@ -139,3 +139,25 @@ export function durableOrderMatchesFailedSession(
     order.travel_end === (session.metadata?.end || null) &&
     order.plan_id === null && order.data_allowance === null;
 }
+
+/**
+ * A delayed asynchronous-failure event can be delivered after the same
+ * Checkout Session is already durably paid. The persistence RPC deliberately
+ * refuses to downgrade that order and returns its existing paid row. Treat
+ * that result as an idempotent acknowledgement only when the row still
+ * matches the failed event's complete commercial snapshot as a paid Session;
+ * a merely matching Session id must never hide a corrupt order.
+ */
+export function durableOrderMatchesFailedOrAlreadyPaidSession(
+  order: DurableOrderSnapshot | null | undefined,
+  session: Stripe.Checkout.Session,
+  productType: QyRoamProductType,
+) {
+  if (durableOrderMatchesFailedSession(order, session, productType)) return true;
+  if (session.status !== 'complete' || session.payment_status !== 'unpaid') return false;
+  return durableOrderMatchesPaidSession(
+    order,
+    { ...session, payment_status: 'paid' },
+    productType,
+  );
+}

@@ -63,7 +63,7 @@ const { structurallyValidStripeSignatureHeader, stripeSignatureTimestampWithinTo
 const { paidFulfilmentDetailsIssue } = require('../lib/paidFulfilmentDetails.ts');
 const { exactNonnegativeCount } = require('../lib/exactCount.ts');
 const { custodyReferenceIssue, normalizeCustodyReference, MAX_CUSTODY_REFERENCE_LENGTH } = require('../lib/custodyReference.ts');
-const { durableOrderMatchesFailedSession, durableOrderMatchesPaidSession } = require('../lib/durableOrderSnapshot.ts');
+const { durableOrderMatchesFailedOrAlreadyPaidSession, durableOrderMatchesFailedSession, durableOrderMatchesPaidSession } = require('../lib/durableOrderSnapshot.ts');
 const { exactDatabaseTimestampToken, exactStripeClaimToken } = require('../lib/stripeClaimToken.ts');
 const { parsePocketWifiAvailability, parsePocketWifiBookingTerms } = require('../lib/pocketWifiAvailability.ts');
 const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutResponse.ts');
@@ -4503,6 +4503,25 @@ test('terminal failed-payment authority requires the exact durable commercial sn
   assert.equal(durableOrderMatchesFailedSession(order, { ...session, payment_status: 'paid' }, 'esim'), false);
 });
 
+test('a superseded asynchronous failure acknowledges only the exact already-paid order', () => {
+  const session = {
+    id: 'cs_live_supersededFailure123', livemode: true, mode: 'payment',
+    status: 'complete', payment_status: 'unpaid', currency: 'sgd', amount_total: 1290,
+    metadata: { product_type: 'esim', measurement_consent: 'essential', plan_id: 'jp-7d', plan_name: 'Japan · 7 days', data_allowance: '10 GB', country: 'Japan' },
+  };
+  const paidOrder = {
+    stripe_session_id: session.id, payment_status: 'paid', product_type: 'esim', amount_sgd: '12.90',
+    plan_id: 'jp-7d', plan_name: 'Japan · 7 days', data_allowance: '10 GB', country: 'Japan',
+    travel_start: null, travel_end: null, measurement_consent: 'essential',
+  };
+
+  assert.equal(durableOrderMatchesFailedOrAlreadyPaidSession(paidOrder, session, 'esim'), true);
+  assert.equal(durableOrderMatchesFailedOrAlreadyPaidSession({ ...paidOrder, amount_sgd: '12.91' }, session, 'esim'), false);
+  assert.equal(durableOrderMatchesFailedOrAlreadyPaidSession({ ...paidOrder, plan_id: 'different-plan' }, session, 'esim'), false);
+  assert.equal(durableOrderMatchesFailedOrAlreadyPaidSession({ ...paidOrder, payment_status: 'unpaid' }, session, 'esim'), true);
+  assert.equal(durableOrderMatchesFailedOrAlreadyPaidSession(paidOrder, { ...session, status: 'open' }, 'esim'), false);
+});
+
 test('database enforces product-specific fulfilment status domains on new order writes', () => {
   // API validation is useful feedback for staff, but this constraint is the
   // final persistence boundary for webhook recovery and service-role work.
@@ -7696,11 +7715,11 @@ test('paid checkout replays require the same exact durable commercial snapshot a
 });
 
 test('Stripe webhook side effects require an exact durable persistence acknowledgement', () => {
-  assert.match(webhookRoute, /import \{ durableOrderMatchesFailedSession, durableOrderMatchesPaidSession \} from '@\/lib\/durableOrderSnapshot'/);
+  assert.match(webhookRoute, /import \{ durableOrderMatchesFailedOrAlreadyPaidSession, durableOrderMatchesPaidSession \} from '@\/lib\/durableOrderSnapshot'/);
   assert.match(webhookRoute, /paid && !durableOrderMatchesPaidSession\(persistedOrder,session,'pocket_wifi'\)/);
-  assert.match(webhookRoute, /failed && !durableOrderMatchesFailedSession\(persistedOrder,session,'pocket_wifi'\)/);
+  assert.match(webhookRoute, /failed && !durableOrderMatchesFailedOrAlreadyPaidSession\(persistedOrder,session,'pocket_wifi'\)/);
   assert.match(webhookRoute, /paid && !durableOrderMatchesPaidSession\(persistedOrder,session,'esim'\)/);
-  assert.match(webhookRoute, /failed && !durableOrderMatchesFailedSession\(persistedOrder,session,'esim'\)/);
+  assert.match(webhookRoute, /failed && !durableOrderMatchesFailedOrAlreadyPaidSession\(persistedOrder,session,'esim'\)/);
 
   const persistenceBoundary = webhookRoute.indexOf("async function persistSession");
   const paidSideEffects = webhookRoute.indexOf('await deliverPaidOrderSideEffects', persistenceBoundary);
