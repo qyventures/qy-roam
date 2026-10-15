@@ -153,6 +153,21 @@ export function durableOrderMatchesFailedOrAlreadyPaidSession(
   session: Stripe.Checkout.Session,
   productType: QyRoamProductType,
 ) {
+  return durableOrderMatchesUnpaidOrAlreadyPaidSession(order, session, productType);
+}
+
+/**
+ * Completed-but-unpaid Checkout Sessions create a durable asynchronous-payment
+ * commitment before Stripe reports success or failure. Require the same exact
+ * commercial join for that provisional write as for a terminal failure. A
+ * delayed unpaid completion/failure may also race behind an already-paid row;
+ * acknowledge that no-op only when the paid row still matches this Session.
+ */
+export function durableOrderMatchesUnpaidOrAlreadyPaidSession(
+  order: DurableOrderSnapshot | null | undefined,
+  session: Stripe.Checkout.Session,
+  productType: QyRoamProductType,
+) {
   if (durableOrderMatchesFailedSession(order, session, productType)) return true;
   if (session.status !== 'complete' || session.payment_status !== 'unpaid') return false;
   return durableOrderMatchesPaidSession(
