@@ -31,6 +31,7 @@ import { structurallyValidStripeSignatureHeader, stripeSignatureTimestampWithinT
 import { hasIdentityRequestContentEncoding, isJsonRequestContentType } from '@/lib/requestBody';
 import { databaseTimestampInstantEquals, exactDatabaseTimestampToken, exactStripeClaimToken } from '@/lib/stripeClaimToken';
 import { exactRpcRow } from '@/lib/exactRpcRow';
+import { acknowledgedPaidDeliveryClaim, acknowledgedPaidDeliverySettlement } from '@/lib/paidDeliveryAcknowledgement';
 import { durablePaidOrderMatchesPaymentEvent, durableOrderMatchesUnpaidOrAlreadyPaidSession } from '@/lib/durableOrderSnapshot';
 import {
   tryAcquireStripeWebhookProcessing,
@@ -715,15 +716,15 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
   // row with no timestamp is deliberately considered stale above. Preserve
   // that recovery path by using the matching null predicate in the CAS itself;
   // otherwise such a paid-order delivery would remain permanently unclaimable.
-  const attempt=await supabase.from('fulfilment_notifications').update({status:'sending',attempts:nextRetryAttempt(notification.attempts,0),last_attempt_at:now,last_error:null,updated_at:now}).eq('stripe_session_id',session.id).eq('status',notification.status)[notification.updated_at?'eq':'is']('updated_at',notification.updated_at||null).select('stripe_session_id,updated_at');
+  const attempt=await supabase.from('fulfilment_notifications').update({status:'sending',attempts:nextRetryAttempt(notification.attempts,0),last_attempt_at:now,last_error:null,updated_at:now}).eq('stripe_session_id',session.id).eq('status',notification.status)[notification.updated_at?'eq':'is']('updated_at',notification.updated_at||null).select('stripe_session_id,status,updated_at');
   if(attempt.error) throw attempt.error;
-  if(attempt.data?.length!==1) throw new Error('Fulfilment notification was claimed by another delivery attempt');
   // The database representation is the lease authority. Preserve all of its
   // fractional precision instead of settling with the application value sent
   // in the update: a trigger, proxy canonicalisation, or future database-side
   // timestamp policy must not make an accepted email impossible to settle.
-  const claimToken=exactDatabaseTimestampToken(attempt.data[0].updated_at);
-  if(!claimToken) throw new Error('Fulfilment notification claim returned an invalid ownership token');
+  const acknowledgedClaim=acknowledgedPaidDeliveryClaim(attempt.data,session.id);
+  if(!acknowledgedClaim) throw new Error('Fulfilment notification claim returned an invalid acknowledgement');
+  const {claimToken}=acknowledgedClaim;
   let providerAccepted=false;
   try{
     await sendHumanFulfilmentEmail(fulfilmentSession);
@@ -732,9 +733,9 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
     // owner may settle it: an older worker must never mark a newer delivery
     // sent (or later reset it to pending in the catch below).
     const sentAt=new Date().toISOString();
-    const sent=await supabase.from('fulfilment_notifications').update({status:'sent',sent_at:sentAt,updated_at:sentAt}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',claimToken).select('stripe_session_id');
+    const sent=await supabase.from('fulfilment_notifications').update({status:'sent',sent_at:sentAt,updated_at:sentAt}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',claimToken).select('stripe_session_id,status,sent_at,updated_at');
     if(sent.error) throw sent.error;
-    if(sent.data?.length!==1) throw new Error('Fulfilment notification delivery lease was lost');
+    if(!acknowledgedPaidDeliverySettlement(sent.data,session.id,sentAt)) throw new Error('Fulfilment notification delivery lease was lost');
   }catch(error){
     // Once SMTP/the relay has accepted the deterministic message id, a
     // database failure while recording `sent` is an ambiguous-success state,
@@ -792,22 +793,22 @@ export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof
   // As with the fulfilment ledger, reclaiming a stale legacy NULL lease must
   // use `IS NULL`, not PostgREST equality with null. The predicate remains a
   // compare-and-swap, so this recovery does not allow concurrent senders.
-  const attempt=await supabase.from('meta_purchase_deliveries').update({status:'sending',event_time:metaEventTime,attempts:nextRetryAttempt(delivery.attempts,0),last_attempt_at:now,last_error:null,updated_at:now}).eq('stripe_session_id',session.id).eq('status',delivery.status)[delivery.updated_at?'eq':'is']('updated_at',delivery.updated_at||null).select('stripe_session_id,event_time,updated_at');
+  const attempt=await supabase.from('meta_purchase_deliveries').update({status:'sending',event_time:metaEventTime,attempts:nextRetryAttempt(delivery.attempts,0),last_attempt_at:now,last_error:null,updated_at:now}).eq('stripe_session_id',session.id).eq('status',delivery.status)[delivery.updated_at?'eq':'is']('updated_at',delivery.updated_at||null).select('stripe_session_id,status,event_time,updated_at');
   if(attempt.error) throw attempt.error;
-  if(attempt.data?.length!==1) throw new Error('Meta purchase delivery was claimed by another attempt');
-  const claimToken=exactDatabaseTimestampToken(attempt.data[0].updated_at);
-  if(!claimToken) throw new Error('Meta purchase claim returned an invalid ownership token');
+  const acknowledgedClaim=acknowledgedPaidDeliveryClaim(attempt.data,session.id,metaEventTime);
+  if(!acknowledgedClaim) throw new Error('Meta purchase claim returned an invalid acknowledgement');
+  const {claimToken,eventTime:claimedEventTime}=acknowledgedClaim;
   let providerAccepted=false;
   try{
-    await sendMetaPurchase(session,Number(attempt.data[0].event_time));
+    await sendMetaPurchase(session,claimedEventTime!);
     providerAccepted=true;
     const sentAt=new Date().toISOString();
     // As with SMTP, do not let a stale CAPI worker settle a lease that a
     // newer retry has reclaimed. Meta's event_id deduplicates the provider
     // event, while this predicate preserves an accurate local delivery state.
-    const sent=await supabase.from('meta_purchase_deliveries').update({status:'sent',sent_at:sentAt,updated_at:sentAt}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',claimToken).select('stripe_session_id');
+    const sent=await supabase.from('meta_purchase_deliveries').update({status:'sent',sent_at:sentAt,updated_at:sentAt}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',claimToken).select('stripe_session_id,status,sent_at,updated_at');
     if(sent.error) throw sent.error;
-    if(sent.data?.length!==1) throw new Error('Meta purchase delivery lease was lost');
+    if(!acknowledgedPaidDeliverySettlement(sent.data,session.id,sentAt)) throw new Error('Meta purchase delivery lease was lost');
   }catch(error){
     // A positive Graph API acknowledgement followed by a local settlement
     // failure is also ambiguous success. Preserve the sending lease instead

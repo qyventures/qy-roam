@@ -72,6 +72,7 @@ const { acknowledgedClosingPeriod } = require('../lib/closingPeriodAcknowledgeme
 const { acknowledgedAdminRecord } = require('../lib/adminRecordAcknowledgement.ts');
 const { acknowledgedUnlinkedReservationRelease } = require('../lib/checkoutReservationAcknowledgement.ts');
 const { acknowledgedExpiredOrderClosure, acknowledgedExpiredReservationRelease } = require('../lib/stripeTerminalMutation.ts');
+const { acknowledgedPaidDeliveryClaim, acknowledgedPaidDeliverySettlement } = require('../lib/paidDeliveryAcknowledgement.ts');
 const { parsePocketWifiAvailability, parsePocketWifiBookingTerms } = require('../lib/pocketWifiAvailability.ts');
 const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutResponse.ts');
 const { CUSTOMER_CHECKOUT_MAX_RECONCILIATION_ATTEMPTS, CUSTOMER_CHECKOUT_RECONCILIATION_TIMEOUT_MS, customerCheckoutRetryAfterMs } = require('../lib/customerCheckout.ts');
@@ -5848,11 +5849,58 @@ test('SMTP and Meta delivery settlement retain ownership of their sending leases
   // submitted in the claim update: database microseconds are ownership data.
   assert.match(webhookRoute, /Fulfilment notification delivery lease was lost/);
   assert.match(webhookRoute, /Meta purchase delivery lease was lost/);
-  assert.match(webhookRoute, /from\('fulfilment_notifications'\)[\s\S]{0,700}\.select\('stripe_session_id,updated_at'\)/);
-  assert.match(webhookRoute, /const claimToken=exactDatabaseTimestampToken\(attempt\.data\[0\]\.updated_at\)/);
+  assert.match(webhookRoute, /from\('fulfilment_notifications'\)[\s\S]{0,700}\.select\('stripe_session_id,status,updated_at'\)/);
+  assert.match(webhookRoute, /acknowledgedPaidDeliveryClaim\(attempt\.data,session\.id\)/);
   assert.equal((webhookRoute.match(/\.eq\('updated_at',claimToken\)/g) || []).length, 4);
   assert.doesNotMatch(webhookRoute, /\.eq\('status','sending'\)\.eq\('updated_at',now\)/);
-  assert.match(webhookRoute, /from\('meta_purchase_deliveries'\)[\s\S]{0,700}\.select\('stripe_session_id,event_time,updated_at'\)/);
+  assert.match(webhookRoute, /from\('meta_purchase_deliveries'\)[\s\S]{0,700}\.select\('stripe_session_id,status,event_time,updated_at'\)/);
+});
+
+test('paid-order delivery claims and settlements acknowledge the exact durable row', () => {
+  const sessionId = 'cs_test_delivery123';
+  const claimedAt = '2026-10-16T12:34:56.123456+00:00';
+  const sentAt = '2026-10-16T12:35:00.000Z';
+
+  assert.deepEqual(acknowledgedPaidDeliveryClaim([{
+    stripe_session_id: sessionId,
+    status: 'sending',
+    updated_at: claimedAt,
+  }], sessionId), { claimToken: claimedAt, eventTime: undefined });
+  assert.deepEqual(acknowledgedPaidDeliveryClaim([{
+    stripe_session_id: sessionId,
+    status: 'sending',
+    event_time: 1_700_000_000,
+    updated_at: claimedAt,
+  }], sessionId, 1_700_000_000), { claimToken: claimedAt, eventTime: 1_700_000_000 });
+  assert.equal(acknowledgedPaidDeliverySettlement([{
+    stripe_session_id: sessionId,
+    status: 'sent',
+    sent_at: '2026-10-16T12:35:00+00:00',
+    updated_at: sentAt,
+  }], sessionId, sentAt), true);
+
+  for (const malformed of [
+    null,
+    [],
+    [{ stripe_session_id: sessionId, status: 'sending', updated_at: claimedAt }, { stripe_session_id: sessionId, status: 'sending', updated_at: claimedAt }],
+    [{ stripe_session_id: 'cs_test_other', status: 'sending', updated_at: claimedAt }],
+    [{ stripe_session_id: sessionId, status: 'pending', updated_at: claimedAt }],
+    [{ stripe_session_id: sessionId, status: 'sending', updated_at: 'not-a-timestamp' }],
+    [{ stripe_session_id: sessionId, status: 'sending', event_time: 1_700_000_001, updated_at: claimedAt }],
+  ]) assert.equal(acknowledgedPaidDeliveryClaim(malformed, sessionId, 1_700_000_000), null);
+
+  for (const malformed of [
+    null,
+    [],
+    [{ stripe_session_id: sessionId, status: 'sent', sent_at: sentAt, updated_at: sentAt }, { stripe_session_id: sessionId, status: 'sent', sent_at: sentAt, updated_at: sentAt }],
+    [{ stripe_session_id: 'cs_test_other', status: 'sent', sent_at: sentAt, updated_at: sentAt }],
+    [{ stripe_session_id: sessionId, status: 'sending', sent_at: sentAt, updated_at: sentAt }],
+    [{ stripe_session_id: sessionId, status: 'sent', sent_at: '2026-10-16T12:36:00Z', updated_at: sentAt }],
+    [{ stripe_session_id: sessionId, status: 'sent', sent_at: sentAt, updated_at: '2026-10-16T12:36:00Z' }],
+  ]) assert.equal(acknowledgedPaidDeliverySettlement(malformed, sessionId, sentAt), false);
+
+  assert.match(webhookRoute, /acknowledgedPaidDeliverySettlement\(sent\.data,session\.id,sentAt\)/);
+  assert.equal((webhookRoute.match(/\.select\('stripe_session_id,status,sent_at,updated_at'\)/g) || []).length, 2);
 });
 
 test('accepted paid-order deliveries are not immediately requeued when local settlement is ambiguous', () => {
@@ -5862,7 +5910,7 @@ test('accepted paid-order deliveries are not immediately requeued when local set
   // email or Purchase. Stale-lease recovery remains the deliberate retry path.
   assert.match(webhookRoute, /let providerAccepted=false;[\s\S]*await sendHumanFulfilmentEmail\(fulfilmentSession\);\s*providerAccepted=true;/);
   assert.match(webhookRoute, /if\(providerAccepted\) throw error;\s*\/\/ This row is shown to operations staff/);
-  assert.match(webhookRoute, /let providerAccepted=false;[\s\S]*await sendMetaPurchase\(session,Number\(attempt\.data\[0\]\.event_time\)\);\s*providerAccepted=true;/);
+  assert.match(webhookRoute, /let providerAccepted=false;[\s\S]*await sendMetaPurchase\(session,claimedEventTime!\);\s*providerAccepted=true;/);
   assert.match(webhookRoute, /if\(providerAccepted\) throw error;\s*\/\/ Meta\/provider errors are durable operator-visible data too/);
 });
 
@@ -6362,7 +6410,8 @@ test('Meta Purchase retries preserve one durable event timestamp for deduplicati
   assert.match(webhookRoute, /insert\(\{stripe_session_id:session\.id,status:'pending',event_time:requestedEventTime\}\)/);
   assert.match(webhookRoute, /async function persistSession\(session:Stripe\.Checkout\.Session,eventType:Stripe\.Event\.Type,eventCreated:number\)/);
   assert.match(schema, /payment_confirmed_at = case when v_paid then coalesce\(orders\.payment_confirmed_at, p_payment_confirmed_at\)/);
-  assert.match(webhookRoute, /await sendMetaPurchase\(session,Number\(attempt\.data\[0\]\.event_time\)\)/);
+  assert.match(webhookRoute, /acknowledgedPaidDeliveryClaim\(attempt\.data,session\.id,metaEventTime\)/);
+  assert.match(webhookRoute, /await sendMetaPurchase\(session,claimedEventTime!\)/);
   assert.match(adminOrderRoute, /select\('stripe_session_id,payment_status,payment_confirmed_at,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,fulfilment_status,measurement_consent'\)/);
   assert.match(adminOrderRoute, /const metaEventTime=hasPaymentConfirmedAt\s*\? validStripePaymentEventCreated\(confirmedAtSeconds,session\.created\)\s*:\s*validStripePaymentEventCreated\(session\.created,session\.created\)/);
   assert.match(adminOrderRoute, /deliverMetaPurchase\(supabase, session, metaEventTime!\)/);
