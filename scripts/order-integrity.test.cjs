@@ -6081,6 +6081,19 @@ test('SMTP fulfilment transport bounds untrusted relay responses', () => {
   assert.match(smtpClient, /reject\(new Error\('SMTP response is too large'\)\);/);
 });
 
+test('admin delivery recovery exposes dependency failures as safely retryable', () => {
+  const recovery = adminOrderRoute.slice(
+    adminOrderRoute.indexOf('async function retryOrderDeliveries'),
+    adminOrderRoute.indexOf('export async function POST'),
+  );
+  // Email and CAPI attempts have durable per-Session ledgers. A provider or
+  // database fault can therefore be retried safely, and should not be
+  // presented to operators or automation as an unclassified permanent 500.
+  assert.match(recovery, /console\.error\('admin_order_notification_retry_error'\);[\s\S]*status: 503/);
+  assert.match(recovery, /headers: \{ 'Cache-Control': 'no-store', 'Retry-After': '5' \}/);
+  assert.doesNotMatch(recovery, /Unable to retry order notifications[^\n]*status: 500/);
+});
+
 test('admin delivery recovery requires a completed Stripe session and its complete durable commercial snapshot', () => {
   assert.match(adminOrderRoute, /if \(validStripeCheckoutSessionIdForMode\(session\.id, session\.livemode\) !== sessionId\)/);
   assert.match(adminOrderRoute, /!validation\.valid \|\| session\.status !== 'complete' \|\| session\.payment_status !== 'paid'/);

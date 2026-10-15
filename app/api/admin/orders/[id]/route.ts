@@ -484,7 +484,20 @@ async function retryOrderDeliveries(_req: Request, { params }: { params: { id: s
     // or configuration details. The delivery ledgers retain safe diagnostics
     // for operators, so keep server logs to a stable event name here.
     console.error('admin_order_notification_retry_error');
-    return NextResponse.json({ error: 'Unable to retry order notifications. Please try again shortly.' }, { status: 500 });
+    // Stripe, PostgREST, SMTP, and Meta failures are dependency outages, not
+    // invalid operator commands. Both outbound deliveries are protected by
+    // durable per-Session ledgers, so a later attempt is safe even when one
+    // provider accepted its delivery before another failed. Return an
+    // explicit temporary-unavailability contract so the admin UI, a CLI, or
+    // an operations runbook can retry without treating this as a permanent
+    // application error or spinning immediately against the same outage.
+    return NextResponse.json(
+      { error: 'Unable to retry order notifications. Please try again shortly.' },
+      {
+        status: 503,
+        headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' },
+      },
+    );
   }
 }
 
