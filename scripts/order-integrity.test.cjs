@@ -7688,6 +7688,21 @@ test('paid checkout replays require the same exact durable commercial snapshot a
   assert.doesNotMatch(wifiPaidReplay.slice(0, wifiPaidReplay.indexOf('completed:true')), /order\.data\?\.payment_status\s*===\s*'paid'/);
 });
 
+test('Stripe webhook side effects require an exact durable persistence acknowledgement', () => {
+  assert.match(webhookRoute, /import \{ durableOrderMatchesFailedSession, durableOrderMatchesPaidSession \} from '@\/lib\/durableOrderSnapshot'/);
+  assert.match(webhookRoute, /paid && !durableOrderMatchesPaidSession\(persistedOrder,session,'pocket_wifi'\)/);
+  assert.match(webhookRoute, /failed && !durableOrderMatchesFailedSession\(persistedOrder,session,'pocket_wifi'\)/);
+  assert.match(webhookRoute, /paid && !durableOrderMatchesPaidSession\(persistedOrder,session,'esim'\)/);
+  assert.match(webhookRoute, /failed && !durableOrderMatchesFailedSession\(persistedOrder,session,'esim'\)/);
+
+  const persistenceBoundary = webhookRoute.indexOf("async function persistSession");
+  const paidSideEffects = webhookRoute.indexOf('await deliverPaidOrderSideEffects', persistenceBoundary);
+  const wifiAcknowledgement = webhookRoute.indexOf("durableOrderMatchesPaidSession(persistedOrder,session,'pocket_wifi')", persistenceBoundary);
+  const esimAcknowledgement = webhookRoute.indexOf("durableOrderMatchesPaidSession(persistedOrder,session,'esim')", persistenceBoundary);
+  assert.ok(wifiAcknowledgement > persistenceBoundary && esimAcknowledgement > wifiAcknowledgement);
+  assert.ok(paidSideEffects > esimAcknowledgement, 'paid delivery must follow both product persistence guards');
+});
+
 test('Stripe webhook concurrency is bounded without queueing or leaking admission slots', () => {
   const limiter = createConcurrencyLimiter(2);
   const releaseFirst = limiter.tryAcquire();

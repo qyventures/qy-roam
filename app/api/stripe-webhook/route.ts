@@ -29,6 +29,7 @@ import { paidFulfilmentDetailsIssue } from '@/lib/paidFulfilmentDetails';
 import { structurallyValidStripeSignatureHeader, stripeSignatureTimestampWithinTolerance } from '@/lib/stripeSignatureHeader';
 import { hasIdentityRequestContentEncoding, isJsonRequestContentType } from '@/lib/requestBody';
 import { exactDatabaseTimestampToken, exactStripeClaimToken } from '@/lib/stripeClaimToken';
+import { durableOrderMatchesFailedSession, durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 import {
   tryAcquireStripeWebhookProcessing,
   tryAcquireStripeWebhookUpload,
@@ -485,7 +486,17 @@ async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.E
     });
     if(persisted.error) throw persisted.error;
     const persistedOrder=Array.isArray(persisted.data)?persisted.data[0]:persisted.data;
-    if(!persistedOrder?.stripe_session_id) throw new Error('Pocket WiFi order persistence returned no order');
+    // The RPC response is the commit acknowledgement for this exact order,
+    // not merely evidence that some row was returned. A malformed gateway
+    // response or stale privileged function must not let the webhook continue
+    // into fulfilment/analytics unless the durable commercial snapshot agrees
+    // with the authenticated Stripe Session. Failed events receive the same
+    // exact join before their inventory commitment is considered released.
+    if(
+      (paid && !durableOrderMatchesPaidSession(persistedOrder,session,'pocket_wifi')) ||
+      (failed && !durableOrderMatchesFailedSession(persistedOrder,session,'pocket_wifi')) ||
+      (!paid && !failed && persistedOrder?.stripe_session_id!==session.id)
+    ) throw new Error('Pocket WiFi order persistence returned a mismatched order');
     return;
   }
 
@@ -512,7 +523,11 @@ async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.E
   });
   if(persisted.error) throw persisted.error;
   const persistedOrder=Array.isArray(persisted.data)?persisted.data[0]:persisted.data;
-  if(!persistedOrder?.stripe_session_id) throw new Error('eSIM order persistence returned no order');
+  if(
+    (paid && !durableOrderMatchesPaidSession(persistedOrder,session,'esim')) ||
+    (failed && !durableOrderMatchesFailedSession(persistedOrder,session,'esim')) ||
+    (!paid && !failed && persistedOrder?.stripe_session_id!==session.id)
+  ) throw new Error('eSIM order persistence returned a mismatched order');
 }
 
 type EventClaim =
