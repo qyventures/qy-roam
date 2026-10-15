@@ -6756,8 +6756,15 @@ test('Pocket WiFi hold scans share one end-to-end deadline across Stripe pages',
   assert.ok(calls.every((options) => options.maxNetworkRetries === 0));
 });
 
-test('Pocket WiFi hold scans fail closed on malformed or duplicate Stripe pages', async () => {
-  const nowSeconds = Math.floor(Date.now() / 1000);
+test('Pocket WiFi hold scans fail closed on malformed or duplicate Stripe pages', async (t) => {
+  // Keep the lifecycle boundary deterministic: the scanner takes its own
+  // clock snapshot, so crossing a wall-clock second after this fixture was
+  // created could otherwise turn the +1 second future case into a valid one.
+  const originalNow = Date.now;
+  const fixedNowMs = originalNow();
+  Date.now = () => fixedNowMs;
+  t.after(() => { Date.now = originalNow; });
+  const nowSeconds = Math.floor(fixedNowMs / 1000);
   const id = 'cs_test_scanduplicate';
   const unsignedMetadata = {
     source: 'qyroam.com',
