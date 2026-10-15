@@ -8,6 +8,7 @@ import { isSafeSmtpMailbox } from '@/lib/smtp';
 import { getEsimPlan } from '@/lib/esimPlans';
 import { manualOrderReference, manualOrderSessionId } from '@/lib/manualOrderReference';
 import { tryAcquireAdminOpsConcurrency } from '@/lib/adminOpsConcurrency';
+import { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } from '@/lib/pocketWifiRentalPeriod';
 
 export const dynamic = 'force-dynamic';
 
@@ -243,6 +244,15 @@ export async function POST(req: NextRequest) {
       const country = esimPlan?.destination || text(body.country, 120) || null;
       if (product === 'pocket_wifi' && (!country || !travel.start || !travel.end)) {
         return NextResponse.json({ error: 'Pocket WiFi orders require a destination and valid travel start and end dates' }, { status: 400 });
+      }
+      if (product === 'pocket_wifi') {
+        const rentalDays = pocketWifiRentalDays(
+          parseExactIsoDate(travel.start!)!,
+          parseExactIsoDate(travel.end!)!,
+        );
+        if (rentalDays > MAX_POCKET_WIFI_RENTAL_DAYS) {
+          return NextResponse.json({ error: `Pocket WiFi rentals cannot exceed ${MAX_POCKET_WIFI_RENTAL_DAYS} days` }, { status: 400 });
+        }
       }
       const recordedAt = new Date().toISOString();
       const row = {

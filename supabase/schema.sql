@@ -190,6 +190,18 @@ alter table public.orders add constraint orders_stripe_product_snapshot_separati
   (product_type = 'pocket_wifi' and plan_id is null and data_allowance is null)
 ) not valid;
 
+-- Public and protected manual sales support rentals of at most 90 inclusive
+-- calendar days. Keep that commercial/custody boundary in the durable ledger
+-- too: service-role imports and future writers must not reserve one router for
+-- an unsupported period that checkout itself would reject. NOT VALID leaves a
+-- historical exception visible for reconciliation while protecting all new
+-- or changed rows.
+alter table public.orders drop constraint if exists orders_pocket_wifi_rental_duration_check;
+alter table public.orders add constraint orders_pocket_wifi_rental_duration_check check (
+  product_type <> 'pocket_wifi' or
+  (travel_start is not null and travel_end is not null and travel_end - travel_start between 0 and 89)
+) not valid;
+
 -- eSIM credentials must never be stored as a delivery "reference". Keep a
 -- database backstop for direct operational writes as well as the stricter
 -- application validation; NOT VALID preserves review access to any legacy
@@ -1533,8 +1545,9 @@ as $$
       'orders_paid_cancellation_reason_check',
       'orders_pocket_wifi_dispatch_evidence_check',
       'orders_pocket_wifi_return_evidence_check',
+      'orders_pocket_wifi_rental_duration_check',
       'orders_session_id_format_check'
-    )) = 17 and
+    )) = 18 and
     (select count(*) from pg_constraint where conrelid = 'public.stripe_events'::regclass and conname in (
       'stripe_events_attempts_check',
       'stripe_events_event_id_check',
@@ -1564,8 +1577,9 @@ as $$
     -- constraints exist.
     (select count(*) from pg_constraint where conrelid = to_regclass('public.checkout_reservations') and conname in (
       'checkout_reservations_request_id_check',
-      'checkout_reservations_session_id_check'
-    )) = 2 and
+      'checkout_reservations_session_id_check',
+      'checkout_reservations_rental_duration_check'
+    )) = 3 and
     -- PostgreSQL's replica-only trigger mode (`R`) is not disabled, but it
     -- does not fire for the ordinary service-role writes used by Checkout and
     -- operations. Treat only origin (`O`) and always (`A`) triggers as active
@@ -1621,6 +1635,10 @@ alter table public.checkout_reservations add constraint checkout_reservations_se
     length(stripe_session_id) <= 255 and
     stripe_session_id ~ '^cs_(test|live)_[A-Za-z0-9]+$'
   )
+) not valid;
+alter table public.checkout_reservations drop constraint if exists checkout_reservations_rental_duration_check;
+alter table public.checkout_reservations add constraint checkout_reservations_rental_duration_check check (
+  travel_end - travel_start between 0 and 89
 ) not valid;
 alter table public.checkout_reservations enable row level security;
 
@@ -2498,7 +2516,9 @@ as $$
   -- assertion, so a partial migration cannot silently weaken that audit trail.
   -- Version 42 binds every later Stripe payment transition to the exact
   -- commercial snapshot stored by the Session's first durable event.
-  select 42;
+  -- Version 43 binds public, manual and direct ledger writes to the supported
+  -- 90-day maximum Pocket WiFi rental period.
+  select 43;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
