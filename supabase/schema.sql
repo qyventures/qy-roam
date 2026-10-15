@@ -2118,6 +2118,24 @@ begin
   if v_order.id is not null and v_order.product_type <> 'esim' then
     raise exception 'stored order product does not match eSIM checkout';
   end if;
+  -- A Session's first durable row fixes its commercial entitlement even
+  -- while an asynchronous payment is still pending. The later paid event may
+  -- refresh contact details, but it must not turn the same Stripe capability
+  -- into a different package, amount, destination, or consent grant. Keep
+  -- this inside the locked transaction so future service-role recovery code
+  -- cannot bypass the application HMAC boundary or race another event.
+  if v_order.id is not null and (
+    v_order.amount_sgd is distinct from p_amount_sgd or
+    v_order.plan_id is distinct from p_plan_id or
+    v_order.plan_name is distinct from p_plan_name or
+    v_order.data_allowance is distinct from p_data_allowance or
+    v_order.country is distinct from p_country or
+    v_order.measurement_consent is distinct from p_measurement_consent or
+    v_order.travel_start is not null or
+    v_order.travel_end is not null
+  ) then
+    raise exception 'stored eSIM order commercial snapshot does not match Stripe checkout';
+  end if;
   -- Never let an older unpaid/failed event downgrade a paid entitlement.
   if v_order.id is not null and v_order.payment_status = 'paid' and not v_paid then
     return v_order;
@@ -2233,6 +2251,25 @@ begin
   -- to reuse an existing eSIM Session as a Pocket WiFi capacity commitment.
   if found and v_order.product_type <> 'pocket_wifi' then
     raise exception 'stored order product does not match Pocket WiFi checkout';
+  end if;
+
+  -- The provisional order already owns scarce capacity for these exact dates.
+  -- An unpaid -> paid transition may fill final customer details, but it must
+  -- never rewrite the amount, rental identity, or measurement authority of
+  -- the Stripe Session that established that commitment. Evaluate this while
+  -- holding the inventory advisory lock and row lock so every privileged
+  -- caller shares one atomic snapshot boundary.
+  if found and (
+    v_order.amount_sgd is distinct from p_amount_sgd or
+    v_order.plan_name is distinct from p_plan_name or
+    v_order.country is distinct from p_country or
+    v_order.travel_start is distinct from p_travel_start or
+    v_order.travel_end is distinct from p_travel_end or
+    v_order.measurement_consent is distinct from p_measurement_consent or
+    v_order.plan_id is not null or
+    v_order.data_allowance is not null
+  ) then
+    raise exception 'stored Pocket WiFi order commercial snapshot does not match Stripe checkout';
   end if;
 
   -- An out-of-order failed event must never downgrade an already-paid order.
@@ -2459,7 +2496,9 @@ as $$
   -- from deployments that predate that transition guard. Version 41 makes the
   -- active cancellation-evidence trigger part of the pre-payment readiness
   -- assertion, so a partial migration cannot silently weaken that audit trail.
-  select 41;
+  -- Version 42 binds every later Stripe payment transition to the exact
+  -- commercial snapshot stored by the Session's first durable event.
+  select 42;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
