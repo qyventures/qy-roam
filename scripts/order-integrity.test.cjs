@@ -3818,13 +3818,13 @@ test('payment-readiness checks coalesce healthy checkout probes without caching 
 test('operations readiness requires the reviewed privileged RPC implementation version', () => {
   assert.match(
     schema,
-    /create or replace function public\.qy_operations_schema_version\(\)[\s\S]*?as \$\$ select 1; \$\$/,
+    /create or replace function public\.qy_operations_schema_version\(\)[\s\S]*?as \$\$ select 2; \$\$/,
   );
   assert.match(
     schema,
     /grant execute on function public\.qy_operations_schema_version\(\) to service_role/,
   );
-  assert.match(productionReadiness, /const REQUIRED_OPERATIONS_SCHEMA_VERSION = 1/);
+  assert.match(productionReadiness, /const REQUIRED_OPERATIONS_SCHEMA_VERSION = 2/);
   assert.match(
     productionReadiness,
     /database\.rpc\('qy_operations_schema_version', \{\}\)\.abortSignal\(signal\)/,

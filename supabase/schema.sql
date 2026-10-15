@@ -3493,6 +3493,13 @@ language sql
 immutable
 security definer
 set search_path = pg_catalog
-as $$ select 1; $$;
+-- Version 2 certifies the complete privileged operations contract above:
+-- atomic manual eSIM and Pocket WiFi sale creation; exact optimistic order
+-- transitions; exactly-once router custody movements and explicit return
+-- disposition; bounded inventory mutations; CRM reconciliation; and
+-- ledger-authoritative, immutable accounting closes. Version 1 was created
+-- before all of those safeguards had reached their current signatures and
+-- bodies, so it is not safe evidence for a current admin deployment.
+as $$ select 2; $$;
 revoke all on function public.qy_operations_schema_version() from public;
 grant execute on function public.qy_operations_schema_version() to service_role;

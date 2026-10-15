@@ -491,6 +491,11 @@ assert.ok(
   operationsSchemaVersion > closingFunction && operationsSchemaVersion > salesSummaryView,
   'operations schema version must be written after every operations contract it certifies',
 );
+assert.match(
+  schema.slice(operationsSchemaVersion),
+  /as \$\$ select 2; \$\$/,
+  'operations schema marker must advertise the reviewed version required by the application',
+);
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure and terminators, function parameters, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
