@@ -116,6 +116,12 @@ export default async function SuccessPage({ searchParams }: Props) {
         <span className="eyebrow">Order status</span>
         <h1>{confirmationBusy ? 'Order confirmation is busy.' : 'We couldn’t load this QY Roam order.'}</h1>
         <p>{confirmationBusy ? 'Please wait a moment and refresh this page. Do not place a second order.' : 'Please use the confirmation link from your QY Roam checkout or contact us for help.'}</p>
+        {/* Admission shedding is deliberately transient and happens before
+            Stripe is queried. Rejoin the same bounded reconciliation loop as
+            a paid order awaiting its durable row, so a customer returning
+            from Checkout does not have to decide whether to pay again. Do
+            not auto-refresh malformed or untrusted confirmation references. */}
+        {confirmationBusy && <OrderConfirmationRefresh />}
         <p><a href="tel:+6580327183"><strong>+65 8032 7183</strong></a></p>
         <a className="secondary" href="/">Back to QY Roam</a>
       </main>

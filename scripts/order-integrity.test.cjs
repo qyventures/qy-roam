@@ -2350,6 +2350,16 @@ test('paid confirmation automatically reconciles a delayed durable order without
   assert.match(orderConfirmationRefresh, /Please do not place a second order|checking the secure order record automatically/);
 });
 
+test('temporarily saturated confirmation views recover without asking for a second checkout', () => {
+  // Admission failure happens before either page spends a Stripe request, so
+  // the existing bounded refresh loop is safe and gives paid customers the
+  // same automatic recovery as a webhook still finalising their order row.
+  assert.match(successPage, /confirmationBusy && <OrderConfirmationRefresh \/>/);
+  assert.match(bookingPage, /if \(!releaseConfirmation\)[\s\S]{0,800}<OrderConfirmationRefresh \/>/);
+  assert.match(successPage, /Do not place a second order/);
+  assert.match(bookingPage, /Do not place a second order/);
+});
+
 test('customer confirmation views distinguish expired Checkout Sessions from delayed payment confirmation', () => {
   // An expired session cannot settle successfully. Presenting it as a delayed
   // payment encourages a customer to wait on an unrecoverable link instead of

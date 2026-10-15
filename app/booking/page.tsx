@@ -65,6 +65,11 @@ export default async function BookingPage({ searchParams }: Props) {
         <span className="eyebrow">Order status</span>
         <h1>Order status is busy.</h1>
         <p>Please wait a moment and refresh this page. Do not place a second order.</p>
+        {/* No provider lookup has started when admission is full. Retry this
+            trusted Checkout capability through the existing bounded refresh
+            loop instead of making the traveller manually recover a transient
+            server condition or wonder whether another order is required. */}
+        <OrderConfirmationRefresh />
         <p>Need help? Call <a href="tel:+6580327183"><strong>+65 8032 7183</strong></a>.</p>
         <a className="secondary" href="/">Back to QY Roam</a>
       </main>
