@@ -324,6 +324,13 @@ test('admin fulfilment transitions refresh every server-owned operations ledger'
   assert.match(adminPage, /<AdminOrderActions key=\{`\$\{o\.id\}:\$\{o\.updated_at\}`\}/);
 });
 
+test('admin delivery recovery refreshes durable delivery status and exception totals', () => {
+  assert.match(
+    adminOrderActions,
+    /setMessage\('Order delivery retry started'\);[\s\S]{0,700}router\.refresh\(\)/,
+  );
+});
+
 test('admin fulfilment notes and cancellation evidence are rejected rather than silently truncated', () => {
   assert.match(adminOrderRoute, /const MAX_ORDER_NOTES_LENGTH = 2_500/);
   assert.match(adminOrderRoute, /Object\.prototype\.hasOwnProperty\.call\(body, 'notes'\)/);

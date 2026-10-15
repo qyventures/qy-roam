@@ -91,6 +91,12 @@ export default function AdminOrderActions({ id, initialStatus, initialUpdatedAt,
       const result = value as { error?: string } | null;
       if (!res.ok) throw new Error(result?.error || 'Notification retry failed');
       setMessage('Order delivery retry started');
+      // The retry endpoint settles the durable email/Meta delivery ledgers
+      // synchronously. Refresh the server-owned dashboard so its exception
+      // totals, per-order delivery statuses, and retry eligibility immediately
+      // reflect that authoritative result instead of inviting a duplicate
+      // operator retry from stale props.
+      router.refresh();
     } catch (error) { setMessage(error instanceof CustomerRequestTimeoutError ? 'The retry timed out. Refresh the order before retrying again.' : error instanceof Error ? error.message : 'Could not retry notifications'); }
     finally { mutationInFlight.current = false; setRetrying(false); }
   }
