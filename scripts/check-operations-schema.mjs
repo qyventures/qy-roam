@@ -407,6 +407,8 @@ const requiredContracts = [
   'grant execute on function public.qy_order_integrity_schema_version() to service_role',
   'create or replace function public.qy_claim_stripe_event',
   'grant execute on function public.qy_claim_stripe_event(text,text,text) to service_role',
+  "to_regprocedure('public.qy_persist_stripe_esim_order(text,text,text,text,text,numeric,text,text,text,text,text,jsonb,timestamptz,boolean)') is not null",
+  "to_regprocedure('public.qy_persist_stripe_pocket_wifi_order(text,text,text,text,text,numeric,text,text,date,date,text,jsonb,timestamptz,boolean,text)') is not null",
   'stripe_events_event_id_check',
   'stripe_events_session_id_check',
   'stripe_events_event_type_check',

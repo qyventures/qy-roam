@@ -1544,6 +1544,13 @@ as $$
     to_regclass('public.fulfilment_notifications') is not null and
     to_regclass('public.meta_purchase_deliveries') is not null and
     to_regprocedure('public.qy_claim_stripe_event(text,text,text)') is not null and
+    -- Checkout readiness is the last boundary before the application creates
+    -- a payable Stripe Session. Certify both product-specific persistence
+    -- functions here: table/constraint probes alone can look healthy after a
+    -- partial migration while every paid webhook would still fail to create
+    -- its durable order.
+    to_regprocedure('public.qy_persist_stripe_esim_order(text,text,text,text,text,numeric,text,text,text,text,text,jsonb,timestamptz,boolean)') is not null and
+    to_regprocedure('public.qy_persist_stripe_pocket_wifi_order(text,text,text,text,text,numeric,text,text,date,date,text,jsonb,timestamptz,boolean,text)') is not null and
     to_regprocedure('public.qy_pocket_wifi_availability_snapshot(date,date,integer,text[])') is not null and
     to_regprocedure('public.qy_esim_delivery_references_ready()') is not null and
     -- The CRM trigger delegates its ledger-derived totals to this helper.
@@ -3262,7 +3269,10 @@ as $$
   -- Version 44 additionally certifies that existing-customer CRM reconciliation
   -- delegates ledger aggregates to qy_reconcile_customer_paid_totals instead
   -- of referencing variables outside their PL/pgSQL scope.
-  select 44;
+  -- Version 45 makes both product-specific Stripe persistence RPC signatures
+  -- part of pre-payment readiness, preventing a partial migration from
+  -- accepting payment when the webhook cannot create its durable order.
+  select 45;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
