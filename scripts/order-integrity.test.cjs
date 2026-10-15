@@ -843,6 +843,14 @@ test('both storefronts cancel the complete checkout reconciliation lifecycle on 
   }
 });
 
+test('Pocket WiFi availability requests are cancelled when their booking selection becomes stale', () => {
+  assert.match(homePage, /const availabilityAbortController = useRef<AbortController \| null>\(null\)/);
+  assert.match(homePage, /availabilityAbortController\.current\?\.abort\(\);[\s\S]*?\[country, start, end\]/);
+  assert.match(homePage, /fetchCustomerJson\(`\/api\/availability\?[\s\S]*?signal: controller\.signal/);
+  assert.match(homePage, /if \(!controller\.signal\.aborted && requestNumber === availabilityRequest\.current/);
+  assert.match(homePage, /if \(availabilityAbortController\.current === controller\) availabilityAbortController\.current = null/);
+});
+
 test('checkout attempt identity survives reloads without becoming permanently stale', () => {
   const previousWindow = global.window;
   const previousCrypto = global.crypto;

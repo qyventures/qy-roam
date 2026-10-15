@@ -55,6 +55,7 @@ export default function Home() {
   const activeCheckoutAttempt = useRef<CheckoutAttempt | null>(null);
   const checkoutInFlight = useRef(false);
   const checkoutAbortController = useRef<AbortController | null>(null);
+  const availabilityAbortController = useRef<AbortController | null>(null);
   const availabilityRequest = useRef(0);
   const selectedBooking = useRef({ country, start, end });
   selectedBooking.current = { country, start, end };
@@ -86,7 +87,25 @@ export default function Home() {
     // polls. Leaving the storefront owns cancellation of that complete cycle.
     checkoutAbortController.current?.abort();
     checkoutAbortController.current = null;
+    // Availability can be waiting on a paginated Stripe hold scan and an
+    // inventory snapshot. A detached storefront has no use for that promise,
+    // so release the browser connection instead of retaining it until the
+    // general customer-request deadline.
+    availabilityAbortController.current?.abort();
+    availabilityAbortController.current = null;
   }, []);
+  useEffect(() => {
+    // An availability result belongs to one exact commercial selection. The
+    // response guard below prevents stale data from enabling checkout, while
+    // aborting here also stops an obsolete browser request as soon as the
+    // traveller changes destination or dates. Incrementing the generation
+    // means even a fetch implementation that settles during abort cannot own
+    // the shared loading state.
+    availabilityRequest.current += 1;
+    availabilityAbortController.current?.abort();
+    availabilityAbortController.current = null;
+    setChecking(false);
+  }, [country, start, end]);
   const plan = useMemo(() => plans.find(p => p.country === country) || plans[0], [country]);
   const datesValid = Boolean(start && end && start >= earliestStart && end >= start);
   const days = daysBetween(start, end);
@@ -126,9 +145,12 @@ export default function Home() {
     const checkedCountry = country;
     const checkedStart = start;
     const checkedEnd = end;
+    availabilityAbortController.current?.abort();
+    const controller = new AbortController();
+    availabilityAbortController.current = controller;
     setChecking(true); setAvailability(null); setCheckoutError('');
     try {
-      const { response: res, value: payload } = await fetchCustomerJson(`/api/availability?start=${encodeURIComponent(checkedStart)}&end=${encodeURIComponent(checkedEnd)}`, { cache: 'no-store' });
+      const { response: res, value: payload } = await fetchCustomerJson(`/api/availability?start=${encodeURIComponent(checkedStart)}&end=${encodeURIComponent(checkedEnd)}`, { cache: 'no-store', signal: controller.signal });
       // Availability is also the public source of operational booking terms.
       // Require a complete live response before enabling payment; Checkout
       // still recalculates every amount and date rule independently.
@@ -146,11 +168,12 @@ export default function Home() {
       return result;
     } catch {
       const result = { available: false, error: 'Unable to check availability. Please try again.', checkedCountry, checkedStart, checkedEnd };
-      if (requestNumber === availabilityRequest.current && selectedBooking.current.country === checkedCountry && selectedBooking.current.start === checkedStart && selectedBooking.current.end === checkedEnd) setAvailability(result);
+      if (!controller.signal.aborted && requestNumber === availabilityRequest.current && selectedBooking.current.country === checkedCountry && selectedBooking.current.start === checkedStart && selectedBooking.current.end === checkedEnd) setAvailability(result);
       return result;
     } finally {
       // An older request can finish after a newer one starts. It does not own
       // the shared loading state or payment-facing booking terms.
+      if (availabilityAbortController.current === controller) availabilityAbortController.current = null;
       if (requestNumber === availabilityRequest.current) setChecking(false);
     }
   }
