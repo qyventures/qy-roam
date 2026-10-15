@@ -2033,6 +2033,26 @@ test('idempotent Checkout Sessions retain QY Roam confirmation and cancellation 
   assert.equal((esimCheckoutRoute.match(/matchesRequestedEsim\([^\n]*, origin\)/g) || []).length, 3);
 });
 
+test('Pocket WiFi checkout cancellation restores only a bounded same-tab booking draft', () => {
+  // The Stripe cancel URL remains free of customer-controlled commercial
+  // fields. Preserve the reviewed selection in sessionStorage instead, then
+  // validate every field before it can update the form; checkout remains the
+  // authority for live terms, availability, promotion and final amount.
+  assert.match(homePage, /const POCKET_WIFI_CHECKOUT_DRAFT_KEY = 'qyroam:pocket-wifi-checkout-draft:v1'/);
+  assert.match(homePage, /const MAX_CHECKOUT_DRAFT_BYTES = 1_024/);
+  assert.match(homePage, /function restoredPocketWifiDraft\(value: string \| null, earliestStart: string\)/);
+  assert.match(homePage, /value\.length > MAX_CHECKOUT_DRAFT_BYTES/);
+  assert.match(homePage, /plans\.some\(plan => plan\.country === input\.country\)/);
+  assert.match(homePage, /!exactIsoDate\(input\.start\) \|\| !exactIsoDate\(input\.end\)/);
+  assert.match(homePage, /\(input\.start as string\) < earliestStart \|\| \(input\.end as string\) < \(input\.start as string\)/);
+  assert.match(homePage, /window\.sessionStorage\.setItem\(POCKET_WIFI_CHECKOUT_DRAFT_KEY, JSON\.stringify\(\{ country, start, end, promoCode \}\)\)/);
+  assert.match(homePage, /url\.searchParams\.get\('checkout'\) !== 'cancelled'/);
+  assert.match(homePage, /window\.sessionStorage\.removeItem\(POCKET_WIFI_CHECKOUT_DRAFT_KEY\)/);
+  assert.match(homePage, /if \(launchPromoActive && validLaunchPromo\(draft\.promoCode\)\) setPromoCode\(draft\.promoCode\)/);
+  assert.match(homePage, /if you completed payment, do not pay again/);
+  assert.doesNotMatch(homePage, /url\.searchParams\.get\('(country|start|end|promoCode)'\)/);
+});
+
 test('rejects unsigned, copied, and session-id-replayed checkout provenance', () => {
   const unsigned = esimSession();
   delete unsigned.metadata.qyroam_provenance;

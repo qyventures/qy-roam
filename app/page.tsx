@@ -16,11 +16,47 @@ import { pocketWifiCheckoutFingerprint } from '../lib/checkoutFingerprint';
 const plans = WIFI_PLANS;
 
 const DEFAULT_DELIVERY_LEAD_DAYS = 2;
+const POCKET_WIFI_CHECKOUT_DRAFT_KEY = 'qyroam:pocket-wifi-checkout-draft:v1';
+const MAX_CHECKOUT_DRAFT_BYTES = 1_024;
 type Availability = PocketWifiAvailability & {
   checkedCountry?: string;
   checkedStart?: string;
   checkedEnd?: string;
 };
+
+type PocketWifiCheckoutDraft = {
+  country: string;
+  start: string;
+  end: string;
+  promoCode: string;
+};
+
+function exactIsoDate(value: unknown) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+function restoredPocketWifiDraft(value: string | null, earliestStart: string): PocketWifiCheckoutDraft | null {
+  if (!value || value.length > MAX_CHECKOUT_DRAFT_BYTES) return null;
+  try {
+    const draft: unknown = JSON.parse(value);
+    if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return null;
+    const input = draft as Record<string, unknown>;
+    if (typeof input.country !== 'string' || !plans.some(plan => plan.country === input.country) ||
+      !exactIsoDate(input.start) || !exactIsoDate(input.end) ||
+      (input.start as string) < earliestStart || (input.end as string) < (input.start as string) ||
+      typeof input.promoCode !== 'string' || input.promoCode.length > 32) return null;
+    return {
+      country: input.country,
+      start: input.start as string,
+      end: input.end as string,
+      promoCode: input.promoCode,
+    };
+  } catch {
+    return null;
+  }
+}
 
 function daysBetween(start: string, end: string) {
   if (!start || !end) return 1;
@@ -52,6 +88,7 @@ export default function Home() {
   const [checking, setChecking] = useState(false);
   const [checkingOut, setCheckingOut] = useState(false);
   const [checkoutError, setCheckoutError] = useState('');
+  const [checkoutCancelled, setCheckoutCancelled] = useState(false);
   const activeCheckoutAttempt = useRef<CheckoutAttempt | null>(null);
   const checkoutInFlight = useRef(false);
   const checkoutAbortController = useRef<AbortController | null>(null);
@@ -59,6 +96,30 @@ export default function Home() {
   const availabilityRequest = useRef(0);
   const selectedBooking = useRef({ country, start, end });
   selectedBooking.current = { country, start, end };
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('checkout') !== 'cancelled') return;
+    setCheckoutCancelled(true);
+    // Stripe's cancellation URL deliberately contains no commercial fields.
+    // Restore only the bounded same-tab draft written immediately before the
+    // shopper opened Checkout; never let query parameters author a quote.
+    let saved: string | null = null;
+    try {
+      saved = window.sessionStorage.getItem(POCKET_WIFI_CHECKOUT_DRAFT_KEY);
+      window.sessionStorage.removeItem(POCKET_WIFI_CHECKOUT_DRAFT_KEY);
+    } catch {}
+    const draft = restoredPocketWifiDraft(saved, operationalIsoDateAfter(DEFAULT_DELIVERY_LEAD_DAYS));
+    if (draft) {
+      setCountry(draft.country);
+      setStart(draft.start);
+      setEnd(draft.end);
+      if (launchPromoActive && validLaunchPromo(draft.promoCode)) setPromoCode(draft.promoCode);
+    }
+    // Consume the marker so refresh/back navigation does not repeatedly
+    // restore an old draft. The in-memory notice remains visible this visit.
+    url.searchParams.delete('checkout');
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  }, [launchPromoActive]);
   useEffect(() => {
     let active = true;
     void fetchCustomerJson('/api/booking-terms', { cache: 'no-store' }).then(({ response, value }) => {
@@ -204,6 +265,13 @@ export default function Home() {
     const measurementConsent = metaMeasurementAllowed();
     const fingerprint = pocketWifiCheckoutFingerprint(country, start, end, promoCode);
     activeCheckoutAttempt.current = checkoutAttempt('pocket_wifi', fingerprint, activeCheckoutAttempt.current);
+    // Stripe returns cancellations to a deliberately generic URL. Preserve
+    // this non-sensitive commercial selection in same-tab storage so a
+    // traveller can review and retry without rebuilding the booking. The
+    // server still recalculates dates, stock, promotion and amount on retry.
+    try {
+      window.sessionStorage.setItem(POCKET_WIFI_CHECKOUT_DRAFT_KEY, JSON.stringify({ country, start, end, promoCode }));
+    } catch {}
     // A transient browser/network failure can retry this exact Stripe
     // idempotency key. Give Pixel the same stable attempt identity so it does
     // not turn one customer's recovery attempt into multiple checkout starts.
@@ -261,6 +329,7 @@ export default function Home() {
   }
 
   return <main>
+    {checkoutCancelled && <div className="wrap" role="status"><p className="muted">Secure checkout was closed before this page received payment confirmation. Your trip details have been restored where possible. Review the total before trying again; if you completed payment, do not pay again—use your confirmation link or contact +65 8032 7183.</p></div>}
     {launchPromoActive && <section className="promo-banner"><div className="wrap promo-inner"><div><span className="promo-kicker">{LAUNCH_PROMO.label}</span><strong>{LAUNCH_PROMO.headline}</strong><span>Use code <b>{LAUNCH_PROMO.code}</b> · valid through 30 Sep 2026</span></div><a href="#plans" className="promo-cta">Book now</a></div></section>}
     <section className="hero"><div className="wrap hero-grid"><div><span className="eyebrow">Travel connectivity for every trip</span><h1>Stay connected overseas without the roaming bill.</h1><p className="lead">{esimOfferActive ? 'Choose a travel eSIM for your phone or Pocket WiFi to share across multiple devices.' : 'Book Pocket WiFi to share across multiple devices. Online eSIM ordering is temporarily paused while availability and pricing are reviewed.'}</p><div className="product-switch"><a className="product-choice" href="/esim"><span className="pill">Travel eSIM</span><strong>{esimOfferActive ? 'Digital travel option' : 'Online ordering paused'}</strong><small>{esimOfferActive ? 'No collection or return. Pick a plan and receive fulfilment after payment.' : 'View plan information or contact our Singapore support team for current availability.'}</small><b>{esimOfferActive ? 'View eSIM plans →' : 'View current status →'}</b></a><a className="product-choice featured-choice" href="#plans"><span className="pill">Pocket WiFi</span><strong>Share across devices</strong><small>Delivered before departure and returned after your trip.</small><b>Check Pocket WiFi →</b></a></div><div className="trust-row"><span>eSIM & Pocket WiFi</span><span>Singapore-based support</span><span>Secure online checkout</span></div></div><form className="search-card" onSubmit={search}><h2>Pocket WiFi availability</h2><label>Destination<select value={country} onChange={e => { setCountry(e.target.value); setAvailability(null); setCheckoutError(''); }}>{plans.map(p => <option key={p.code}>{p.country}</option>)}</select></label><div className="date-grid"><label>Start date<input type="date" min={earliestStart} value={start} onChange={e => { setStart(e.target.value); if (end < e.target.value) setEnd(e.target.value); setAvailability(null); setCheckoutError(''); }} /></label><label>End date<input type="date" min={start || earliestStart} value={end} onChange={e => { setEnd(e.target.value); setAvailability(null); setCheckoutError(''); }} /></label></div>{launchPromoActive && <label>Promo code<input value={promoCode} onChange={e => setPromoCode(e.target.value.toUpperCase())} placeholder="Enter promo code" /></label>}{promoActive && <div className="promo-applied">✓ {LAUNCH_PROMO.code} applied — {LAUNCH_PROMO.percent}% off rental</div>}<button type="submit" className="primary" disabled={checking || !datesValid}>{checking ? 'Checking availability…' : 'Check price & availability'}</button><small>Book at least {deliveryLeadDays} day{deliveryLeadDays === 1 ? '' : 's'} before departure. SGD pricing · S$10 minimum booking{launchPromoActive ? ' before promotion' : ''}.</small></form></div></section>
     <section className="wrap section" id="plans"><div className="section-head"><div><span className="eyebrow">Simple daily pricing</span><h2>{searched ? `${country} Pocket WiFi` : 'Popular destinations'}</h2></div><p>Clear daily rates with the rental total calculated from your selected travel dates.</p></div><div className="plan-card featured"><div><span className="pill">Pocket WiFi</span><h3>{country}</h3><p>{plan.data} · {plan.note}</p><p className="muted">Rental: {days} day{days !== 1 ? 's' : ''} × S${plan.daily.toFixed(2)}{minimumApplied ? ' · S$10 minimum booking applies' : ''}</p>{promoActive && <p className="promo-line">Launch promo: {LAUNCH_PROMO.percent}% off with {LAUNCH_PROMO.code}</p>}{searched && availabilityMatchesSelection && availability?.available && <p className="muted">✓ Available for your dates{typeof availability.remaining === 'number' ? ` · ${availability.remaining} unit${availability.remaining === 1 ? '' : 's'} remaining` : ''}</p>}{searched && availabilityMatchesSelection && availability && !availability.available && <p className="muted">{availability.error || 'Sold out for these dates. Choose different dates or contact +65 8032 7183.'}</p>}{checkoutError && <p className="muted">{checkoutError}</p>}</div><div className="price"><span>S$</span>{plan.daily.toFixed(2)}<small>/day</small>{promoActive && <><p className="old-total">Before promo: S${baseSubtotal.toFixed(2)}</p><p className="discount-total">Save S${promoDiscount.toFixed(2)}</p></>}<p>Rental total: S${subtotal.toFixed(2)}</p>{courierFeeSgd > 0 && <p>Courier fee: S${courierFeeSgd.toFixed(2)}</p>}<p><strong>Total due today: S${payableTotal.toFixed(2)}</strong></p><button className="primary" onClick={checkout} disabled={checking || checkingOut || !datesValid}>{checking ? 'Checking…' : checkingOut ? 'Opening secure checkout…' : availabilityMatchesSelection && availability?.available ? `Reserve for S$${payableTotal.toFixed(2)}` : 'Check availability'}</button><small>Live booking terms are checked before payment.</small></div></div></section>
