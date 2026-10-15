@@ -1655,6 +1655,23 @@ test('Stripe webhook failure logging does not print raw dependency errors', () =
   assert.match(webhookRoute, /console\.error\('stripe_webhook_unexpected_error'\)/);
 });
 
+test('customer Checkout Session capabilities are never copied into process logs', () => {
+  // Session ids grant access to the customer confirmation/status views. They
+  // belong in protected order and webhook ledgers, not general application
+  // logs. Stable event names and Stripe event ids retain incident correlation.
+  for (const [name, source] of [
+    ['Pocket WiFi checkout', wifiCheckoutRoute],
+    ['eSIM checkout', esimCheckoutRoute],
+    ['Stripe webhook', webhookRoute],
+  ]) {
+    const loggingCalls = source.match(/console\.(?:error|warn|log)\([^;]+;/gs) || [];
+    for (const call of loggingCalls) {
+      assert.doesNotMatch(call, /(?:sessionId|SessionId|session\.id|eventSessionId|createdSessionId|currentSession\.id|existing\.id)/, `${name} logs a Checkout Session capability: ${call}`);
+    }
+  }
+  assert.match(webhookRoute, /stripe_webhook_claim_error'\s*,\s*\{eventId:stripeEventId\}/);
+});
+
 test('Stripe webhook acknowledgements and retry responses are never cacheable', () => {
   assert.match(webhookRoute, /const STRIPE_WEBHOOK_RESPONSE_HEADERS = \{ 'Cache-Control': 'no-store' \}/);
   assert.match(webhookRoute, /function webhookJson\(body: unknown, init: ResponseInit = \{\}\)/);

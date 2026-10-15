@@ -278,14 +278,14 @@ export async function POST(req: Request) {
     // This object can release a reservation, confirm a paid order, or expose a
     // payment URL. Require it to remain bound to the exact hold selected above.
     if(!stripeWebhookCheckoutSessionMatchesSnapshot(holdState.existingSessionSnapshot,existing)){
-      console.error('checkout_session_identity_mismatch',{expectedSessionId:holdState.existingSessionId,retrievedSessionId:existing.id});
+      console.error('checkout_session_identity_mismatch');
       return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
     }
     // The Stripe credential normally scopes this read to one mode, but this
     // is a payment-capability boundary. Do not re-sign or return a session if
     // an unexpected SDK/provider response crosses the configured mode.
     if(!stripeEventMatchesConfiguredMode(key,existing.livemode)){
-      console.error('checkout_session_mode_mismatch',{sessionId:existing.id});
+      console.error('checkout_session_mode_mismatch');
       return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
     }
     if(!matchesRequestedPocketWifi(existing,requestId,requested,origin)){
@@ -297,7 +297,7 @@ export async function POST(req: Request) {
       if(!stripeWebhookCheckoutSessionMatchesSnapshot(existing,updated)||
         !stripeEventMatchesConfiguredMode(key,updated.livemode)||
         !matchesRequestedPocketWifi(updated,requestId,requested,origin)){
-        console.error('checkout_consent_downgrade_mismatch',{expectedSessionId:existing.id});
+        console.error('checkout_consent_downgrade_mismatch');
         return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
       }
       existing=updated;
@@ -314,7 +314,7 @@ export async function POST(req: Request) {
       if(!stripeWebhookCheckoutSessionMatchesSnapshot(existing,updated)||
         !stripeEventMatchesConfiguredMode(key,updated.livemode)||
         !matchesRequestedPocketWifi(updated,requestId,requested,origin)){
-        console.error('checkout_recovered_session_mismatch',{expectedSessionId:existing.id});
+        console.error('checkout_recovered_session_mismatch');
         return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
       }
       existing=updated;
@@ -323,7 +323,7 @@ export async function POST(req: Request) {
     // exact id-bound signature on the object that controls all subsequent
     // reservation and customer redirect decisions.
     if(!validQyRoamProvenance(existing.id,existing.metadata)){
-      console.error('checkout_provenance_confirmation_error',{sessionId:existing.id});
+      console.error('checkout_provenance_confirmation_error');
       return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
     }
     if(existing.status==='complete'&&existing.payment_status==='paid'){
@@ -380,7 +380,7 @@ export async function POST(req: Request) {
     const existingCheckoutUrl=safeStripeCheckoutUrl(existing.url);
     if(existing.status!=='open'||!existingCheckoutUrl){
       if(existing.status==='open'&&existing.url){
-        console.error('checkout_url_invalid',{sessionId:existing.id});
+        console.error('checkout_url_invalid');
         return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
       }
       return NextResponse.json({error:'Your payment is still being confirmed. Please wait for confirmation before trying again.',paymentPending:true},{status:409,headers:{'Cache-Control':'no-store','Retry-After':'3'}});
@@ -458,7 +458,7 @@ export async function POST(req: Request) {
     // credential-mode boundary must never be exposed or treated as a safe
     // checkout session, and releasing its capacity could oversell a session
     // whose creation outcome is otherwise ambiguous.
-    console.error('checkout_session_mode_mismatch',{sessionId:session.id});
+    console.error('checkout_session_mode_mismatch');
     return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
   }
   if(!matchesRequestedPocketWifi(session,requestId,requested,origin)){
@@ -472,7 +472,7 @@ export async function POST(req: Request) {
     if(!stripeWebhookCheckoutSessionMatchesSnapshot(session,updated)||
       !stripeEventMatchesConfiguredMode(key,updated.livemode)||
       !matchesRequestedPocketWifi(updated,requestId,requested,origin)){
-      console.error('checkout_consent_downgrade_mismatch',{expectedSessionId:createdSessionId});
+      console.error('checkout_consent_downgrade_mismatch');
       return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
     }
     session=updated;
@@ -502,11 +502,11 @@ export async function POST(req: Request) {
   // Keep the fresh response bound to the idempotent create result before it
   // can confirm payment, mutate this booking's reservation, or expose a URL.
   if(!stripeWebhookCheckoutSessionMatchesSnapshot(session,currentSession)){
-    console.error('checkout_session_identity_mismatch',{expectedSessionId:createdSessionId,retrievedSessionId:currentSession.id});
+    console.error('checkout_session_identity_mismatch');
     return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
   }
   if(!stripeEventMatchesConfiguredMode(key,currentSession.livemode)){
-    console.error('checkout_session_mode_mismatch',{sessionId:currentSession.id});
+    console.error('checkout_session_mode_mismatch');
     return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
   }
   if(!matchesRequestedPocketWifi(currentSession,requestId,requested,origin)){
@@ -518,7 +518,7 @@ export async function POST(req: Request) {
     return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.',checkoutRequestConflict:true},{status:409,headers:{'Cache-Control':'no-store'}});
   }
   if(!validQyRoamProvenance(currentSession.id,currentSession.metadata)){
-    console.error('checkout_provenance_confirmation_error',{sessionId:currentSession.id});
+    console.error('checkout_provenance_confirmation_error');
     return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
   }
   // A completed paid Session may be returned when a browser retries after its
@@ -584,7 +584,7 @@ export async function POST(req: Request) {
   if(currentSession.status!=='open'||!checkoutUrl){
     if(!await linkReservationToSession(supabase,requestId,currentSession.id,requested)) return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
     if(currentSession.status==='open'&&currentSession.url){
-      console.error('checkout_url_invalid',{sessionId:currentSession.id});
+      console.error('checkout_url_invalid');
       return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
     }
     return NextResponse.json({error:'Your payment is still being confirmed. Please wait for confirmation before trying again.',paymentPending:true},{status:409,headers:{'Cache-Control':'no-store','Retry-After':'3'}});

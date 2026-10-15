@@ -950,7 +950,11 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
     if(claim.status==='in_progress') return webhookRetryJson({error:'Event is still processing'});
     claimStartedAt=claim.processingStartedAt;
   }catch(error){
-    console.error('stripe_webhook_claim_error',{eventId:stripeEventId,sessionId:eventSessionId});
+    // Checkout Session ids are customer capability references used by the
+    // confirmation pages. Keep them in the protected recovery ledger, but
+    // never duplicate them into process logs. The Stripe event id remains a
+    // safe operational correlation key for this signed delivery.
+    console.error('stripe_webhook_claim_error',{eventId:stripeEventId});
     return webhookRetryJson({error:'Processing failed'});
   }
   // Stripe signs the event snapshot, but fetch the Checkout Session again
@@ -967,7 +971,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
     // A temporary Stripe read failure must remain retryable rather than
     // acknowledging a paid order whose durable fulfilment record we cannot
     // safely reconstruct from a complete Checkout Session.
-    console.error('stripe_webhook_session_retrieve_error',{eventId:stripeEventId,sessionId:eventSessionId});
+    console.error('stripe_webhook_session_retrieve_error',{eventId:stripeEventId});
     if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error);
     return webhookRetryJson({error:'Unable to retrieve Checkout Session'});
   }
@@ -979,7 +983,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
   // lease instead of an immediately actionable recovery record.
   const session=stripeWebhookCheckoutSession(refreshedSession);
   if(!session){
-    console.error('stripe_webhook_invalid_retrieved_session',{eventId:stripeEventId,sessionId:eventSessionId});
+    console.error('stripe_webhook_invalid_retrieved_session',{eventId:stripeEventId});
     if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,new Error('Stripe returned an invalid Checkout Session object'));
     return webhookRetryJson({error:'Invalid retrieved Checkout Session'});
   }
@@ -990,13 +994,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
   // Stripe mode) inherit this event's authority and reach persistence or
   // fulfilment side effects.
   if(!stripeWebhookCheckoutSessionMatchesSnapshot(eventSession,session)){
-    console.error('stripe_webhook_session_identity_mismatch',{
-      eventId:stripeEventId,
-      eventSessionId,
-      retrievedSessionId:session.id,
-      eventLivemode:event.livemode,
-      retrievedLivemode:session.livemode,
-    });
+    console.error('stripe_webhook_session_identity_mismatch',{eventId:stripeEventId});
     if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,new Error('Retrieved Checkout Session does not match webhook event'));
     return webhookRetryJson({error:'Retrieved Checkout Session does not match webhook event'});
   }
@@ -1017,7 +1015,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
     // to retain the same server-only HMAC; metadata drift is an actionable
     // recovery failure, not a reason to silently discard a trusted event.
     if(!validQyRoamProvenance(session.id,session.metadata)){
-      console.error('stripe_webhook_expiry_integrity_error',{sessionId:session.id});
+      console.error('stripe_webhook_expiry_integrity_error',{eventId:stripeEventId});
       const error=new Error('Refreshed expired Checkout Session failed provenance validation');
       if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error);
       return webhookRetryJson({error:'Processing failed'});
@@ -1035,7 +1033,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
       // snapshot remains visible and immediately retryable in operations.
       const expiryEventCreated=validStripePaymentEventCreated(event.created,session.created);
       if(!expiryEventCreated){
-        console.error('stripe_webhook_invalid_expiry_event_created',{eventId:stripeEventId,sessionId:session.id});
+        console.error('stripe_webhook_invalid_expiry_event_created',{eventId:stripeEventId});
         throw new Error('Invalid Stripe expiry event timestamp');
       }
       await releaseExpiredPocketWifiReservation(supabase,session);
@@ -1061,7 +1059,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
     // it only exists in Stripe's finite retry history and staff cannot
     // reconcile the affected paid order after those retries stop.
     if(eventStateIssue) {
-      console.error('stripe_webhook_event_state_error',{eventId:stripeEventId,sessionId:session.id,reason:eventStateIssue});
+      console.error('stripe_webhook_event_state_error',{eventId:stripeEventId,reason:eventStateIssue});
       throw new Error(`Stripe event state validation failed: ${eventStateIssue}`);
     }
     // `event.created` is carried into both the durable payment-confirmation
@@ -1071,7 +1069,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
     // instead of producing an impossible historical/future order time.
     const eventCreated=validStripePaymentEventCreated(event.created,session.created);
     if(!eventCreated) {
-      console.error('stripe_webhook_invalid_event_created',{eventId:stripeEventId,sessionId:session.id});
+      console.error('stripe_webhook_invalid_event_created',{eventId:stripeEventId});
       throw new Error('Invalid Stripe event timestamp');
     }
     // Combine current fulfilment details with the signed event's payment and
@@ -1088,7 +1086,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
     if(!validation.valid){
       // Never persist or fulfil a malformed order. The claimed event is
       // marked failed below so it is visible and safely retryable.
-      console.error('stripe_webhook_order_integrity_error',{sessionId:session.id,reason:validation.reason});
+      console.error('stripe_webhook_order_integrity_error',{eventId:stripeEventId,reason:validation.reason});
       throw new Error(`Order integrity validation failed: ${validation.reason}`);
     }
     const fulfilmentDetailsIssue=paidFulfilmentDetailsIssue(sessionForEvent,validation.productType);

@@ -291,7 +291,7 @@ export async function POST(req: Request) {
     // boundary already enforced by webhook and confirmation flows before
     // signing metadata or returning any Checkout state.
     if (!stripeEventMatchesConfiguredMode(key, session.livemode)) {
-      console.error('esim_checkout_session_mode_mismatch', { sessionId: session.id });
+      console.error('esim_checkout_session_mode_mismatch');
       return NextResponse.json({ error: 'Secure checkout confirmation is temporarily unavailable. Please try again shortly.' }, {
         status: 503,
         headers: { 'Cache-Control': 'no-store', 'Retry-After': '10' },
@@ -313,7 +313,7 @@ export async function POST(req: Request) {
       if (!stripeWebhookCheckoutSessionMatchesSnapshot(session, updated) ||
         !stripeEventMatchesConfiguredMode(key, updated.livemode) ||
         !matchesRequestedEsim(updated, requestId, plan, expiresAt, origin)) {
-        console.error('esim_checkout_consent_downgrade_mismatch', { expectedSessionId: createdSessionId });
+        console.error('esim_checkout_consent_downgrade_mismatch');
         return NextResponse.json({ error: 'Secure checkout confirmation is temporarily unavailable. Please try again shortly.' }, {
           status: 503,
           headers: { 'Cache-Control': 'no-store', 'Retry-After': '10' },
@@ -341,14 +341,14 @@ export async function POST(req: Request) {
     // payment URL. Bind it to the idempotent create result before trusting any
     // metadata, status, provenance, or URL on it.
     if (!stripeWebhookCheckoutSessionMatchesSnapshot(session, currentSession)) {
-      console.error('esim_checkout_session_identity_mismatch', { expectedSessionId: createdSessionId, retrievedSessionId: currentSession.id });
+      console.error('esim_checkout_session_identity_mismatch');
       return NextResponse.json({ error: 'Secure checkout confirmation is temporarily unavailable. Please try again shortly.' }, {
         status: 503,
         headers: { 'Cache-Control': 'no-store', 'Retry-After': '10' },
       });
     }
     if (!stripeEventMatchesConfiguredMode(key, currentSession.livemode)) {
-      console.error('esim_checkout_session_mode_mismatch', { sessionId: currentSession.id });
+      console.error('esim_checkout_session_mode_mismatch');
       return NextResponse.json({ error: 'Secure checkout confirmation is temporarily unavailable. Please try again shortly.' }, {
         status: 503,
         headers: { 'Cache-Control': 'no-store', 'Retry-After': '10' },
@@ -367,7 +367,7 @@ export async function POST(req: Request) {
     // same idempotent request instead of accepting a payment the webhook
     // must reject as unauthenticated.
     if (!validQyRoamProvenance(currentSession.id, currentSession.metadata)) {
-      console.error('esim_checkout_provenance_confirmation_error', { sessionId: currentSession.id });
+      console.error('esim_checkout_provenance_confirmation_error');
       return NextResponse.json({ error: 'Secure checkout confirmation is temporarily unavailable. Please try again shortly.' }, {
         status: 503,
         headers: { 'Cache-Control': 'no-store', 'Retry-After': '10' }
@@ -439,7 +439,7 @@ export async function POST(req: Request) {
     const checkoutUrl = safeStripeCheckoutUrl(currentSession.url);
     if (currentSession.status !== 'open' || !checkoutUrl) {
       if (currentSession.status === 'open' && currentSession.url) {
-        console.error('esim_checkout_url_invalid', { sessionId: currentSession.id });
+        console.error('esim_checkout_url_invalid');
         return NextResponse.json({ error: 'Secure checkout confirmation is temporarily unavailable. Please try again shortly.' }, {
           status: 503,
           headers: { 'Cache-Control': 'no-store', 'Retry-After': '10' }
