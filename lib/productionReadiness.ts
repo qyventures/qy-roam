@@ -111,13 +111,24 @@ export async function hasRequiredStripeApiAccess() {
 }
 
 async function hasCurrentOrderIntegritySchema(database: any, signal: AbortSignal) {
-  const [integrityProbe, versionProbe] = await Promise.all([
+  const [integrityProbe, versionProbe, eventClaimProbe] = await Promise.all([
     database.rpc('qy_order_integrity_schema_ready', {}).abortSignal(signal),
     database.rpc('qy_order_integrity_schema_version', {}).abortSignal(signal),
+    // Resolve the exact webhook claim signature through PostgREST and prove
+    // that the service role can execute it. The deliberately invalid event id
+    // is rejected by the function before it takes a lock or writes the durable
+    // idempotency ledger, so this remains a no-write readiness probe. Object
+    // and version checks alone cannot detect a grant revoked after deployment.
+    database.rpc('qy_claim_stripe_event', {
+      p_event_id: '',
+      p_event_type: 'checkout.session.completed',
+      p_stripe_session_id: 'cs_test_readinessProbe',
+    }).abortSignal(signal),
   ]);
   if (
     integrityProbe.error || integrityProbe.data !== true ||
-    versionProbe.error || versionProbe.data !== REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION
+    versionProbe.error || versionProbe.data !== REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION ||
+    !eventClaimProbe.error || !/invalid Stripe event id/i.test(eventClaimProbe.error.message || '')
   ) {
     console.error('production_payment_integrity_schema_check_failed');
     return false;

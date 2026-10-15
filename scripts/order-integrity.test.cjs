@@ -3507,6 +3507,26 @@ test('post-payment readiness checks every webhook-persisted delivery field and p
   assert.match(schema, /grant execute on function public\.qy_order_integrity_schema_ready\(\) to service_role/);
 });
 
+test('checkout readiness proves the webhook idempotency claim is executable without writing a claim', () => {
+  // A schema marker can stay healthy after an operator accidentally revokes
+  // the claim RPC grant. Both product checkouts share this live probe, so no
+  // payable Session is created when the webhook cannot enter its durable
+  // idempotency ledger. Invalid identity validation runs before locking or
+  // inserting, making the expected-error probe safe for production traffic.
+  assert.match(productionReadiness, /database\.rpc\('qy_claim_stripe_event', \{/);
+  assert.match(productionReadiness, /p_event_id: ''/);
+  assert.match(productionReadiness, /p_event_type: 'checkout\.session\.completed'/);
+  assert.match(productionReadiness, /p_stripe_session_id: 'cs_test_readinessProbe'/);
+  assert.match(productionReadiness, /!eventClaimProbe\.error \|\| !\/invalid Stripe event id\/i\.test\(eventClaimProbe\.error\.message \|\| ''\)/);
+
+  const claimFunction = schema.match(/create or replace function public\.qy_claim_stripe_event\([\s\S]*?\n\$\$;/)?.[0] || '';
+  const identityRejection = claimFunction.indexOf("raise exception 'invalid Stripe event id'");
+  const firstLock = claimFunction.indexOf('pg_advisory_xact_lock');
+  const firstWrite = claimFunction.indexOf('insert into public.stripe_events');
+  assert.ok(identityRejection > -1 && firstLock > identityRejection && firstWrite > identityRejection);
+  assert.match(schema, /grant execute on function public\.qy_claim_stripe_event\(text,text,text\) to service_role/);
+});
+
 test('checkout readiness rejects an older order-integrity schema with matching object names', () => {
   // The compatibility marker covers function bodies and privilege boundaries
   // that object-presence probes cannot distinguish during a rolling deploy.
