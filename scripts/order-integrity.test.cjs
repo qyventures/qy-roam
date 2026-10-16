@@ -7778,6 +7778,7 @@ test('deployment rejects structurally broken PL/pgSQL before schema application'
   const {
     validateAddConstraintStatements,
     validateCreateTriggerStatements,
+    validateCreateTableStatements,
     validateDuplicateFunctionParameters,
     validateDuplicateReturningClauses,
     validatePlpgsqlStructure,
@@ -7834,6 +7835,23 @@ test('deployment rejects structurally broken PL/pgSQL before schema application'
     create trigger example_audit after update on public.example
     for each row execute function public.audit_example();
   `), /Duplicate CREATE TRIGGER declaration/);
+  assert.doesNotThrow(() => validateCreateTableStatements(`
+    create table if not exists public.example (
+      id bigint primary key,
+      amount numeric(12,2) check (amount >= 0)
+    );
+  `));
+  assert.throws(() => validateCreateTableStatements(`
+    create table public.example (id bigint)
+    create table public.second (id bigint);
+  `), /missing its semicolon/);
+  assert.throws(() => validateCreateTableStatements(`
+    create table public.example (id bigint, check ((id > 0));
+  `), /unmatched opening parenthesis/);
+  assert.throws(() => validateCreateTableStatements(`
+    create table public.example (id bigint);
+    create table if not exists public.example (id bigint);
+  `), /Duplicate CREATE TABLE declaration/);
   assert.doesNotThrow(() => validateAddConstraintStatements(`
     alter table public.example add constraint example_positive_check
       check (value > 0) not valid;

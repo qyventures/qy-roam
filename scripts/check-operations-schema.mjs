@@ -136,6 +136,83 @@ export function validatePlpgsqlStructure(sql) {
 
 validatePlpgsqlStructure(schema);
 
+// Every checkout, idempotency, delivery and operations guarantee ultimately
+// depends on the base relations compiling first. Presence checks can still
+// find a table name after a missing closing parenthesis or semicolon has joined
+// two declarations together, leaving a clean production migration only
+// partially applied. Validate the deliberately simple CREATE TABLE form used
+// by this repository before examining its dependent indexes and triggers.
+export function validateCreateTableStatements(sql) {
+  const topLevelSql = sql
+    .replace(/(\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$)[\s\S]*?\1/g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/--[^\r\n]*/g, ' ');
+  const starts = topLevelSql.match(/\bcreate\s+(?:temporary\s+|temp\s+|unlogged\s+)?table\b/gi) || [];
+  const statements = topLevelSql.match(/\bcreate\s+(?:temporary\s+|temp\s+|unlogged\s+)?table\b[\s\S]*?;/gi) || [];
+  assert.equal(statements.length, starts.length, 'CREATE TABLE statement is missing its semicolon');
+
+  const names = new Set();
+  for (const statement of statements) {
+    assert.doesNotMatch(
+      statement.replace(/^\s*create\s+(?:temporary\s+|temp\s+|unlogged\s+)?table\b/i, ''),
+      /\bcreate\s+(?:temporary\s+|temp\s+|unlogged\s+)?table\b/i,
+      'CREATE TABLE statement contains another CREATE TABLE before its terminator',
+    );
+    const declaration = statement.match(
+      /^\s*create\s+(?:temporary\s+|temp\s+|unlogged\s+)?table\s+(?:if\s+not\s+exists\s+)?([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\s*\(([\s\S]+)\)\s*;\s*$/i,
+    );
+    assert.ok(declaration, 'Malformed CREATE TABLE statement');
+
+    // Column defaults and CHECK expressions can contain parentheses. Remove
+    // quoted literals and count the remaining delimiters so a truncated
+    // nested expression cannot masquerade as the table's final closing `)`.
+    const definition = declaration[2]
+      .replace(/'(?:''|[^'])*'/g, ' ')
+      .replace(/"(?:""|[^"])*"/g, ' ');
+    let depth = 0;
+    for (const character of definition) {
+      if (character === '(') depth += 1;
+      if (character === ')') {
+        depth -= 1;
+        assert.ok(depth >= 0, 'CREATE TABLE statement contains an unmatched closing parenthesis');
+      }
+    }
+    assert.equal(depth, 0, 'CREATE TABLE statement contains an unmatched opening parenthesis');
+
+    const name = declaration[1].toLowerCase();
+    assert.ok(!names.has(name), `Duplicate CREATE TABLE declaration: ${name}`);
+    names.add(name);
+  }
+}
+
+validateCreateTableStatements(schema);
+validateCreateTableStatements(`
+  create table if not exists public.example (
+    id bigint primary key,
+    amount numeric(12,2) check (amount >= 0)
+  );
+`);
+assert.throws(
+  () => validateCreateTableStatements(`
+    create table public.example (id bigint)
+    create table public.second (id bigint);
+  `),
+  /missing its semicolon/,
+);
+assert.throws(
+  () => validateCreateTableStatements(
+    'create table public.example (id bigint, check ((id > 0));',
+  ),
+  /unmatched opening parenthesis/,
+);
+assert.throws(
+  () => validateCreateTableStatements(`
+    create table public.example (id bigint);
+    create table if not exists public.example (id bigint);
+  `),
+  /Duplicate CREATE TABLE declaration/,
+);
+
 // Top-level DDL can be damaged independently of the PL/pgSQL bodies above.
 // In particular, a truncated CREATE INDEX followed by another CREATE INDEX
 // is valid enough for presence-only contract checks to find both names, but
@@ -693,5 +770,5 @@ assert.match(
 );
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure and terminators, index, trigger and constraint declarations, function parameters, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
+  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure and terminators, table, index, trigger and constraint declarations, function parameters, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
 }
