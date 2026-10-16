@@ -136,6 +136,63 @@ export function validatePlpgsqlStructure(sql) {
 
 validatePlpgsqlStructure(schema);
 
+// Top-level DDL can be damaged independently of the PL/pgSQL bodies above.
+// In particular, a truncated CREATE INDEX followed by another CREATE INDEX
+// is valid enough for presence-only contract checks to find both names, but
+// PostgreSQL will stop the clean-install migration at the first statement.
+// Keep this deliberately narrow: it validates the schema's index declarations
+// without pretending to be a general SQL parser.
+export function validateCreateIndexStatements(sql) {
+  const topLevelSql = sql
+    .replace(/(\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$)[\s\S]*?\1/g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/--[^\r\n]*/g, ' ');
+  const starts = topLevelSql.match(/\bcreate\s+(?:unique\s+)?index\b/gi) || [];
+  const statements = topLevelSql.match(/\bcreate\s+(?:unique\s+)?index\b[\s\S]*?;/gi) || [];
+  assert.equal(statements.length, starts.length, 'CREATE INDEX statement is missing its semicolon');
+
+  const names = new Set();
+  for (const statement of statements) {
+    assert.doesNotMatch(
+      statement.replace(/^\s*create\s+(?:unique\s+)?index\b/i, ''),
+      /\bcreate\s+(?:unique\s+)?index\b/i,
+      'CREATE INDEX statement contains another CREATE INDEX before its terminator',
+    );
+    const declaration = statement.match(
+      /^\s*create\s+(?:unique\s+)?index\s+(?:concurrently\s+)?(?:if\s+not\s+exists\s+)?([A-Za-z_][A-Za-z0-9_$]*)\s+on\s+(?:only\s+)?[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?\s*\([\s\S]+\)(?:\s+where\s+[\s\S]+)?\s*;\s*$/i,
+    );
+    assert.ok(declaration, 'Malformed CREATE INDEX statement');
+    const name = declaration[1].toLowerCase();
+    assert.ok(!names.has(name), `Duplicate CREATE INDEX declaration: ${name}`);
+    names.add(name);
+  }
+}
+
+validateCreateIndexStatements(schema);
+validateCreateIndexStatements(`
+  create index if not exists example_created_idx
+    on public.example(created_at desc)
+    where deleted_at is null;
+`);
+assert.throws(
+  () => validateCreateIndexStatements(`
+    create index if not exists example_created_idx
+    create index if not exists example_status_idx on public.example(status);
+  `),
+  /missing its semicolon/,
+);
+assert.throws(
+  () => validateCreateIndexStatements('create index if not exists example_created_idx;'),
+  /Malformed CREATE INDEX/,
+);
+assert.throws(
+  () => validateCreateIndexStatements(`
+    create index example_idx on public.example(id);
+    create index example_idx on public.example(created_at);
+  `),
+  /Duplicate CREATE INDEX declaration/,
+);
+
 // Keep both halves of the lightweight parser covered in the release command
 // itself; the broader integrity suite also exercises these exported guards.
 validatePlpgsqlStructure(`
@@ -500,5 +557,5 @@ assert.match(
 );
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure and terminators, function parameters, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
+  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure and terminators, index declarations, function parameters, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
 }
