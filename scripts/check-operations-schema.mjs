@@ -333,6 +333,82 @@ assert.throws(
   /Duplicate CREATE TRIGGER declaration/,
 );
 
+// The admin sales and closing dashboards depend on a security-invoker view
+// installed near the end of this clean-install migration. Presence checks can
+// still find its name after a missing terminator has joined the following
+// schema-version function onto the view query. PostgreSQL would then stop the
+// migration before publishing readiness, leaving order processing deployed
+// without trustworthy reporting. Validate complete, uniquely named top-level
+// view declarations before accepting the migration offline.
+export function validateCreateViewStatements(sql) {
+  const topLevelSql = sql
+    .replace(/(\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$)[\s\S]*?\1/g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/--[^\r\n]*/g, ' ');
+  const starts = topLevelSql.match(/\bcreate\s+(?:or\s+replace\s+)?(?:temporary\s+|temp\s+|recursive\s+)?view\b/gi) || [];
+  const statements = topLevelSql.match(/\bcreate\s+(?:or\s+replace\s+)?(?:temporary\s+|temp\s+|recursive\s+)?view\b[\s\S]*?;/gi) || [];
+  assert.equal(statements.length, starts.length, 'CREATE VIEW statement is missing its semicolon');
+
+  const names = new Set();
+  for (const statement of statements) {
+    assert.doesNotMatch(
+      statement.replace(/^\s*create\s+(?:or\s+replace\s+)?(?:temporary\s+|temp\s+|recursive\s+)?view\b/i, ''),
+      /\bcreate\s+(?:or\s+replace\s+)?(?:temporary\s+|temp\s+|recursive\s+)?view\b/i,
+      'CREATE VIEW statement contains another CREATE VIEW before its terminator',
+    );
+    const declaration = statement.match(
+      /^\s*create\s+(?:or\s+replace\s+)?(?:temporary\s+|temp\s+|recursive\s+)?view\s+([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)(?:\s*\([^;]*?\))?(?:\s+with\s*\([^;]*?\))?\s+as\s+([\s\S]+?)\s*;\s*$/i,
+    );
+    assert.ok(declaration, 'Malformed CREATE VIEW statement');
+    assert.match(declaration[2], /^(?:select|with|values|table)\b/i, 'CREATE VIEW is missing a query');
+
+    const query = declaration[2]
+      .replace(/'(?:''|[^'])*'/g, ' ')
+      .replace(/"(?:""|[^"])*"/g, ' ');
+    let depth = 0;
+    for (const character of query) {
+      if (character === '(') depth += 1;
+      if (character === ')') {
+        depth -= 1;
+        assert.ok(depth >= 0, 'CREATE VIEW statement contains an unmatched closing parenthesis');
+      }
+    }
+    assert.equal(depth, 0, 'CREATE VIEW statement contains an unmatched opening parenthesis');
+
+    const name = declaration[1].toLowerCase();
+    assert.ok(!names.has(name), `Duplicate CREATE VIEW declaration: ${name}`);
+    names.add(name);
+  }
+}
+
+validateCreateViewStatements(schema);
+validateCreateViewStatements(`
+  create or replace view public.example with (security_invoker = true) as
+  select id, coalesce(amount, 0) as amount from public.orders;
+`);
+assert.throws(
+  () => validateCreateViewStatements(`
+    create view public.example as select id from public.orders
+    create view public.second as select id from public.orders;
+  `),
+  /missing its semicolon/,
+);
+assert.throws(
+  () => validateCreateViewStatements('create view public.example as select (id from public.orders;'),
+  /unmatched opening parenthesis/,
+);
+assert.throws(
+  () => validateCreateViewStatements('create view public.example;'),
+  /Malformed CREATE VIEW/,
+);
+assert.throws(
+  () => validateCreateViewStatements(`
+    create view public.example as select id from public.orders;
+    create or replace view public.example as select email from public.orders;
+  `),
+  /Duplicate CREATE VIEW declaration/,
+);
+
 // The order ledger's payment, fulfilment, delivery-reference and Stripe
 // identity invariants are installed as named ALTER TABLE constraints. A
 // missing semicolon can join two declarations into one broken statement while
@@ -770,5 +846,5 @@ assert.match(
 );
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure and terminators, table, index, trigger and constraint declarations, function parameters, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
+  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure and terminators, table, index, trigger, view and constraint declarations, function parameters, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
 }

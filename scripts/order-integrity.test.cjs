@@ -7779,6 +7779,7 @@ test('deployment rejects structurally broken PL/pgSQL before schema application'
     validateAddConstraintStatements,
     validateCreateTriggerStatements,
     validateCreateTableStatements,
+    validateCreateViewStatements,
     validateDuplicateFunctionParameters,
     validateDuplicateReturningClauses,
     validatePlpgsqlStructure,
@@ -7852,6 +7853,22 @@ test('deployment rejects structurally broken PL/pgSQL before schema application'
     create table public.example (id bigint);
     create table if not exists public.example (id bigint);
   `), /Duplicate CREATE TABLE declaration/);
+  assert.doesNotThrow(() => validateCreateViewStatements(`
+    create or replace view public.example with (security_invoker = true) as
+    select id, coalesce(amount, 0) as amount from public.orders;
+  `));
+  assert.throws(() => validateCreateViewStatements(`
+    create view public.example as select id from public.orders
+    create view public.second as select id from public.orders;
+  `), /missing its semicolon/);
+  assert.throws(() => validateCreateViewStatements(`
+    create view public.example as select (id from public.orders;
+  `), /unmatched opening parenthesis/);
+  assert.throws(() => validateCreateViewStatements('create view public.example;'), /Malformed CREATE VIEW/);
+  assert.throws(() => validateCreateViewStatements(`
+    create view public.example as select id from public.orders;
+    create or replace view public.example as select email from public.orders;
+  `), /Duplicate CREATE VIEW declaration/);
   assert.doesNotThrow(() => validateAddConstraintStatements(`
     alter table public.example add constraint example_positive_check
       check (value > 0) not valid;
