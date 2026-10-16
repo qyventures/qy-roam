@@ -419,6 +419,7 @@ test('manual paid sales acknowledge the exact durable commercial order', () => {
     customerName: 'Test Traveller', email: 'traveller@example.com', phone: null,
     planId: 'jp-5d', planName: 'Japan · 5 days', dataAllowance: '1 GB/day',
     country: 'Japan', travelStart: null, travelEnd: null,
+    notes: 'Manual order · Reference: TEST-12345 · Corporate traveller',
   };
   const committed = {
     id: 91, stripe_session_id: expected.stripeSessionId,
@@ -428,6 +429,7 @@ test('manual paid sales acknowledge the exact durable commercial order', () => {
     email: expected.email, phone: expected.phone, plan_id: expected.planId,
     plan_name: expected.planName, data_allowance: expected.dataAllowance,
     country: expected.country, travel_start: null, travel_end: null,
+    notes: expected.notes,
     payment_confirmed_at: '2026-10-16T01:02:03.123456Z',
     updated_at: '2026-10-16T09:02:03.123456+08:00',
   };
@@ -444,6 +446,7 @@ test('manual paid sales acknowledge the exact durable commercial order', () => {
     { ...committed, product_type: 'pocket_wifi' },
     { ...committed, amount_sgd: '7.51' },
     { ...committed, plan_id: 'jp-10d' },
+    { ...committed, notes: `${expected.notes} changed` },
     { ...committed, measurement_consent: 'accepted' },
     { ...committed, payment_confirmed_at: null },
   ]) assert.equal(acknowledgedManualOrder(changed, expected), null);
@@ -4143,13 +4146,13 @@ test('payment-readiness checks coalesce healthy checkout probes without caching 
 test('operations readiness requires the reviewed privileged RPC implementation version', () => {
   assert.match(
     schema,
-    /create or replace function public\.qy_operations_schema_version\(\)[\s\S]*?as \$\$ select 4; \$\$/,
+    /create or replace function public\.qy_operations_schema_version\(\)[\s\S]*?as \$\$ select 5; \$\$/,
   );
   assert.match(
     schema,
     /grant execute on function public\.qy_operations_schema_version\(\) to service_role/,
   );
-  assert.match(productionReadiness, /const REQUIRED_OPERATIONS_SCHEMA_VERSION = 4/);
+  assert.match(productionReadiness, /const REQUIRED_OPERATIONS_SCHEMA_VERSION = 5/);
   assert.match(
     productionReadiness,
     /database\.rpc\('qy_operations_schema_version', \{\}\)\.abortSignal\(signal\)/,
@@ -4708,6 +4711,8 @@ test('manual sales use one retry-safe payment or sales reference instead of mint
   );
   assert.match(manualWifiPersistence, /where stripe_session_id = p_stripe_session_id\s+for update;/);
   assert.match(manualWifiPersistence, /if found then[\s\S]*manual order reference already belongs to different order details/);
+  assert.match(manualWifiPersistence, /v_order\.notes is distinct from p_notes/);
+  assert.match(manualWifiPersistence, /p_stripe_session_id !~ '\^manual_\[a-f0-9\]\{48\}\$'/);
   assert.match(manualWifiPersistence, /return v_order;/);
 });
 
@@ -4753,6 +4758,7 @@ test('manual eSIM sales are created through one atomic exact-idempotency boundar
   assert.match(manualEsimRpc, /where stripe_session_id = p_stripe_session_id for update;/);
   assert.match(manualEsimRpc, /v_order\.plan_id is distinct from p_plan_id/);
   assert.match(manualEsimRpc, /v_order\.data_allowance is distinct from p_data_allowance/);
+  assert.match(manualEsimRpc, /v_order\.notes is distinct from p_notes/);
   assert.match(manualEsimRpc, /manual order reference already belongs to different order details/);
   assert.match(manualEsimRpc, /'awaiting_fulfilment',now\(\),'essential'/);
   assert.match(schema, /grant execute on function public\.qy_create_manual_esim_order\(text,text,text,text,numeric,text,text,text,text,date,date,text\) to service_role/);
@@ -5386,7 +5392,7 @@ test('production readiness verifies the deployed Pocket WiFi dispatch and return
   assert.match(productionReadiness, /p_order_id: 0/);
   assert.match(productionReadiness, /p_item_id: 0/);
   assert.match(productionReadiness, /production_operations_inventory_rpc_check_failed/);
-  assert.match(productionReadiness, /manual order reference is required/);
+  assert.match(productionReadiness, /invalid manual order reference/);
   assert.match(productionReadiness, /production_operations_manual_order_rpc_check_failed/);
   // Checkout has a narrow fulfilment gate independent of the broader admin
   // reporting contract. A missing custody RPC must stop public sales before

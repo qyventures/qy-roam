@@ -325,6 +325,7 @@ export async function POST(req: NextRequest) {
           customerName: row.customer_name, email: row.email, phone: row.phone,
           planId: null, planName: row.plan_name, dataAllowance: null,
           country: row.country, travelStart: row.travel_start, travelEnd: row.travel_end,
+          notes: row.notes,
         })) throw new Error('Manual Pocket WiFi order acknowledgement mismatch');
       } else {
         // Manual eSIM creation is an irreversible digital entitlement. Keep
@@ -356,6 +357,7 @@ export async function POST(req: NextRequest) {
           customerName: row.customer_name, email: row.email, phone: row.phone,
           planId: row.plan_id, planName: row.plan_name, dataAllowance: row.data_allowance,
           country: row.country, travelStart: row.travel_start, travelEnd: row.travel_end,
+          notes: row.notes,
         })) throw new Error('Manual eSIM order acknowledgement mismatch');
       }
     } else if (action === 'inventory_create') {

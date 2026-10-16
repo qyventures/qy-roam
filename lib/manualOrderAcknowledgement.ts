@@ -15,6 +15,7 @@ export type ExpectedManualOrder = {
   country: string | null;
   travelStart: string | null;
   travelEnd: string | null;
+  notes: string;
 };
 
 function orderAmountCents(value: unknown) {
@@ -55,7 +56,8 @@ export function acknowledgedManualOrder(value: unknown, expected: ExpectedManual
     row.email !== expected.email || row.phone !== expected.phone ||
     row.plan_id !== expected.planId || row.plan_name !== expected.planName ||
     row.data_allowance !== expected.dataAllowance || row.country !== expected.country ||
-    row.travel_start !== expected.travelStart || row.travel_end !== expected.travelEnd) {
+    row.travel_start !== expected.travelStart || row.travel_end !== expected.travelEnd ||
+    row.notes !== expected.notes) {
     return null;
   }
   return { id, payment_confirmed_at: paymentConfirmedAt, updated_at: updatedAt };

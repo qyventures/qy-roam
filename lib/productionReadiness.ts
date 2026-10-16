@@ -32,7 +32,7 @@ const REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 10;
 // optimistic fulfilment transitions, custody-ledger idempotency, and
 // database-authoritative period closing. Version 1 predates several of those
 // contracts and must not keep a rolling deployment's operations UI enabled.
-const REQUIRED_OPERATIONS_SCHEMA_VERSION = 4;
+const REQUIRED_OPERATIONS_SCHEMA_VERSION = 5;
 
 type ProductionReadinessState = {
   stripeApiReadyUntil: number;
@@ -777,7 +777,7 @@ async function checkRequiredOperationsSchema() {
         console.error('production_operations_inventory_creation_rpc_check_failed');
         return false;
       }
-      if (!manualOrderProbe.error || !/manual order reference is required/i.test(manualOrderProbe.error.message || '')) {
+      if (!manualOrderProbe.error || !/invalid manual order reference/i.test(manualOrderProbe.error.message || '')) {
         console.error('production_operations_manual_order_rpc_check_failed');
         return false;
       }

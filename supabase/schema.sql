@@ -2021,7 +2021,9 @@ declare
   v_effective_inventory integer;
   v_order public.orders%rowtype;
 begin
-  if coalesce(length(trim(p_stripe_session_id)), 0) = 0 then raise exception 'manual order reference is required'; end if;
+  if p_stripe_session_id is null or p_stripe_session_id !~ '^manual_[a-f0-9]{48}$' then
+    raise exception 'invalid manual order reference';
+  end if;
   if p_amount_sgd is null or p_amount_sgd <= 0 or p_amount_sgd > 99999999.99 or p_amount_sgd <> round(p_amount_sgd, 2) then
     raise exception 'manual order amount must be positive whole cents within the order ledger range';
   end if;
@@ -2065,7 +2067,8 @@ begin
       or v_order.plan_name is distinct from p_plan_name
       or v_order.country is distinct from p_country
       or v_order.travel_start is distinct from p_travel_start
-      or v_order.travel_end is distinct from p_travel_end then
+      or v_order.travel_end is distinct from p_travel_end
+      or v_order.notes is distinct from p_notes then
       raise exception 'manual order reference already belongs to different order details';
     end if;
     return v_order;
@@ -2510,7 +2513,8 @@ begin
       or v_order.data_allowance is distinct from p_data_allowance
       or v_order.country is distinct from p_country
       or v_order.travel_start is distinct from p_travel_start
-      or v_order.travel_end is distinct from p_travel_end then
+      or v_order.travel_end is distinct from p_travel_end
+      or v_order.notes is distinct from p_notes then
       raise exception 'manual order reference already belongs to different order details';
     end if;
     return v_order;
@@ -3633,6 +3637,8 @@ set search_path = pg_catalog
 -- ledger-authoritative, immutable accounting closes. Version 1 was created
 -- before all of those safeguards had reached their current signatures and
 -- bodies, so it is not safe evidence for a current admin deployment.
-as $$ select 4; $$;
+-- Version 5 binds manual-sale retries and API acknowledgements to the exact
+-- operator notes and rejects non-canonical Pocket WiFi manual identities.
+as $$ select 5; $$;
 revoke all on function public.qy_operations_schema_version() from public;
 grant execute on function public.qy_operations_schema_version() to service_role;
