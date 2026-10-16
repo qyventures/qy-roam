@@ -7,6 +7,7 @@ import { operationalDaysFromToday } from '@/lib/operationalDate';
 import { POCKET_WIFI_RETURN_GRACE_DAYS } from '@/lib/pocketWifiReturns';
 import { stripeSecretKeyMode } from '@/lib/stripeCheckoutConfig';
 import { tryAcquireAdminDashboardConcurrency } from '@/lib/adminDashboardConcurrency';
+import { formatSingaporeDate, formatSingaporeTimestamp } from '@/lib/singaporeTimestamp';
 
 export const dynamic = 'force-dynamic';
 
@@ -76,20 +77,6 @@ function formatCents(cents: number) {
 // creation and payment confirmation can be hours or days apart for an
 // asynchronous payment method; showing both timestamps makes that distinction
 // explicit while keeping malformed legacy values visibly unavailable.
-const singaporeTimestamp = new Intl.DateTimeFormat('en-SG', {
-  timeZone: 'Asia/Singapore',
-  year: 'numeric',
-  month: 'short',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit',
-  hour12: false,
-});
-function formatSingaporeTimestamp(value: unknown) {
-  if (typeof value !== 'string') return '—';
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? singaporeTimestamp.format(timestamp) : '—';
-}
 function isStripeCheckoutOrder(order: any) { return typeof order.stripe_session_id === 'string' && order.stripe_session_id.startsWith('cs_'); }
 function stripeEventDashboardUrl(eventId: unknown) {
   const match = typeof eventId === 'string' ? /^stripe:(evt_[A-Za-z0-9]{8,96})$/.exec(eventId) : null;
@@ -499,7 +486,7 @@ async function renderAdminPage() {
           <td>{Array.from(c.products).join(' + ')}</td>
           <td>{c.orders}{c.orders > 1 ? ' · Repeat' : ''}</td>
           <td><strong>{formatCents(c.revenue)}</strong></td>
-          <td>{c.last ? new Date(c.last).toLocaleDateString('en-SG') : '-'}</td>
+          <td>{formatSingaporeDate(c.last, '-')}</td>
         </tr>)}</tbody>
       </table></div>}
     </section>

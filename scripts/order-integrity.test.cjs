@@ -93,6 +93,7 @@ const { validatedForecastRow } = require('../lib/forecastRow.ts');
 const { META_ATTRIBUTION_METADATA_KEYS, stripeMeasurementConsentDowngrade } = require('../lib/stripeMeasurementConsent.ts');
 const { saleablePocketWifiInventory: scanSaleablePocketWifiInventory } = require('../lib/pocketWifiStock.ts');
 const { retryableStripeConfirmationFailure } = require('../lib/confirmationLookupFailure.ts');
+const { formatSingaporeDate, formatSingaporeTimestamp } = require('../lib/singaporeTimestamp.ts');
 
 function requireFresh(relativePath) {
   const resolved = require.resolve(relativePath);
@@ -6216,8 +6217,11 @@ test('admin financial reporting fails closed on malformed paid ledger rows', () 
 });
 
 test('admin order visibility distinguishes creation from Singapore payment settlement', () => {
-  assert.match(adminPage, /timeZone:\s*'Asia\/Singapore'/);
-  assert.match(adminPage, /function formatSingaporeTimestamp\(value: unknown\)/);
+  assert.equal(formatSingaporeTimestamp('2026-10-15T18:30:00.000Z'), '16 Oct 2026, 02:30');
+  assert.equal(formatSingaporeDate('2026-10-15T18:30:00.000Z'), '16 Oct 2026');
+  assert.equal(formatSingaporeTimestamp('not-a-timestamp'), '—');
+  assert.equal(formatSingaporeDate(null, '-'), '-');
+  assert.match(adminPage, /from '@\/lib\/singaporeTimestamp'/);
   assert.match(adminPage, /Order \/ created/);
   assert.match(adminPage, /Payment \/ confirmed/);
   assert.match(adminPage, /formatSingaporeTimestamp\(o\.payment_confirmed_at\)/);
@@ -6225,6 +6229,20 @@ test('admin order visibility distinguishes creation from Singapore payment settl
   // trailing suffix is not an authoritative payment identity.
   assert.match(adminPage, /String\(o\.stripe_session_id \|\| o\.id\)/);
   assert.doesNotMatch(adminPage, /String\(o\.stripe_session_id \|\| o\.id\)\.slice\(-10\)/);
+});
+
+test('operational admin timestamps never inherit the VPS timezone', () => {
+  for (const page of [adminPage, inventoryPage, crmPage]) {
+    assert.match(page, /from '@\/lib\/singaporeTimestamp'/);
+  }
+  assert.match(inventoryPage, /formatSingaporeTimestamp\(r\.expires_at\)/);
+  assert.match(inventoryPage, /formatSingaporeTimestamp\(r\.created_at\)/);
+  assert.match(inventoryPage, /formatSingaporeTimestamp\(m\.created_at\)/);
+  assert.match(crmPage, /formatSingaporeDate\(c\.last_order_at, '-'\)/);
+  assert.match(crmPage, /formatSingaporeTimestamp\(a\.created_at\)/);
+  assert.match(crmPage, /formatSingaporeTimestamp\(a\.due_at, '-'\)/);
+  assert.doesNotMatch(inventoryPage, /new Date\([^)]*(?:created_at|expires_at)[^)]*\)\.toLocaleString/);
+  assert.doesNotMatch(crmPage, /new Date\([^)]*(?:created_at|due_at|last_order_at)[^)]*\)\.toLocale/);
 });
 
 test('sales reports reject malformed aggregate rows before calculating financial metrics', () => {
