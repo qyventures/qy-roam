@@ -7781,6 +7781,7 @@ test('deployment rejects structurally broken PL/pgSQL before schema application'
     validateCreateTableStatements,
     validateCreateViewStatements,
     validateCreateFunctionStatements,
+    validateAlterTableStatements,
     validateDuplicateFunctionParameters,
     validateDuplicateReturningClauses,
     validatePlpgsqlStructure,
@@ -7884,6 +7885,18 @@ test('deployment rejects structurally broken PL/pgSQL before schema application'
     create function public.example(p_value integer) returns integer language sql as $$ select p_value; $$;
     create or replace function public.example(p_value integer) returns integer language sql as $$ select p_value + 1; $$;
   `), /Duplicate CREATE FUNCTION declaration/);
+  assert.doesNotThrow(() => validateAlterTableStatements(`
+    alter table public.example add column if not exists label text;
+    alter table only public.example enable row level security;
+  `));
+  assert.throws(() => validateAlterTableStatements(`
+    alter table public.example add column label text
+    alter table public.example enable row level security;
+  `), /missing its semicolon/);
+  assert.throws(() => validateAlterTableStatements('alter table public.example;'), /Malformed ALTER TABLE statement/);
+  assert.throws(() => validateAlterTableStatements(
+    'alter table public.example add constraint example_check check ((value > 0);',
+  ), /unmatched opening parenthesis/);
   assert.doesNotThrow(() => validateAddConstraintStatements(`
     alter table public.example add constraint example_positive_check
       check (value > 0) not valid;

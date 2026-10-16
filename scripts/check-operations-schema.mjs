@@ -468,6 +468,73 @@ assert.throws(
   /Duplicate CREATE FUNCTION declaration/,
 );
 
+// Column upgrades, constraint replacement and RLS activation are expressed
+// through top-level ALTER TABLE statements throughout this clean-install
+// schema. The more specific ADD CONSTRAINT validator below cannot see a
+// missing terminator on ADD/DROP/ALTER COLUMN or ENABLE ROW LEVEL SECURITY.
+export function validateAlterTableStatements(sql) {
+  const topLevelSql = sql
+    .replace(/(\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$)[\s\S]*?\1/g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/--[^\r\n]*/g, ' ');
+  const starts = topLevelSql.match(/\balter\s+table\b/gi) || [];
+  const statements = topLevelSql.match(/\balter\s+table\b[\s\S]*?;/gi) || [];
+  assert.equal(statements.length, starts.length, 'ALTER TABLE statement is missing its semicolon');
+
+  for (const statement of statements) {
+    assert.doesNotMatch(
+      statement.replace(/^\s*alter\s+table\b/i, ''),
+      /\balter\s+table\b/i,
+      'ALTER TABLE statement contains another ALTER TABLE before its terminator',
+    );
+    const declaration = statement.match(
+      /^\s*alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\s+([\s\S]+?)\s*;\s*$/i,
+    );
+    assert.ok(declaration, 'Malformed ALTER TABLE statement');
+    assert.match(
+      declaration[2],
+      /^(?:add|drop|alter|enable|disable|validate|rename|attach|detach|set|reset|owner|no\s+force|force)\b/i,
+      'ALTER TABLE statement has an unsupported or missing action',
+    );
+
+    const action = declaration[2]
+      .replace(/'(?:''|[^'])*'/g, ' ')
+      .replace(/"(?:""|[^"])*"/g, ' ');
+    let depth = 0;
+    for (const character of action) {
+      if (character === '(') depth += 1;
+      if (character === ')') {
+        depth -= 1;
+        assert.ok(depth >= 0, 'ALTER TABLE statement contains an unmatched closing parenthesis');
+      }
+    }
+    assert.equal(depth, 0, 'ALTER TABLE statement contains an unmatched opening parenthesis');
+  }
+}
+
+validateAlterTableStatements(schema);
+validateAlterTableStatements(`
+  alter table public.example add column if not exists label text;
+  alter table only public.example enable row level security;
+`);
+assert.throws(
+  () => validateAlterTableStatements(`
+    alter table public.example add column label text
+    alter table public.example enable row level security;
+  `),
+  /missing its semicolon/,
+);
+assert.throws(
+  () => validateAlterTableStatements('alter table public.example;'),
+  /Malformed ALTER TABLE statement/,
+);
+assert.throws(
+  () => validateAlterTableStatements(
+    'alter table public.example add constraint example_check check ((value > 0);',
+  ),
+  /unmatched opening parenthesis/,
+);
+
 // The order ledger's payment, fulfilment, delivery-reference and Stripe
 // identity invariants are installed as named ALTER TABLE constraints. A
 // missing semicolon can join two declarations into one broken statement while
@@ -905,5 +972,5 @@ assert.match(
 );
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure and terminators, table, index, trigger, view, function and constraint declarations, function parameters, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
+  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure and terminators, table, index, trigger, view, function, ALTER TABLE and constraint declarations, function parameters, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
 }
