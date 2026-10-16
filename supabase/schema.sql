@@ -1048,6 +1048,17 @@ alter table public.stripe_events drop constraint if exists stripe_events_process
 alter table public.stripe_events add constraint stripe_events_processed_failure_check check (
   processed_at is null or last_error is null
 ) not valid;
+-- `processed_at` is the permanent idempotency boundary: once populated, the
+-- webhook acknowledges every retry without repeating order or delivery work.
+-- A privileged import must therefore not be able to put that boundary before
+-- the claim it supposedly settled. Failure evidence has the same ownership
+-- rule. NOT VALID keeps malformed historical rows visible for reconciliation
+-- while enforcing chronology on every new or changed row.
+alter table public.stripe_events drop constraint if exists stripe_events_lifecycle_chronology_check;
+alter table public.stripe_events add constraint stripe_events_lifecycle_chronology_check check (
+  (processed_at is null or processed_at >= processing_started_at) and
+  (last_failed_at is null or last_failed_at >= processing_started_at)
+) not valid;
 alter table public.stripe_events enable row level security;
 
 -- Stripe's event id is the durable idempotency identity. The webhook checks
@@ -1092,6 +1103,21 @@ security invoker
 set search_path = public
 as $$
 begin
+  -- A future settlement can suppress this event until an operator notices an
+  -- impossible audit date, even though no worker actually completed its work.
+  -- Use the same one-day clock-skew allowance as paid-order timestamps while
+  -- the chronology CHECK above also protects inserts and old rows on their
+  -- next update. Run this before the INSERT exit so repair/import tooling is
+  -- held to the same durable timestamp boundary as webhook workers.
+  if new.processed_at is not null and new.processed_at > clock_timestamp() + interval '1 day' then
+    raise exception 'invalid Stripe event processed time';
+  end if;
+  if new.last_failed_at is not null and new.last_failed_at > clock_timestamp() + interval '1 day' then
+    raise exception 'invalid Stripe event failure time';
+  end if;
+  if tg_op = 'INSERT' then
+    return new;
+  end if;
   if old.processed_at is not null and old.* is distinct from new.* then
     raise exception 'processed Stripe event is immutable';
   end if;
@@ -1157,7 +1183,7 @@ $$;
 
 drop trigger if exists qy_enforce_stripe_event_lifecycle on public.stripe_events;
 create trigger qy_enforce_stripe_event_lifecycle
-before update on public.stripe_events
+before insert or update on public.stripe_events
 for each row execute function public.qy_enforce_stripe_event_lifecycle();
 
 -- Claim one Stripe event and issue its ownership lease in the same database
@@ -1584,8 +1610,9 @@ as $$
       'stripe_events_session_id_check',
       'stripe_events_event_type_check',
       'stripe_events_failure_timestamp_check',
-      'stripe_events_processed_failure_check'
-    )) = 6 and
+      'stripe_events_processed_failure_check',
+      'stripe_events_lifecycle_chronology_check'
+    )) = 7 and
     (select count(*) from pg_constraint where conrelid = 'public.fulfilment_notifications'::regclass and conname in (
       'fulfilment_notifications_status_check',
       'fulfilment_notifications_attempts_check',
@@ -3286,7 +3313,10 @@ as $$
   -- Version 45 makes both product-specific Stripe persistence RPC signatures
   -- part of pre-payment readiness, preventing a partial migration from
   -- accepting payment when the webhook cannot create its durable order.
-  select 46;
+  -- Version 47 makes Stripe event settlement/failure chronology durable and
+  -- rejects future-dated terminal audit evidence before it can suppress a
+  -- legitimate retry or hide an abandoned claim from operations.
+  select 47;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
