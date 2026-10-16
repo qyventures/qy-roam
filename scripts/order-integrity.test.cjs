@@ -5609,7 +5609,9 @@ test('authenticated health readiness separates shared release controls from prod
   assert.match(healthRoute, /error: 'Readiness checks are busy\.'/);
   assert.match(healthRoute, /'Retry-After': '5'/);
   assert.match(healthRoute, /finally \{\s*releaseHealth\(\);\s*\}/);
+  assert.match(healthRoute, /const esimOfferActive = esimPromoIsActive\(\)/);
   assert.match(healthRoute, /dependencyChecks = await Promise\.all\(\[/);
+  assert.match(healthRoute, /esimOfferActive \? hasRequiredEsimOrderSchema\(\) : Promise\.resolve\(false\)/);
   assert.match(healthRoute, /const \[stripeApi, esimOrderSchema, paymentSchema, pocketWifiFulfilmentSchema, operationsSchema, pocketWifiStock\] = dependencyChecks/);
   assert.match(healthRoute, /stripeApi,/);
   assert.match(healthRoute, /esimOrderSchema,/);
@@ -5626,7 +5628,7 @@ test('authenticated health readiness separates shared release controls from prod
   assert.doesNotMatch(healthRoute, /const launchChecks = \{[\s\S]*?pocketWifiFulfilmentSchema:/);
   assert.doesNotMatch(healthRoute, /const launchChecks = \{[\s\S]*?inventory:/);
   assert.match(healthRoute, /const commonCheckoutReady = Boolean\(/);
-  assert.match(healthRoute, /esim: commonCheckoutReady && Boolean\(esimOrderSchema\) && esimPromoIsActive\(\)/);
+  assert.match(healthRoute, /esim: commonCheckoutReady && Boolean\(esimOrderSchema\) && esimOfferActive/);
   assert.match(healthRoute, /pocketWifi: commonCheckoutReady && Boolean\(paymentSchema\) &&/);
   assert.match(healthRoute, /Boolean\(pocketWifiFulfilmentSchema\) && checks\.inventory && availabilityChecks\.pocketWifiStock/);
   assert.match(pocketWifiStock, /\.eq\('product_type', 'pocket_wifi'\)/);

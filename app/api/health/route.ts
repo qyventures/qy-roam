@@ -61,6 +61,13 @@ export async function GET(req: Request) {
 
   try {
   const config = operationalConfig();
+  // The approved eSIM catalogue can be intentionally paused at its offer
+  // boundary. Its readiness probe exercises several privileged tables and
+  // RPCs, so do not spend that database work (or make a Pocket WiFi-only
+  // deployment wait for it) when the public eSIM checkout is guaranteed to
+  // reject every purchase. Capture the offer state once so the dependency
+  // plan and the resulting product gate describe the same instant.
+  const esimOfferActive = esimPromoIsActive();
   // Checkout has product-specific post-payment contracts. In particular, an
   // eSIM requires its non-secret digital-delivery audit field, which is not a
   // Pocket WiFi requirement. Keep the authenticated release signal aligned
@@ -70,7 +77,7 @@ export async function GET(req: Request) {
   try {
     dependencyChecks = await Promise.all([
       hasRequiredStripeApiAccess(),
-      hasRequiredEsimOrderSchema(),
+      esimOfferActive ? hasRequiredEsimOrderSchema() : Promise.resolve(false),
       hasRequiredPaymentSchema(),
       hasRequiredPocketWifiFulfilmentSchema(),
       hasRequiredOperationsSchema(),
@@ -152,7 +159,7 @@ export async function GET(req: Request) {
     checks.orderIntegrity && checks.supabase && checks.fulfilmentEmail
   );
   const checkoutChecks = {
-    esim: commonCheckoutReady && Boolean(esimOrderSchema) && esimPromoIsActive(),
+    esim: commonCheckoutReady && Boolean(esimOrderSchema) && esimOfferActive,
     pocketWifi: commonCheckoutReady && Boolean(paymentSchema) &&
       Boolean(pocketWifiFulfilmentSchema) && checks.inventory && availabilityChecks.pocketWifiStock,
   };
