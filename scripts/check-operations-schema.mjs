@@ -193,6 +193,69 @@ assert.throws(
   /Duplicate CREATE INDEX declaration/,
 );
 
+// Triggers enforce the paid-order, delivery-ledger, inventory-custody and CRM
+// boundaries in this migration. A truncated declaration can still leave its
+// name, table and function visible to the contract checks below while making
+// PostgreSQL stop before later functions and the compatibility marker are
+// installed. Validate each complete top-level declaration and reject duplicate
+// names, which would otherwise make a clean install fail at the second CREATE.
+export function validateCreateTriggerStatements(sql) {
+  const topLevelSql = sql
+    .replace(/(\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$)[\s\S]*?\1/g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/--[^\r\n]*/g, ' ');
+  const starts = topLevelSql.match(/\bcreate\s+(?:constraint\s+)?trigger\b/gi) || [];
+  const statements = topLevelSql.match(/\bcreate\s+(?:constraint\s+)?trigger\b[\s\S]*?;/gi) || [];
+  assert.equal(statements.length, starts.length, 'CREATE TRIGGER statement is missing its semicolon');
+
+  const names = new Set();
+  for (const statement of statements) {
+    assert.doesNotMatch(
+      statement.replace(/^\s*create\s+(?:constraint\s+)?trigger\b/i, ''),
+      /\bcreate\s+(?:constraint\s+)?trigger\b/i,
+      'CREATE TRIGGER statement contains another CREATE TRIGGER before its terminator',
+    );
+    const declaration = statement.match(
+      /^\s*create\s+(?:constraint\s+)?trigger\s+([A-Za-z_][A-Za-z0-9_$]*)\s+(?:before|after|instead\s+of)\s+[\s\S]+?\s+on\s+(?:only\s+)?[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?\s+[\s\S]*?execute\s+(?:function|procedure)\s+[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?\s*\([^;]*\)\s*;\s*$/i,
+    );
+    assert.ok(declaration, 'Malformed CREATE TRIGGER statement');
+    const name = declaration[1].toLowerCase();
+    assert.ok(!names.has(name), `Duplicate CREATE TRIGGER declaration: ${name}`);
+    names.add(name);
+  }
+}
+
+validateCreateTriggerStatements(schema);
+validateCreateTriggerStatements(`
+  create trigger example_audit
+  after insert or update of status on public.example
+  for each row execute function public.audit_example();
+`);
+assert.throws(
+  () => validateCreateTriggerStatements(`
+    create trigger example_audit after insert on public.example
+    for each row execute function public.audit_example()
+    create trigger example_notify after update on public.example
+    for each row execute function public.notify_example();
+  `),
+  /missing its semicolon/,
+);
+assert.throws(
+  () => validateCreateTriggerStatements(
+    'create trigger example_audit after insert on public.example for each row;',
+  ),
+  /Malformed CREATE TRIGGER/,
+);
+assert.throws(
+  () => validateCreateTriggerStatements(`
+    create trigger example_audit after insert on public.example
+    for each row execute function public.audit_example();
+    create trigger example_audit after update on public.example
+    for each row execute function public.audit_example();
+  `),
+  /Duplicate CREATE TRIGGER declaration/,
+);
+
 // Keep both halves of the lightweight parser covered in the release command
 // itself; the broader integrity suite also exercises these exported guards.
 validatePlpgsqlStructure(`
@@ -557,5 +620,5 @@ assert.match(
 );
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure and terminators, index declarations, function parameters, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
+  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure and terminators, index and trigger declarations, function parameters, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
 }

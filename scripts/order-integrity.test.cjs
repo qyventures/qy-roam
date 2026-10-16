@@ -7775,7 +7775,12 @@ test('per-identity database locks use 64-bit keys without weakening the global i
 });
 
 test('deployment rejects structurally broken PL/pgSQL before schema application', async () => {
-  const { validateDuplicateFunctionParameters, validateDuplicateReturningClauses, validatePlpgsqlStructure } = await import('./check-operations-schema.mjs');
+  const {
+    validateCreateTriggerStatements,
+    validateDuplicateFunctionParameters,
+    validateDuplicateReturningClauses,
+    validatePlpgsqlStructure,
+  } = await import('./check-operations-schema.mjs');
   assert.doesNotThrow(() => validateDuplicateFunctionParameters(`
     create function public.example(p_first integer, p_second text default 'safe')
     returns void language sql as $$ select $$;
@@ -7812,6 +7817,22 @@ test('deployment rejects structurally broken PL/pgSQL before schema application'
     returning * into saved;
     returning * into saved;
   `), /duplicate RETURNING clause/);
+  assert.doesNotThrow(() => validateCreateTriggerStatements(`
+    create trigger example_audit after insert or update on public.example
+    for each row execute function public.audit_example();
+  `));
+  assert.throws(() => validateCreateTriggerStatements(`
+    create trigger example_audit after insert on public.example
+    for each row execute function public.audit_example()
+    create trigger example_notify after update on public.example
+    for each row execute function public.notify_example();
+  `), /missing its semicolon/);
+  assert.throws(() => validateCreateTriggerStatements(`
+    create trigger example_audit after insert on public.example
+    for each row execute function public.audit_example();
+    create trigger example_audit after update on public.example
+    for each row execute function public.audit_example();
+  `), /Duplicate CREATE TRIGGER declaration/);
   // PostgreSQL permits LANGUAGE after AS. This form must not bypass the
   // release guard merely because the repository currently prefers the
   // equivalent pre-body clause order.
