@@ -739,6 +739,13 @@ create table if not exists public.inventory_items (
   check (product_type in ('pocket_wifi', 'esim'))
 );
 alter table public.inventory_items enable row level security;
+alter table public.inventory_items add column if not exists creation_operation_id text;
+alter table public.inventory_items drop constraint if exists inventory_items_creation_operation_id_check;
+alter table public.inventory_items add constraint inventory_items_creation_operation_id_check check (
+  creation_operation_id is null or creation_operation_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+) not valid;
+create unique index if not exists inventory_items_creation_operation_id_uidx
+  on public.inventory_items(creation_operation_id) where creation_operation_id is not null;
 
 -- Reservation capacity excludes dispatched orders whose stock has already
 -- left this register, so the relationship must exist before that function is
@@ -2677,7 +2684,8 @@ create or replace function public.qy_create_inventory_item(
   p_reorder_level integer default 0,
   p_unit_cost_sgd numeric default 0,
   p_location text default null,
-  p_notes text default null
+  p_notes text default null,
+  p_operation_id text default null
 )
 returns public.inventory_items
 language plpgsql
@@ -2689,6 +2697,9 @@ declare
   v_product_type text := lower(trim(coalesce(p_product_type, '')));
   v_status text := lower(trim(coalesce(p_status, '')));
 begin
+  if p_operation_id is null or p_operation_id !~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' then
+    raise exception 'invalid inventory operation identity';
+  end if;
   if nullif(trim(coalesce(p_sku, '')), '') is null then raise exception 'inventory SKU is required'; end if;
   if nullif(trim(coalesce(p_name, '')), '') is null then raise exception 'inventory name is required'; end if;
   if v_product_type not in ('pocket_wifi', 'esim') then raise exception 'invalid inventory product type'; end if;
@@ -2697,26 +2708,45 @@ begin
   if p_reorder_level is null or p_reorder_level < 0 or p_reorder_level > 1000000 then raise exception 'inventory reorder level is out of range'; end if;
   if p_unit_cost_sgd is null or p_unit_cost_sgd < 0 or p_unit_cost_sgd > 100000 then raise exception 'inventory unit cost is out of range'; end if;
 
+  perform pg_advisory_xact_lock(hashtextextended('qy_roam_inventory_operation:' || p_operation_id, 0));
+  select * into v_item from public.inventory_items where creation_operation_id = p_operation_id for update;
+  if found then
+    if v_item.sku is distinct from left(trim(p_sku), 80)
+      or v_item.name is distinct from left(trim(p_name), 120)
+      or v_item.product_type is distinct from v_product_type
+      or v_item.serial_no is distinct from nullif(left(trim(coalesce(p_serial_no, '')), 120), '')
+      or v_item.status is distinct from v_status
+      or v_item.quantity_on_hand is distinct from p_quantity_on_hand
+      or v_item.reorder_level is distinct from p_reorder_level
+      or v_item.unit_cost_sgd is distinct from p_unit_cost_sgd
+      or v_item.location is distinct from nullif(left(trim(coalesce(p_location, '')), 120), '')
+      or v_item.notes is distinct from nullif(left(trim(coalesce(p_notes, '')), 1000), '') then
+      raise exception 'inventory operation identity already belongs to different creation details';
+    end if;
+    return v_item;
+  end if;
+
   insert into public.inventory_items (
     sku, name, product_type, serial_no, status, quantity_on_hand, reorder_level,
-    unit_cost_sgd, location, notes, updated_at
+    unit_cost_sgd, location, notes, creation_operation_id, updated_at
   ) values (
     left(trim(p_sku), 80), left(trim(p_name), 120), v_product_type,
     nullif(left(trim(coalesce(p_serial_no, '')), 120), ''), v_status,
     p_quantity_on_hand, p_reorder_level, p_unit_cost_sgd,
     nullif(left(trim(coalesce(p_location, '')), 120), ''),
-    nullif(left(trim(coalesce(p_notes, '')), 1000), ''), now()
+    nullif(left(trim(coalesce(p_notes, '')), 1000), ''), p_operation_id, now()
   ) returning * into v_item;
 
   if p_quantity_on_hand > 0 then
-    insert into public.inventory_movements (inventory_item_id, movement_type, quantity, reference, notes)
-    values (v_item.id, 'opening_stock', p_quantity_on_hand, left(v_item.sku, 120), 'Initial inventory receipt');
+    insert into public.inventory_movements (inventory_item_id, movement_type, quantity, reference, notes, operation_id)
+    values (v_item.id, 'opening_stock', p_quantity_on_hand, left(v_item.sku, 120), 'Initial inventory receipt', p_operation_id);
   end if;
   return v_item;
 end;
 $$;
-revoke all on function public.qy_create_inventory_item(text,text,text,text,text,integer,integer,numeric,text,text) from public;
-grant execute on function public.qy_create_inventory_item(text,text,text,text,text,integer,integer,numeric,text,text) to service_role;
+revoke all on function public.qy_create_inventory_item(text,text,text,text,text,integer,integer,numeric,text,text,text) from public;
+grant execute on function public.qy_create_inventory_item(text,text,text,text,text,integer,integer,numeric,text,text,text) to service_role;
+drop function if exists public.qy_create_inventory_item(text,text,text,text,text,integer,integer,numeric,text,text);
 
 -- Inventory quantity and its audit record must change atomically. This is for
 -- counted receipts, write-offs and corrections only: physical dispatch and
@@ -3603,6 +3633,6 @@ set search_path = pg_catalog
 -- ledger-authoritative, immutable accounting closes. Version 1 was created
 -- before all of those safeguards had reached their current signatures and
 -- bodies, so it is not safe evidence for a current admin deployment.
-as $$ select 3; $$;
+as $$ select 4; $$;
 revoke all on function public.qy_operations_schema_version() from public;
 grant execute on function public.qy_operations_schema_version() to service_role;

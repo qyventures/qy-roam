@@ -377,11 +377,13 @@ test('operator inventory mutations are durably idempotent across ambiguous retri
   ]) assert.equal(validAdminOperationId(malformed), null);
 
   assert.match(adminOpsForms, /operationId\.current \|\|= createAdminOperationId\(\)/);
-  assert.equal((adminOpsForms.match(/operation_id:operationId\.current/g) || []).length, 2);
-  assert.equal((adminOpsRoute.match(/validAdminOperationId\(body\.operation_id\)/g) || []).length, 2);
-  assert.equal((adminOpsRoute.match(/p_operation_id: operationId/g) || []).length, 2);
+  assert.equal((adminOpsForms.match(/operation_id:operationId\.current/g) || []).length, 3);
+  assert.equal((adminOpsRoute.match(/validAdminOperationId\(body\.operation_id\)/g) || []).length, 3);
+  assert.equal((adminOpsRoute.match(/p_operation_id: operationId/g) || []).length, 3);
   assert.match(schema, /create unique index if not exists inventory_movements_operation_id_uidx/);
-  assert.equal((schema.match(/qy_roam_inventory_operation:/g) || []).length, 2);
+  assert.match(schema, /create unique index if not exists inventory_items_creation_operation_id_uidx/);
+  assert.equal((schema.match(/qy_roam_inventory_operation:/g) || []).length, 3);
+  assert.match(schema, /inventory operation identity already belongs to different creation details/);
   assert.match(schema, /inventory operation identity already belongs to different adjustment details/);
   assert.match(schema, /inventory operation identity already belongs to different status details/);
   assert.match(schema, /grant execute on function public\.qy_adjust_inventory\(bigint,integer,text,text,text,text\) to service_role/);
@@ -4119,13 +4121,13 @@ test('payment-readiness checks coalesce healthy checkout probes without caching 
 test('operations readiness requires the reviewed privileged RPC implementation version', () => {
   assert.match(
     schema,
-    /create or replace function public\.qy_operations_schema_version\(\)[\s\S]*?as \$\$ select 3; \$\$/,
+    /create or replace function public\.qy_operations_schema_version\(\)[\s\S]*?as \$\$ select 4; \$\$/,
   );
   assert.match(
     schema,
     /grant execute on function public\.qy_operations_schema_version\(\) to service_role/,
   );
-  assert.match(productionReadiness, /const REQUIRED_OPERATIONS_SCHEMA_VERSION = 3/);
+  assert.match(productionReadiness, /const REQUIRED_OPERATIONS_SCHEMA_VERSION = 4/);
   assert.match(
     productionReadiness,
     /database\.rpc\('qy_operations_schema_version', \{\}\)\.abortSignal\(signal\)/,
@@ -4741,7 +4743,7 @@ test('opening Pocket WiFi stock is created through an audited database boundary'
   assert.doesNotMatch(adminOpsRoute, /from\('inventory_items'\)\.insert\(row\)/);
   assert.match(schema, /create or replace function public\.qy_create_inventory_item/);
   assert.match(schema, /'opening_stock'/);
-  assert.match(schema, /grant execute on function public\.qy_create_inventory_item\(text,text,text,text,text,integer,integer,numeric,text,text\) to service_role/);
+  assert.match(schema, /grant execute on function public\.qy_create_inventory_item\(text,text,text,text,text,integer,integer,numeric,text,text,text\) to service_role/);
   assert.match(productionReadiness, /qy_create_inventory_item/);
   assert.match(productionReadiness, /inventory SKU is required/);
 });

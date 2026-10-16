@@ -996,7 +996,7 @@ const requiredContracts = [
   'Require an explicit',
   'grant execute on function public.qy_transition_pocket_wifi_order(bigint,text,timestamptz,text,text,text,text,bigint,text) to service_role',
   'grant execute on function public.qy_create_manual_pocket_wifi_order(text,text,text,text,numeric,text,text,date,date,text,integer) to service_role',
-  'grant execute on function public.qy_create_inventory_item(text,text,text,text,text,integer,integer,numeric,text,text) to service_role',
+  'grant execute on function public.qy_create_inventory_item(text,text,text,text,text,integer,integer,numeric,text,text,text) to service_role',
 ];
 
 for (const contract of requiredContracts) {
@@ -1025,7 +1025,7 @@ assert.ok(
 );
 assert.match(
   schema.slice(operationsSchemaVersion),
-  /as \$\$ select 3; \$\$/,
+  /as \$\$ select 4; \$\$/,
   'operations schema marker must advertise the reviewed version required by the application',
 );
 

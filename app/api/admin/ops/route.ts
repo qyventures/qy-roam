@@ -358,11 +358,13 @@ export async function POST(req: NextRequest) {
         })) throw new Error('Manual eSIM order acknowledgement mismatch');
       }
     } else if (action === 'inventory_create') {
+      const operationId = validAdminOperationId(body.operation_id);
       const quantityOnHand = nonNegativeInteger(body.quantity_on_hand);
       const reorderLevel = nonNegativeInteger(body.reorder_level);
       const unitCostCents = nonNegativeMoney(body.unit_cost_sgd);
       const productType = text(body.product_type, 40) || 'pocket_wifi';
       const status = text(body.status, 40).toLowerCase() || 'available';
+      if (!operationId) return NextResponse.json({ error: 'Invalid inventory operation identity. Refresh the page before retrying.' }, { status: 400 });
       if (quantityOnHand === null || reorderLevel === null || unitCostCents === null) {
         return NextResponse.json({ error: 'Stock and reorder quantities must be whole non-negative numbers; unit cost must be a non-negative amount with at most two decimal places' }, { status: 400 });
       }
@@ -393,6 +395,7 @@ export async function POST(req: NextRequest) {
         p_unit_cost_sgd: row.unit_cost_sgd,
         p_location: row.location,
         p_notes: row.notes,
+        p_operation_id: operationId,
       });
       if (error) throw error;
       if (!acknowledgedInventoryMutation(data, {
