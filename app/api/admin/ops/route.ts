@@ -13,6 +13,7 @@ import { acknowledgedInventoryMutation } from '@/lib/inventoryMutation';
 import { acknowledgedManualOrder } from '@/lib/manualOrderAcknowledgement';
 import { acknowledgedClosingPeriod } from '@/lib/closingPeriodAcknowledgement';
 import { acknowledgedAdminRecord } from '@/lib/adminRecordAcknowledgement';
+import { validAdminOperationId } from '@/lib/adminOperationId';
 
 export const dynamic = 'force-dynamic';
 
@@ -405,10 +406,12 @@ export async function POST(req: NextRequest) {
         });
       }
     } else if (action === 'inventory_adjust') {
+      const operationId = validAdminOperationId(body.operation_id);
       const movementType = text(body.movement_type, 40).toLowerCase() || 'adjustment';
       const reference = typeof body.reference === 'string' ? body.reference.trim() : '';
       const itemId = positiveSafeInteger(body.item_id);
       const delta = signedNonZeroInteger(body.delta);
+      if (!operationId) return NextResponse.json({ error: 'Invalid inventory operation identity. Refresh the page before retrying.' }, { status: 400 });
       if (!itemId || delta === null) return NextResponse.json({ error: 'Choose an inventory item and enter a non-zero whole-number quantity change' }, { status: 400 });
       // Keep generic stock corrections on a closed vocabulary. Custody and
       // inspection movement names are interpreted as audit evidence by the
@@ -419,7 +422,7 @@ export async function POST(req: NextRequest) {
       if (movementType === 'write_off' && delta > -1) return NextResponse.json({ error: 'A write-off must decrease stock' }, { status: 400 });
       if (!reference) return NextResponse.json({ error: 'An inventory adjustment reference is required' }, { status: 400 });
       if (!validInventoryReference(reference)) return NextResponse.json({ error: 'Inventory references must be a single line of 120 characters or fewer' }, { status: 400 });
-      const { data, error } = await db.rpc('qy_adjust_inventory', { p_item_id: itemId, p_delta: delta, p_type: movementType, p_reference: reference, p_notes: text(body.notes, 1000) || null });
+      const { data, error } = await db.rpc('qy_adjust_inventory', { p_item_id: itemId, p_delta: delta, p_type: movementType, p_reference: reference, p_notes: text(body.notes, 1000) || null, p_operation_id: operationId });
       if (error) throw error;
       if (!acknowledgedInventoryMutation(data, { id: itemId })) {
         return NextResponse.json({ error: 'Unable to verify the inventory adjustment. Refresh the stock register before making another change.' }, {
@@ -428,11 +431,13 @@ export async function POST(req: NextRequest) {
         });
       }
     } else if (action === 'inventory_status') {
+      const operationId = validAdminOperationId(body.operation_id);
       const itemId = positiveSafeInteger(body.item_id);
       const status = text(body.status, 40).toLowerCase();
       // Status is intentionally separate from a quantity adjustment. Returning
       // a quarantined unit to service requires staff to both record the
       // inspection decision here and post the physical stock movement above.
+      if (!operationId) return NextResponse.json({ error: 'Invalid inventory operation identity. Refresh the page before retrying.' }, { status: 400 });
       if (itemId === null) return NextResponse.json({ error: 'Choose an inventory item' }, { status: 400 });
       if (!['available', 'quarantined', 'damaged', 'maintenance'].includes(status)) {
         return NextResponse.json({ error: 'Choose a valid inventory status' }, { status: 400 });
@@ -448,6 +453,7 @@ export async function POST(req: NextRequest) {
         p_status: status,
         p_reference: reference,
         p_notes: text(body.notes, 1000) || null,
+        p_operation_id: operationId,
       });
       if (error) {
         if (/inventory item not found/i.test(error.message || '')) return NextResponse.json({ error: 'Inventory item not found' }, { status: 404 });

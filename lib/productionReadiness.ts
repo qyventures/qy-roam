@@ -32,7 +32,7 @@ const REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 10;
 // optimistic fulfilment transitions, custody-ledger idempotency, and
 // database-authoritative period closing. Version 1 predates several of those
 // contracts and must not keep a rolling deployment's operations UI enabled.
-const REQUIRED_OPERATIONS_SCHEMA_VERSION = 2;
+const REQUIRED_OPERATIONS_SCHEMA_VERSION = 3;
 
 type ProductionReadinessState = {
   stripeApiReadyUntil: number;
@@ -699,12 +699,14 @@ async function checkRequiredOperationsSchema() {
           p_type: 'readiness_probe',
           p_reference: null,
           p_notes: null,
+          p_operation_id: '00000000-0000-4000-8000-000000000001',
         }).abortSignal(signal),
         database.rpc('qy_set_inventory_status', {
           p_item_id: 0,
           p_status: 'available',
           p_reference: null,
           p_notes: null,
+          p_operation_id: '00000000-0000-4000-8000-000000000002',
         }).abortSignal(signal),
         database.rpc('qy_create_inventory_item', {
           p_sku: '',

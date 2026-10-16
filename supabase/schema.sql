@@ -2539,6 +2539,13 @@ create table if not exists public.inventory_movements (
   notes text,
   created_at timestamptz not null default now()
 );
+alter table public.inventory_movements add column if not exists operation_id text;
+alter table public.inventory_movements drop constraint if exists inventory_movements_operation_id_check;
+alter table public.inventory_movements add constraint inventory_movements_operation_id_check check (
+  operation_id is null or operation_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+) not valid;
+create unique index if not exists inventory_movements_operation_id_uidx
+  on public.inventory_movements(operation_id) where operation_id is not null;
 -- Existing projects may have the original non-zero check. Replace that
 -- generated constraint explicitly so the additive migration is safe both for
 -- fresh installs and deployments that already have inventory movements.
@@ -2715,12 +2722,14 @@ grant execute on function public.qy_create_inventory_item(text,text,text,text,te
 -- counted receipts, write-offs and corrections only: physical dispatch and
 -- returns must use the order-transition function below, which ties the exact
 -- device movement to its paid booking and its hand-off/receipt evidence.
+drop function if exists public.qy_adjust_inventory(bigint,integer,text,text,text);
 create or replace function public.qy_adjust_inventory(
   p_item_id bigint,
   p_delta integer,
   p_type text,
   p_reference text default null,
-  p_notes text default null
+  p_notes text default null,
+  p_operation_id text default null
 )
 returns public.inventory_items
 language plpgsql
@@ -2729,6 +2738,7 @@ set search_path = public
 as $$
 declare
   v_item public.inventory_items%rowtype;
+  v_existing public.inventory_movements%rowtype;
 begin
   if p_item_id is null or p_item_id < 1 then raise exception 'invalid inventory item'; end if;
   if p_delta is null or p_delta = 0 or abs(p_delta::bigint) > 1000000 then raise exception 'inventory adjustment is out of range'; end if;
@@ -2742,6 +2752,22 @@ begin
   end if;
   if length(trim(p_reference)) > 120 or trim(p_reference) ~ '[[:cntrl:]]' then
     raise exception 'invalid inventory adjustment reference';
+  end if;
+  if p_operation_id is null or p_operation_id !~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' then
+    raise exception 'invalid inventory operation identity';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended('qy_roam_inventory_operation:' || p_operation_id, 0));
+  select * into v_existing from public.inventory_movements where operation_id = p_operation_id;
+  if found then
+    if v_existing.inventory_item_id <> p_item_id or v_existing.quantity <> p_delta or
+       v_existing.movement_type <> lower(trim(p_type)) or v_existing.reference <> trim(p_reference) or
+       v_existing.notes is distinct from nullif(left(trim(coalesce(p_notes, '')), 1000), '') then
+      raise exception 'inventory operation identity already belongs to different adjustment details';
+    end if;
+    select * into v_item from public.inventory_items where id = p_item_id;
+    if not found then raise exception 'inventory item not found'; end if;
+    return v_item;
   end if;
 
   select * into v_item from public.inventory_items where id = p_item_id for update;
@@ -2768,24 +2794,26 @@ begin
   where id = p_item_id
   returning * into v_item;
 
-  insert into public.inventory_movements (inventory_item_id, movement_type, quantity, reference, notes)
-  values (p_item_id, left(trim(p_type), 40), p_delta, nullif(left(trim(coalesce(p_reference, '')), 120), ''), nullif(left(trim(coalesce(p_notes, '')), 1000), ''));
+  insert into public.inventory_movements (inventory_item_id, movement_type, quantity, reference, notes, operation_id)
+  values (p_item_id, left(trim(p_type), 40), p_delta, nullif(left(trim(coalesce(p_reference, '')), 120), ''), nullif(left(trim(coalesce(p_notes, '')), 1000), ''), p_operation_id);
   return v_item;
 end;
 $$;
-revoke all on function public.qy_adjust_inventory(bigint,integer,text,text,text) from public;
-grant execute on function public.qy_adjust_inventory(bigint,integer,text,text,text) to service_role;
+revoke all on function public.qy_adjust_inventory(bigint,integer,text,text,text,text) from public;
+grant execute on function public.qy_adjust_inventory(bigint,integer,text,text,text,text) to service_role;
 
 -- Inspection state is part of the physical-stock boundary too. A direct
 -- table update would let a quarantined or damaged router become dispatchable
 -- without leaving any evidence of the inspection decision. Keep this
 -- zero-quantity movement in the same transaction as the status change, and
 -- require an inspection/repair reference before an item can be made available.
+drop function if exists public.qy_set_inventory_status(bigint,text,text,text);
 create or replace function public.qy_set_inventory_status(
   p_item_id bigint,
   p_status text,
   p_reference text default null,
-  p_notes text default null
+  p_notes text default null,
+  p_operation_id text default null
 )
 returns public.inventory_items
 language plpgsql
@@ -2795,6 +2823,7 @@ as $$
 declare
   v_item public.inventory_items%rowtype;
   v_status text;
+  v_existing public.inventory_movements%rowtype;
 begin
   if p_item_id is null or p_item_id < 1 then raise exception 'invalid inventory item'; end if;
   v_status := lower(trim(coalesce(p_status, '')));
@@ -2806,6 +2835,24 @@ begin
   end if;
   if length(trim(p_reference)) > 120 or trim(p_reference) ~ '[[:cntrl:]]' then
     raise exception 'invalid inventory status reference';
+  end if;
+  if p_operation_id is null or p_operation_id !~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' then
+    raise exception 'invalid inventory operation identity';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended('qy_roam_inventory_operation:' || p_operation_id, 0));
+  select * into v_existing from public.inventory_movements where operation_id = p_operation_id;
+  if found then
+    if v_existing.inventory_item_id <> p_item_id or v_existing.quantity <> 0 or
+       v_existing.movement_type <> 'status_change' or v_existing.reference <> trim(p_reference) or
+       v_existing.notes is distinct from nullif(left(trim(coalesce(p_notes, '')), 1000), '') then
+      raise exception 'inventory operation identity already belongs to different status details';
+    end if;
+    select * into v_item from public.inventory_items where id = p_item_id;
+    if not found or v_item.status <> v_status then
+      raise exception 'inventory operation no longer matches current status';
+    end if;
+    return v_item;
   end if;
 
   select * into v_item from public.inventory_items where id = p_item_id for update;
@@ -2828,19 +2875,20 @@ begin
   where id = p_item_id
   returning * into v_item;
 
-  insert into public.inventory_movements (inventory_item_id, movement_type, quantity, reference, notes)
+  insert into public.inventory_movements (inventory_item_id, movement_type, quantity, reference, notes, operation_id)
   values (
     p_item_id,
     'status_change',
     0,
     nullif(left(trim(coalesce(p_reference, '')), 120), ''),
-    nullif(left(trim(coalesce(p_notes, '')), 1000), '')
+    nullif(left(trim(coalesce(p_notes, '')), 1000), ''),
+    p_operation_id
   );
   return v_item;
 end;
 $$;
-revoke all on function public.qy_set_inventory_status(bigint,text,text,text) from public;
-grant execute on function public.qy_set_inventory_status(bigint,text,text,text) to service_role;
+revoke all on function public.qy_set_inventory_status(bigint,text,text,text,text) from public;
+grant execute on function public.qy_set_inventory_status(bigint,text,text,text,text) to service_role;
 
 -- The physical hand-off and receipt boundaries must update an order and its
 -- stock ledger in one transaction. A browser-side sequence of "set status",
@@ -3547,13 +3595,14 @@ language sql
 immutable
 security definer
 set search_path = pg_catalog
--- Version 2 certifies the complete privileged operations contract above:
+-- Version 3 certifies the complete privileged operations contract above,
+-- including durable idempotency identities for operator stock mutations.
 -- atomic manual eSIM and Pocket WiFi sale creation; exact optimistic order
 -- transitions; exactly-once router custody movements and explicit return
 -- disposition; bounded inventory mutations; CRM reconciliation; and
 -- ledger-authoritative, immutable accounting closes. Version 1 was created
 -- before all of those safeguards had reached their current signatures and
 -- bodies, so it is not safe evidence for a current admin deployment.
-as $$ select 2; $$;
+as $$ select 3; $$;
 revoke all on function public.qy_operations_schema_version() from public;
 grant execute on function public.qy_operations_schema_version() to service_role;

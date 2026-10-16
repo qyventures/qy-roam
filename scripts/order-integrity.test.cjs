@@ -68,6 +68,7 @@ const { durablePaidOrderMatchesPaymentEvent, durableOrderMatchesFailedOrAlreadyP
 const { databaseTimestampInstantEquals, exactDatabaseTimestampToken, exactStripeClaimToken } = require('../lib/stripeClaimToken.ts');
 const { exactRpcRow } = require('../lib/exactRpcRow.ts');
 const { acknowledgedInventoryMutation } = require('../lib/inventoryMutation.ts');
+const { validAdminOperationId } = require('../lib/adminOperationId.ts');
 const { acknowledgedManualOrder } = require('../lib/manualOrderAcknowledgement.ts');
 const { acknowledgedClosingPeriod } = require('../lib/closingPeriodAcknowledgement.ts');
 const { acknowledgedAdminRecord } = require('../lib/adminRecordAcknowledgement.ts');
@@ -362,6 +363,29 @@ test('inventory mutations acknowledge the exact item and committed stock state',
   assert.match(adminOpsRoute, /Unable to verify the saved inventory item/);
   assert.match(adminOpsRoute, /Unable to verify the inventory adjustment/);
   assert.match(adminOpsRoute, /Unable to verify the inventory status change/);
+});
+
+test('operator inventory mutations are durably idempotent across ambiguous retries', () => {
+  const operationId = '123e4567-e89b-42d3-a456-426614174000';
+  assert.equal(validAdminOperationId(operationId), operationId);
+  for (const malformed of [
+    undefined,
+    '',
+    operationId.toUpperCase(),
+    '123e4567-e89b-12d3-a456-426614174000',
+    '123e4567-e89b-42d3-c456-426614174000',
+  ]) assert.equal(validAdminOperationId(malformed), null);
+
+  assert.match(adminOpsForms, /operationId\.current \|\|= createAdminOperationId\(\)/);
+  assert.equal((adminOpsForms.match(/operation_id:operationId\.current/g) || []).length, 2);
+  assert.equal((adminOpsRoute.match(/validAdminOperationId\(body\.operation_id\)/g) || []).length, 2);
+  assert.equal((adminOpsRoute.match(/p_operation_id: operationId/g) || []).length, 2);
+  assert.match(schema, /create unique index if not exists inventory_movements_operation_id_uidx/);
+  assert.equal((schema.match(/qy_roam_inventory_operation:/g) || []).length, 2);
+  assert.match(schema, /inventory operation identity already belongs to different adjustment details/);
+  assert.match(schema, /inventory operation identity already belongs to different status details/);
+  assert.match(schema, /grant execute on function public\.qy_adjust_inventory\(bigint,integer,text,text,text,text\) to service_role/);
+  assert.match(schema, /grant execute on function public\.qy_set_inventory_status\(bigint,text,text,text,text\) to service_role/);
 });
 
 test('manual paid sales acknowledge the exact durable commercial order', () => {
@@ -4095,13 +4119,13 @@ test('payment-readiness checks coalesce healthy checkout probes without caching 
 test('operations readiness requires the reviewed privileged RPC implementation version', () => {
   assert.match(
     schema,
-    /create or replace function public\.qy_operations_schema_version\(\)[\s\S]*?as \$\$ select 2; \$\$/,
+    /create or replace function public\.qy_operations_schema_version\(\)[\s\S]*?as \$\$ select 3; \$\$/,
   );
   assert.match(
     schema,
     /grant execute on function public\.qy_operations_schema_version\(\) to service_role/,
   );
-  assert.match(productionReadiness, /const REQUIRED_OPERATIONS_SCHEMA_VERSION = 2/);
+  assert.match(productionReadiness, /const REQUIRED_OPERATIONS_SCHEMA_VERSION = 3/);
   assert.match(
     productionReadiness,
     /database\.rpc\('qy_operations_schema_version', \{\}\)\.abortSignal\(signal\)/,
@@ -5224,7 +5248,7 @@ test('Pocket WiFi inspection status changes are durably audited before a unit ca
   assert.match(schema, /movement_type in \('return_quarantined', 'return_damaged', 'status_change'\)/);
   assert.match(schema, /create or replace function public\.qy_set_inventory_status/);
   assert.match(schema, /'status_change',\s*\n    0,/);
-  assert.match(schema, /grant execute on function public\.qy_set_inventory_status\(bigint,text,text,text\) to service_role/);
+  assert.match(schema, /grant execute on function public\.qy_set_inventory_status\(bigint,text,text,text,text\) to service_role/);
   assert.match(adminOpsRoute, /rpc\('qy_set_inventory_status'/);
   assert.doesNotMatch(adminOpsRoute, /from\('inventory_items'\)\s*\n\s*\.update\(\{ status/);
   assert.match(adminOpsRoute, /p_reference: reference/);
