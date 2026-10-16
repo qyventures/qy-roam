@@ -256,6 +256,79 @@ assert.throws(
   /Duplicate CREATE TRIGGER declaration/,
 );
 
+// The order ledger's payment, fulfilment, delivery-reference and Stripe
+// identity invariants are installed as named ALTER TABLE constraints. A
+// missing semicolon can join two declarations into one broken statement while
+// leaving every expected constraint name visible to the presence checks
+// below. Validate the complete declarations and reject a copied name on the
+// same table before deployment starts applying this migration.
+export function validateAddConstraintStatements(sql) {
+  const topLevelSql = sql
+    .replace(/(\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$)[\s\S]*?\1/g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/--[^\r\n]*/g, ' ');
+  const starts = topLevelSql.match(/\balter\s+table\s+(?:only\s+)?[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?\s+add\s+constraint\b/gi) || [];
+  const statements = topLevelSql.match(/\balter\s+table\s+(?:only\s+)?[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?\s+add\s+constraint\b[\s\S]*?;/gi) || [];
+  assert.equal(statements.length, starts.length, 'ADD CONSTRAINT statement is missing its semicolon');
+
+  const declarations = new Set();
+  for (const statement of statements) {
+    assert.doesNotMatch(
+      statement.replace(/^\s*alter\s+table\b/i, ''),
+      /\balter\s+table\s+(?:only\s+)?[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?\s+add\s+constraint\b/i,
+      'ADD CONSTRAINT statement contains another ADD CONSTRAINT before its terminator',
+    );
+    const declaration = statement.match(
+      /^\s*alter\s+table\s+(?:only\s+)?([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\s+add\s+constraint\s+([A-Za-z_][A-Za-z0-9_$]*)\s+([\s\S]+?)\s*;\s*$/i,
+    );
+    assert.ok(declaration, 'Malformed ADD CONSTRAINT statement');
+    assert.match(declaration[3], /^(?:check|unique|primary\s+key|foreign\s+key|exclude)\b/i, 'Unsupported ADD CONSTRAINT declaration');
+
+    // Parentheses in constraint expressions and column lists must balance.
+    // String literals were retained above because their contents are part of
+    // the expression; remove them before counting syntax delimiters.
+    const expression = declaration[3].replace(/'(?:''|[^'])*'/g, ' ');
+    let depth = 0;
+    for (const character of expression) {
+      if (character === '(') depth += 1;
+      if (character === ')') {
+        depth -= 1;
+        assert.ok(depth >= 0, 'ADD CONSTRAINT statement contains an unmatched closing parenthesis');
+      }
+    }
+    assert.equal(depth, 0, 'ADD CONSTRAINT statement contains an unmatched opening parenthesis');
+
+    const identity = `${declaration[1].toLowerCase()}:${declaration[2].toLowerCase()}`;
+    assert.ok(!declarations.has(identity), `Duplicate ADD CONSTRAINT declaration: ${identity}`);
+    declarations.add(identity);
+  }
+}
+
+validateAddConstraintStatements(schema);
+validateAddConstraintStatements(`
+  alter table public.example add constraint example_positive_check check (value > 0) not valid;
+`);
+assert.throws(
+  () => validateAddConstraintStatements(`
+    alter table public.example add constraint example_positive_check check (value > 0)
+    alter table public.example add constraint example_label_check check (label <> '');
+  `),
+  /missing its semicolon/,
+);
+assert.throws(
+  () => validateAddConstraintStatements(
+    'alter table public.example add constraint example_positive_check check (value > 0;',
+  ),
+  /unmatched opening parenthesis/,
+);
+assert.throws(
+  () => validateAddConstraintStatements(`
+    alter table public.example add constraint example_positive_check check (value > 0);
+    alter table public.example add constraint example_positive_check check (value >= 0);
+  `),
+  /Duplicate ADD CONSTRAINT declaration/,
+);
+
 // Keep both halves of the lightweight parser covered in the release command
 // itself; the broader integrity suite also exercises these exported guards.
 validatePlpgsqlStructure(`
@@ -620,5 +693,5 @@ assert.match(
 );
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure and terminators, index and trigger declarations, function parameters, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
+  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure and terminators, index, trigger and constraint declarations, function parameters, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
 }

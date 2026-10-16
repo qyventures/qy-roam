@@ -7776,6 +7776,7 @@ test('per-identity database locks use 64-bit keys without weakening the global i
 
 test('deployment rejects structurally broken PL/pgSQL before schema application', async () => {
   const {
+    validateAddConstraintStatements,
     validateCreateTriggerStatements,
     validateDuplicateFunctionParameters,
     validateDuplicateReturningClauses,
@@ -7833,6 +7834,21 @@ test('deployment rejects structurally broken PL/pgSQL before schema application'
     create trigger example_audit after update on public.example
     for each row execute function public.audit_example();
   `), /Duplicate CREATE TRIGGER declaration/);
+  assert.doesNotThrow(() => validateAddConstraintStatements(`
+    alter table public.example add constraint example_positive_check
+      check (value > 0) not valid;
+  `));
+  assert.throws(() => validateAddConstraintStatements(`
+    alter table public.example add constraint example_positive_check check (value > 0)
+    alter table public.example add constraint example_label_check check (label <> '');
+  `), /missing its semicolon/);
+  assert.throws(() => validateAddConstraintStatements(`
+    alter table public.example add constraint example_positive_check check (value > 0;
+  `), /unmatched opening parenthesis/);
+  assert.throws(() => validateAddConstraintStatements(`
+    alter table public.example add constraint example_positive_check check (value > 0);
+    alter table public.example add constraint example_positive_check check (value >= 0);
+  `), /Duplicate ADD CONSTRAINT declaration/);
   // PostgreSQL permits LANGUAGE after AS. This form must not bypass the
   // release guard merely because the repository currently prefers the
   // equivalent pre-body clause order.
