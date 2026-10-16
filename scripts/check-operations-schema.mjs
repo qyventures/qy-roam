@@ -409,6 +409,65 @@ assert.throws(
   /Duplicate CREATE VIEW declaration/,
 );
 
+// Function-body validation above proves that each dollar-quoted PL/pgSQL
+// block is internally balanced, but it does not prove that the enclosing
+// CREATE FUNCTION statement ends after the closing delimiter. A missing
+// semicolon before REVOKE/GRANT leaves the body looking valid to every
+// presence and compatibility-version check while PostgreSQL stops the clean
+// install at that function. Validate the complete top-level declaration for
+// every SQL and PL/pgSQL function in this migration.
+export function validateCreateFunctionStatements(sql) {
+  const source = sql
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/--[^\r\n]*/g, ' ');
+  const starts = source.match(/\bcreate\s+(?:or\s+replace\s+)?function\b/gi) || [];
+  const declaration = /\bcreate\s+(?:or\s+replace\s+)?function\s+([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\s*\([\s\S]*?\)\s*returns\b[\s\S]*?\bas\s+(\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$)[\s\S]*?\2\s*;/gi;
+  const statements = [...source.matchAll(declaration)];
+  assert.equal(statements.length, starts.length, 'CREATE FUNCTION statement is malformed or missing its semicolon');
+
+  // This repository deliberately replaces functions in place and drops old
+  // overloads before changing a signature. Two declarations for the exact
+  // same textual signature in one clean-install file are therefore almost
+  // certainly a damaged merge or a stale duplicate whose later body silently
+  // supersedes the compatibility contract reviewed above.
+  const signatures = new Set();
+  for (const statement of statements) {
+    const header = statement[0].slice(0, statement[0].toLowerCase().indexOf('returns'));
+    const signature = header
+      .replace(/^\s*create\s+(?:or\s+replace\s+)?function\s+/i, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+    assert.ok(!signatures.has(signature), `Duplicate CREATE FUNCTION declaration: ${signature}`);
+    signatures.add(signature);
+  }
+}
+
+validateCreateFunctionStatements(schema);
+validateCreateFunctionStatements(`
+  create or replace function public.example(p_value integer)
+  returns integer language sql immutable as $$ select p_value; $$;
+`);
+assert.throws(
+  () => validateCreateFunctionStatements(`
+    create function public.example() returns integer
+    language sql as $$ select 1; $$
+    revoke all on function public.example() from public;
+  `),
+  /malformed or missing its semicolon/,
+);
+assert.throws(
+  () => validateCreateFunctionStatements('create function public.example();'),
+  /malformed or missing its semicolon/,
+);
+assert.throws(
+  () => validateCreateFunctionStatements(`
+    create function public.example(p_value integer) returns integer language sql as $$ select p_value; $$;
+    create or replace function public.example(p_value integer) returns integer language sql as $$ select p_value + 1; $$;
+  `),
+  /Duplicate CREATE FUNCTION declaration/,
+);
+
 // The order ledger's payment, fulfilment, delivery-reference and Stripe
 // identity invariants are installed as named ALTER TABLE constraints. A
 // missing semicolon can join two declarations into one broken statement while
@@ -846,5 +905,5 @@ assert.match(
 );
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure and terminators, table, index, trigger, view and constraint declarations, function parameters, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
+  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure and terminators, table, index, trigger, view, function and constraint declarations, function parameters, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
 }

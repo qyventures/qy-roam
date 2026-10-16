@@ -7780,6 +7780,7 @@ test('deployment rejects structurally broken PL/pgSQL before schema application'
     validateCreateTriggerStatements,
     validateCreateTableStatements,
     validateCreateViewStatements,
+    validateCreateFunctionStatements,
     validateDuplicateFunctionParameters,
     validateDuplicateReturningClauses,
     validatePlpgsqlStructure,
@@ -7869,6 +7870,20 @@ test('deployment rejects structurally broken PL/pgSQL before schema application'
     create view public.example as select id from public.orders;
     create or replace view public.example as select email from public.orders;
   `), /Duplicate CREATE VIEW declaration/);
+  assert.doesNotThrow(() => validateCreateFunctionStatements(`
+    create or replace function public.example(p_value integer)
+    returns integer language sql immutable as $$ select p_value; $$;
+  `));
+  assert.throws(() => validateCreateFunctionStatements(`
+    create function public.example() returns integer
+    language sql as $$ select 1; $$
+    revoke all on function public.example() from public;
+  `), /malformed or missing its semicolon/);
+  assert.throws(() => validateCreateFunctionStatements('create function public.example();'), /malformed or missing its semicolon/);
+  assert.throws(() => validateCreateFunctionStatements(`
+    create function public.example(p_value integer) returns integer language sql as $$ select p_value; $$;
+    create or replace function public.example(p_value integer) returns integer language sql as $$ select p_value + 1; $$;
+  `), /Duplicate CREATE FUNCTION declaration/);
   assert.doesNotThrow(() => validateAddConstraintStatements(`
     alter table public.example add constraint example_positive_check
       check (value > 0) not valid;
