@@ -253,7 +253,14 @@ verify_customer_response_headers() {
   local private_path
   for private_path in /success /booking; do
     : > "$response_headers"
-    if ! "$@" --dump-header "$response_headers" --output /dev/null "${base_url}${private_path}?session_id=cs_test_release_header_probe" ||
+    # Header verification must remain a local ingress check. A syntactically
+    # valid `cs_test_...` value crosses the page's Stripe lookup boundary when
+    # production credentials are configured, making both the isolated smoke
+    # boot and the live post-cutover check depend on an unnecessary provider
+    # request. Keep a query parameter here so the capability-bearing URL shape
+    # is exercised, but deliberately fail the bounded Session-id parser before
+    # either page can acquire confirmation capacity or call Stripe/Supabase.
+    if ! "$@" --dump-header "$response_headers" --output /dev/null "${base_url}${private_path}?session_id=release-header-probe" ||
        ! grep -Eiq '^cache-control:.*no-store' "$response_headers" ||
        ! grep -Eiq '^cache-control:.*private' "$response_headers" ||
        ! grep -Eiq '^x-robots-tag:.*noindex' "$response_headers" ||

@@ -7694,6 +7694,12 @@ test('release verification enforces the complete customer ingress security bound
   assert.match(deployScript, /\$base_url\/api\/health/);
   assert.match(deployScript, /x-robots-tag:\.\*noindex/);
   assert.match(deployScript, /cache-control:\.\*no-store/);
+  assert.match(deployScript, /\?session_id=release-header-probe/);
+  assert.doesNotMatch(deployScript, /\?session_id=cs_(?:test|live)_release_header_probe/);
+  assert.ok(
+    deployScript.indexOf('?session_id=release-header-probe') > deployScript.indexOf('for private_path in /success /booking'),
+    'confirmation header probes must use a deliberately invalid provider identity',
+  );
   assert.match(deployScript, /verify_checkout_ingress\(\)/);
   assert.match(deployScript, /for checkout_path in \/api\/checkout \/api\/esim-checkout/);
   assert.match(deployScript, /--request POST[\s\S]*?Content-Type: text\/plain[\s\S]*?\$\{base_url\}\$\{checkout_path\}/);
