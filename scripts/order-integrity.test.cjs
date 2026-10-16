@@ -8717,3 +8717,12 @@ test('customer confirmation retries only authenticated orders or transient Strip
   assert.match(bookingPage, /authenticatedSession = true/);
   assert.match(bookingPage, /\(authenticatedSession \|\| retryableStripeConfirmationFailure\(error\)\) && <OrderConfirmationRefresh/);
 });
+
+test('authenticated delayed payments reconcile automatically on the primary success page', () => {
+  // Reaching the unpaid branch requires a fully validated QY Roam Session,
+  // making its customer capability safe to retry through the existing
+  // finite, offline-aware refresh loop. Expired sessions are terminal and
+  // must remain excluded so they cannot keep polling Stripe.
+  assert.match(successPage, /if \(!paid\)[\s\S]{0,1200}!checkoutExpired && <OrderConfirmationRefresh \/>/);
+  assert.match(successPage, /!checkoutExpired && <OrderConfirmationRefresh \/>[\s\S]{0,500}Check booking status/);
+});

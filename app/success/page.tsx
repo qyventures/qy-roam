@@ -147,6 +147,13 @@ export default async function SuccessPage({ searchParams }: Props) {
         ) : (
           <p>If you completed payment, please wait a moment and refresh this page. Some payment methods can take a little longer to confirm.</p>
         )}
+        {/* This Session has passed the complete QY Roam provenance boundary,
+            so bounded automatic reconciliation cannot amplify arbitrary
+            Stripe lookups. Delayed payment methods may become paid after the
+            redirect page was rendered; recheck the same authenticated
+            capability instead of leaving the traveller on a stale unpaid
+            result or encouraging a second checkout. */}
+        {!checkoutExpired && <OrderConfirmationRefresh />}
         {sessionId && !checkoutExpired && <p><a className="secondary" href={`/booking?session_id=${encodeURIComponent(sessionId)}`}>Check booking status</a></p>}
         <p>If you need help, contact us at <a href="tel:+6580327183"><strong>+65 8032 7183</strong></a>.</p>
         <a className="secondary" href={productType === 'esim' ? '/esim' : '/'}>{checkoutExpired ? 'Choose a plan' : 'Back to QY Roam'}</a>
