@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 const REFRESH_INTERVAL_MS = 3_000;
 const MAX_REFRESH_ATTEMPTS = 20;
@@ -14,28 +14,41 @@ const MAX_REFRESH_ATTEMPTS = 20;
 export default function OrderConfirmationRefresh() {
   const router = useRouter();
   const [attempts, setAttempts] = useState(0);
+  const attemptsRef = useRef(0);
 
   useEffect(() => {
     if (attempts >= MAX_REFRESH_ATTEMPTS) return;
-    const timer = window.setTimeout(() => {
-      // Do not spend the bounded retry window while the tab is backgrounded.
-      // A visibility change below resumes confirmation promptly.
-      if (document.visibilityState !== 'visible') return;
-      setAttempts((current) => current + 1);
+    // One effect owns the timer and wake-up listeners. A visibility/online
+    // event can otherwise race the interval and spend two attempts on the
+    // same render. The ref is advanced synchronously before router.refresh(),
+    // making the retry budget authoritative even before React rerenders.
+    let timer: number | undefined;
+    let refreshStarted = false;
+    const refreshWhenReachable = () => {
+      if (
+        refreshStarted ||
+        attemptsRef.current >= MAX_REFRESH_ATTEMPTS ||
+        document.visibilityState !== 'visible' ||
+        !navigator.onLine
+      ) return;
+      refreshStarted = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+      attemptsRef.current += 1;
+      setAttempts(attemptsRef.current);
       router.refresh();
-    }, REFRESH_INTERVAL_MS);
-    return () => window.clearTimeout(timer);
-  }, [attempts, router]);
-
-  useEffect(() => {
-    const refreshWhenVisible = () => {
-      if (document.visibilityState === 'visible' && attempts < MAX_REFRESH_ATTEMPTS) {
-        setAttempts((current) => current + 1);
-        router.refresh();
-      }
     };
-    document.addEventListener('visibilitychange', refreshWhenVisible);
-    return () => document.removeEventListener('visibilitychange', refreshWhenVisible);
+    timer = window.setTimeout(refreshWhenReachable, REFRESH_INTERVAL_MS);
+    // Do not consume the finite reconciliation budget while the tab is
+    // backgrounded or the device is offline. Resume immediately when the
+    // customer can actually reach the server again instead of leaving a paid
+    // order stuck on a stale confirmation until a manual reload.
+    document.addEventListener('visibilitychange', refreshWhenReachable);
+    window.addEventListener('online', refreshWhenReachable);
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', refreshWhenReachable);
+      window.removeEventListener('online', refreshWhenReachable);
+    };
   }, [attempts, router]);
 
   return (

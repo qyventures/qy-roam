@@ -8688,3 +8688,12 @@ test('Stripe expiry cleanup acknowledges only its exact idempotent terminal muta
   assert.match(close, /\.update\([\s\S]*\.select\('stripe_session_id,fulfilment_status'\)/);
   assert.match(close, /acknowledgedExpiredOrderClosure\(expired\.data,session\.id\)/);
 });
+
+test('customer confirmation preserves its retry budget while offline and resumes safely', () => {
+  assert.match(orderConfirmationRefresh, /!navigator\.onLine/);
+  assert.match(orderConfirmationRefresh, /window\.addEventListener\('online', refreshWhenReachable\)/);
+  assert.match(orderConfirmationRefresh, /window\.removeEventListener\('online', refreshWhenReachable\)/);
+  assert.match(orderConfirmationRefresh, /document\.visibilityState !== 'visible'/);
+  assert.match(orderConfirmationRefresh, /refreshStarted \|\|/);
+  assert.match(orderConfirmationRefresh, /attemptsRef\.current \+= 1;[\s\S]*setAttempts\(attemptsRef\.current\);[\s\S]*router\.refresh\(\)/);
+});
