@@ -14,6 +14,7 @@ import { acknowledgedManualOrder } from '@/lib/manualOrderAcknowledgement';
 import { acknowledgedClosingPeriod } from '@/lib/closingPeriodAcknowledgement';
 import { acknowledgedAdminRecord } from '@/lib/adminRecordAcknowledgement';
 import { validAdminOperationId } from '@/lib/adminOperationId';
+import { inventoryMutationFailure } from '@/lib/inventoryMutationFailure';
 
 export const dynamic = 'force-dynamic';
 
@@ -397,7 +398,11 @@ export async function POST(req: NextRequest) {
         p_notes: row.notes,
         p_operation_id: operationId,
       });
-      if (error) throw error;
+      if (error) {
+        const failure = inventoryMutationFailure(error);
+        if (failure) return NextResponse.json({ error: failure.message }, { status: failure.status });
+        throw error;
+      }
       if (!acknowledgedInventoryMutation(data, {
         sku: row.sku,
         status: row.status,
@@ -426,7 +431,11 @@ export async function POST(req: NextRequest) {
       if (!reference) return NextResponse.json({ error: 'An inventory adjustment reference is required' }, { status: 400 });
       if (!validInventoryReference(reference)) return NextResponse.json({ error: 'Inventory references must be a single line of 120 characters or fewer' }, { status: 400 });
       const { data, error } = await db.rpc('qy_adjust_inventory', { p_item_id: itemId, p_delta: delta, p_type: movementType, p_reference: reference, p_notes: text(body.notes, 1000) || null, p_operation_id: operationId });
-      if (error) throw error;
+      if (error) {
+        const failure = inventoryMutationFailure(error);
+        if (failure) return NextResponse.json({ error: failure.message }, { status: failure.status });
+        throw error;
+      }
       if (!acknowledgedInventoryMutation(data, { id: itemId })) {
         return NextResponse.json({ error: 'Unable to verify the inventory adjustment. Refresh the stock register before making another change.' }, {
           status: 503,
@@ -459,7 +468,8 @@ export async function POST(req: NextRequest) {
         p_operation_id: operationId,
       });
       if (error) {
-        if (/inventory item not found/i.test(error.message || '')) return NextResponse.json({ error: 'Inventory item not found' }, { status: 404 });
+        const failure = inventoryMutationFailure(error);
+        if (failure) return NextResponse.json({ error: failure.message }, { status: failure.status });
         throw error;
       }
       if (!acknowledgedInventoryMutation(data, { id: itemId, status })) {

@@ -68,6 +68,7 @@ const { durablePaidOrderMatchesPaymentEvent, durableOrderMatchesFailedOrAlreadyP
 const { databaseTimestampInstantEquals, exactDatabaseTimestampToken, exactStripeClaimToken } = require('../lib/stripeClaimToken.ts');
 const { exactRpcRow } = require('../lib/exactRpcRow.ts');
 const { acknowledgedInventoryMutation } = require('../lib/inventoryMutation.ts');
+const { inventoryMutationFailure } = require('../lib/inventoryMutationFailure.ts');
 const { validAdminOperationId } = require('../lib/adminOperationId.ts');
 const { acknowledgedManualOrder } = require('../lib/manualOrderAcknowledgement.ts');
 const { acknowledgedClosingPeriod } = require('../lib/closingPeriodAcknowledgement.ts');
@@ -95,6 +96,27 @@ const { META_ATTRIBUTION_METADATA_KEYS, stripeMeasurementConsentDowngrade } = re
 const { saleablePocketWifiInventory: scanSaleablePocketWifiInventory } = require('../lib/pocketWifiStock.ts');
 const { retryableStripeConfirmationFailure } = require('../lib/confirmationLookupFailure.ts');
 const { formatSingaporeDate, formatSingaporeTimestamp } = require('../lib/singaporeTimestamp.ts');
+
+test('inventory mutation conflicts are actionable without exposing database failures', () => {
+  assert.deepEqual(
+    inventoryMutationFailure({ message: 'inventory operation identity already belongs to different adjustment details' }),
+    {
+      status: 409,
+      message: 'This stock operation was already used with different details. Refresh the stock register and confirm the saved movement before trying again.',
+    },
+  );
+  assert.equal(inventoryMutationFailure({ message: 'upstream connection string and provider detail' }), null);
+  assert.equal(inventoryMutationFailure('inventory item not found'), null);
+
+  for (const message of [
+    'inventory operation no longer matches current status',
+    'inventory item is assigned to an active Pocket WiFi custody order',
+    'inventory quantity is out of range',
+  ]) {
+    assert.equal(inventoryMutationFailure({ message })?.status, 409);
+  }
+  assert.equal(inventoryMutationFailure({ message: 'inventory item not found' })?.status, 404);
+});
 
 function requireFresh(relativePath) {
   const resolved = require.resolve(relativePath);
