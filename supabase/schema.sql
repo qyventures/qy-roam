@@ -2169,16 +2169,22 @@ begin
   -- A Session's first durable row fixes its commercial entitlement even
   -- while an asynchronous payment is still pending. The later paid event may
   -- refresh contact details, but it must not turn the same Stripe capability
-  -- into a different package, amount, destination, or consent grant. Keep
-  -- this inside the locked transaction so future service-role recovery code
-  -- cannot bypass the application HMAC boundary or race another event.
+  -- into a different package, amount, destination, or consent grant. A
+  -- shopper can revoke optional measurement while payment is pending, so
+  -- accept only the one-way accepted -> essential narrowing before payment.
+  -- Keep this inside the locked transaction so future service-role recovery
+  -- code cannot bypass the application HMAC boundary or race another event.
   if v_order.id is not null and (
     v_order.amount_sgd is distinct from p_amount_sgd or
     v_order.plan_id is distinct from p_plan_id or
     v_order.plan_name is distinct from p_plan_name or
     v_order.data_allowance is distinct from p_data_allowance or
     v_order.country is distinct from p_country or
-    v_order.measurement_consent is distinct from p_measurement_consent or
+    (v_order.measurement_consent is distinct from p_measurement_consent and not (
+      v_order.payment_status = 'unpaid' and
+      v_order.measurement_consent = 'accepted' and
+      p_measurement_consent = 'essential'
+    )) or
     v_order.travel_start is not null or
     v_order.travel_end is not null
   ) then
@@ -2303,17 +2309,22 @@ begin
 
   -- The provisional order already owns scarce capacity for these exact dates.
   -- An unpaid -> paid transition may fill final customer details, but it must
-  -- never rewrite the amount, rental identity, or measurement authority of
-  -- the Stripe Session that established that commitment. Evaluate this while
-  -- holding the inventory advisory lock and row lock so every privileged
-  -- caller shares one atomic snapshot boundary.
+  -- never rewrite the amount or rental identity. Measurement authority can
+  -- only narrow from accepted to essential while unpaid, matching Checkout's
+  -- same-Session consent revocation; it can never be granted or changed after
+  -- payment. Evaluate this while holding the inventory advisory lock and row
+  -- lock so every privileged caller shares one atomic snapshot boundary.
   if found and (
     v_order.amount_sgd is distinct from p_amount_sgd or
     v_order.plan_name is distinct from p_plan_name or
     v_order.country is distinct from p_country or
     v_order.travel_start is distinct from p_travel_start or
     v_order.travel_end is distinct from p_travel_end or
-    v_order.measurement_consent is distinct from p_measurement_consent or
+    (v_order.measurement_consent is distinct from p_measurement_consent and not (
+      v_order.payment_status = 'unpaid' and
+      v_order.measurement_consent = 'accepted' and
+      p_measurement_consent = 'essential'
+    )) or
     v_order.plan_id is not null or
     v_order.data_allowance is not null
   ) then
@@ -3269,10 +3280,13 @@ as $$
   -- Version 44 additionally certifies that existing-customer CRM reconciliation
   -- delegates ledger aggregates to qy_reconcile_customer_paid_totals instead
   -- of referencing variables outside their PL/pgSQL scope.
+  -- Version 46 permits a pending Stripe order's measurement consent to narrow
+  -- from accepted to essential without stranding its eventual paid webhook;
+  -- consent escalation and paid-order changes remain rejected.
   -- Version 45 makes both product-specific Stripe persistence RPC signatures
   -- part of pre-payment readiness, preventing a partial migration from
   -- accepting payment when the webhook cannot create its durable order.
-  select 45;
+  select 46;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
