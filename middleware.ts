@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminCredentials, hasRequiredAdminCredentials } from './lib/runtimeConfig';
-import { ADMIN_AUTH_FAILURE_WINDOW_MS, createFailedAdminAuthLimiter, failedAdminAuthGloballyLimited, failedAdminAuthLimited } from './lib/adminAuthRateLimit';
+import { ADMIN_AUTH_FAILURE_WINDOW_MS, failedAdminAuthGloballyLimited, failedAdminAuthLimited } from './lib/adminAuthRateLimit';
 import { ADMIN_MUTATION_HEADER, ADMIN_MUTATION_HEADER_VALUE } from './lib/adminMutation';
 import { validStripeCheckoutSessionId } from './lib/stripeSessionId';
+import { CONFIRMATION_RATE_LIMIT_WINDOW_MS, confirmationClientLimited, confirmationGloballyLimited } from './lib/confirmationRateLimit';
 
 // Reverse proxies normally impose a header limit, but authentication is a
 // public edge of the operations surface and must retain a bounded CPU/memory
@@ -13,46 +14,10 @@ const MAX_BASIC_AUTH_DECODED_LENGTH = 4_096;
 // The success and booking pages retrieve a Stripe Checkout Session and can
 // also query the paid-order ledger. Unlike API checkout rate limits, this
 // boundary must run before a server component is rendered; otherwise even a
-// rejected page has already consumed provider work. Keep the limiter
-// allocation-free so rotating clients cannot turn its bookkeeping into a
-// second denial-of-service vector. This is an instance-local overload guard,
-// matching the standalone single-process production deployment.
-export const CONFIRMATION_RATE_LIMIT_WINDOW_MS = 60_000;
-export const CONFIRMATION_CLIENT_RATE_LIMIT_MAX_ATTEMPTS = 30;
-export const CONFIRMATION_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS = 180;
-// Reuse the edge-safe, bounded client-window implementation used at the
-// Basic Auth boundary. Confirmation lookups are read-only, but each accepted
-// request performs a Stripe read and can also query the paid-order ledger.
-// Capping one trusted proxy identity before it reaches the shared counter
-// prevents a single noisy browser from denying confirmation to every buyer;
-// the aggregate counter below still bounds callers that rotate addresses.
-const confirmationClientLimited = createFailedAdminAuthLimiter(
-  CONFIRMATION_RATE_LIMIT_WINDOW_MS,
-  CONFIRMATION_CLIENT_RATE_LIMIT_MAX_ATTEMPTS,
-);
-let confirmationRequestCount = 0;
-let confirmationWindowResetAt = 0;
-let confirmationLastObservedAt = 0;
-
-function confirmationGloballyLimited(now = Date.now()) {
-  if (!Number.isFinite(now)) now = Date.now();
-  // Confirmation pages perform provider-backed reads before rendering. A
-  // backwards host-clock correction must not leave their shared fixed window
-  // saturated until an old future reset time catches up.
-  if (now < confirmationLastObservedAt) {
-    confirmationRequestCount = 0;
-    confirmationWindowResetAt = 0;
-  }
-  confirmationLastObservedAt = now;
-  if (confirmationWindowResetAt <= now) {
-    confirmationRequestCount = 1;
-    confirmationWindowResetAt = now + CONFIRMATION_RATE_LIMIT_WINDOW_MS;
-    return false;
-  }
-  confirmationRequestCount += 1;
-  return confirmationRequestCount > CONFIRMATION_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS;
-}
-
+// rejected page has already consumed provider work. Keep its client registry
+// bounded so rotating clients cannot turn the defence itself into a second
+// denial-of-service vector. This is an instance-local overload guard, matching
+// the standalone single-process production deployment.
 function isConfirmationLookup(pathname: string) {
   return pathname === '/success' || pathname === '/booking';
 }

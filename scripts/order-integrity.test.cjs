@@ -38,6 +38,7 @@ const { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheck
 const { hasIdentityRequestContentEncoding, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError, InvalidRequestBodyLimitError, MAX_REQUEST_BODY_CHUNKS, MAX_JSON_CONTENT_TYPE_HEADER_LENGTH, MAX_CONTENT_ENCODING_HEADER_LENGTH } = require('../lib/requestBody.ts');
 const { checkoutClientKey, createCheckoutAttemptLimiter, createGlobalAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { ADMIN_AUTH_GLOBAL_MAX_FAILURES, adminAuthClientKey, createFailedAdminAuthLimiter, createGlobalFailedAdminAuthLimiter } = require('../lib/adminAuthRateLimit.ts');
+const { CONFIRMATION_RATE_LIMIT_WINDOW_MS, CONFIRMATION_CLIENT_RATE_LIMIT_MAX_ATTEMPTS, CONFIRMATION_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS } = require('../lib/confirmationRateLimit.ts');
 const { ADMIN_MUTATION_HEADER, ADMIN_MUTATION_HEADER_VALUE, adminMutationHeaders } = require('../lib/adminMutation.ts');
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode, stripeSecretKeyMode } = require('../lib/stripeCheckoutConfig.ts');
 const { stripeWebhookSigningSecret, stripeWebhookSigningSecrets } = require('../lib/stripeWebhookSecret.ts');
@@ -3321,15 +3322,42 @@ test('rejected availability ranges cannot exhaust the shared provider-work budge
 });
 
 test('customer confirmation lookups are throttled before provider-backed server rendering', () => {
-  assert.match(middleware, /CONFIRMATION_CLIENT_RATE_LIMIT_MAX_ATTEMPTS\s*=\s*30/);
-  assert.match(middleware, /CONFIRMATION_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS\s*=\s*180/);
+  assert.equal(CONFIRMATION_RATE_LIMIT_WINDOW_MS, 60_000);
+  assert.equal(CONFIRMATION_CLIENT_RATE_LIMIT_MAX_ATTEMPTS, 30);
+  assert.equal(CONFIRMATION_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS, 180);
   assert.match(middleware, /pathname === '\/success' \|\| pathname === '\/booking'/);
-  assert.match(middleware, /const confirmationClientLimited = createFailedAdminAuthLimiter\([\s\S]*?CONFIRMATION_CLIENT_RATE_LIMIT_MAX_ATTEMPTS/);
+  assert.match(middleware, /confirmationClientLimited, confirmationGloballyLimited/);
+  assert.doesNotMatch(middleware, /createFailedAdminAuthLimiter/);
   assert.match(middleware, /providerBackedLookup && \(confirmationClientLimited\(req\) \|\| confirmationGloballyLimited\(\)\)[\s\S]*?status: 429/);
-  assert.match(middleware, /if \(now < confirmationLastObservedAt\) \{[\s\S]*?confirmationRequestCount = 0;[\s\S]*?confirmationWindowResetAt = 0;/);
   assert.match(middleware, /'Cache-Control': 'no-store, max-age=0, private'/);
   assert.match(middleware, /'Referrer-Policy': 'no-referrer'/);
   assert.match(middleware, /matcher: \['\/admin\/:path\*', '\/api\/admin\/:path\*', '\/success', '\/booking'\]/);
+});
+
+test('customer confirmation rate limits survive duplicate Next module graphs', () => {
+  const first = requireFresh('../lib/confirmationRateLimit.ts');
+  const second = requireFresh('../lib/confirmationRateLimit.ts');
+  assert.notEqual(first, second);
+
+  const client = new Request('https://qyroam.com/success?session_id=cs_test_example', {
+    headers: { 'x-real-ip': '198.51.100.214' },
+  });
+  const clientWindow = 9_300_000_000_000;
+  for (let index = 0; index < first.CONFIRMATION_CLIENT_RATE_LIMIT_MAX_ATTEMPTS; index += 1) {
+    assert.equal((index % 2 === 0 ? first : second).confirmationClientLimited(client, clientWindow), false);
+  }
+  assert.equal(second.confirmationClientLimited(client, clientWindow), true);
+
+  const globalWindow = clientWindow + first.CONFIRMATION_RATE_LIMIT_WINDOW_MS + 1;
+  for (let index = 0; index < first.CONFIRMATION_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS; index += 1) {
+    assert.equal((index % 2 === 0 ? first : second).confirmationGloballyLimited(globalWindow), false);
+  }
+  assert.equal(first.confirmationGloballyLimited(globalWindow), true);
+
+  // The shared factory already treats a backwards wall-clock correction as a
+  // fresh bounded window, so a host time adjustment cannot strand customers
+  // behind a future-dated confirmation throttle.
+  assert.equal(second.confirmationGloballyLimited(globalWindow - 10_000), false);
 });
 
 test('checkout attempt rate limiting keeps per-client limits while bounding unique client state', () => {
