@@ -34,6 +34,27 @@ assert.doesNotMatch(deploy, /git diff --cached --quiet/);
 assert.doesNotMatch(deploy, /git checkout\s/);
 assert.match(deploy, /npm ci --no-audit --no-fund/);
 assert.doesNotMatch(deploy, /npm install --no-audit --no-fund/);
+// Runtime secrets are loaded with shell `source`, so deployment-owned names
+// must be immutable first. Otherwise an innocently duplicated APP_DIR,
+// service, health URL, or artifact variable can redirect cleanup, rollback,
+// verification, or restart operations away from their reviewed targets.
+const deploymentControlsReadonly = deploy.indexOf(
+  'readonly APP_DIR ENV_FILE SERVICE_NAME HEALTH_URL PUBLIC_ORIGIN',
+);
+const deploymentPathsReadonly = deploy.indexOf(
+  'readonly SYSTEMD_UNIT_PATH NGINX_CONFIG_PATH READINESS_CURL_TIMEOUT_SECONDS',
+);
+const artifactPathsReadonly = deploy.indexOf(
+  'readonly RELEASE_DIST_DIR ROLLBACK_RESTORE_DIST_DIR',
+);
+const envSource = deploy.indexOf('source "$ENV_FILE"');
+assert.ok(deploymentControlsReadonly > -1, 'deployment control variables must be immutable');
+assert.ok(deploymentPathsReadonly > -1, 'deployment target paths must be immutable');
+assert.ok(artifactPathsReadonly > -1, 'release artifact paths must be immutable');
+assert.ok(
+  deploymentControlsReadonly < envSource && deploymentPathsReadonly < envSource && artifactPathsReadonly < envSource,
+  'deployment controls must be immutable before the application environment is sourced',
+);
 // Building into the serving `.next` tree makes old HTML and route responses
 // reference chunks that Next may already have deleted or replaced. Compile
 // and smoke-test a separate dist directory, then promote it only immediately

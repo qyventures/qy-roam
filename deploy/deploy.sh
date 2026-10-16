@@ -25,6 +25,16 @@ RELEASE_DIST_DIR=.next-release
 # only after the complete snapshot copy succeeds.
 ROLLBACK_RESTORE_DIST_DIR=.next-rollback-restore
 
+# These values control filesystem replacement, cleanup, service restarts and
+# the readiness authority used to approve a release. The application env file
+# is sourced later to provide runtime secrets, but it must never be able to
+# replace deployment control variables through an accidental name collision.
+# Make the resolved operator overrides immutable before reading that file;
+# Bash will fail closed if it tries to assign one of these names.
+readonly APP_DIR ENV_FILE SERVICE_NAME HEALTH_URL PUBLIC_ORIGIN
+readonly SYSTEMD_UNIT_PATH NGINX_CONFIG_PATH READINESS_CURL_TIMEOUT_SECONDS
+readonly RELEASE_DIST_DIR ROLLBACK_RESTORE_DIST_DIR
+
 cd "$APP_DIR"
 
 echo "[1/11] Checking production runtime"
