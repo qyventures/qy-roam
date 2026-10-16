@@ -7782,6 +7782,7 @@ test('deployment rejects structurally broken PL/pgSQL before schema application'
     validateCreateViewStatements,
     validateCreateFunctionStatements,
     validateAlterTableStatements,
+    validatePrivilegeStatements,
     validateDuplicateFunctionParameters,
     validateDuplicateReturningClauses,
     validatePlpgsqlStructure,
@@ -7912,6 +7913,20 @@ test('deployment rejects structurally broken PL/pgSQL before schema application'
     alter table public.example add constraint example_positive_check check (value > 0);
     alter table public.example add constraint example_positive_check check (value >= 0);
   `), /Duplicate ADD CONSTRAINT declaration/);
+  assert.doesNotThrow(() => validatePrivilegeStatements(`
+    revoke all on function public.example(integer, text) from public;
+    grant execute on function public.example(integer, text) to service_role;
+  `));
+  assert.throws(() => validatePrivilegeStatements(`
+    revoke all on function public.example(integer, text) from public
+    grant execute on function public.example(integer, text) to service_role;
+  `), /missing its semicolon/);
+  assert.throws(() => validatePrivilegeStatements(
+    'revoke all on function public.example(integer, text)) from public;',
+  ), /unmatched closing parenthesis/);
+  assert.throws(() => validatePrivilegeStatements(
+    'grant execute on function public.example(integer, text) service_role;',
+  ), /Malformed GRANT statement/);
   // PostgreSQL permits LANGUAGE after AS. This form must not bypass the
   // release guard merely because the repository currently prefers the
   // equivalent pre-body clause order.

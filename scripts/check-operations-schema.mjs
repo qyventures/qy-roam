@@ -608,6 +608,64 @@ assert.throws(
   /Duplicate ADD CONSTRAINT declaration/,
 );
 
+// Security-definer RPCs are safe only when their default PUBLIC execution
+// privilege is revoked and the reviewed service role is granted access. A
+// missing semicolon can join two otherwise recognizable privilege clauses:
+// substring contract checks still pass, but PostgreSQL either stops the clean
+// install before the protective REVOKE or never installs the narrow GRANT.
+// Validate every top-level privilege statement as a complete declaration.
+export function validatePrivilegeStatements(sql) {
+  const topLevelSql = sql
+    .replace(/(\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$)[\s\S]*?\1/g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/--[^\r\n]*/g, ' ');
+  const starts = topLevelSql.match(/\b(?:grant|revoke)\b/gi) || [];
+  const statements = topLevelSql.match(/\b(?:grant|revoke)\b[\s\S]*?;/gi) || [];
+  assert.equal(statements.length, starts.length, 'GRANT or REVOKE statement is missing its semicolon');
+
+  for (const statement of statements) {
+    const verb = statement.match(/^\s*(grant|revoke)\b/i)?.[1]?.toUpperCase();
+    assert.ok(verb, 'Malformed privilege statement');
+    assert.doesNotMatch(
+      statement.replace(/^\s*(?:grant|revoke)\b/i, ''),
+      /\b(?:grant|revoke)\b/i,
+      `${verb} statement contains another privilege statement before its terminator`,
+    );
+    const boundary = verb === 'GRANT' ? /\bto\s+[A-Za-z_][A-Za-z0-9_$]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_$]*)*\s*;\s*$/i : /\bfrom\s+[A-Za-z_][A-Za-z0-9_$]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_$]*)*\s*;\s*$/i;
+    assert.match(statement, boundary, `Malformed ${verb} statement`);
+
+    const syntax = statement
+      .replace(/'(?:''|[^'])*'/g, ' ')
+      .replace(/"(?:""|[^"])*"/g, ' ');
+    let depth = 0;
+    for (const character of syntax) {
+      if (character === '(') depth += 1;
+      if (character === ')') {
+        depth -= 1;
+        assert.ok(depth >= 0, `${verb} statement contains an unmatched closing parenthesis`);
+      }
+    }
+    assert.equal(depth, 0, `${verb} statement contains an unmatched opening parenthesis`);
+  }
+}
+
+validatePrivilegeStatements(schema);
+validatePrivilegeStatements(`
+  revoke all on function public.example(integer) from public;
+  grant execute on function public.example(integer) to service_role;
+`);
+assert.throws(
+  () => validatePrivilegeStatements(`
+    revoke all on function public.example(integer) from public
+    grant execute on function public.example(integer) to service_role;
+  `),
+  /missing its semicolon/,
+);
+assert.throws(
+  () => validatePrivilegeStatements('grant execute on function public.example(integer to service_role;'),
+  /unmatched opening parenthesis/,
+);
+
 // Keep both halves of the lightweight parser covered in the release command
 // itself; the broader integrity suite also exercises these exported guards.
 validatePlpgsqlStructure(`
@@ -972,5 +1030,5 @@ assert.match(
 );
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure and terminators, table, index, trigger, view, function, ALTER TABLE and constraint declarations, function parameters, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
+  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure and terminators, table, index, trigger, view, function, ALTER TABLE, constraint and privilege declarations, function parameters, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
 }
