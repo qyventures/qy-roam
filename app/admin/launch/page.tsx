@@ -6,6 +6,7 @@ import { ESIM_PROMO, esimPromoIsActive } from '@/lib/esimPlans';
 import { LAUNCH_PROMO, promoIsActive } from '@/lib/promotions';
 import { isProductionQyRoamOrigin } from '@/lib/siteOrigin';
 import { hasSaleablePocketWifiInventory } from '@/lib/pocketWifiStock';
+import { runAdminDashboardWork } from '@/lib/adminDashboardConcurrency';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,7 +15,22 @@ function Row({label,ok,note}:{label:string,ok:boolean,note:string}){return <div 
 
 export default async function LaunchPage(){
  const config=operationalConfig();
- const [stripeApi, esimOrderDbOk, paymentDbOk, pocketWifiFulfilmentDbOk, operationsDbOk, pocketWifiStock]=await Promise.all([hasRequiredStripeApiAccess(),hasRequiredEsimOrderSchema(),hasRequiredPaymentSchema(),hasRequiredPocketWifiFulfilmentSchema(),hasRequiredOperationsSchema(),hasSaleablePocketWifiInventory(config?.pocketWifiInventory||0)]);
+ // This page performs the same provider-backed readiness work as the
+ // authenticated health route. Keep it inside the shared admin read budget so
+ // overlapping operator refreshes cannot multiply Stripe/Supabase work during
+ // an incident. A busy or unexpectedly rejected probe remains a usable,
+ // explicitly unavailable control surface instead of a server-render failure.
+ const esimOfferActive=esimPromoIsActive();
+ const dependencyChecks=await runAdminDashboardWork(async()=>{
+  try {
+   return await Promise.all([hasRequiredStripeApiAccess(),esimOfferActive?hasRequiredEsimOrderSchema():Promise.resolve(false),hasRequiredPaymentSchema(),hasRequiredPocketWifiFulfilmentSchema(),hasRequiredOperationsSchema(),hasSaleablePocketWifiInventory(config?.pocketWifiInventory||0)]);
+  } catch {
+   console.error('admin_launch_dependency_check_failed');
+   return null;
+  }
+ },null);
+ const dependencyChecksAvailable=dependencyChecks!==null;
+ const [stripeApi, esimOrderDbOk, paymentDbOk, pocketWifiFulfilmentDbOk, operationsDbOk, pocketWifiStock]=dependencyChecks||[false,false,false,false,false,false];
  // Use the checkout route's canonical credential boundary. A duplicated
  // prefix-only check can otherwise tell operators the store is ready while
  // the customer-facing route correctly rejects a malformed credential.
@@ -32,7 +48,6 @@ export default async function LaunchPage(){
  // green launch control while the customer payment route fails closed.
  const site=isProductionQyRoamOrigin(process.env.NEXT_PUBLIC_SITE_URL);
  const orderIntegrity=hasOrderIntegritySigningConfig();
- const esimOfferActive=esimPromoIsActive();
  const wifiPromoActive=promoIsActive();
  // Mirror each public checkout route independently. eSIM intentionally remains
  // sellable when only the router reservation/inventory contract is unavailable;
@@ -58,6 +73,7 @@ export default async function LaunchPage(){
  const releaseBlockers=Array.from(new Set([...commonBlockers,!operationsDbOk&&'operations database schema',!admin&&'secure admin credentials',!esimReady&&!wifiReady&&'at least one complete saleable product checkout'].filter(Boolean))) as string[];
  const paidBlockers=Array.from(new Set([...releaseBlockers,...esimBlockers,...wifiBlockers,!metaCapi&&'valid Meta Pixel ID and CAPI access token'].filter(Boolean))) as string[];
  return <main className="wrap section legal" style={{maxWidth:1100}}><span className="eyebrow">Launch control</span><h1>Production readiness</h1><p style={{color:'#64748b'}}>Safe configuration check only. Secret values are never displayed. Checkout status reflects the gates enforced before a customer can pay.</p>
+ {!dependencyChecksAvailable&&<div style={{...card,marginTop:16,borderColor:'#f59e0b'}}><strong>Live readiness checks are temporarily unavailable</strong><p style={{marginBottom:0}}>Another admin view is using the operational read budget, or a provider check failed unexpectedly. No checkout is shown as ready from this incomplete snapshot; refresh shortly.</p></div>}
  <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:14,marginTop:20}}><div style={card}><small>Release readiness</small><h2 style={{margin:'6px 0'}}>{releaseReady?'✓ Ready':'⚠ Blocked'}</h2><span style={{color:'#64748b'}}>{releaseReady?'Matches the authenticated production health gate.':`${releaseBlockers.length} release blocker${releaseBlockers.length===1?'':'s'} remaining.`}</span></div><div style={card}><small>eSIM checkout</small><h2 style={{margin:'6px 0'}}>{esimReady?'✓ Ready':'⚠ Blocked'}</h2><span style={{color:'#64748b'}}>Payment, durable order record and fulfilment alert.</span></div><div style={card}><small>Pocket WiFi checkout</small><h2 style={{margin:'6px 0'}}>{wifiReady?'✓ Ready':'⚠ Blocked'}</h2><span style={{color:'#64748b'}}>Payment, reservation, physical-custody and router-capacity controls.</span></div><div style={card}><small>Paid acquisition</small><h2 style={{margin:'6px 0'}}>{paidReady?'✓ Ready':'⚠ Hold'}</h2><span style={{color:'#64748b'}}>{paidReady?'Release, storefront, fulfilment and measurement controls ready.':`${paidBlockers.length} production blocker${paidBlockers.length===1?'':'s'} remaining.`}</span></div></div>
  <div style={{...card,marginTop:16}}><h2 style={{marginTop:0}}>Launch checklist</h2><Row label="Live Stripe credential" ok={stripe} note="Valid production server-side key format"/><Row label="Stripe Checkout API" ok={stripeApi} note="Bounded read-only probe confirms the deployed key can reach Checkout"/><Row label="Stripe webhook" ok={webhook} note="Required for signed payment confirmation and durable order processing"/><Row label="Order integrity" ok={orderIntegrity} note="Server-only Checkout Session provenance signing"/><Row label="Production URL" ok={site} note="HTTPS qyroam.com or www.qyroam.com origin for Stripe redirects"/><Row label="eSIM approved offer" ok={esimOfferActive} note={esimOfferActive?`${ESIM_PROMO.code} is within its approved sales window`:`${ESIM_PROMO.code} ended ${ESIM_PROMO.endDate}; public eSIM checkout is paused`}/><Row label="eSIM order database" ok={esimOrderDbOk} note="Orders plus Stripe idempotency, fulfilment and Meta delivery ledgers"/><Row label="Pocket WiFi payment database" ok={paymentDbOk} note="eSIM order contract plus router inventory and atomic reservation boundary"/><Row label="Pocket WiFi custody database" ok={pocketWifiFulfilmentDbOk} note="Atomic router dispatch, receipt and inspection evidence"/><Row label="Fulfilment email" ok={smtp} note="Paid-order alert to QY operations for manual fulfilment"/><Row label="Pocket WiFi capacity" ok={wifiInventory} note="Positive configured router capacity required for Pocket WiFi checkout"/><Row label="Pocket WiFi available stock" ok={pocketWifiStock} note="At least one available physical unit exists in the inventory register"/><Row label="Operations database schema" ok={operationsDbOk} note="Inventory, admin reporting, CRM, forecasting and closing records"/><Row label="Meta Purchase delivery" ok={metaCapi} note="Validated Pixel ID and CAPI access token for consented server-side Purchases"/></div>
  {!esimReady&&<div style={{...card,marginTop:16}}><strong>eSIM checkout blockers</strong><p style={{marginBottom:0}}>{esimBlockers.join(' · ')||'Investigate checkout configuration.'}</p></div>}

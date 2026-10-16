@@ -1357,12 +1357,17 @@ test('all read-heavy admin views share the bounded dashboard budget and release 
   assert.equal(typeof recovered, 'function', 'a failed admin read must release its shared slot');
   recovered();
 
-  for (const source of [inventoryPage, reportsPage, crmPage, forecastingPage, closingPage]) {
+  for (const source of [inventoryPage, reportsPage, crmPage, forecastingPage, closingPage, launchPage]) {
     assert.match(source, /runAdminDashboardWork\(/);
   }
   assert.match(inventoryPage, /runAdminDashboardWork\(\(\)=>Promise\.all\(/);
   assert.match(crmPage, /runAdminDashboardWork\(\(\)=>Promise\.all\(/);
   assert.match(forecastingPage, /runAdminDashboardWork\(\(\)=>Promise\.all\(/);
+  assert.match(launchPage, /const dependencyChecks=await runAdminDashboardWork\(/);
+  assert.match(launchPage, /catch \{\s*console\.error\('admin_launch_dependency_check_failed'\);\s*return null;/);
+  assert.match(launchPage, /const dependencyChecksAvailable=dependencyChecks!==null/);
+  assert.match(launchPage, /Live readiness checks are temporarily unavailable/);
+  assert.match(launchPage, /esimOfferActive\?hasRequiredEsimOrderSchema\(\):Promise\.resolve\(false\)/);
 });
 
 test('admin order transitions share the bounded operations database-work budget', () => {
