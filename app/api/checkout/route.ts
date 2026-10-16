@@ -569,9 +569,15 @@ export async function POST(req: Request) {
   // recorded that failure; before then, preserving the attempt protects an
   // in-flight payment and its linked inventory reservation.
   if(currentSession.status==='complete'&&currentSession.payment_status==='unpaid'){
-    const order=await supabase.from('orders').select('payment_status,fulfilment_status').eq('stripe_session_id',currentSession.id).maybeSingle();
+    const order=await supabase.from('orders').select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,fulfilment_status').eq('stripe_session_id',currentSession.id).maybeSingle();
     if(order.error) throw order.error;
-    if(order.data?.payment_status==='unpaid'&&order.data?.fulfilment_status==='payment_failed'){
+    // The Session id and lifecycle label alone are not enough to abandon this
+    // durable attempt. A service-role import or repair can leave a row under
+    // the right id with the wrong product, amount, dates, or consent state.
+    // Rotate only after the signed failure webhook has recorded the complete
+    // commercial snapshot for this exact Stripe Session; otherwise keep the
+    // attempt stable so a delayed asynchronous success remains recoverable.
+    if(order.data?.fulfilment_status==='payment_failed'&&durableOrderMatchesFailedSession(order.data,currentSession,'pocket_wifi')){
       return NextResponse.json({error:'This payment attempt was unsuccessful. Please try again with a new secure checkout.',paymentFailed:true},{status:409,headers:{'Cache-Control':'no-store'}});
     }
   }

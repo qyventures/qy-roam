@@ -4361,6 +4361,28 @@ test('Pocket WiFi paid checkout recovery waits for the durable paid order ledger
   }
 });
 
+test('Pocket WiFi failed-payment replays rotate only after an exact durable order match', () => {
+  const replayStart = wifiCheckoutRoute.indexOf('if(holdState.existingUrl&&holdState.existingSessionId&&holdState.existingSessionSnapshot)');
+  const replayEnd = wifiCheckoutRoute.indexOf('const expiresAt=', replayStart);
+  const replayBranch = wifiCheckoutRoute.slice(replayStart, replayEnd);
+  const createStart = wifiCheckoutRoute.indexOf("if(currentSession.status==='complete'&&currentSession.payment_status==='unpaid')", replayEnd);
+  const createEnd = wifiCheckoutRoute.indexOf("if(currentSession.status==='expired')", createStart);
+  const createBranch = wifiCheckoutRoute.slice(createStart, createEnd);
+
+  for (const [name, branch, sessionObject] of [
+    ['open-session replay', replayBranch, 'existing'],
+    ['idempotent create replay', createBranch, 'currentSession'],
+  ]) {
+    assert.match(branch, /select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,fulfilment_status'\)/,
+      `${name} must load every field in the durable commercial join`);
+    const lifecycleGuard = branch.indexOf("fulfilment_status==='payment_failed'");
+    const durableGuard = branch.indexOf(`durableOrderMatchesFailedSession(order.data,${sessionObject},'pocket_wifi')`);
+    const failedResponse = branch.indexOf('paymentFailed:true');
+    assert.ok(lifecycleGuard > -1 && durableGuard > lifecycleGuard && failedResponse > durableGuard,
+      `${name} must not abandon an asynchronous attempt for a mismatched order row`);
+  }
+});
+
 test('Pocket WiFi open-session retries honor the freshly retrieved Stripe state', () => {
   // Listing and retrieving are separate Stripe calls. A traveller can pay or
   // the session can expire between them, so the stale listed URL must never be
