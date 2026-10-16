@@ -91,6 +91,7 @@ const { validatedSalesReportRow } = require('../lib/salesReportRow.ts');
 const { validatedForecastRow } = require('../lib/forecastRow.ts');
 const { META_ATTRIBUTION_METADATA_KEYS, stripeMeasurementConsentDowngrade } = require('../lib/stripeMeasurementConsent.ts');
 const { saleablePocketWifiInventory: scanSaleablePocketWifiInventory } = require('../lib/pocketWifiStock.ts');
+const { retryableStripeConfirmationFailure } = require('../lib/confirmationLookupFailure.ts');
 
 function requireFresh(relativePath) {
   const resolved = require.resolve(relativePath);
@@ -2571,7 +2572,7 @@ test('temporarily saturated confirmation views recover without asking for a seco
   // Admission failure happens before either page spends a Stripe request, so
   // the existing bounded refresh loop is safe and gives paid customers the
   // same automatic recovery as a webhook still finalising their order row.
-  assert.match(successPage, /confirmationBusy && <OrderConfirmationRefresh \/>/);
+  assert.match(successPage, /\(confirmationBusy \|\| confirmationLookupRetryable\) && <OrderConfirmationRefresh \/>/);
   assert.match(bookingPage, /if \(!releaseConfirmation\)[\s\S]{0,800}<OrderConfirmationRefresh \/>/);
   assert.match(successPage, /Do not place a second order/);
   assert.match(bookingPage, /Do not place a second order/);
@@ -8696,4 +8697,23 @@ test('customer confirmation preserves its retry budget while offline and resumes
   assert.match(orderConfirmationRefresh, /document\.visibilityState !== 'visible'/);
   assert.match(orderConfirmationRefresh, /refreshStarted \|\|/);
   assert.match(orderConfirmationRefresh, /attemptsRef\.current \+= 1;[\s\S]*setAttempts\(attemptsRef\.current\);[\s\S]*router\.refresh\(\)/);
+});
+
+test('customer confirmation retries only authenticated orders or transient Stripe lookups', () => {
+  for (const type of ['StripeAPIError', 'StripeConnectionError', 'StripeRateLimitError']) {
+    assert.equal(retryableStripeConfirmationFailure({ type }), true);
+  }
+  for (const failure of [
+    null,
+    new Error('network-looking but unauthenticated'),
+    { type: 'StripeInvalidRequestError' },
+    { type: 'StripeAuthenticationError' },
+    { type: 429 },
+  ]) assert.equal(retryableStripeConfirmationFailure(failure), false);
+
+  assert.match(successPage, /authenticatedSession = true/);
+  assert.match(successPage, /confirmationLookupRetryable = authenticatedSession \|\| retryableStripeConfirmationFailure\(error\)/);
+  assert.match(successPage, /\(confirmationBusy \|\| confirmationLookupRetryable\) && <OrderConfirmationRefresh/);
+  assert.match(bookingPage, /authenticatedSession = true/);
+  assert.match(bookingPage, /\(authenticatedSession \|\| retryableStripeConfirmationFailure\(error\)\) && <OrderConfirmationRefresh/);
 });

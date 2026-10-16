@@ -8,6 +8,7 @@ import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import OrderConfirmationRefresh from '@/components/OrderConfirmationRefresh';
 import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 import { tryAcquireConfirmationConcurrency } from '@/lib/confirmationConcurrency';
+import { retryableStripeConfirmationFailure } from '@/lib/confirmationLookupFailure';
 
 export const dynamic = 'force-dynamic';
 export const metadata = {
@@ -34,6 +35,8 @@ export default async function SuccessPage({ searchParams }: Props) {
   let orderPersisted = false;
   let orderLookupFailed = false;
   let confirmationBusy = false;
+  let authenticatedSession = false;
+  let confirmationLookupRetryable = false;
 
   // Keep the confirmation page on the same Stripe credential boundary as
   // checkout and webhook processing. In production, a mistakenly deployed
@@ -62,6 +65,7 @@ export default async function SuccessPage({ searchParams }: Props) {
       }
       const validation = validateQyRoamSession(session);
       if (!validation.valid) throw new Error(`Invalid QY Roam Checkout Session: ${validation.reason}`);
+      authenticatedSession = true;
       productType = validation.productType;
       checkoutExpired = session.status === 'expired';
       // Keep the customer-visible payment boundary as strict as webhook
@@ -99,11 +103,16 @@ export default async function SuccessPage({ searchParams }: Props) {
           orderLookupFailed = Boolean(orderResult.error);
         }
       }
-    } catch {
+    } catch (error) {
       // A customer confirmation page may call Stripe and the database. Keep
       // third-party failure text out of application logs. Expected admission
       // shedding is customer-retryable and must not create false provider
       // incidents in production logs.
+      // Once the signed Session is authenticated, any later failure is safe
+      // to retry against the same customer capability. Before that point,
+      // retry only Stripe's explicit transient error classes: a well-formed
+      // but nonexistent id must not turn one request into twenty lookups.
+      confirmationLookupRetryable = authenticatedSession || retryableStripeConfirmationFailure(error);
       if (!confirmationBusy) console.error('success_session_lookup_error');
     } finally {
       releaseConfirmation?.();
@@ -121,7 +130,7 @@ export default async function SuccessPage({ searchParams }: Props) {
             a paid order awaiting its durable row, so a customer returning
             from Checkout does not have to decide whether to pay again. Do
             not auto-refresh malformed or untrusted confirmation references. */}
-        {confirmationBusy && <OrderConfirmationRefresh />}
+        {(confirmationBusy || confirmationLookupRetryable) && <OrderConfirmationRefresh />}
         <p><a href="tel:+6580327183"><strong>+65 8032 7183</strong></a></p>
         <a className="secondary" href="/">Back to QY Roam</a>
       </main>

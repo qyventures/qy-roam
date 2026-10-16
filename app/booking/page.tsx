@@ -11,6 +11,7 @@ import { durableOrderMatchesFailedSession, durableOrderMatchesPaidSession } from
 import { custodyReferenceIssue, normalizeCustodyReference } from '@/lib/custodyReference';
 import { tryAcquireConfirmationConcurrency } from '@/lib/confirmationConcurrency';
 import OrderConfirmationRefresh from '@/components/OrderConfirmationRefresh';
+import { retryableStripeConfirmationFailure } from '@/lib/confirmationLookupFailure';
 
 export const dynamic = 'force-dynamic';
 
@@ -76,6 +77,7 @@ export default async function BookingPage({ searchParams }: Props) {
     );
   }
 
+  let authenticatedSession = false;
   try {
     const stripe = createStripeClient(key);
     const session = await stripe.checkout.sessions.retrieve(sessionId);
@@ -96,6 +98,7 @@ export default async function BookingPage({ searchParams }: Props) {
     // manually created session in a shared Stripe account can carry metadata.
     const validation = validateQyRoamSession(session);
     if (!validation.valid) throw new Error(`Invalid QY Roam Checkout Session: ${validation.reason}`);
+    authenticatedSession = true;
     const productType = validation.productType;
     const supabase = getSupabaseAdmin();
     const orderResult = supabase
@@ -215,7 +218,7 @@ export default async function BookingPage({ searchParams }: Props) {
         <a className="secondary" href={isEsim ? '/esim' : '/'}>{checkoutExpired ? 'Choose a plan' : isEsim ? 'Back to eSIM plans' : 'Back to QY Roam'}</a>
       </main>
     );
-  } catch {
+  } catch (error) {
     // Stripe and database errors are untrusted diagnostics. The order URL is
     // a customer capability, so never mirror those details into logs.
     console.error('booking_status_lookup_error');
@@ -224,6 +227,7 @@ export default async function BookingPage({ searchParams }: Props) {
         <span className="eyebrow">Order status</span>
         <h1>We couldn’t load this order.</h1>
         <p>Please check the original confirmation link or contact <a href="tel:+6580327183"><strong>+65 8032 7183</strong></a> for help.</p>
+        {(authenticatedSession || retryableStripeConfirmationFailure(error)) && <OrderConfirmationRefresh />}
         <a className="secondary" href="/">Back to QY Roam</a>
       </main>
     );
