@@ -3,10 +3,23 @@ import { isSafeSmtpMailbox } from './smtp';
 
 export type PaidFulfilmentProductType = 'esim' | 'pocket_wifi';
 
-function normalizedPhone(value?: string | null) {
-  if (!value) return null;
+function normalizedPhone(value: unknown) {
+  // Checkout Session objects are provider JSON at runtime. Do not invoke a
+  // string method until the field has crossed that boundary; a malformed
+  // paid snapshot must become an actionable validation failure rather than
+  // throwing before the webhook can classify it.
+  if (typeof value !== 'string' || value.length > 32 || /[\u0000-\u001f\u007f]/.test(value)) return null;
   const digits = value.replace(/\D/g, '');
   return digits.length >= 7 && digits.length <= 15 ? digits : null;
+}
+
+function safeCustomerName(value: unknown) {
+  // Names are optional for eSIM delivery, but when Stripe supplies one it is
+  // copied into the durable order and the human fulfilment message. Bound it
+  // and keep line/control characters from creating ambiguous operations data.
+  if (value === null || value === undefined) return true;
+  return typeof value === 'string' && value.trim().length > 0 && value.length <= 200 &&
+    !/[\u0000-\u001f\u007f]/.test(value);
 }
 
 function validSingaporePostalCode(value?: string | null) {
@@ -39,8 +52,12 @@ export function paidFulfilmentDetailsIssue(
 ) {
   if (session.payment_status !== 'paid') return null;
 
-  const email = session.customer_details?.email?.trim();
+  const rawEmail: unknown = session.customer_details?.email;
+  const email = typeof rawEmail === 'string' ? rawEmail.trim() : undefined;
   if (!isSafeSmtpMailbox(email)) return 'Paid order is missing a valid customer email';
+  if (!safeCustomerName(session.customer_details?.name)) {
+    return 'Paid order has an invalid customer name';
+  }
   if (productType === 'esim') return null;
 
   if (!normalizedPhone(session.customer_details?.phone)) {

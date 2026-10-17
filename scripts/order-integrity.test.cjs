@@ -2479,9 +2479,19 @@ test('paid orders fail into the durable webhook recovery ledger when fulfilment 
   };
   assert.equal(paidFulfilmentDetailsIssue(paidEsim, 'esim'), null);
   assert.equal(
+    paidFulfilmentDetailsIssue({ ...paidEsim, customer_details: { email: 42, phone: null } }, 'esim'),
+    'Paid order is missing a valid customer email',
+  );
+  assert.equal(
     paidFulfilmentDetailsIssue({ ...paidEsim, customer_details: { email: 'not-an-email', phone: null } }, 'esim'),
     'Paid order is missing a valid customer email',
   );
+  for (const name of ['Buyer\nBcc: operations@example.com', 'x'.repeat(201), 42]) {
+    assert.equal(
+      paidFulfilmentDetailsIssue({ ...paidEsim, customer_details: { email: 'buyer@example.com', name } }, 'esim'),
+      'Paid order has an invalid customer name',
+    );
+  }
 
   const paidWifi = {
     payment_status: 'paid',
@@ -2493,6 +2503,12 @@ test('paid orders fail into the durable webhook recovery ledger when fulfilment 
     paidFulfilmentDetailsIssue({ ...paidWifi, customer_details: { ...paidWifi.customer_details, phone: '123' } }, 'pocket_wifi'),
     'Paid Pocket WiFi order is missing a valid customer phone number',
   );
+  for (const phone of [65_8032_7183, `+65 ${' '.repeat(30)}8032 7183`, '+65 8032 7183\n']) {
+    assert.equal(
+      paidFulfilmentDetailsIssue({ ...paidWifi, customer_details: { ...paidWifi.customer_details, phone } }, 'pocket_wifi'),
+      'Paid Pocket WiFi order is missing a valid customer phone number',
+    );
+  }
   assert.equal(
     paidFulfilmentDetailsIssue({ ...paidWifi, shipping_details: { address: { country: 'MY', line1: '1 Road', postal_code: '12345' } } }, 'pocket_wifi'),
     'Paid Pocket WiFi order is missing a complete Singapore delivery address',
