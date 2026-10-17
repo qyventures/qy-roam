@@ -17,6 +17,7 @@ import { tryAcquireAdminOpsConcurrency } from '@/lib/adminOpsConcurrency';
 import { tryAcquireAdminDeliveryConcurrency } from '@/lib/adminDeliveryConcurrency';
 import { exactDatabaseTimestampToken } from '@/lib/stripeClaimToken';
 import { exactRpcRow } from '@/lib/exactRpcRow';
+import { acknowledgedOrderTransition } from '@/lib/adminOrderTransitionAcknowledgement';
 
 export const runtime = 'nodejs';
 
@@ -66,14 +67,6 @@ function cancellationReason(value: unknown) {
   const reason = value.trim();
   if (reason.length < 5 || reason.length > 500 || /[\u0000-\u001f\u007f]/.test(reason)) return '';
   return reason;
-}
-
-function acknowledgedOrderTransition(value: unknown, orderId: number, status: string) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const order = value as { id?: unknown; fulfilment_status?: unknown; updated_at?: unknown };
-  const updatedAt = exactDatabaseTimestampToken(order.updated_at);
-  if (order.id !== orderId || order.fulfilment_status !== status || !updatedAt) return null;
-  return { id: orderId, fulfilment_status: status, updated_at: updatedAt };
 }
 
 function notesWithCancellationReason(existing: unknown, reason: string) {
@@ -343,7 +336,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       console.error('admin_pocket_wifi_transition_error');
       return NextResponse.json({ error: 'Unable to update order. Please try again or contact an administrator.' }, { status: 500 });
     }
-    const order = acknowledgedOrderTransition(exactRpcRow(data), id, status);
+    const order = acknowledgedOrderTransition(exactRpcRow(data), { orderId: id, status });
     if (!order) return NextResponse.json({ error: 'Unable to verify the saved order. Refresh before making another change.' }, { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' } });
     return NextResponse.json(order, { headers: { 'Cache-Control': 'no-store' } });
   }
@@ -364,7 +357,14 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     console.error('admin_esim_transition_error');
     return NextResponse.json({ error: 'Unable to update order. Please try again or contact an administrator.' }, { status: 500 });
   }
-  const order = acknowledgedOrderTransition(exactRpcRow(data), id, status);
+  // For the irreversible digital hand-off, status is not a complete commit
+  // acknowledgement. Require the RPC to echo the exact audit reference that
+  // the row lock and transition wrote before telling the operator it saved.
+  const order = acknowledgedOrderTransition(exactRpcRow(data), {
+    orderId: id,
+    status,
+    ...(status === 'fulfilled' ? { digitalDeliveryReference: deliveryReference } : {}),
+  });
   if (!order) return NextResponse.json({ error: 'Unable to verify the saved order. Refresh before making another change.' }, { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' } });
   return NextResponse.json(order, { headers: { 'Cache-Control': 'no-store' } });
   } catch {

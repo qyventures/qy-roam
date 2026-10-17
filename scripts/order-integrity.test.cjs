@@ -73,6 +73,7 @@ const { validAdminOperationId } = require('../lib/adminOperationId.ts');
 const { acknowledgedManualOrder } = require('../lib/manualOrderAcknowledgement.ts');
 const { acknowledgedClosingPeriod } = require('../lib/closingPeriodAcknowledgement.ts');
 const { acknowledgedAdminRecord } = require('../lib/adminRecordAcknowledgement.ts');
+const { acknowledgedOrderTransition } = require('../lib/adminOrderTransitionAcknowledgement.ts');
 const { acknowledgedExpiredCheckoutReservationRelease, acknowledgedLinkedReservationRelease, acknowledgedUnlinkedReservationRelease } = require('../lib/checkoutReservationAcknowledgement.ts');
 const { acknowledgedExpiredOrderClosure, acknowledgedExpiredReservationRelease } = require('../lib/stripeTerminalMutation.ts');
 const { acknowledgedPaidDeliveryClaim, acknowledgedPaidDeliveryFailure, acknowledgedPaidDeliverySettlement } = require('../lib/paidDeliveryAcknowledgement.ts');
@@ -336,8 +337,35 @@ test('database settlement acknowledgements compare the complete timestamp instan
 test('admin order transitions preserve exact database versions and verify their commit acknowledgement', () => {
   assert.match(adminOrderRoute, /exactDatabaseTimestampToken\(body\.expected_updated_at\)/);
   assert.doesNotMatch(adminOrderRoute, /Date\.parse\(expectedUpdatedAt\)/);
-  assert.match(adminOrderRoute, /order\.id !== orderId \|\| order\.fulfilment_status !== status \|\| !updatedAt/);
-  assert.equal((adminOrderRoute.match(/acknowledgedOrderTransition\(exactRpcRow\(data\), id, status\)/g) || []).length, 2);
+  const committed = {
+    id: 42,
+    fulfilment_status: 'fulfilled',
+    digital_delivery_reference: 'provider-order-123',
+    updated_at: '2026-10-18T04:01:02.123456+00:00',
+  };
+  assert.deepEqual(
+    acknowledgedOrderTransition(committed, {
+      orderId: 42,
+      status: 'fulfilled',
+      digitalDeliveryReference: 'provider-order-123',
+    }),
+    { id: 42, fulfilment_status: 'fulfilled', updated_at: committed.updated_at },
+  );
+  for (const malformed of [
+    { ...committed, digital_delivery_reference: 'provider-order-OTHER' },
+    { ...committed, digital_delivery_reference: null },
+    { ...committed, updated_at: 'not-a-timestamp' },
+    { ...committed, id: 43 },
+    [committed],
+  ]) {
+    assert.equal(acknowledgedOrderTransition(malformed, {
+      orderId: 42,
+      status: 'fulfilled',
+      digitalDeliveryReference: 'provider-order-123',
+    }), null);
+  }
+  assert.equal((adminOrderRoute.match(/acknowledgedOrderTransition\(exactRpcRow\(data\),/g) || []).length, 2);
+  assert.match(adminOrderRoute, /status === 'fulfilled' \? \{ digitalDeliveryReference: deliveryReference \} : \{\}/);
   assert.match(adminOrderRoute, /Unable to verify the saved order\. Refresh before making another change\./);
 });
 
@@ -5199,7 +5227,6 @@ test('admin fulfilment writes reject stale same-status saves using the exact ord
   assert.match(adminOrderActions, /expected_updated_at: expectedUpdatedAt/);
   assert.match(adminOrderActions, /setExpectedUpdatedAt\(result\.updated_at\)/);
   assert.match(adminOrderRoute, /p_expected_updated_at: expectedUpdatedAt/g);
-  assert.match(adminOrderRoute, /updated_at: updatedAt/);
 
   const esimTransition = schema.slice(
     schema.indexOf('create or replace function public.qy_transition_esim_order'),
