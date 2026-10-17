@@ -24,7 +24,7 @@ import { tryAcquireCheckoutConcurrency, tryAcquireCheckoutUpload } from '@/lib/c
 import { scanActivePocketWifiStripeHolds } from '@/lib/pocketWifiStripeHolds';
 import { stripeMeasurementConsentDowngrade } from '@/lib/stripeMeasurementConsent';
 import { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } from '@/lib/pocketWifiRentalPeriod';
-import { acknowledgedUnlinkedReservationRelease } from '@/lib/checkoutReservationAcknowledgement';
+import { acknowledgedExpiredCheckoutReservationRelease, acknowledgedLinkedReservationRelease, acknowledgedUnlinkedReservationRelease } from '@/lib/checkoutReservationAcknowledgement';
 
 export const runtime = 'nodejs';
 
@@ -349,8 +349,10 @@ export async function POST(req: Request) {
       if(durableOrderMatchesPaidSession(order.data,existing,'pocket_wifi')){
         const released=await supabase.from('checkout_reservations').delete()
           .eq('checkout_request_id',requestId)
-          .eq('stripe_session_id',existing.id);
+          .eq('stripe_session_id',existing.id)
+          .select('checkout_request_id,stripe_session_id');
         if(released.error) throw released.error;
+        if(!acknowledgedLinkedReservationRelease(released.data,requestId,existing.id)) throw new Error('Paid checkout reservation release returned an invalid acknowledgement');
       }else{
         if(!await linkReservationToSession(supabase,requestId,existing.id,requested)){
           return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
@@ -381,8 +383,10 @@ export async function POST(req: Request) {
       // recovery attempt must remain untouched.
       const released=await supabase.from('checkout_reservations').delete()
         .eq('checkout_request_id',requestId)
-        .or(`stripe_session_id.is.null,stripe_session_id.eq.${existing.id}`);
-      if(released.error) console.error('checkout_expired_reservation_release_error');
+        .or(`stripe_session_id.is.null,stripe_session_id.eq.${existing.id}`)
+        .select('checkout_request_id,stripe_session_id');
+      if(released.error) throw released.error;
+      if(!acknowledgedExpiredCheckoutReservationRelease(released.data,requestId,existing.id)) throw new Error('Expired checkout reservation release returned an invalid acknowledgement');
       return NextResponse.json({error:'This secure checkout session has expired. Please try again to start a new one.',checkoutExpired:true},{status:409,headers:{'Cache-Control':'no-store'}});
     }
     if(!await linkReservationToSession(supabase,requestId,existing.id,requested)){
@@ -550,8 +554,10 @@ export async function POST(req: Request) {
       // otherwise free a later recovery attempt that reused the request id.
       const released=await supabase.from('checkout_reservations').delete()
         .eq('checkout_request_id',requestId)
-        .eq('stripe_session_id',currentSession.id);
+        .eq('stripe_session_id',currentSession.id)
+        .select('checkout_request_id,stripe_session_id');
       if(released.error) throw released.error;
+      if(!acknowledgedLinkedReservationRelease(released.data,requestId,currentSession.id)) throw new Error('Paid checkout reservation release returned an invalid acknowledgement');
     }else{
       if(!await linkReservationToSession(supabase,requestId,currentSession.id,requested)){
         return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});

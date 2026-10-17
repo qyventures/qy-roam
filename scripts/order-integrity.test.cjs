@@ -73,7 +73,7 @@ const { validAdminOperationId } = require('../lib/adminOperationId.ts');
 const { acknowledgedManualOrder } = require('../lib/manualOrderAcknowledgement.ts');
 const { acknowledgedClosingPeriod } = require('../lib/closingPeriodAcknowledgement.ts');
 const { acknowledgedAdminRecord } = require('../lib/adminRecordAcknowledgement.ts');
-const { acknowledgedUnlinkedReservationRelease } = require('../lib/checkoutReservationAcknowledgement.ts');
+const { acknowledgedExpiredCheckoutReservationRelease, acknowledgedLinkedReservationRelease, acknowledgedUnlinkedReservationRelease } = require('../lib/checkoutReservationAcknowledgement.ts');
 const { acknowledgedExpiredOrderClosure, acknowledgedExpiredReservationRelease } = require('../lib/stripeTerminalMutation.ts');
 const { acknowledgedPaidDeliveryClaim, acknowledgedPaidDeliveryFailure, acknowledgedPaidDeliverySettlement } = require('../lib/paidDeliveryAcknowledgement.ts');
 const { parsePocketWifiAvailability, parsePocketWifiBookingTerms } = require('../lib/pocketWifiAvailability.ts');
@@ -1996,7 +1996,6 @@ test('public sales and confirmation paths do not log raw provider failures', () 
   // request details, so logging is intentionally a stable event name only.
   for (const [source, event] of [
     [wifiCheckoutRoute, 'checkout_error'],
-    [wifiCheckoutRoute, 'checkout_expired_reservation_release_error'],
     [esimCheckoutRoute, 'esim_checkout_error'],
     [availabilityRoute, 'availability_check_failed'],
     [successPage, 'success_session_lookup_error'],
@@ -8788,6 +8787,39 @@ test('aborted Pocket WiFi checkouts prove their exact unlinked reservation was r
   assert.match(helper, /\.delete\(\)[\s\S]*\.eq\('checkout_request_id',requestId\)[\s\S]*\.is\('stripe_session_id',null\)[\s\S]*\.select\('checkout_request_id,stripe_session_id'\)/);
   assert.match(helper, /acknowledgedUnlinkedReservationRelease\(released\.data,requestId\)/);
   assert.equal((wifiCheckoutRoute.match(/await releaseUnlinkedReservation\(supabase,requestId\)/g) || []).length, 6);
+});
+
+test('terminal Pocket WiFi checkout recovery acknowledges only its own reservation cleanup', () => {
+  const requestId = '01234567-89ab-4cde-8f01-23456789abcd';
+  const sessionId = 'cs_test_terminal123';
+
+  for (const value of [[], [{ checkout_request_id: requestId, stripe_session_id: sessionId }]]) {
+    assert.equal(acknowledgedLinkedReservationRelease(value, requestId, sessionId), true);
+  }
+  for (const malformed of [
+    null,
+    {},
+    [{ checkout_request_id: requestId, stripe_session_id: null }],
+    [{ checkout_request_id: requestId, stripe_session_id: 'cs_test_other' }],
+    [{ checkout_request_id: requestId, stripe_session_id: sessionId }, { checkout_request_id: requestId, stripe_session_id: sessionId }],
+  ]) assert.equal(acknowledgedLinkedReservationRelease(malformed, requestId, sessionId), false);
+
+  for (const value of [
+    [],
+    [{ checkout_request_id: requestId, stripe_session_id: null }],
+    [{ checkout_request_id: requestId, stripe_session_id: sessionId }],
+  ]) assert.equal(acknowledgedExpiredCheckoutReservationRelease(value, requestId, sessionId), true);
+  for (const malformed of [
+    null,
+    {},
+    [{ checkout_request_id: '11234567-89ab-4cde-8f01-23456789abcd', stripe_session_id: sessionId }],
+    [{ checkout_request_id: requestId, stripe_session_id: 'cs_test_other' }],
+    [{ checkout_request_id: requestId, stripe_session_id: null }, { checkout_request_id: requestId, stripe_session_id: sessionId }],
+  ]) assert.equal(acknowledgedExpiredCheckoutReservationRelease(malformed, requestId, sessionId), false);
+
+  assert.equal((wifiCheckoutRoute.match(/acknowledgedLinkedReservationRelease\(released\.data,requestId,/g) || []).length, 2);
+  assert.equal((wifiCheckoutRoute.match(/acknowledgedExpiredCheckoutReservationRelease\(released\.data,requestId,/g) || []).length, 1);
+  assert.equal((wifiCheckoutRoute.match(/\.select\('checkout_request_id,stripe_session_id'\)/g) || []).length, 4);
 });
 
 test('Stripe expiry cleanup acknowledges only its exact idempotent terminal mutations', () => {
