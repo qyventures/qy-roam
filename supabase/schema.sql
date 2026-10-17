@@ -1592,6 +1592,27 @@ as $$
     to_regclass('public.stripe_events') is not null and
     to_regclass('public.fulfilment_notifications') is not null and
     to_regclass('public.meta_purchase_deliveries') is not null and
+    -- Supabase exposes public-schema relations through PostgREST. Constraints
+    -- and triggers can remain healthy after an accidental DISABLE ROW LEVEL
+    -- SECURITY, while anon/authenticated table grants would then expose paid
+    -- customer details and webhook/delivery audit state. Checkout must fail
+    -- closed until every payment-path relation (including the CRM trigger
+    -- target and temporary inventory holds) is back behind RLS.
+    (select count(*)
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = 'public'
+        and c.relname in (
+          'orders',
+          'stripe_events',
+          'fulfilment_notifications',
+          'meta_purchase_deliveries',
+          'checkout_reservations',
+          'customers'
+        )
+        and c.relkind in ('r', 'p')
+        and c.relrowsecurity
+    ) = 6 and
     to_regprocedure('public.qy_claim_stripe_event(text,text,text)') is not null and
     -- Checkout readiness is the last boundary before the application creates
     -- a payable Stripe Session. Certify both product-specific persistence
@@ -3418,7 +3439,9 @@ as $$
   -- Version 48 additionally prevents cancellation evidence from being
   -- pre-seeded on an active paid order and requires fresh evidence on the
   -- exact transition into the cancelled lifecycle.
-  select 48;
+  -- Version 49 additionally makes active row-level security on every
+  -- payment-path relation part of the pre-payment readiness boundary.
+  select 49;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
