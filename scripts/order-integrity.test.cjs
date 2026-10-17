@@ -8998,3 +8998,13 @@ test('primary confirmation stops polling only after an exact durable asynchronou
   assert.match(successPage, /!checkoutExpired && !paymentFailed && <OrderConfirmationRefresh \/>/);
   assert.match(successPage, /checkoutExpired \|\| paymentFailed \? 'Choose a plan'/);
 });
+
+test('durably failed payments offer a clear fresh-checkout path on every customer status page', () => {
+  // Both customer capabilities must stop their bounded reconciliation loop
+  // only after the exact failed commercial snapshot is durable, then make it
+  // explicit that starting a new server-priced checkout is safe.
+  assert.match(successPage, /!checkoutExpired && !paymentFailed && <OrderConfirmationRefresh \/>/);
+  assert.match(successPage, /checkoutExpired \|\| paymentFailed \? 'Choose a plan'/);
+  assert.match(bookingPage, /!checkoutExpired && !paymentFailed && \(!paid \|\| !orderLifecycleValid\) && <OrderConfirmationRefresh \/>/);
+  assert.match(bookingPage, /checkoutExpired \|\| paymentFailed \? 'Choose a plan'/);
+});

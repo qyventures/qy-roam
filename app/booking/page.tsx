@@ -215,7 +215,12 @@ export default async function BookingPage({ searchParams }: Props) {
 
         {!checkoutExpired && !paymentFailed && (!paid || !orderLifecycleValid) && <OrderConfirmationRefresh />}
         <p>Need help? Call <a href="tel:+6580327183"><strong>+65 8032 7183</strong></a>.</p>
-        <a className="secondary" href={isEsim ? '/esim' : '/'}>{checkoutExpired ? 'Choose a plan' : isEsim ? 'Back to eSIM plans' : 'Back to QY Roam'}</a>
+        {/* A durably failed asynchronous payment is just as terminal as an
+            expired Checkout Session. Give both states one unambiguous path
+            to a fresh server-priced checkout; a generic "Back" action can
+            leave a traveller unsure whether retrying would duplicate an
+            order, even though the exact failed snapshot proves it is safe. */}
+        <a className="secondary" href={isEsim ? '/esim' : '/'}>{checkoutExpired || paymentFailed ? 'Choose a plan' : isEsim ? 'Back to eSIM plans' : 'Back to QY Roam'}</a>
       </main>
     );
   } catch (error) {
