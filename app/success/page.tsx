@@ -6,7 +6,7 @@ import { validStripeCheckoutSessionId, validStripeCheckoutSessionIdForMode } fro
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import OrderConfirmationRefresh from '@/components/OrderConfirmationRefresh';
-import { durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
+import { durableOrderMatchesFailedSession, durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 import { tryAcquireConfirmationConcurrency } from '@/lib/confirmationConcurrency';
 import { retryableStripeConfirmationFailure } from '@/lib/confirmationLookupFailure';
 
@@ -33,6 +33,7 @@ export default async function SuccessPage({ searchParams }: Props) {
   let planId = '';
   let checkoutExpired = false;
   let orderPersisted = false;
+  let paymentFailed = false;
   let orderLookupFailed = false;
   let confirmationBusy = false;
   let authenticatedSession = false;
@@ -86,20 +87,26 @@ export default async function SuccessPage({ searchParams }: Props) {
       // especially important when a shopper reloads the success URL after a
       // network interruption: placing a second order would be the wrong
       // recovery action for a payment that Stripe has already accepted.
-      if (paid) {
+      if (paid || (session.status === 'complete' && session.payment_status === 'unpaid')) {
         const supabase = getSupabaseAdmin();
         if (!supabase) {
           orderLookupFailed = true;
         } else {
           const orderResult = await supabase
             .from('orders')
-            .select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent')
+            .select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,fulfilment_status')
             .eq('stripe_session_id', session.id)
             .maybeSingle();
           // A previously received asynchronous-completion event can have
           // created an awaiting-payment row. The success page must wait for
           // the paid snapshot, not merely any row for this Checkout Session.
           orderPersisted = durableOrderMatchesPaidSession(orderResult.data, session, productType);
+          // An asynchronous failure is terminal only after the signed webhook
+          // has written the exact failed commercial snapshot. Until then an
+          // unpaid Session can still become paid, so keep polling the same
+          // customer capability instead of inviting a duplicate checkout.
+          paymentFailed = orderResult.data?.fulfilment_status === 'payment_failed' &&
+            durableOrderMatchesFailedSession(orderResult.data, session, productType);
           orderLookupFailed = Boolean(orderResult.error);
         }
       }
@@ -141,9 +148,11 @@ export default async function SuccessPage({ searchParams }: Props) {
     return (
       <main className="wrap section legal">
         <span className="eyebrow">Payment status</span>
-        <h1>{checkoutExpired ? 'This secure checkout session has expired.' : 'We’re still confirming your payment.'}</h1>
+        <h1>{checkoutExpired ? 'This secure checkout session has expired.' : paymentFailed ? 'This payment was unsuccessful.' : 'We’re still confirming your payment.'}</h1>
         {checkoutExpired ? (
           <p>No payment was completed for this session. Please return to the plans page to start a new secure checkout.</p>
+        ) : paymentFailed ? (
+          <p>No paid order was created. Please return to the plans page to start a new secure checkout, or contact us if you believe you were charged.</p>
         ) : (
           <p>If you completed payment, please wait a moment and refresh this page. Some payment methods can take a little longer to confirm.</p>
         )}
@@ -153,10 +162,10 @@ export default async function SuccessPage({ searchParams }: Props) {
             redirect page was rendered; recheck the same authenticated
             capability instead of leaving the traveller on a stale unpaid
             result or encouraging a second checkout. */}
-        {!checkoutExpired && <OrderConfirmationRefresh />}
-        {sessionId && !checkoutExpired && <p><a className="secondary" href={`/booking?session_id=${encodeURIComponent(sessionId)}`}>Check booking status</a></p>}
+        {!checkoutExpired && !paymentFailed && <OrderConfirmationRefresh />}
+        {sessionId && !checkoutExpired && !paymentFailed && <p><a className="secondary" href={`/booking?session_id=${encodeURIComponent(sessionId)}`}>Check booking status</a></p>}
         <p>If you need help, contact us at <a href="tel:+6580327183"><strong>+65 8032 7183</strong></a>.</p>
-        <a className="secondary" href={productType === 'esim' ? '/esim' : '/'}>{checkoutExpired ? 'Choose a plan' : 'Back to QY Roam'}</a>
+        <a className="secondary" href={productType === 'esim' ? '/esim' : '/'}>{checkoutExpired || paymentFailed ? 'Choose a plan' : 'Back to QY Roam'}</a>
       </main>
     );
   }

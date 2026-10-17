@@ -2664,7 +2664,7 @@ test('success confirmation does not imply fulfilment is durable before the paid 
   assert.match(successPage, /getSupabaseAdmin/);
   assert.match(successPage, /let orderPersisted = false/);
   assert.match(successPage, /let orderLookupFailed = false/);
-  assert.match(successPage, /select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent'\)/);
+  assert.match(successPage, /select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,fulfilment_status'\)/);
   assert.match(successPage, /orderPersisted = durableOrderMatchesPaidSession\(orderResult\.data, session, productType\)/);
   assert.match(successPage, /orderPersisted \? 'Order confirmed' : 'Payment confirmed'/);
   assert.match(successPage, /Please do not place a second order/);
@@ -8985,6 +8985,16 @@ test('authenticated delayed payments reconcile automatically on the primary succ
   // making its customer capability safe to retry through the existing
   // finite, offline-aware refresh loop. Expired sessions are terminal and
   // must remain excluded so they cannot keep polling Stripe.
-  assert.match(successPage, /if \(!paid\)[\s\S]{0,1200}!checkoutExpired && <OrderConfirmationRefresh \/>/);
-  assert.match(successPage, /!checkoutExpired && <OrderConfirmationRefresh \/>[\s\S]{0,500}Check booking status/);
+  assert.match(successPage, /if \(!paid\)[\s\S]{0,1600}!checkoutExpired && !paymentFailed && <OrderConfirmationRefresh \/>/);
+  assert.match(successPage, /!checkoutExpired && !paymentFailed && <OrderConfirmationRefresh \/>[\s\S]{0,500}Check booking status/);
+});
+
+test('primary confirmation stops polling only after an exact durable asynchronous payment failure', () => {
+  assert.match(successPage, /durableOrderMatchesFailedSession/);
+  assert.match(successPage, /session\.status === 'complete' && session\.payment_status === 'unpaid'/);
+  assert.match(successPage, /\.select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,fulfilment_status'\)/);
+  assert.match(successPage, /orderResult\.data\?\.fulfilment_status === 'payment_failed' &&[\s\S]{0,150}durableOrderMatchesFailedSession\(orderResult\.data, session, productType\)/);
+  assert.match(successPage, /paymentFailed \? 'This payment was unsuccessful\.'/);
+  assert.match(successPage, /!checkoutExpired && !paymentFailed && <OrderConfirmationRefresh \/>/);
+  assert.match(successPage, /checkoutExpired \|\| paymentFailed \? 'Choose a plan'/);
 });
