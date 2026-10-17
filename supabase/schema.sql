@@ -474,8 +474,11 @@ begin
   if old.payment_status = 'paid'
     and old.fulfilment_status <> 'cancelled'
     and new.fulfilment_status = 'cancelled'
-    and coalesce(new.notes, '') !~ '(^|\n)Cancellation reason: .{5,500}$' then
-    raise exception 'paid order cancellation reason is required';
+    and (
+      new.notes is not distinct from old.notes or
+      coalesce(new.notes, '') !~ '(^|\n)Cancellation reason: .{5,500}$'
+    ) then
+    raise exception 'new paid order cancellation reason is required';
   end if;
 
   -- The reason is financial reconciliation evidence, not ordinary editable
@@ -535,6 +538,19 @@ alter table public.orders add constraint orders_paid_cancellation_reason_check c
   payment_status is distinct from 'paid' or
   fulfilment_status <> 'cancelled' or
   coalesce(notes, '') ~ '(^|\n)Cancellation reason: [^[:cntrl:]]{5,500}$'
+) not valid;
+
+-- Cancellation evidence may exist only once the paid fulfilment lifecycle is
+-- actually cancelled. This prevents privileged imports, repair scripts, or a
+-- stale application client from pre-seeding an active order with a terminal
+-- reason that a later status-only update could incorrectly reuse. NOT VALID
+-- leaves historical exceptions visible for reconciliation while protecting
+-- every new or changed row.
+alter table public.orders drop constraint if exists orders_paid_cancellation_evidence_state_check;
+alter table public.orders add constraint orders_paid_cancellation_evidence_state_check check (
+  payment_status is distinct from 'paid' or
+  fulfilment_status = 'cancelled' or
+  coalesce(notes, '') !~ '(^|\n)Cancellation reason: [^[:cntrl:]]{5,500}$'
 ) not valid;
 
 -- The admin API and webhook each validate the lifecycle they write, but the
@@ -1606,11 +1622,12 @@ as $$
       'orders_paid_stripe_fulfilment_details_check',
       'orders_paid_esim_delivery_email_check',
       'orders_paid_cancellation_reason_check',
+      'orders_paid_cancellation_evidence_state_check',
       'orders_pocket_wifi_dispatch_evidence_check',
       'orders_pocket_wifi_return_evidence_check',
       'orders_pocket_wifi_rental_duration_check',
       'orders_session_id_format_check'
-    )) = 18 and
+    )) = 19 and
     (select count(*) from pg_constraint where conrelid = 'public.stripe_events'::regclass and conname in (
       'stripe_events_attempts_check',
       'stripe_events_event_id_check',
@@ -3398,7 +3415,10 @@ as $$
   -- Version 47 makes Stripe event settlement/failure chronology durable and
   -- rejects future-dated terminal audit evidence before it can suppress a
   -- legitimate retry or hide an abandoned claim from operations.
-  select 47;
+  -- Version 48 additionally prevents cancellation evidence from being
+  -- pre-seeded on an active paid order and requires fresh evidence on the
+  -- exact transition into the cancelled lifecycle.
+  select 48;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;

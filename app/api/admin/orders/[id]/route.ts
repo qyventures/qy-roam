@@ -199,6 +199,14 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const deliveryReference = digitalDeliveryReference(body.digital_delivery_reference, existing.data.digital_delivery_reference);
   const returnDisposition = typeof body.return_disposition === 'string' ? body.return_disposition.trim().toLowerCase() : '';
   const cancelReason = cancellationReason(body.cancellation_reason);
+  // Cancellation evidence is meaningful only on the transition that actually
+  // closes fulfilment. A stale or hand-authored client must not be able to
+  // pre-seed an active paid order with an apparently authoritative reason;
+  // that text could otherwise be reused by a later cancellation without the
+  // operator making the financial decision at that boundary.
+  if (Object.prototype.hasOwnProperty.call(body, 'cancellation_reason') && status !== 'cancelled') {
+    return NextResponse.json({ error: 'A cancellation reason can be recorded only when cancelling the order.' }, { status: 400 });
+  }
   // Notes are operational audit evidence. Never silently save only a prefix:
   // an older/custom admin client may submit this field even though the current
   // compact UI only adds structured cancellation evidence. Reject an invalid
@@ -210,6 +218,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       return NextResponse.json({ error: `Order notes must be text of ${MAX_ORDER_NOTES_LENGTH.toLocaleString()} characters or fewer and cannot contain null characters.` }, { status: 400 });
     }
     submittedNotes = body.notes;
+    if (status !== 'cancelled' && /(^|\n)Cancellation reason: [^\u0000-\u001f\u007f]{5,500}$/.test(submittedNotes)) {
+      return NextResponse.json({ error: 'Cancellation evidence can be recorded only when cancelling the order.' }, { status: 400 });
+    }
   }
   // Product-specific evidence must not leak across fulfilment workflows. A
   // stale or hand-authored admin client can submit fields that the current UI
