@@ -77,6 +77,7 @@ const { acknowledgedOrderTransition } = require('../lib/adminOrderTransitionAckn
 const { acknowledgedExpiredCheckoutReservationRelease, acknowledgedLinkedReservationRelease, acknowledgedUnlinkedReservationRelease } = require('../lib/checkoutReservationAcknowledgement.ts');
 const { acknowledgedExpiredOrderClosure, acknowledgedExpiredReservationRelease } = require('../lib/stripeTerminalMutation.ts');
 const { acknowledgedPaidDeliveryClaim, acknowledgedPaidDeliveryFailure, acknowledgedPaidDeliverySettlement } = require('../lib/paidDeliveryAcknowledgement.ts');
+const { acknowledgedStripeEventFailure } = require('../lib/stripeEventFailureAcknowledgement.ts');
 const { parsePocketWifiAvailability, parsePocketWifiBookingTerms } = require('../lib/pocketWifiAvailability.ts');
 const { parseCustomerCheckoutResponse } = require('../lib/customerCheckoutResponse.ts');
 const { CUSTOMER_CHECKOUT_MAX_RECONCILIATION_ATTEMPTS, CUSTOMER_CHECKOUT_RECONCILIATION_TIMEOUT_MS, customerCheckoutRetryAfterMs } = require('../lib/customerCheckout.ts');
@@ -8426,6 +8427,37 @@ test('Stripe event settlement acknowledges the exact event and database lease', 
   assert.match(webhookRoute, /exactDatabaseTimestampToken\(settled\.processing_started_at\)!==processingStartedAt/);
   assert.match(webhookRoute, /!databaseTimestampInstantEquals\(settled\.processed_at,processedAt\)/);
   assert.equal((webhookRoute.match(/await settleStripeEvent\(supabase,eventClaimId,claimStartedAt\)/g) || []).length, 2);
+});
+
+test('Stripe webhook failure recovery acknowledges the exact event and database lease', () => {
+  const eventId = 'stripe:evt_test_failure_ack';
+  const claimStartedAt = '2026-10-18T01:02:03.123456+00:00';
+  const failedAt = '2026-10-18T01:03:04.567Z';
+  const message = 'Stripe webhook processing failed; retry or inspect the affected event.';
+  const row = {
+    event_id: eventId,
+    processing_started_at: claimStartedAt,
+    processed_at: null,
+    last_failed_at: '2026-10-18T01:03:04.567000+00:00',
+    last_error: message,
+  };
+
+  assert.equal(acknowledgedStripeEventFailure([row], eventId, claimStartedAt, failedAt, message), true);
+  for (const malformed of [
+    null,
+    [],
+    [row, row],
+    [{ ...row, event_id: 'stripe:evt_test_other' }],
+    [{ ...row, processing_started_at: '2026-10-18T01:02:03.123000+00:00' }],
+    [{ ...row, processed_at: failedAt }],
+    [{ ...row, last_failed_at: '2026-10-18T01:03:05.567Z' }],
+    [{ ...row, last_error: 'different recovery state' }],
+  ]) {
+    assert.equal(acknowledgedStripeEventFailure(malformed, eventId, claimStartedAt, failedAt, message), false);
+  }
+
+  assert.match(webhookRoute, /\.select\('event_id,processing_started_at,processed_at,last_failed_at,last_error'\)/);
+  assert.match(webhookRoute, /!acknowledgedStripeEventFailure\(failed\.data,eventId,processingStartedAt,failedAt,message\.slice\(0,500\)\)/);
 });
 
 test('Stripe webhook concurrency is bounded without queueing or leaking admission slots', () => {

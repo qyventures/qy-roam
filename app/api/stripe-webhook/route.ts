@@ -33,6 +33,7 @@ import { databaseTimestampInstantEquals, exactDatabaseTimestampToken, exactStrip
 import { exactRpcRow } from '@/lib/exactRpcRow';
 import { acknowledgedPaidDeliveryClaim, acknowledgedPaidDeliveryFailure, acknowledgedPaidDeliverySettlement } from '@/lib/paidDeliveryAcknowledgement';
 import { durablePaidOrderMatchesPaymentEvent, durableOrderMatchesUnpaidOrAlreadyPaidSession } from '@/lib/durableOrderSnapshot';
+import { acknowledgedStripeEventFailure } from '@/lib/stripeEventFailureAcknowledgement';
 import {
   tryAcquireStripeWebhookProcessing,
   tryAcquireStripeWebhookUpload,
@@ -576,11 +577,13 @@ async function recordEventFailure(supabase:NonNullable<ReturnType<typeof getSupa
       .eq('event_id',eventId)
       .eq('processing_started_at',processingStartedAt)
       .is('processed_at',null)
-      .select('event_id');
+      .select('event_id,processing_started_at,processed_at,last_failed_at,last_error');
     // This is a recovery-path write, so PostgREST can surface a proxy or
     // database error here. Do not turn the application log into a second raw
     // exception sink after deliberately sanitising the durable event ledger.
-    if(failed.error||failed.data?.length!==1) console.error('stripe_webhook_failure_record_error');
+    if(failed.error||!acknowledgedStripeEventFailure(failed.data,eventId,processingStartedAt,failedAt,message.slice(0,500))) {
+      console.error('stripe_webhook_failure_record_error');
+    }
   } catch {
     // The primary processing failure still needs Stripe to receive a clean
     // retryable response when the database transport itself is unavailable.
