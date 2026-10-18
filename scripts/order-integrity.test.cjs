@@ -7844,7 +7844,7 @@ test('admin and authenticated health checks bound credential inputs before compa
   assert.match(healthRoute, /const expected = healthCheckToken\(\)/);
   assert.match(healthCheckToken, /MAX_HEALTH_CHECK_TOKEN_LENGTH = 1_024/);
   assert.match(healthCheckToken, /value\.length > MAX_HEALTH_CHECK_TOKEN_LENGTH/);
-  assert.match(healthCheckToken, /\^\[\\x20-\\x7e\]\+\$/);
+  assert.match(healthCheckToken, /\^\[\\x21-\\x7e\]\+\$/);
   assert.match(healthRoute, /supplied\.length <= MAX_HEALTH_AUTHORIZATION_HEADER_LENGTH/);
 });
 
@@ -9242,4 +9242,16 @@ test('Pocket WiFi rejects unreviewed prices before spending shared checkout capa
     wifiCheckoutRoute.indexOf('const inventory=config.pocketWifiInventory') < globalAdmission,
     'known sold-out configuration must also fail before shared checkout admission',
   );
+});
+
+test('release health credentials survive HTTP header transport byte-for-byte', () => {
+  const { healthCheckToken } = require('../lib/healthCheckToken.ts');
+  const valid = 'release-health_0123456789.ABC-xyz';
+  assert.equal(healthCheckToken(valid), valid);
+  for (const ambiguous of [
+    ` ${valid}`,
+    `${valid} `,
+    `release health_0123456789.ABC-xyz`,
+    `release\thealth_0123456789.ABC-xyz`,
+  ]) assert.equal(healthCheckToken(ambiguous), null);
 });

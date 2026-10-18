@@ -312,7 +312,9 @@ assert.ok(
 assert.match(healthRoute, /healthCheckToken\(\)/);
 assert.match(healthCheckToken, /value\.length < 24/);
 assert.match(healthCheckToken, /value\.length > MAX_HEALTH_CHECK_TOKEN_LENGTH/);
-assert.match(healthCheckToken, /\^\[\\x20-\\x7e\]\+\$/);
+assert.match(healthCheckToken, /\^\[\\x21-\\x7e\]\+\$/);
+assert.match(deploy, /\^\[\\\\x21-\\\\x7e\]\+\$/);
+assert.doesNotMatch(deploy, /\^\[\\\\x20-\\\\x7e\]\+\$/);
 assert.match(deploy, /token\.length<24\|\|token\.length>1024/);
 assert.match(deploy, /printf 'Authorization: Bearer %s\\n'/);
 assert.doesNotMatch(deploy, /header = "Authorization: Bearer/);

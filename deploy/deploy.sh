@@ -239,8 +239,8 @@ set -a
 source "$ENV_FILE"
 set +a
 health_check_token="${HEALTH_CHECK_TOKEN:-}"
-if ! node -e "const token=process.env.HEALTH_CHECK_TOKEN||'';if(token.length<24||token.length>1024||!/^[\\x20-\\x7e]+$/.test(token))process.exit(1)"; then
-  echo "HEALTH_CHECK_TOKEN must be 24-1024 printable ASCII characters" >&2
+if ! node -e "const token=process.env.HEALTH_CHECK_TOKEN||'';if(token.length<24||token.length>1024||!/^[\\x21-\\x7e]+$/.test(token))process.exit(1)"; then
+  echo "HEALTH_CHECK_TOKEN must be 24-1024 visible non-space ASCII characters" >&2
   exit 1
 fi
 npm run check:esim-pricing
