@@ -22,10 +22,39 @@ export function safeHttpsDeliveryEndpoint(value: string | null | undefined) {
     // suffixes are likewise deployment-local rather than public relay names.
     // Reject them here so both readiness and the eventual credential-bearing
     // delivery enforce the public-service boundary they advertise.
+    const labels = normalizedHostname.split('.');
+    const hasCanonicalDnsLabels =
+      normalizedHostname.length <= 253 &&
+      labels.length >= 2 &&
+      labels.every((label) =>
+        label.length >= 1 &&
+        label.length <= 63 &&
+        /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label),
+      );
+    // These suffixes are reserved for local, documentation, testing, reverse
+    // lookup, or alternative-resolution use. They cannot be the public HTTPS
+    // relay promised by this configuration boundary. Reject the complete
+    // namespace rather than a few familiar hosts: for example,
+    // `relay.example.com` is intentionally non-production even though it has
+    // an otherwise valid DNS shape.
+    const reservedSuffixes = [
+      'alt',
+      'arpa',
+      'example',
+      'example.com',
+      'example.net',
+      'example.org',
+      'home.arpa',
+      'internal',
+      'invalid',
+      'local',
+      'localhost',
+      'onion',
+      'test',
+    ];
     const hasPublicDnsShape =
-      normalizedHostname.includes('.') &&
-      !normalizedHostname.endsWith('.') &&
-      !['local', 'internal', 'localhost', 'test', 'invalid', 'home.arpa'].some(
+      hasCanonicalDnsLabels &&
+      !reservedSuffixes.some(
         (suffix) => normalizedHostname === suffix || normalizedHostname.endsWith(`.${suffix}`),
       );
     if (

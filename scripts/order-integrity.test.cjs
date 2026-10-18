@@ -7172,7 +7172,7 @@ test('paid-order delivery endpoints are fail-closed and never follow credential-
   // request carries its access token in an authorization header.
   assert.match(productionReadiness, /const relayUrl = process\.env\.SMTP_RELAY_URL\?\.trim\(\)/);
   assert.match(productionReadiness, /const relaySecret = process\.env\.SMTP_RELAY_SECRET\?\.trim\(\)/);
-  assert.equal(safeHttpsDeliveryEndpoint('https://relay.example.com/orders'), 'https://relay.example.com/orders');
+  assert.equal(safeHttpsDeliveryEndpoint('https://relay.vendor.co/orders'), 'https://relay.vendor.co/orders');
   for (const unsafe of [
     'http://relay.example.com/orders',
     'https://user:pass@relay.example.com/orders',
@@ -7188,6 +7188,18 @@ test('paid-order delivery endpoints are fail-closed and never follow credential-
     'https://relay.home.arpa/orders',
     'https://relay.test/orders',
     'https://relay.invalid/orders',
+    'https://relay.example/orders',
+    'https://relay.example.com/orders',
+    'https://relay.example.net/orders',
+    'https://relay.example.org/orders',
+    'https://relay.arpa/orders',
+    'https://relay.onion/orders',
+    'https://relay.alt/orders',
+    'https://-relay.example.co/orders',
+    'https://relay-.example.co/orders',
+    'https://relay_name.example.co/orders',
+    `https://${'a'.repeat(64)}.example.co/orders`,
+    `https://${Array.from({ length: 32 }, () => 'abcdefgh').join('.')}.co/orders`,
     'https://127.0.0.1/orders',
     'https://[::1]/orders',
     'not a URL',
