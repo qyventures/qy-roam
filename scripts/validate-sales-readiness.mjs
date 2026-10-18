@@ -18,9 +18,27 @@ function allTrue(record, names) {
   return names.every((name) => record[name] === true);
 }
 
-export function salesReadinessResponseIsValid(result) {
+// Release checks run on the same host as the application, so a two-minute
+// window is generous for provider probes and retry loops while still refusing
+// a readiness document retained by a broken intermediary or replayed from an
+// earlier process. Permit a small future skew between the server response and
+// validator clocks, but never let an arbitrarily future timestamp remain
+// valid indefinitely.
+export const SALES_READINESS_MAX_AGE_MS = 120_000;
+export const SALES_READINESS_MAX_FUTURE_SKEW_MS = 30_000;
+
+function freshTimestamp(value, nowMs) {
+  if (typeof value !== 'string' || value.length > 40) return false;
+  const timestampMs = Date.parse(value);
+  return Number.isFinite(timestampMs) &&
+    timestampMs >= nowMs - SALES_READINESS_MAX_AGE_MS &&
+    timestampMs <= nowMs + SALES_READINESS_MAX_FUTURE_SKEW_MS;
+}
+
+export function salesReadinessResponseIsValid(result, nowMs = Date.now()) {
   if (!plainRecord(result) || result.service !== 'qy-roam' || result.ok !== true ||
       result.launchReady !== true || result.salesReady !== true ||
+      !Number.isFinite(nowMs) || !freshTimestamp(result.timestamp, nowMs) ||
       !plainRecord(result.checks) || !plainRecord(result.checkoutChecks) ||
       !plainRecord(result.availabilityChecks)) {
     return false;

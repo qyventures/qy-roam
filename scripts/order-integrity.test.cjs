@@ -5960,7 +5960,12 @@ test('authenticated health readiness separates shared release controls from prod
 });
 
 test('deployment readiness validator proves detailed evidence for every saleable product', async () => {
-  const { salesReadinessResponseIsValid: validate } = await import('./validate-sales-readiness.mjs');
+  const {
+    SALES_READINESS_MAX_AGE_MS,
+    SALES_READINESS_MAX_FUTURE_SKEW_MS,
+    salesReadinessResponseIsValid: validate,
+  } = await import('./validate-sales-readiness.mjs');
+  const now = Date.parse('2026-10-19T01:30:00.000Z');
   const checks = {
     stripe: true,
     stripeApi: true,
@@ -5985,12 +5990,13 @@ test('deployment readiness validator proves detailed evidence for every saleable
     checks,
     checkoutChecks: { esim: true, pocketWifi: true },
     availabilityChecks: { pocketWifiStock: true },
+    timestamp: new Date(now).toISOString(),
   };
-  assert.equal(validate(response), true);
-  assert.equal(validate({ ...response, checks: { ...checks, webhook: false } }), false);
-  assert.equal(validate({ ...response, checks: { ...checks, esimOrderSchema: false } }), false);
-  assert.equal(validate({ ...response, checks: { ...checks, inventory: false } }), false);
-  assert.equal(validate({ ...response, availabilityChecks: { pocketWifiStock: false } }), false);
+  assert.equal(validate(response, now), true);
+  assert.equal(validate({ ...response, checks: { ...checks, webhook: false } }, now), false);
+  assert.equal(validate({ ...response, checks: { ...checks, esimOrderSchema: false } }, now), false);
+  assert.equal(validate({ ...response, checks: { ...checks, inventory: false } }, now), false);
+  assert.equal(validate({ ...response, availabilityChecks: { pocketWifiStock: false } }, now), false);
 
   // A deliberately paused product need not have its product-only evidence,
   // but the remaining saleable path must still be proven in full.
@@ -6000,11 +6006,33 @@ test('deployment readiness validator proves detailed evidence for every saleable
     checks: { ...checks, esimOrderSchema: false },
     checkoutChecks: { esim: false, pocketWifi: true },
   };
-  assert.equal(validate(wifiOnly), true);
+  assert.equal(validate(wifiOnly, now), true);
   assert.equal(validate({
     ...wifiOnly,
     checks: { ...wifiOnly.checks, pocketWifiFulfilmentSchema: false },
-  }), false);
+  }, now), false);
+
+  // Cutover and rollback must be authorized by the process answering now,
+  // not by an otherwise valid document cached before the current release.
+  assert.equal(validate({
+    ...wifiOnly,
+    timestamp: new Date(now - SALES_READINESS_MAX_AGE_MS).toISOString(),
+  }, now), true);
+  assert.equal(validate({
+    ...wifiOnly,
+    timestamp: new Date(now - SALES_READINESS_MAX_AGE_MS - 1).toISOString(),
+  }, now), false);
+  assert.equal(validate({
+    ...wifiOnly,
+    timestamp: new Date(now + SALES_READINESS_MAX_FUTURE_SKEW_MS).toISOString(),
+  }, now), true);
+  assert.equal(validate({
+    ...wifiOnly,
+    timestamp: new Date(now + SALES_READINESS_MAX_FUTURE_SKEW_MS + 1).toISOString(),
+  }, now), false);
+  assert.equal(validate({ ...wifiOnly, timestamp: 'not-an-instant' }, now), false);
+  assert.equal(validate({ ...wifiOnly, timestamp: 123 }, now), false);
+  assert.equal(validate(wifiOnly, Number.NaN), false);
 });
 
 test('authenticated readiness checks fail fast under concurrency and release every slot', () => {
