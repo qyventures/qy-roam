@@ -24,6 +24,11 @@ export function pocketWifiReturnTiming(
   // the date rule below is the fallback that prevents a delayed transition
   // from suppressing an instruction after the booked rental has ended.
   if (fulfilmentStatus === 'return_due') return 'due';
+  // A passed itinerary is not evidence that the router ever left QY Roam.
+  // Orders still awaiting packing/dispatch belong in the dispatch exception
+  // queue and must not tell a customer to return a kit they never received.
+  // Only custody states can become date-driven return work.
+  if (!['dispatched', 'with_customer'].includes(fulfilmentStatus || '')) return 'not_due';
   const daysUntilEnd = operationalDaysFromToday(travelEnd);
   if (typeof daysUntilEnd !== 'number' || daysUntilEnd >= 0) return 'not_due';
   return daysUntilEnd < -POCKET_WIFI_RETURN_GRACE_DAYS ? 'overdue' : 'due';

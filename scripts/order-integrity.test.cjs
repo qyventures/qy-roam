@@ -6398,9 +6398,10 @@ test('admin visibility detects abandoned Stripe claims using the webhook recover
 
 test('admin return custody queue exposes due routers before they become overdue', () => {
   assert.match(adminPage, /const returnDueOrders = active\.filter/);
-  assert.match(adminPage, /typeof days === 'number' && days < 0/);
+  assert.match(adminPage, /const timing = pocketWifiReturnTiming\(o\.travel_end, o\.fulfilment_status\)/);
+  assert.match(adminPage, /timing === 'due' \|\| timing === 'overdue'/);
   assert.match(adminPage, /const overdueReturnOrders = returnDueOrders\.filter/);
-  assert.match(adminPage, /days < -POCKET_WIFI_RETURN_GRACE_DAYS/);
+  assert.match(adminPage, /pocketWifiReturnTiming\(o\.travel_end, o\.fulfilment_status\) === 'overdue'/);
   assert.match(adminPage, /<small>WiFi returns due<\/small>/);
   assert.match(adminPage, /Pocket WiFi returns are due\./);
   assert.match(adminPage, /no return reference recorded/);
@@ -9120,6 +9121,11 @@ test('Pocket WiFi return prompts follow the rental date even before an admin sta
   assert.equal(pocketWifiReturnTiming(isoDaysAgo(1), 'with_customer'), 'due');
   assert.equal(pocketWifiReturnTiming(isoDaysAgo(5), 'dispatched'), 'due');
   assert.equal(pocketWifiReturnTiming(isoDaysAgo(6), 'with_customer'), 'overdue');
+  // A missed dispatch is urgent outbound work, not a return. Never instruct a
+  // customer to return a router unless the durable lifecycle records custody.
+  assert.equal(pocketWifiReturnTiming(isoDaysAgo(6), 'paid'), 'not_due');
+  assert.equal(pocketWifiReturnTiming(isoDaysAgo(6), 'packing'), 'not_due');
+  assert.equal(pocketWifiReturnTiming(isoDaysAgo(6), 'awaiting_payment'), 'not_due');
   assert.equal(pocketWifiReturnTiming(isoDaysAgo(6), 'returned'), 'complete');
   assert.equal(pocketWifiReturnTiming(isoDaysAgo(6), 'closed'), 'complete');
   assert.equal(pocketWifiReturnTiming(isoDaysAgo(6), 'cancelled'), 'complete');
@@ -9129,6 +9135,8 @@ test('Pocket WiFi return prompts follow the rental date even before an admin sta
   assert.match(bookingPage, /returnTiming === 'due' \|\| returnTiming === 'overdue'/);
   assert.match(bookingPage, /Your return is overdue\./);
   assert.match(adminPage, /pocketWifiReturnTiming\(order\.travel_end, order\.fulfilment_status\)/);
+  assert.match(adminPage, /const timing = pocketWifiReturnTiming\(o\.travel_end, o\.fulfilment_status\);/);
+  assert.match(adminPage, /timing === 'due' \|\| timing === 'overdue'/);
 });
 
 test('Pocket WiFi rejects unreviewed prices before spending shared checkout capacity', () => {

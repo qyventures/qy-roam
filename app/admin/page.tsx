@@ -335,12 +335,11 @@ async function renderAdminPage() {
   });
   const returnDueOrders = active.filter((o:any) => {
     if (!isPocketWifiProduct(o.product_type)) return false;
-    const days = daysFromToday(o.travel_end);
-    return typeof days === 'number' && days < 0 && !['returned','closed'].includes(o.fulfilment_status);
+    const timing = pocketWifiReturnTiming(o.travel_end, o.fulfilment_status);
+    return timing === 'due' || timing === 'overdue';
   }).sort((a:any,b:any) => String(a.travel_end || '').localeCompare(String(b.travel_end || '')) || Number(a.id || 0) - Number(b.id || 0));
   const overdueReturnOrders = returnDueOrders.filter((o:any) => {
-    const days = daysFromToday(o.travel_end);
-    return typeof days === 'number' && days < -POCKET_WIFI_RETURN_GRACE_DAYS;
+    return pocketWifiReturnTiming(o.travel_end, o.fulfilment_status) === 'overdue';
   });
 
   return <main className="wrap section legal" style={{maxWidth:1280}}>
@@ -405,7 +404,7 @@ async function renderAdminPage() {
           <ul>{returnDueOrders.slice(0,50).map((order:any)=>{
             const days = daysFromToday(order.travel_end);
             const daysPastTrip = typeof days === 'number' ? Math.abs(days) : null;
-            const overdue = typeof days === 'number' && days < -POCKET_WIFI_RETURN_GRACE_DAYS;
+            const overdue = pocketWifiReturnTiming(order.travel_end, order.fulfilment_status) === 'overdue';
             return <li key={order.id} style={{marginBottom:8}}>
               <a href={`#order-${order.id}`}><strong>Order #{order.id}</strong></a>
               {' · '}{order.customer_name || order.email || order.phone || 'Customer details unavailable'}
