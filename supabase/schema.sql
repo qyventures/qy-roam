@@ -248,9 +248,23 @@ security invoker
 set search_path = public
 as $$
 begin
+  if tg_op = 'INSERT' then
+    if new.product_type = 'esim'
+      and new.digital_delivery_reference is not null
+      and new.fulfilment_status not in ('fulfilled', 'closed') then
+      raise exception 'eSIM delivery reference can only be recorded at fulfilment';
+    end if;
+    return new;
+  end if;
+
   if old.product_type = 'esim' and old.fulfilment_status in ('fulfilled', 'closed')
     and new.digital_delivery_reference is distinct from old.digital_delivery_reference then
     raise exception 'eSIM delivery reference is immutable after fulfilment';
+  end if;
+  if new.product_type = 'esim'
+    and new.digital_delivery_reference is distinct from old.digital_delivery_reference
+    and new.fulfilment_status not in ('fulfilled', 'closed') then
+    raise exception 'eSIM delivery reference can only be recorded at fulfilment';
   end if;
   return new;
 end;
@@ -258,7 +272,7 @@ $$;
 
 drop trigger if exists qy_enforce_esim_delivery_reference_immutability on public.orders;
 create trigger qy_enforce_esim_delivery_reference_immutability
-before update of digital_delivery_reference on public.orders
+before insert or update of digital_delivery_reference, product_type, fulfilment_status on public.orders
 for each row execute function public.qy_enforce_esim_delivery_reference_immutability();
 
 -- One provider/email audit reference must identify one completed digital
@@ -436,6 +450,17 @@ begin
   if p_next_status = 'fulfilled'
     and coalesce(nullif(btrim(p_digital_delivery_reference), ''), v_order.digital_delivery_reference) is null then
     raise exception 'eSIM delivery reference is required before fulfilment';
+  end if;
+
+  -- Delivery references are proof of the irreversible credential hand-off,
+  -- not editable preparation data. Only the boundary transition itself may
+  -- create this evidence. Keep a legacy pre-seeded value visible so staff can
+  -- reconcile it, but never allow an awaiting-order same-status save or a
+  -- cancellation to create or replace one through the service-role RPC.
+  if p_next_status <> 'fulfilled'
+    and p_digital_delivery_reference is not null
+    and p_digital_delivery_reference is distinct from v_order.digital_delivery_reference then
+    raise exception 'eSIM delivery reference can only be recorded at fulfilment';
   end if;
 
   update public.orders set
@@ -3464,7 +3489,9 @@ as $$
   -- exact transition into the cancelled lifecycle.
   -- Version 49 additionally makes active row-level security on every
   -- payment-path relation part of the pre-payment readiness boundary.
-  select 49;
+  -- Version 50 binds eSIM delivery references to the actual digital hand-off
+  -- transition for both supported RPC writes and direct service-role writes.
+  select 50;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;

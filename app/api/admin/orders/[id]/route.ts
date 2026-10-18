@@ -300,6 +300,16 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   if (existing.data.product_type === 'esim' && typeof body.digital_delivery_reference === 'string') {
     const referenceIssue = digitalDeliveryReferenceIssue(deliveryReference);
     if (referenceIssue) return NextResponse.json({ error: referenceIssue }, { status: 400 });
+    // A provider/email reference is evidence that the irreversible digital
+    // hand-off happened, not a preparation note. Only the transition to
+    // `fulfilled` may create it; otherwise an awaiting order can look
+    // delivered to operators before the QR code or activation instructions
+    // have actually left QY Roam. Preserve an existing legacy value for
+    // reconciliation, but do not let a same-status or cancellation save
+    // create or replace one.
+    if (status !== 'fulfilled' && deliveryReference && deliveryReference !== normalizeDigitalDeliveryReference(existing.data.digital_delivery_reference)) {
+      return NextResponse.json({ error: 'Record the delivery reference only when marking the eSIM order fulfilled.' }, { status: 400 });
+    }
     // A fulfilled eSIM is an irreversible hand-off. Its audit pointer must
     // remain stable so later edits cannot hide the actual delivery record or
     // replace it with a credential. Corrections belong in the support/refund
