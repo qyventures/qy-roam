@@ -8976,7 +8976,14 @@ test('customer confirmation preserves its retry budget while offline and resumes
   assert.match(orderConfirmationRefresh, /window\.removeEventListener\('online', refreshWhenReachable\)/);
   assert.match(orderConfirmationRefresh, /document\.visibilityState !== 'visible'/);
   assert.match(orderConfirmationRefresh, /refreshStarted \|\|/);
-  assert.match(orderConfirmationRefresh, /attemptsRef\.current \+= 1;[\s\S]*setAttempts\(attemptsRef\.current\);[\s\S]*router\.refresh\(\)/);
+  assert.match(orderConfirmationRefresh, /attemptsRef\.current \+= 1;[\s\S]*setAttempts\(attemptsRef\.current\);[\s\S]*startRefreshTransition\(\(\) => router\.refresh\(\)\)/);
+});
+
+test('customer confirmation polling keeps server refreshes single-flight', () => {
+  assert.match(orderConfirmationRefresh, /const \[refreshPending, startRefreshTransition\] = useTransition\(\)/);
+  assert.match(orderConfirmationRefresh, /attempts >= CONFIRMATION_REFRESH_MAX_ATTEMPTS \|\| refreshPending/);
+  assert.match(orderConfirmationRefresh, /startRefreshTransition\(\(\) => router\.refresh\(\)\)/);
+  assert.match(orderConfirmationRefresh, /\[attempts, refreshPending, router\]/);
 });
 
 test('customer confirmation retry backoff survives a complete overload window', () => {

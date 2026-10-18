@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useTransition } from 'react';
 import {
   CONFIRMATION_REFRESH_MAX_ATTEMPTS,
   confirmationRefreshDelayMs,
@@ -16,9 +16,15 @@ export default function OrderConfirmationRefresh() {
   const router = useRouter();
   const [attempts, setAttempts] = useState(0);
   const attemptsRef = useRef(0);
+  const [refreshPending, startRefreshTransition] = useTransition();
 
   useEffect(() => {
-    if (attempts >= CONFIRMATION_REFRESH_MAX_ATTEMPTS) return;
+    // router.refresh() has no promise, but a React transition remains pending
+    // until the refreshed server component payload has settled. Do not arm a
+    // second timer while that request is in flight: slow Stripe/Supabase
+    // confirmation reads must not overlap, consume the finite retry budget,
+    // or create avoidable pressure on the shared server admission pool.
+    if (attempts >= CONFIRMATION_REFRESH_MAX_ATTEMPTS || refreshPending) return;
     // One effect owns the timer and wake-up listeners. A visibility/online
     // event can otherwise race the interval and spend two attempts on the
     // same render. The ref is advanced synchronously before router.refresh(),
@@ -36,7 +42,7 @@ export default function OrderConfirmationRefresh() {
       if (timer !== undefined) window.clearTimeout(timer);
       attemptsRef.current += 1;
       setAttempts(attemptsRef.current);
-      router.refresh();
+      startRefreshTransition(() => router.refresh());
     };
     // Back off after the first few checks. A fixed three-second schedule
     // spent all twenty attempts inside the middleware's one-minute overload
@@ -55,7 +61,7 @@ export default function OrderConfirmationRefresh() {
       document.removeEventListener('visibilitychange', refreshWhenReachable);
       window.removeEventListener('online', refreshWhenReachable);
     };
-  }, [attempts, router]);
+  }, [attempts, refreshPending, router]);
 
   return (
     <p className="muted" role="status" aria-live="polite">
