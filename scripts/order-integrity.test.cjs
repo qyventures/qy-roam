@@ -9110,3 +9110,29 @@ test('durably failed payments offer a clear fresh-checkout path on every custome
   assert.match(bookingPage, /!checkoutExpired && !paymentFailed && \(!paid \|\| !orderLifecycleValid\) && <OrderConfirmationRefresh \/>/);
   assert.match(bookingPage, /checkoutExpired \|\| paymentFailed \? 'Choose a plan'/);
 });
+
+test('Pocket WiFi rejects unreviewed prices before spending shared checkout capacity', () => {
+  // A syntactically valid request can still omit or stale the cent-precise
+  // price reviewed by the shopper. That is a local validation failure and
+  // must not consume the process-wide allowance, a provider-work slot, or a
+  // schema probe that legitimate checkouts need during load.
+  const priceValidation = wifiCheckoutRoute.indexOf("const expectedTotalCents=body.expectedTotalCents");
+  const globalAdmission = wifiCheckoutRoute.indexOf('if(checkoutGloballyLimited())');
+  const workAdmission = wifiCheckoutRoute.indexOf('releaseCheckout=tryAcquireCheckoutConcurrency()');
+  const schemaReadiness = wifiCheckoutRoute.indexOf('if(!await hasRequiredPaymentSchema())');
+  const stripeClient = wifiCheckoutRoute.indexOf('const stripe=createStripeClient(key)');
+
+  assert.ok(priceValidation > -1, 'Pocket WiFi checkout must validate the reviewed total');
+  for (const [name, boundary] of [
+    ['global checkout admission', globalAdmission],
+    ['checkout concurrency admission', workAdmission],
+    ['payment schema readiness', schemaReadiness],
+    ['Stripe client creation', stripeClient],
+  ]) {
+    assert.ok(boundary > priceValidation, `${name} must follow reviewed-price validation`);
+  }
+  assert.ok(
+    wifiCheckoutRoute.indexOf('const inventory=config.pocketWifiInventory') < globalAdmission,
+    'known sold-out configuration must also fail before shared checkout admission',
+  );
+});

@@ -237,6 +237,27 @@ export async function POST(req: Request) {
   const minLeadDays=config.minDeliveryLeadDays, earliest=operationalIsoDateAfter(minLeadDays);
   if(start<earliest) return NextResponse.json({error:`Please book at least ${minLeadDays} day${minLeadDays===1?'':'s'} before departure so we can arrange delivery. Contact +65 8032 7183 for urgent trips.`},{status:400});
   const days=pocketWifiRentalDays(startDate,endDate); if(days<1||days>MAX_POCKET_WIFI_RENTAL_DAYS) return NextResponse.json({error:`Bookings must be between 1 and ${MAX_POCKET_WIFI_RENTAL_DAYS} days.`},{status:400});
+  // Inventory and the complete server-priced quote are local configuration
+  // decisions. Validate them before spending the process-wide checkout
+  // allowance or entering the scarce Stripe/Supabase work pool. Otherwise a
+  // valid-looking request that omits (or deliberately stales) the reviewed
+  // total can consume capacity even though no external dependency could make
+  // it saleable. This mirrors the eSIM route's cheap-validation boundary.
+  const inventory=config.pocketWifiInventory;
+  if(inventory<1) return NextResponse.json({error:'Pocket WiFi is sold out for these dates. Please choose different dates or contact +65 8032 7183.'},{status:409,headers:{'Cache-Control':'no-store'}});
+  const rentalBeforePromo=pocketWifiRentalCents(daily,days);
+  const promo=applyPromoCents(rentalBeforePromo, body.promoCode);
+  const rentalAmount=promo.amountCents;
+  const courierFee=config.courierFeeCents;
+  // Availability is the customer's price-review boundary. Bind checkout to
+  // the exact cent total rendered from that quote so a courier-fee or promo
+  // change in a long-lived tab cannot open Stripe at an amount the customer
+  // has not reviewed. This value is not pricing authority: the server still
+  // calculates every component independently and accepts only exact agreement.
+  const expectedTotalCents=body.expectedTotalCents;
+  if(typeof expectedTotalCents!=='number'||!Number.isSafeInteger(expectedTotalCents)||expectedTotalCents<0) return NextResponse.json({error:'Please check live availability and review the current total before payment.'},{status:400});
+  if(expectedTotalCents!==rentalAmount+courierFee) return NextResponse.json({error:'The booking price has changed. Please check availability and review the updated total before payment.',priceChanged:true},{status:409,headers:{'Cache-Control':'no-store'}});
+  const requested={country,start,end,days,daily,rentalBeforePromo,promoCode:promo.promoCode,promoDiscount:promo.discountCents,courierFee,expiresAtSeconds};
   // Resolve the deployment-controlled redirect origin before any Stripe read
   // or inventory reservation. A malformed production URL is deterministic:
   // no Checkout Session can be created safely. Discovering it only after the
@@ -264,21 +285,6 @@ export async function POST(req: Request) {
   // cannot safely dispatch or receive the assigned device afterwards.
   if(!await hasRequiredPocketWifiFulfilmentSchema()) return NextResponse.json({error:'Pocket WiFi ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
   const stripe=createStripeClient(key);
-  const inventory=config.pocketWifiInventory;
-  if(inventory<1) return NextResponse.json({error:'Pocket WiFi is sold out for these dates. Please choose different dates or contact +65 8032 7183.'},{status:409,headers:{'Cache-Control':'no-store'}});
-  const rentalBeforePromo=pocketWifiRentalCents(daily,days);
-  const promo=applyPromoCents(rentalBeforePromo, body.promoCode);
-  const rentalAmount=promo.amountCents;
-  const courierFee=config.courierFeeCents;
-  // Availability is the customer's price-review boundary. Bind checkout to
-  // the exact cent total rendered from that quote so a courier-fee or promo
-  // change in a long-lived tab cannot open Stripe at an amount the customer
-  // has not reviewed. This value is not pricing authority: the server still
-  // calculates every component independently and accepts only exact agreement.
-  const expectedTotalCents=body.expectedTotalCents;
-  if(typeof expectedTotalCents!=='number'||!Number.isSafeInteger(expectedTotalCents)||expectedTotalCents<0) return NextResponse.json({error:'Please check live availability and review the current total before payment.'},{status:400});
-  if(expectedTotalCents!==rentalAmount+courierFee) return NextResponse.json({error:'The booking price has changed. Please check availability and review the updated total before payment.',priceChanged:true},{status:409,headers:{'Cache-Control':'no-store'}});
-  const requested={country,start,end,days,daily,rentalBeforePromo,promoCode:promo.promoCode,promoDiscount:promo.discountCents,courierFee,expiresAtSeconds};
   const holdState=await activeStripeHolds(stripe,key,start,end,requestId,requested,origin);
   if(holdState.requestConflict) return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.',checkoutRequestConflict:true},{status:409,headers:{'Cache-Control':'no-store'}});
   const supabase=getSupabaseAdmin();
