@@ -1,4 +1,5 @@
 import { getSupabaseAdmin } from './supabaseAdmin';
+import { readinessWindowActive } from './readinessBackoff';
 
 const INVENTORY_SCAN_PAGE_SIZE = 1_000;
 // Operational configuration caps the fleet at 10,000 units. Because this
@@ -115,9 +116,10 @@ export async function hasSaleablePocketWifiInventory(configuredInventory: number
   // valid fleet limit. This check also avoids starting/coalescing work that
   // the underlying scanner would reject immediately.
   if (!Number.isSafeInteger(configuredInventory) || configuredInventory < 1) return false;
+  const now = Date.now();
   if (
     stockReadinessState.readyConfiguredInventory === configuredInventory &&
-    Date.now() < stockReadinessState.readyUntil
+    readinessWindowActive(stockReadinessState.readyUntil, now, STOCK_READINESS_CACHE_MS)
   ) return true;
 
   // Operational configuration is process-stable, but keep coalescing keyed

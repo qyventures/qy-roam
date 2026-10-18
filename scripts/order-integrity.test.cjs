@@ -100,7 +100,7 @@ const { CONFIRMATION_REFRESH_INITIAL_DELAY_MS, CONFIRMATION_REFRESH_MAX_DELAY_MS
 const { formatSingaporeDate, formatSingaporeTimestamp } = require('../lib/singaporeTimestamp.ts');
 const { customerOrderReference } = require('../lib/customerOrderReference.ts');
 const { READINESS_PROBE_TIMEOUT_MS, ReadinessProbeTimeoutError, runReadinessProbe } = require('../lib/readinessProbe.ts');
-const { readinessFailureBackoffActive } = require('../lib/readinessBackoff.ts');
+const { readinessFailureBackoffActive, readinessWindowActive } = require('../lib/readinessBackoff.ts');
 
 test('production readiness has a real deadline even when a dependency ignores cancellation', async () => {
   let signal;
@@ -136,6 +136,19 @@ test('production readiness failure backoff self-heals after wall-clock rollback'
   // Re-probe fail-closed instead of stretching a five-second outage window.
   assert.equal(readinessFailureBackoffActive(now + 5_001, now, 5_000), false);
   assert.equal(readinessFailureBackoffActive(Number.POSITIVE_INFINITY, now, 5_000), false);
+});
+
+test('successful readiness caches self-heal after wall-clock rollback', () => {
+  const now = 10_000;
+  assert.equal(readinessWindowActive(now + 10_000, now, 10_000), true);
+  assert.equal(readinessWindowActive(now + 1, now, 10_000), true);
+  assert.equal(readinessWindowActive(now, now, 10_000), false);
+  assert.equal(readinessWindowActive(now - 1, now, 10_000), false);
+
+  // A success deadline beyond the only window this process can arm reflects
+  // clock rollback or corrupt inherited state and must trigger a fresh probe.
+  assert.equal(readinessWindowActive(now + 10_001, now, 10_000), false);
+  assert.equal(readinessWindowActive(Number.POSITIVE_INFINITY, now, 10_000), false);
 });
 
 test('inventory mutation conflicts are actionable without exposing database failures', () => {
@@ -4294,22 +4307,22 @@ test('SMTP relay delivery canonicalizes the same relay secret accepted by readin
 
 test('payment-readiness checks coalesce healthy probes and briefly back off failures', () => {
   assert.match(productionReadiness, /const READINESS_CACHE_MS = 15_000/);
-  assert.match(productionReadiness, /if \(now < readinessState\.paymentSchemaReadyUntil\) return true/);
+  assert.match(productionReadiness, /if \(readinessWindowActive\(readinessState\.paymentSchemaReadyUntil, now, READINESS_CACHE_MS\)\) return true/);
   assert.match(productionReadiness, /if \(!readinessState\.paymentSchemaCheckInFlight\)/);
   assert.match(productionReadiness, /if \(ready\) readinessState\.paymentSchemaReadyUntil = Date\.now\(\) \+ READINESS_CACHE_MS/);
-  assert.match(productionReadiness, /if \(now < readinessState\.esimOrderSchemaReadyUntil\) return true/);
+  assert.match(productionReadiness, /if \(readinessWindowActive\(readinessState\.esimOrderSchemaReadyUntil, now, READINESS_CACHE_MS\)\) return true/);
   assert.match(productionReadiness, /if \(!readinessState\.esimOrderSchemaCheckInFlight\)/);
   // Authenticated health monitoring can run concurrently on several workers.
   // Its operations contract probe is expensive but must retain the same
   // fail-closed caching and retry-backoff semantics as checkout readiness.
-  assert.match(productionReadiness, /if \(now < readinessState\.operationsSchemaReadyUntil\) return true/);
+  assert.match(productionReadiness, /if \(readinessWindowActive\(readinessState\.operationsSchemaReadyUntil, now, READINESS_CACHE_MS\)\) return true/);
   assert.match(productionReadiness, /if \(!readinessState\.operationsSchemaCheckInFlight\)/);
   assert.match(productionReadiness, /if \(ready\) readinessState\.operationsSchemaReadyUntil = Date\.now\(\) \+ READINESS_CACHE_MS/);
   assert.match(productionReadiness, /async function checkRequiredOperationsSchema\(\)/);
   // Router checkout has a smaller, sale-critical custody probe. It must use
   // the same healthy-cache/failure-backoff pattern without making checkout depend on
   // non-essential CRM, forecast, or accounting relations.
-  assert.match(productionReadiness, /if \(now < readinessState\.pocketWifiFulfilmentSchemaReadyUntil\) return true/);
+  assert.match(productionReadiness, /if \(readinessWindowActive\(readinessState\.pocketWifiFulfilmentSchemaReadyUntil, now, READINESS_CACHE_MS\)\) return true/);
   assert.match(productionReadiness, /if \(!readinessState\.pocketWifiFulfilmentSchemaCheckInFlight\)/);
   assert.match(productionReadiness, /if \(ready\) readinessState\.pocketWifiFulfilmentSchemaReadyUntil = Date\.now\(\) \+ READINESS_CACHE_MS/);
   assert.match(productionReadiness, /async function checkRequiredPocketWifiFulfilmentSchema\(\)/);
@@ -4340,6 +4353,7 @@ test('stock readiness coalesces deploy probes without caching failures or crossi
   assert.match(pocketWifiStock, /__qyRoamPocketWifiStockReadinessState/);
   assert.match(pocketWifiStock, /\(globalThis as PocketWifiStockReadinessGlobal\)\.__qyRoamPocketWifiStockReadinessState \?\?=/);
   assert.match(pocketWifiStock, /stockReadinessState\.readyConfiguredInventory === configuredInventory/);
+  assert.match(pocketWifiStock, /readinessWindowActive\(stockReadinessState\.readyUntil, now, STOCK_READINESS_CACHE_MS\)/);
   assert.match(pocketWifiStock, /stockReadinessState\.checkInFlightConfiguredInventory !== configuredInventory/);
   assert.match(pocketWifiStock, /if \(ready\) \{[\s\S]*?stockReadinessState\.readyUntil = Date\.now\(\) \+ STOCK_READINESS_CACHE_MS/);
   assert.doesNotMatch(pocketWifiStock, /if \(!ready\)[\s\S]{0,100}stockReadinessState\.readyUntil/);
