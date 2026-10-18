@@ -16,7 +16,6 @@ import { fulfilmentNotificationActionable } from '@/lib/orderLifecycle';
 import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { validStripeEventId } from '@/lib/stripeEventId';
 import { validStripePaymentEventCreated } from '@/lib/stripeEventCreated';
-import { acknowledgedExpiredOrderClosure, acknowledgedExpiredReservationRelease } from '@/lib/stripeTerminalMutation';
 import { safeHttpsDeliveryEndpoint } from '@/lib/deliveryEndpoint';
 import { metaPurchaseEventSourceUrl } from '@/lib/siteOrigin';
 import { fulfilmentRelayAcknowledged } from '@/lib/deliveryAcknowledgement';
@@ -474,7 +473,7 @@ async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
 
 async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.Event.Type,eventCreated:number){
   const supabase=getSupabaseAdmin(); if(!supabase) throw new Error('Order persistence unavailable');
-  const paid=session.payment_status==='paid', failed=eventType==='checkout.session.async_payment_failed';
+  const paid=session.payment_status==='paid', failed=eventType==='checkout.session.async_payment_failed'||eventType==='checkout.session.expired';
   const productType=session.metadata?.product_type;
   if(productType!=='esim'&&productType!=='pocket_wifi') throw new Error('Unknown or missing product_type on Stripe session');
   const paymentConfirmedAt=new Date(eventCreated*1000).toISOString();
@@ -635,46 +634,6 @@ async function settleStripeEvent(
     exactDatabaseTimestampToken(settled.processing_started_at)!==processingStartedAt ||
     !databaseTimestampInstantEquals(settled.processed_at,processedAt)
   ) throw new Error('Stripe event settlement returned a mismatched event');
-}
-
-// An expired Checkout Session can otherwise occupy the durable reservation
-// until its original timeout. Stripe's event is signed, but this application
-// may share an account with other products, so require the same server-issued
-// provenance used for live inventory holds before releasing anything.
-async function releaseExpiredPocketWifiReservation(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session) {
-  const requestId=validCheckoutRequestId(session.metadata?.checkout_request_id);
-  if(!requestId||session.metadata?.source!=='qyroam.com'||session.metadata?.product_type!=='pocket_wifi'||!validQyRoamProvenance(session.id,session.metadata)) return;
-  // A reservation can be linked only to this Checkout Session. The predicate
-  // protects a newer recovery attempt if an old expiry event is delivered late.
-  const released=await supabase.from('checkout_reservations')
-    .delete()
-    .eq('checkout_request_id',requestId)
-    .or(`stripe_session_id.is.null,stripe_session_id.eq.${session.id}`)
-    .select('checkout_request_id,stripe_session_id');
-  if(released.error) throw released.error;
-  if(!acknowledgedExpiredReservationRelease(released.data,requestId,session.id)){
-    throw new Error('Expired checkout reservation release returned an invalid acknowledgement');
-  }
-}
-
-// Delayed payment can create an awaiting-payment order before Stripe later
-// expires the Checkout Session. Do not leave it looking actionable once the
-// signed terminal event arrives. Stripe's payment_status remains its canonical
-// snapshot; only the provisional fulfilment state is closed. The narrow
-// predicate prevents an out-of-order expiry event from changing a paid,
-// cancelled, or otherwise operator-handled order.
-async function closeExpiredAwaitingPaymentOrder(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session) {
-  if(!validQyRoamProvenance(session.id,session.metadata)) return;
-  const expired=await supabase.from('orders')
-    .update({fulfilment_status:'payment_failed',updated_at:new Date().toISOString()})
-    .eq('stripe_session_id',session.id)
-    .eq('fulfilment_status','awaiting_payment')
-    .or('payment_status.is.null,payment_status.neq.paid')
-    .select('stripe_session_id,fulfilment_status');
-  if(expired.error) throw expired.error;
-  if(!acknowledgedExpiredOrderClosure(expired.data,session.id)){
-    throw new Error('Expired provisional order closure returned an invalid acknowledgement');
-  }
 }
 
 export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session){
@@ -1110,8 +1069,17 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
         console.error('stripe_webhook_invalid_expiry_event_created',{eventId:stripeEventId});
         throw new Error('Invalid Stripe expiry event timestamp');
       }
-      await releaseExpiredPocketWifiReservation(supabase,session);
-      await closeExpiredAwaitingPaymentOrder(supabase,session);
+      // Expiry is a terminal payment transition, not merely reservation
+      // cleanup. Persist it through the same product-specific transaction as
+      // completed/failed events. This creates a payment_failed tombstone even
+      // when Stripe delivers expiry before the earlier unpaid completion, so
+      // that late event cannot recreate an awaiting-payment entitlement. For
+      // Pocket WiFi the RPC also removes only the Session-linked reservation
+      // while holding the global inventory lock, eliminating a release/write
+      // gap in which another checkout could consume the same capacity.
+      const validation=validateQyRoamSession(session);
+      if(!validation.valid) throw new Error(`Order integrity validation failed: ${validation.reason}`);
+      await persistSession(session,event.type,expiryEventCreated);
       await settleStripeEvent(supabase,eventClaimId,claimStartedAt);
     }catch(error){
       // The signed event id and Checkout Session id are durable on the

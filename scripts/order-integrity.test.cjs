@@ -75,7 +75,6 @@ const { acknowledgedClosingPeriod } = require('../lib/closingPeriodAcknowledgeme
 const { acknowledgedAdminRecord } = require('../lib/adminRecordAcknowledgement.ts');
 const { acknowledgedOrderTransition } = require('../lib/adminOrderTransitionAcknowledgement.ts');
 const { acknowledgedExpiredCheckoutReservationRelease, acknowledgedLinkedReservationRelease, acknowledgedUnlinkedReservationRelease } = require('../lib/checkoutReservationAcknowledgement.ts');
-const { acknowledgedExpiredOrderClosure, acknowledgedExpiredReservationRelease } = require('../lib/stripeTerminalMutation.ts');
 const { acknowledgedPaidDeliveryClaim, acknowledgedPaidDeliveryFailure, acknowledgedPaidDeliverySettlement } = require('../lib/paidDeliveryAcknowledgement.ts');
 const { acknowledgedStripeEventFailure } = require('../lib/stripeEventFailureAcknowledgement.ts');
 const { parsePocketWifiAvailability, parsePocketWifiBookingTerms } = require('../lib/pocketWifiAvailability.ts');
@@ -2044,7 +2043,7 @@ test('Stripe webhook transient failures consistently advertise a bounded retry',
 });
 
 test('Stripe webhook failure recording cannot replace the controlled retry response', () => {
-  const failureRecorder = webhookRoute.match(/async function recordEventFailure[\s\S]*?\n}\n\n\/\/ An expired Checkout Session/);
+  const failureRecorder = webhookRoute.match(/async function recordEventFailure[\s\S]*?\n}\n\nasync function settleStripeEvent/);
   assert.ok(failureRecorder, 'webhook must retain a dedicated event-failure recorder');
   assert.match(failureRecorder[0], /try\s*{[\s\S]*await supabase\.from\('stripe_events'\)/,
     'the recovery-ledger transport must be guarded');
@@ -6556,12 +6555,12 @@ test('Stripe expiry events validate signed chronology before releasing inventory
   );
   assert.ok(
     expiryBranch.indexOf("stripeCheckoutEventStateIssue('checkout.session.expired',session)") <
-      expiryBranch.indexOf('await releaseExpiredPocketWifiReservation(supabase,session)'),
+      expiryBranch.indexOf('await persistSession(session,event.type,expiryEventCreated)'),
     'the refreshed Session must still be expired and unpaid before inventory is released',
   );
   assert.ok(
     expiryBranch.indexOf('validStripePaymentEventCreated(event.created,session.created)') <
-      expiryBranch.indexOf('await releaseExpiredPocketWifiReservation(supabase,session)'),
+      expiryBranch.indexOf('await persistSession(session,event.type,expiryEventCreated)'),
     'expiry chronology must be validated before inventory is released',
   );
   assert.ok(
@@ -7611,16 +7610,15 @@ test('Supabase order-critical requests use a bounded shared transport', async ()
   }
 });
 
-test('expired authenticated Pocket WiFi sessions promptly release only their matching reservation', () => {
-  const webhookRoute = fs.readFileSync(require.resolve('../app/api/stripe-webhook/route.ts'), 'utf8');
-  assert.match(webhookRoute, /'checkout\.session\.expired'/);
-  assert.match(webhookRoute, /async function releaseExpiredPocketWifiReservation/);
-  assert.match(webhookRoute, /session\.metadata\?\.product_type!=='pocket_wifi'/);
-  assert.match(webhookRoute, /validQyRoamProvenance\(session\.id,session\.metadata\)/);
-  assert.match(webhookRoute, /\.eq\('checkout_request_id',requestId\)/);
-  assert.match(webhookRoute, /stripe_session_id\.is\.null,stripe_session_id\.eq\.\$\{session\.id\}/);
-  assert.match(webhookRoute, /if\(event\.type==='checkout\.session\.expired'\)/);
-  assert.match(webhookRoute, /await releaseExpiredPocketWifiReservation\(supabase,session\)/);
+test('expired authenticated sessions persist a terminal order before acknowledging Stripe', () => {
+  const expiryBranch = webhookRoute.slice(webhookRoute.indexOf("if(event.type==='checkout.session.expired')"));
+  assert.match(expiryBranch, /const validation=validateQyRoamSession\(session\)/);
+  assert.match(expiryBranch, /await persistSession\(session,event\.type,expiryEventCreated\)/);
+  assert.ok(
+    expiryBranch.indexOf('await persistSession(session,event.type,expiryEventCreated)') <
+      expiryBranch.indexOf('await settleStripeEvent(supabase,eventClaimId,claimStartedAt)'),
+  );
+  assert.match(webhookRoute, /failed=eventType==='checkout\.session\.async_payment_failed'\|\|eventType==='checkout\.session\.expired'/);
 });
 
 test('expired lookalike sessions are ignored before claiming while trusted refresh drift stays recoverable', () => {
@@ -7638,14 +7636,18 @@ test('expired lookalike sessions are ignored before claiming while trusted refre
   assert.match(expiryBranch, /return webhookRetryJson\(\{error:'Processing failed'\}\)/);
 });
 
-test('expired checkout sessions close only their provisional pending orders', () => {
-  // A delayed payment may have created an awaiting-payment order before its
-  // Checkout Session reaches Stripe's terminal expiry state.
-  assert.match(webhookRoute, /async function closeExpiredAwaitingPaymentOrder/);
-  assert.match(webhookRoute, /fulfilment_status:'payment_failed'/);
-  assert.match(webhookRoute, /\.eq\('fulfilment_status','awaiting_payment'\)/);
-  assert.match(webhookRoute, /payment_status\.is\.null,payment_status\.neq\.paid/);
-  assert.match(webhookRoute, /await closeExpiredAwaitingPaymentOrder\(supabase,session\)/);
+test('expiry uses atomic product persistence so a delayed completion cannot reopen the order', () => {
+  const expiryBranch = webhookRoute.slice(webhookRoute.indexOf("if(event.type==='checkout.session.expired')"));
+  assert.match(expiryBranch, /await persistSession\(session,event\.type,expiryEventCreated\)/);
+  assert.doesNotMatch(expiryBranch, /from\('checkout_reservations'\)\.delete/);
+  assert.doesNotMatch(expiryBranch, /from\('orders'\)\.update/);
+  const persistence = webhookRoute.slice(
+    webhookRoute.indexOf('async function persistSession'),
+    webhookRoute.indexOf('type EventClaim'),
+  );
+  assert.match(persistence, /p_payment_failed:failed/);
+  assert.match(persistence, /qy_persist_stripe_pocket_wifi_order/);
+  assert.match(persistence, /qy_persist_stripe_esim_order/);
 });
 
 test('Pocket WiFi terminal events clear only their own durably linked reservation', () => {
@@ -8973,52 +8975,6 @@ test('terminal Pocket WiFi checkout recovery acknowledges only its own reservati
   assert.equal((wifiCheckoutRoute.match(/acknowledgedLinkedReservationRelease\(released\.data,requestId,/g) || []).length, 2);
   assert.equal((wifiCheckoutRoute.match(/acknowledgedExpiredCheckoutReservationRelease\(released\.data,requestId,/g) || []).length, 1);
   assert.equal((wifiCheckoutRoute.match(/\.select\('checkout_request_id,stripe_session_id'\)/g) || []).length, 4);
-});
-
-test('Stripe expiry cleanup acknowledges only its exact idempotent terminal mutations', () => {
-  const requestId = '01234567-89ab-4cde-8f01-23456789abcd';
-  const sessionId = 'cs_test_expiry123';
-
-  assert.equal(acknowledgedExpiredReservationRelease([], requestId, sessionId), true);
-  assert.equal(acknowledgedExpiredReservationRelease([{
-    checkout_request_id: requestId,
-    stripe_session_id: null,
-  }], requestId, sessionId), true);
-  assert.equal(acknowledgedExpiredReservationRelease([{
-    checkout_request_id: requestId,
-    stripe_session_id: sessionId,
-  }], requestId, sessionId), true);
-  assert.equal(acknowledgedExpiredOrderClosure([], sessionId), true);
-  assert.equal(acknowledgedExpiredOrderClosure([{
-    stripe_session_id: sessionId,
-    fulfilment_status: 'payment_failed',
-  }], sessionId), true);
-
-  for (const malformed of [
-    null,
-    {},
-    [{ checkout_request_id: requestId, stripe_session_id: sessionId }, { checkout_request_id: requestId, stripe_session_id: sessionId }],
-    [{ checkout_request_id: '11234567-89ab-4cde-8f01-23456789abcd', stripe_session_id: sessionId }],
-    [{ checkout_request_id: requestId, stripe_session_id: 'cs_test_other' }],
-  ]) assert.equal(acknowledgedExpiredReservationRelease(malformed, requestId, sessionId), false);
-
-  for (const malformed of [
-    null,
-    {},
-    [{ stripe_session_id: sessionId, fulfilment_status: 'payment_failed' }, { stripe_session_id: sessionId, fulfilment_status: 'payment_failed' }],
-    [{ stripe_session_id: 'cs_test_other', fulfilment_status: 'payment_failed' }],
-    [{ stripe_session_id: sessionId, fulfilment_status: 'awaiting_payment' }],
-  ]) assert.equal(acknowledgedExpiredOrderClosure(malformed, sessionId), false);
-
-  const releaseStart = webhookRoute.indexOf('async function releaseExpiredPocketWifiReservation');
-  const closeStart = webhookRoute.indexOf('async function closeExpiredAwaitingPaymentOrder');
-  const deliverStart = webhookRoute.indexOf('export async function deliverFulfilmentNotification');
-  const release = webhookRoute.slice(releaseStart, closeStart);
-  const close = webhookRoute.slice(closeStart, deliverStart);
-  assert.match(release, /\.delete\(\)[\s\S]*\.select\('checkout_request_id,stripe_session_id'\)/);
-  assert.match(release, /acknowledgedExpiredReservationRelease\(released\.data,requestId,session\.id\)/);
-  assert.match(close, /\.update\([\s\S]*\.select\('stripe_session_id,fulfilment_status'\)/);
-  assert.match(close, /acknowledgedExpiredOrderClosure\(expired\.data,session\.id\)/);
 });
 
 test('customer confirmation preserves its retry budget while offline and resumes safely', () => {
