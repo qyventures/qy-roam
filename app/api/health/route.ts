@@ -114,6 +114,7 @@ export async function GET(req: Request) {
       salesReady: false,
       checkoutReady: false,
       paidAcquisitionReady: false,
+      allProductsPaidAcquisitionReady: false,
       service: 'qy-roam',
       error: 'Production readiness checks are temporarily unavailable.',
       timestamp: new Date().toISOString(),
@@ -140,7 +141,7 @@ export async function GET(req: Request) {
     courierFee: Boolean(config),
     fulfilmentEmail: hasRequiredFulfilmentEmailConfig(),
   };
-  const paidAcquisitionChecks = {
+  const measurementChecks = {
     metaCapi: hasRequiredMetaCapiPurchaseConfig(),
   };
   const availabilityChecks = { pocketWifiStock };
@@ -188,11 +189,21 @@ export async function GET(req: Request) {
   // Pocket WiFi release remains possible while deployment automation can
   // still reject a configuration that leaves customers with nothing to buy.
   const salesReady = launchReady && Object.values(checkoutChecks).some(Boolean);
-  const paidAcquisitionReady = launchReady && checkoutReady && Object.values(paidAcquisitionChecks).every(Boolean);
+  // Paid traffic is a product-specific promise. An intentionally paused eSIM
+  // offer must not suppress a fully ready Pocket WiFi campaign, but a coarse
+  // store-level green light must also never imply that every product is safe
+  // to advertise. Publish both boundaries so campaign automation can select
+  // the exact product gate and operators can still see the stricter state.
+  const paidAcquisitionChecks = {
+    esim: launchReady && checkoutChecks.esim && measurementChecks.metaCapi,
+    pocketWifi: launchReady && checkoutChecks.pocketWifi && measurementChecks.metaCapi,
+  };
+  const paidAcquisitionReady = Object.values(paidAcquisitionChecks).some(Boolean);
+  const allProductsPaidAcquisitionReady = Object.values(paidAcquisitionChecks).every(Boolean);
 
   const missing = Object.entries(launchChecks).filter(([, configured]) => !configured).map(([name]) => name);
   const paidAcquisitionMissing = Object.entries(paidAcquisitionChecks)
-    .filter(([, configured]) => !configured)
+    .filter(([, ready]) => !ready)
     .map(([name]) => name);
   const checkoutMissing = Object.entries(checkoutChecks)
     .filter(([, ready]) => !ready)
@@ -215,10 +226,12 @@ export async function GET(req: Request) {
     salesReady,
     checkoutReady,
     paidAcquisitionReady,
+    allProductsPaidAcquisitionReady,
     service: 'qy-roam',
     checks,
     checkoutChecks,
     availabilityChecks,
+    measurementChecks,
     paidAcquisitionChecks,
     missing,
     checkoutMissing,

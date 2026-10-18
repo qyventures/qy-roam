@@ -5860,7 +5860,11 @@ test('launch control reports the same checkout prerequisites that protect real o
   // incomplete operations/admin contract cannot look safe for paid traffic.
   assert.match(launchPage, /const admin=hasRequiredAdminCredentials\(\)/);
   assert.match(launchPage, /const releaseReady=commonCheckoutReady&&operationsDbOk&&admin&&\(esimReady\|\|wifiReady\)/);
-  assert.match(launchPage, /const paidReady=releaseReady&&esimReady&&wifiReady&&metaCapi/);
+  assert.match(launchPage, /const paidProductReady=\{esim:releaseReady&&esimReady&&metaCapi,pocketWifi:releaseReady&&wifiReady&&metaCapi\}/);
+  assert.match(launchPage, /const paidReady=Object\.values\(paidProductReady\)\.some\(Boolean\)/);
+  assert.match(launchPage, /const allProductsPaidReady=Object\.values\(paidProductReady\)\.every\(Boolean\)/);
+  assert.match(launchPage, /Product-specific paid launch only/);
+  assert.match(launchPage, /Keep campaigns for the blocked product paused/);
   assert.match(launchPage, /!operationsDbOk&&'operations database schema'/);
   assert.match(launchPage, /!admin&&'secure admin credentials'/);
   assert.match(launchPage, /Release readiness/);
@@ -5915,7 +5919,11 @@ test('authenticated health readiness separates shared release controls from prod
   assert.match(pocketWifiStock, /throw new Error\('Pocket WiFi inventory scan exceeded its safe page limit'\)/);
   assert.match(healthRoute, /const checkoutReady = Object\.values\(checkoutChecks\)\.every\(Boolean\)/);
   assert.match(healthRoute, /const salesReady = launchReady && Object\.values\(checkoutChecks\)\.some\(Boolean\)/);
-  assert.match(healthRoute, /const paidAcquisitionReady = launchReady && checkoutReady && Object\.values\(paidAcquisitionChecks\)\.every\(Boolean\)/);
+  assert.match(healthRoute, /const paidAcquisitionChecks = \{\s*esim: launchReady && checkoutChecks\.esim && measurementChecks\.metaCapi,\s*pocketWifi: launchReady && checkoutChecks\.pocketWifi && measurementChecks\.metaCapi,/);
+  assert.match(healthRoute, /const paidAcquisitionReady = Object\.values\(paidAcquisitionChecks\)\.some\(Boolean\)/);
+  assert.match(healthRoute, /const allProductsPaidAcquisitionReady = Object\.values\(paidAcquisitionChecks\)\.every\(Boolean\)/);
+  assert.match(healthRoute, /allProductsPaidAcquisitionReady,/);
+  assert.match(healthRoute, /measurementChecks,/);
   assert.match(healthRoute, /checkoutChecks,/);
   assert.match(healthRoute, /availabilityChecks,/);
   assert.match(healthRoute, /checkoutMissing,/);
