@@ -8,6 +8,12 @@ HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3100/api/health}"
 PUBLIC_ORIGIN="${PUBLIC_ORIGIN:-https://qyroam.com}"
 SYSTEMD_UNIT_PATH="${SYSTEMD_UNIT_PATH:-/etc/systemd/system/${SERVICE_NAME}.service}"
 NGINX_CONFIG_PATH="${NGINX_CONFIG_PATH:-/etc/nginx/sites-available/qyroam}"
+# Releases share fixed staging paths and replace one supervised service. A
+# second deploy must never build into, clean up, or promote the first deploy's
+# artifact. Keep the lock outside the repository so Git cleanliness and build
+# packaging are unaffected, and acquire it before any source, dependency, or
+# service mutation.
+DEPLOY_LOCK_PATH="${DEPLOY_LOCK_PATH:-/run/lock/qyroam-deploy.lock}"
 # Authenticated readiness can legitimately wait for the application's bounded
 # database probes. Keep curl's deadline above that application budget so a
 # slow-but-healthy probe can return its authoritative result instead of being
@@ -33,7 +39,17 @@ ROLLBACK_RESTORE_DIST_DIR=.next-rollback-restore
 # Bash will fail closed if it tries to assign one of these names.
 readonly APP_DIR ENV_FILE SERVICE_NAME HEALTH_URL PUBLIC_ORIGIN
 readonly SYSTEMD_UNIT_PATH NGINX_CONFIG_PATH READINESS_CURL_TIMEOUT_SECONDS
-readonly RELEASE_DIST_DIR ROLLBACK_RESTORE_DIST_DIR
+readonly RELEASE_DIST_DIR ROLLBACK_RESTORE_DIST_DIR DEPLOY_LOCK_PATH
+
+# Hold this descriptor for the complete script lifetime. `flock --nonblock`
+# fails fast instead of queueing a stale release which could deploy an older
+# commit after the active release finishes. Opening the root-managed lock file
+# does not truncate it and the kernel releases the lease on every exit path.
+exec 9>>"$DEPLOY_LOCK_PATH"
+if ! flock --nonblock 9; then
+  echo "Refusing to deploy: another QY Roam release is already in progress" >&2
+  exit 1
+fi
 
 cd "$APP_DIR"
 

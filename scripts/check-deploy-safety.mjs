@@ -45,7 +45,7 @@ const deploymentPathsReadonly = deploy.indexOf(
   'readonly SYSTEMD_UNIT_PATH NGINX_CONFIG_PATH READINESS_CURL_TIMEOUT_SECONDS',
 );
 const artifactPathsReadonly = deploy.indexOf(
-  'readonly RELEASE_DIST_DIR ROLLBACK_RESTORE_DIST_DIR',
+  'readonly RELEASE_DIST_DIR ROLLBACK_RESTORE_DIST_DIR DEPLOY_LOCK_PATH',
 );
 const envSource = deploy.indexOf('source "$ENV_FILE"');
 assert.ok(deploymentControlsReadonly > -1, 'deployment control variables must be immutable');
@@ -54,6 +54,25 @@ assert.ok(artifactPathsReadonly > -1, 'release artifact paths must be immutable'
 assert.ok(
   deploymentControlsReadonly < envSource && deploymentPathsReadonly < envSource && artifactPathsReadonly < envSource,
   'deployment controls must be immutable before the application environment is sourced',
+);
+// The release uses fixed build/restore paths and performs one service cutover.
+// Concurrent wrappers could otherwise delete each other's staging tree or
+// promote a different artifact from the one that passed smoke tests. Acquire
+// one non-queueing host lock before even Git/dependency updates, and keep its
+// path immutable before the environment file is sourced.
+assert.match(deploy, /^DEPLOY_LOCK_PATH="\$\{DEPLOY_LOCK_PATH:-\/run\/lock\/qyroam-deploy\.lock\}"$/m);
+assert.match(deploy, /exec 9>>"\$DEPLOY_LOCK_PATH"/);
+assert.match(deploy, /flock --nonblock 9/);
+assert.match(deploy, /another QY Roam release is already in progress/);
+assert.ok(
+  deploy.indexOf('flock --nonblock 9') < deploy.indexOf('cd "$APP_DIR"') &&
+    deploy.indexOf('flock --nonblock 9') < deploy.indexOf('git fetch --prune origin') &&
+    deploy.indexOf('flock --nonblock 9') < deploy.indexOf('npm ci --no-audit --no-fund'),
+  'the deployment lock must be held before repository or artifact mutation',
+);
+assert.ok(
+  artifactPathsReadonly < deploy.indexOf('exec 9>>"$DEPLOY_LOCK_PATH"') && artifactPathsReadonly < envSource,
+  'the deployment lock path must be immutable before it is opened or environment values are sourced',
 );
 // Building into the serving `.next` tree makes old HTML and route responses
 // reference chunks that Next may already have deleted or replaced. Compile
