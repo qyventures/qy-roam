@@ -4278,24 +4278,24 @@ test('SMTP relay delivery canonicalizes the same relay secret accepted by readin
   assert.match(webhookRoute, /relaySecret=process\.env\.SMTP_RELAY_SECRET\?\.trim\(\)/);
 });
 
-test('payment-readiness checks coalesce healthy checkout probes without caching failures', () => {
+test('payment-readiness checks coalesce healthy probes and briefly back off failures', () => {
   assert.match(productionReadiness, /const READINESS_CACHE_MS = 15_000/);
-  assert.match(productionReadiness, /if \(Date\.now\(\) < readinessState\.paymentSchemaReadyUntil\) return true/);
+  assert.match(productionReadiness, /if \(now < readinessState\.paymentSchemaReadyUntil\) return true/);
   assert.match(productionReadiness, /if \(!readinessState\.paymentSchemaCheckInFlight\)/);
   assert.match(productionReadiness, /if \(ready\) readinessState\.paymentSchemaReadyUntil = Date\.now\(\) \+ READINESS_CACHE_MS/);
-  assert.match(productionReadiness, /if \(Date\.now\(\) < readinessState\.esimOrderSchemaReadyUntil\) return true/);
+  assert.match(productionReadiness, /if \(now < readinessState\.esimOrderSchemaReadyUntil\) return true/);
   assert.match(productionReadiness, /if \(!readinessState\.esimOrderSchemaCheckInFlight\)/);
   // Authenticated health monitoring can run concurrently on several workers.
   // Its operations contract probe is expensive but must retain the same
-  // fail-closed, success-only caching semantics as checkout readiness.
-  assert.match(productionReadiness, /if \(Date\.now\(\) < readinessState\.operationsSchemaReadyUntil\) return true/);
+  // fail-closed caching and retry-backoff semantics as checkout readiness.
+  assert.match(productionReadiness, /if \(now < readinessState\.operationsSchemaReadyUntil\) return true/);
   assert.match(productionReadiness, /if \(!readinessState\.operationsSchemaCheckInFlight\)/);
   assert.match(productionReadiness, /if \(ready\) readinessState\.operationsSchemaReadyUntil = Date\.now\(\) \+ READINESS_CACHE_MS/);
   assert.match(productionReadiness, /async function checkRequiredOperationsSchema\(\)/);
   // Router checkout has a smaller, sale-critical custody probe. It must use
-  // the same success-only cache pattern without making checkout depend on
+  // the same healthy-cache/failure-backoff pattern without making checkout depend on
   // non-essential CRM, forecast, or accounting relations.
-  assert.match(productionReadiness, /if \(Date\.now\(\) < readinessState\.pocketWifiFulfilmentSchemaReadyUntil\) return true/);
+  assert.match(productionReadiness, /if \(now < readinessState\.pocketWifiFulfilmentSchemaReadyUntil\) return true/);
   assert.match(productionReadiness, /if \(!readinessState\.pocketWifiFulfilmentSchemaCheckInFlight\)/);
   assert.match(productionReadiness, /if \(ready\) readinessState\.pocketWifiFulfilmentSchemaReadyUntil = Date\.now\(\) \+ READINESS_CACHE_MS/);
   assert.match(productionReadiness, /async function checkRequiredPocketWifiFulfilmentSchema\(\)/);
@@ -9092,6 +9092,7 @@ test('dependency-work concurrency budgets survive duplicate Next server module g
 test('production readiness probes share cache and in-flight work across Next route graphs', () => {
   assert.match(productionReadiness, /__qyRoamProductionReadinessState/);
   assert.match(productionReadiness, /\(globalThis as ProductionReadinessGlobal\)\.__qyRoamProductionReadinessState \?\?=/);
+  assert.match(productionReadiness, /export const READINESS_FAILURE_BACKOFF_MS = 5_000/);
 
   for (const boundary of [
     'stripeApi',
@@ -9101,12 +9102,23 @@ test('production readiness probes share cache and in-flight work across Next rou
     'pocketWifiFulfilmentSchema',
   ]) {
     assert.match(productionReadiness, new RegExp(`readinessState\\.${boundary}ReadyUntil`));
+    assert.match(productionReadiness, new RegExp(`readinessState\\.${boundary}RetryAfter`));
     assert.match(productionReadiness, new RegExp(`readinessState\\.${boundary}CheckInFlight`));
+    assert.match(
+      productionReadiness,
+      new RegExp(`if \\(now < readinessState\\.${boundary}RetryAfter\\) return false`),
+      `${boundary} failures must stay fail-closed during the shared retry backoff`,
+    );
+    assert.match(
+      productionReadiness,
+      new RegExp(`readinessState\\.${boundary}RetryAfter = Date\\.now\\(\\) \\+ READINESS_FAILURE_BACKOFF_MS`),
+      `${boundary} failures must arm the shared retry backoff`,
+    );
   }
 
   // A route-local lease would restore the stampede whenever Next evaluates a
   // separate checkout, availability, or health entrypoint.
-  assert.doesNotMatch(productionReadiness, /let (?:stripeApi|paymentSchema|esimOrderSchema|operationsSchema|pocketWifiFulfilmentSchema)(?:ReadyUntil|CheckInFlight)/);
+  assert.doesNotMatch(productionReadiness, /let (?:stripeApi|paymentSchema|esimOrderSchema|operationsSchema|pocketWifiFulfilmentSchema)(?:ReadyUntil|RetryAfter|CheckInFlight)/);
 });
 
 test('public Pocket WiFi booking terms stay aligned with the checkout authority', () => {

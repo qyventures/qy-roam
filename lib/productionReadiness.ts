@@ -12,9 +12,17 @@ export { hasRequiredStripeCheckoutConfig };
 // Session. A healthy schema does not change between adjacent requests, while
 // repeatedly probing it adds several database round trips (and, for Pocket
 // WiFi, briefly takes the same advisory lock used to reserve inventory).
-// Cache only a successful result and only for a short interval: an outage or
-// incomplete migration is never cached and continues to fail closed.
+// Cache a successful result only briefly. Failed checks use the shorter
+// fail-closed retry backoff below and can never be mistaken for readiness.
 const READINESS_CACHE_MS = 15_000;
+// A failed probe must remain fail-closed, but immediately launching the same
+// provider work on the next checkout turns an outage into a request-driven
+// retry storm. This matters especially after a deadline: AbortSignal support
+// is best-effort, so a broken transport may still have detached work running
+// after the customer has received a bounded unavailable response. Apply a
+// short process-wide backoff to false/rejected results; it is deliberately
+// much shorter than the successful cache and never converts failure to ready.
+export const READINESS_FAILURE_BACKOFF_MS = 5_000;
 // A readiness check sits directly on the customer checkout path. Supabase's
 // normal request timeout is intentionally generous, but waiting that long
 // here can exhaust server workers during a network partition. Abort the
@@ -40,6 +48,11 @@ type ProductionReadinessState = {
   esimOrderSchemaReadyUntil: number;
   operationsSchemaReadyUntil: number;
   pocketWifiFulfilmentSchemaReadyUntil: number;
+  stripeApiRetryAfter: number;
+  paymentSchemaRetryAfter: number;
+  esimOrderSchemaRetryAfter: number;
+  operationsSchemaRetryAfter: number;
+  pocketWifiFulfilmentSchemaRetryAfter: number;
   stripeApiCheckInFlight: Promise<boolean> | null;
   paymentSchemaCheckInFlight: Promise<boolean> | null;
   esimOrderSchemaCheckInFlight: Promise<boolean> | null;
@@ -63,6 +76,11 @@ const readinessState = ((globalThis as ProductionReadinessGlobal).__qyRoamProduc
   esimOrderSchemaReadyUntil: 0,
   operationsSchemaReadyUntil: 0,
   pocketWifiFulfilmentSchemaReadyUntil: 0,
+  stripeApiRetryAfter: 0,
+  paymentSchemaRetryAfter: 0,
+  esimOrderSchemaRetryAfter: 0,
+  operationsSchemaRetryAfter: 0,
+  pocketWifiFulfilmentSchemaRetryAfter: 0,
   stripeApiCheckInFlight: null,
   paymentSchemaCheckInFlight: null,
   esimOrderSchemaCheckInFlight: null,
@@ -95,14 +113,20 @@ async function checkRequiredStripeApiAccess() {
 }
 
 export async function hasRequiredStripeApiAccess() {
-  if (Date.now() < readinessState.stripeApiReadyUntil) return true;
+  const now = Date.now();
+  if (now < readinessState.stripeApiReadyUntil) return true;
+  if (now < readinessState.stripeApiRetryAfter) return false;
   if (!readinessState.stripeApiCheckInFlight) {
     readinessState.stripeApiCheckInFlight = checkRequiredStripeApiAccess()
       .then((ready) => {
         if (ready) readinessState.stripeApiReadyUntil = Date.now() + READINESS_CACHE_MS;
+        else readinessState.stripeApiRetryAfter = Date.now() + READINESS_FAILURE_BACKOFF_MS;
         return ready;
       })
-      .catch(() => false)
+      .catch(() => {
+        readinessState.stripeApiRetryAfter = Date.now() + READINESS_FAILURE_BACKOFF_MS;
+        return false;
+      })
       .finally(() => { readinessState.stripeApiCheckInFlight = null; });
   }
   return readinessState.stripeApiCheckInFlight;
@@ -410,11 +434,14 @@ async function checkRequiredPaymentSchema() {
 }
 
 export async function hasRequiredPaymentSchema() {
-  if (Date.now() < readinessState.paymentSchemaReadyUntil) return true;
+  const now = Date.now();
+  if (now < readinessState.paymentSchemaReadyUntil) return true;
+  if (now < readinessState.paymentSchemaRetryAfter) return false;
   if (!readinessState.paymentSchemaCheckInFlight) {
     readinessState.paymentSchemaCheckInFlight = checkRequiredPaymentSchema()
       .then((ready) => {
         if (ready) readinessState.paymentSchemaReadyUntil = Date.now() + READINESS_CACHE_MS;
+        else readinessState.paymentSchemaRetryAfter = Date.now() + READINESS_FAILURE_BACKOFF_MS;
         return ready;
       })
       .catch(() => {
@@ -422,6 +449,7 @@ export async function hasRequiredPaymentSchema() {
         // readiness response already reports this check as unavailable, so a
         // stable event name is sufficient for alerting without leaking them.
         console.error('production_payment_schema_check_unexpected_error');
+        readinessState.paymentSchemaRetryAfter = Date.now() + READINESS_FAILURE_BACKOFF_MS;
         return false;
       })
       .finally(() => { readinessState.paymentSchemaCheckInFlight = null; });
@@ -525,15 +553,19 @@ async function checkRequiredEsimOrderSchema() {
 }
 
 export async function hasRequiredEsimOrderSchema() {
-  if (Date.now() < readinessState.esimOrderSchemaReadyUntil) return true;
+  const now = Date.now();
+  if (now < readinessState.esimOrderSchemaReadyUntil) return true;
+  if (now < readinessState.esimOrderSchemaRetryAfter) return false;
   if (!readinessState.esimOrderSchemaCheckInFlight) {
     readinessState.esimOrderSchemaCheckInFlight = checkRequiredEsimOrderSchema()
       .then((ready) => {
         if (ready) readinessState.esimOrderSchemaReadyUntil = Date.now() + READINESS_CACHE_MS;
+        else readinessState.esimOrderSchemaRetryAfter = Date.now() + READINESS_FAILURE_BACKOFF_MS;
         return ready;
       })
       .catch(() => {
         console.error('production_esim_order_schema_check_unexpected_error');
+        readinessState.esimOrderSchemaRetryAfter = Date.now() + READINESS_FAILURE_BACKOFF_MS;
         return false;
       })
       .finally(() => { readinessState.esimOrderSchemaCheckInFlight = null; });
@@ -601,15 +633,19 @@ async function checkRequiredPocketWifiFulfilmentSchema() {
 }
 
 export async function hasRequiredPocketWifiFulfilmentSchema() {
-  if (Date.now() < readinessState.pocketWifiFulfilmentSchemaReadyUntil) return true;
+  const now = Date.now();
+  if (now < readinessState.pocketWifiFulfilmentSchemaReadyUntil) return true;
+  if (now < readinessState.pocketWifiFulfilmentSchemaRetryAfter) return false;
   if (!readinessState.pocketWifiFulfilmentSchemaCheckInFlight) {
     readinessState.pocketWifiFulfilmentSchemaCheckInFlight = checkRequiredPocketWifiFulfilmentSchema()
       .then((ready) => {
         if (ready) readinessState.pocketWifiFulfilmentSchemaReadyUntil = Date.now() + READINESS_CACHE_MS;
+        else readinessState.pocketWifiFulfilmentSchemaRetryAfter = Date.now() + READINESS_FAILURE_BACKOFF_MS;
         return ready;
       })
       .catch(() => {
         console.error('production_pocket_wifi_fulfilment_schema_check_unexpected_error');
+        readinessState.pocketWifiFulfilmentSchemaRetryAfter = Date.now() + READINESS_FAILURE_BACKOFF_MS;
         return false;
       })
       .finally(() => { readinessState.pocketWifiFulfilmentSchemaCheckInFlight = null; });
@@ -785,17 +821,21 @@ async function checkRequiredOperationsSchema() {
 // Health checks commonly run on a short interval and this operations probe is
 // intentionally comprehensive (nine relations plus seven RPC contracts). Keep
 // it responsive under multiple health-check workers without hiding a failed
-// migration or outage: only a successful result is cached, and only briefly.
+// migration or outage: success and failure retain distinct, brief windows.
 export async function hasRequiredOperationsSchema() {
-  if (Date.now() < readinessState.operationsSchemaReadyUntil) return true;
+  const now = Date.now();
+  if (now < readinessState.operationsSchemaReadyUntil) return true;
+  if (now < readinessState.operationsSchemaRetryAfter) return false;
   if (!readinessState.operationsSchemaCheckInFlight) {
     readinessState.operationsSchemaCheckInFlight = checkRequiredOperationsSchema()
       .then((ready) => {
         if (ready) readinessState.operationsSchemaReadyUntil = Date.now() + READINESS_CACHE_MS;
+        else readinessState.operationsSchemaRetryAfter = Date.now() + READINESS_FAILURE_BACKOFF_MS;
         return ready;
       })
       .catch(() => {
         console.error('production_operations_schema_check_unexpected_error');
+        readinessState.operationsSchemaRetryAfter = Date.now() + READINESS_FAILURE_BACKOFF_MS;
         return false;
       })
       .finally(() => { readinessState.operationsSchemaCheckInFlight = null; });
