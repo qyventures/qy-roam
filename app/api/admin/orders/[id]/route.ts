@@ -275,6 +275,25 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     const referenceIssue = custodyReferenceIssue(returnTracking);
     if (referenceIssue) return NextResponse.json({ error: referenceIssue }, { status: 400 });
   }
+  // Custody references are evidence of a physical boundary, not editable
+  // preparation notes. A same-status save must not pre-seed tracking that the
+  // customer status page could mistake for an actual dispatch or receipt.
+  // Existing legacy evidence is left visible for reconciliation, but only the
+  // atomic boundary transition may create or replace a reference.
+  if (existing.data.product_type === 'pocket_wifi' && !existing.data.dispatched_at &&
+    status !== 'dispatched' && courierTracking &&
+    courierTracking !== normalizeCustodyReference(existing.data.courier_tracking)) {
+    return NextResponse.json({ error: 'Record the delivery reference only when marking the Pocket WiFi order dispatched.' }, { status: 400 });
+  }
+  if (existing.data.product_type === 'pocket_wifi' && !existing.data.returned_at &&
+    status !== 'returned' && returnTracking &&
+    returnTracking !== normalizeCustodyReference(existing.data.return_tracking)) {
+    return NextResponse.json({ error: 'Record the return reference only when marking the Pocket WiFi order physically received.' }, { status: 400 });
+  }
+  if (existing.data.product_type === 'pocket_wifi' && !existing.data.returned_at &&
+    status !== 'returned' && returnDisposition && returnDisposition !== existing.data.return_disposition) {
+    return NextResponse.json({ error: 'Record the return inspection disposition only when marking the Pocket WiFi order physically received.' }, { status: 400 });
+  }
   if (existing.data.product_type === 'esim' && status === 'fulfilled' && !deliveryReference) {
     return NextResponse.json({ error: 'A delivery reference is required before marking an eSIM order fulfilled. Record a provider order ID or secure delivery/email log reference, not the eSIM QR code.' }, { status: 400 });
   }

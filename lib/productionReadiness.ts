@@ -26,7 +26,7 @@ const READINESS_PROBE_TIMEOUT_MS = 8_000;
 // explicit handshake prevents a rolling application deploy from accepting a
 // payment against stale database logic.
 const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 49;
-const REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 10;
+const REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 11;
 // Version 2 is the first marker that certifies the complete current admin
 // mutation surface, including atomic manual eSIM/WiFi order creation, exact
 // optimistic fulfilment transitions, custody-ledger idempotency, and

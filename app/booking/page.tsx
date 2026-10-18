@@ -160,13 +160,13 @@ export default async function BookingPage({ searchParams }: Props) {
     const safeCourierTracking = typeof order?.courier_tracking === 'string'
       ? normalizeCustodyReference(order.courier_tracking)
       : '';
-    const courierTracking = safeCourierTracking && !custodyReferenceIssue(safeCourierTracking)
+    const courierTracking = order?.dispatched_at && safeCourierTracking && !custodyReferenceIssue(safeCourierTracking)
       ? safeCourierTracking
       : '';
     const safeReturnTracking = typeof order?.return_tracking === 'string'
       ? normalizeCustodyReference(order.return_tracking)
       : '';
-    const returnTracking = safeReturnTracking && !custodyReferenceIssue(safeReturnTracking)
+    const returnTracking = order?.returned_at && safeReturnTracking && !custodyReferenceIssue(safeReturnTracking)
       ? safeReturnTracking
       : '';
     // Return instructions are date-driven. Staff may not have moved the

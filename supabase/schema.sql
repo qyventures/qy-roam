@@ -3016,6 +3016,27 @@ begin
     raise exception 'invalid order notes';
   end if;
 
+  -- Tracking references certify physical events. Do not let a same-status
+  -- save or a future service-role client pre-seed customer-visible custody
+  -- evidence before the transaction that records the matching stock movement.
+  -- Preserve an identical inherited value so legacy rows remain operable and
+  -- visible for reconciliation; only creation/replacement is blocked here.
+  if v_order.dispatched_at is null and p_next_status <> 'dispatched'
+    and nullif(trim(coalesce(p_courier_tracking, '')), '') is not null
+    and nullif(trim(p_courier_tracking), '') is distinct from v_order.courier_tracking then
+    raise exception 'courier tracking can only be recorded at dispatch';
+  end if;
+  if v_order.returned_at is null and p_next_status <> 'returned'
+    and nullif(trim(coalesce(p_return_tracking, '')), '') is not null
+    and nullif(trim(p_return_tracking), '') is distinct from v_order.return_tracking then
+    raise exception 'return tracking can only be recorded at physical receipt';
+  end if;
+  if v_order.returned_at is null and p_next_status <> 'returned'
+    and nullif(lower(trim(coalesce(p_return_disposition, ''))), '') is not null
+    and nullif(lower(trim(p_return_disposition)), '') is distinct from v_order.return_disposition then
+    raise exception 'return disposition can only be recorded at physical receipt';
+  end if;
+
   if not (
     p_next_status = p_expected_status or
     (p_expected_status = 'paid' and p_next_status in ('packing', 'dispatched', 'cancelled')) or
@@ -3158,7 +3179,9 @@ set search_path = pg_catalog
 -- closes the movement-type domain and enforces direction/quantity semantics
 -- for every newly written stock-ledger row. Version 10 makes each order/item
 -- custody boundary exactly-once even for privileged database writers.
-as $$ select 10; $$;
+-- Version 11 prevents custody references and inspection decisions from being
+-- pre-seeded before their atomic dispatch or physical-receipt transition.
+as $$ select 11; $$;
 revoke all on function public.qy_pocket_wifi_fulfilment_schema_version() from public;
 grant execute on function public.qy_pocket_wifi_fulfilment_schema_version() to service_role;
 

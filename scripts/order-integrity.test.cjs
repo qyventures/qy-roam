@@ -5337,7 +5337,7 @@ test('admin fulfilment writes reject stale same-status saves using the exact ord
     assert.match(transition, /raise exception 'order changed since it was loaded'/);
   }
   assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 49/);
-  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 10/);
+  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 11/);
 });
 
 test('eSIM delivery evidence and fulfilment transition share one database authority', () => {
@@ -5357,6 +5357,24 @@ test('Pocket WiFi dispatch and return require a recorded operational reference',
   assert.match(adminOrderRoute, /required before marking a Pocket WiFi order returned/);
   assert.match(adminOrderActions, /status === 'dispatched' && !courier\.trim\(\)/);
   assert.match(adminOrderActions, /status === 'returned' && !returned\.trim\(\)/);
+});
+
+test('Pocket WiFi custody evidence cannot be pre-seeded before its physical boundary', () => {
+  assert.match(adminOrderRoute, /status !== 'dispatched' && courierTracking/);
+  assert.match(adminOrderRoute, /Record the delivery reference only when marking the Pocket WiFi order dispatched/);
+  assert.match(adminOrderRoute, /status !== 'returned' && returnTracking/);
+  assert.match(adminOrderRoute, /Record the return reference only when marking the Pocket WiFi order physically received/);
+  assert.match(adminOrderRoute, /Record the return inspection disposition only when marking the Pocket WiFi order physically received/);
+
+  const wifiTransition = schema.slice(
+    schema.indexOf('create or replace function public.qy_transition_pocket_wifi_order'),
+    schema.indexOf('revoke all on function public.qy_transition_pocket_wifi_order'),
+  );
+  assert.match(wifiTransition, /p_next_status <> 'dispatched'[\s\S]*?raise exception 'courier tracking can only be recorded at dispatch'/);
+  assert.match(wifiTransition, /p_next_status <> 'returned'[\s\S]*?raise exception 'return tracking can only be recorded at physical receipt'/);
+  assert.match(wifiTransition, /raise exception 'return disposition can only be recorded at physical receipt'/);
+  assert.match(bookingPage, /const courierTracking = order\?\.dispatched_at && safeCourierTracking/);
+  assert.match(bookingPage, /const returnTracking = order\?\.returned_at && safeReturnTracking/);
 });
 
 test('database preserves dispatch and return evidence throughout the Pocket WiFi lifecycle', () => {
@@ -5505,8 +5523,8 @@ test('generic inventory mutations cannot make a router saleable while it is in c
     'both quantity adjustments and status changes must reject assigned in-custody routers',
   );
   assert.match(schema, /inventory item is assigned to an active Pocket WiFi custody order/);
-  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 10; \$\$/);
-  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 10/);
+  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 11; \$\$/);
+  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 11/);
   assert.match(productionReadiness, /database\.rpc\('qy_pocket_wifi_fulfilment_schema_version', \{\}\)/);
   assert.match(productionReadiness, /versionProbe\.data !== REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION/);
 });
@@ -5583,8 +5601,8 @@ test('Pocket WiFi inventory movements remain append-only audit evidence', () => 
     guard,
     /create trigger qy_enforce_inventory_movement_immutability[\s\S]*before update or delete on public\.inventory_movements/,
   );
-  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 10; \$\$/);
-  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 10/);
+  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 11; \$\$/);
+  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 11/);
 });
 
 test('Pocket WiFi custody movements are exactly-once per order and inventory item', () => {
@@ -5621,8 +5639,8 @@ test('Pocket WiFi stock can only be mutated through audited inventory RPCs', () 
     const body = schema.slice(start, schema.indexOf('$$;', start) + 3);
     assert.match(body, /security definer/, `${rpc} must retain owner-authorized writes`);
   }
-  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 10; \$\$/);
-  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 10/);
+  assert.match(schema, /create or replace function public\.qy_pocket_wifi_fulfilment_schema_version\(\)[\s\S]*as \$\$ select 11; \$\$/);
+  assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 11/);
 });
 
 test('admin actions advance their transition baseline after each save', () => {
