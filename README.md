@@ -37,6 +37,12 @@ cd /root/qy-roam
 bash deploy/deploy.sh
 ```
 
+Apply the reviewed `supabase/schema.sql` to production Supabase before running
+the application deploy. The deploy script never mutates that external
+database; it verifies the required schema/version through authenticated
+readiness and stops before cutover if the migration is absent or incomplete.
+See `LAUNCH_CHECKLIST.md` for the ordered production procedure.
+
 The script requires Node.js 22.x and an already-clean `main` checkout, fast-forwards it, installs from the committed dependency lock, validates pricing, operations schema and order integrity, and builds with the protected env file. Before replacing the live process, it boots that exact standalone artifact on an isolated loopback port and requires the public liveness response; set `SMOKE_PORT` only if the default port `3199` is reserved locally. It then verifies the installed systemd unit and Nginx site against their checked-in definitions, validates Nginx, reloads the service definition, restarts the service, and uses `HEALTH_CHECK_TOKEN` to verify launch readiness at `http://127.0.0.1:3100/api/health`. The previously serving standalone artifact is retained outside the repository until that live check passes. Any failure after the snapshot restores it on disk; if live cutover was attempted, the restored artifact is restarted and must pass authenticated sales readiness (including at least one complete checkout path) before rollback is reported successful. An unready rollback retains its recovery snapshot and prints service diagnostics for operator recovery. The unit keeps a 150-second graceful-stop budget so a release does not cut off an in-flight webhook inside Nginx's 120-second reviewed proxy window. A failed runtime, artifact smoke test, ingress/unit verification, Nginx validation, unit reload, or restart stops the release; service failures print bounded service/journal diagnostics before the readiness loop. Set `NGINX_CONFIG_PATH` only when the installed site uses a nonstandard path (the default is `/etc/nginx/sites-available/qyroam`).
 
 The authenticated health response separates configured deployment safety

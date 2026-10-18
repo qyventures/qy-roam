@@ -61,6 +61,21 @@ node --version
 `deploy/deploy.sh` fails before pulling source or installing dependencies when
 the active runtime is not Node.js 22.x.
 
+Before running the application deployment, apply the reviewed
+`supabase/schema.sql` to the production Supabase project. The deploy script
+deliberately does not mutate the external database: its isolated readiness
+check verifies the installed schema version and fails closed before live
+cutover when the migration is missing or incomplete. Apply the schema first so
+the application and database contracts move forward in the intended order.
+
+The checkout and webhook require the `orders`, `checkout_reservations`,
+`stripe_events`, `fulfilment_notifications`, and `meta_purchase_deliveries`
+tables plus the Pocket WiFi reservation, Stripe-persistence, manual-order,
+inventory-creation, inventory-adjustment, inventory-status, and
+dispatch/return RPCs defined there. Do not continue if the SQL application
+reports an error; the file is both the clean-install schema and the ordered
+upgrade contract.
+
 From the privileged VPS account:
 
 ```bash
@@ -103,8 +118,6 @@ Create a live Stripe webhook endpoint at:
 Subscribe to `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, and `checkout.session.expired`. The expiry event promptly releases an authenticated Pocket WiFi reservation after a customer abandons an expired Checkout page. Copy the resulting `whsec_...` into the protected VPS env file, redeploy/restart, and confirm `/api/health` becomes ready.
 
 ## 5. End-to-end payment smoke test
-
-Before deploying this application version, apply `supabase/schema.sql` to the production Supabase project. The checkout and webhook require the `orders`, `checkout_reservations`, `stripe_events`, `fulfilment_notifications`, and `meta_purchase_deliveries` tables plus the Pocket WiFi reservation, Stripe-persistence, manual-order, inventory-creation, inventory-adjustment, inventory-status, and dispatch/return RPCs defined there. Deploy the schema before restarting the app so checkout, staff-created paid rentals, and opening router stock all use their atomic inventory and audit boundaries.
 
 Pricing preflight is intentionally fail-closed. If `npm run check:wifi-pricing` or
 `npm run check:esim-pricing` reports a stale benchmark, re-open the exact public
