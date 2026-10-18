@@ -6,6 +6,7 @@ import { stripeWebhookSigningSecrets } from '@/lib/stripeWebhookSecret';
 import { createStripeClient } from '@/lib/stripeClient';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/stripeCheckoutConfig';
 import { runReadinessProbe } from '@/lib/readinessProbe';
+import { readinessFailureBackoffActive } from '@/lib/readinessBackoff';
 export { hasRequiredStripeCheckoutConfig };
 
 // Checkout invokes these guards immediately before creating a payable Stripe
@@ -115,7 +116,7 @@ async function checkRequiredStripeApiAccess() {
 export async function hasRequiredStripeApiAccess() {
   const now = Date.now();
   if (now < readinessState.stripeApiReadyUntil) return true;
-  if (now < readinessState.stripeApiRetryAfter) return false;
+  if (readinessFailureBackoffActive(readinessState.stripeApiRetryAfter, now, READINESS_FAILURE_BACKOFF_MS)) return false;
   if (!readinessState.stripeApiCheckInFlight) {
     readinessState.stripeApiCheckInFlight = checkRequiredStripeApiAccess()
       .then((ready) => {
@@ -436,7 +437,7 @@ async function checkRequiredPaymentSchema() {
 export async function hasRequiredPaymentSchema() {
   const now = Date.now();
   if (now < readinessState.paymentSchemaReadyUntil) return true;
-  if (now < readinessState.paymentSchemaRetryAfter) return false;
+  if (readinessFailureBackoffActive(readinessState.paymentSchemaRetryAfter, now, READINESS_FAILURE_BACKOFF_MS)) return false;
   if (!readinessState.paymentSchemaCheckInFlight) {
     readinessState.paymentSchemaCheckInFlight = checkRequiredPaymentSchema()
       .then((ready) => {
@@ -555,7 +556,7 @@ async function checkRequiredEsimOrderSchema() {
 export async function hasRequiredEsimOrderSchema() {
   const now = Date.now();
   if (now < readinessState.esimOrderSchemaReadyUntil) return true;
-  if (now < readinessState.esimOrderSchemaRetryAfter) return false;
+  if (readinessFailureBackoffActive(readinessState.esimOrderSchemaRetryAfter, now, READINESS_FAILURE_BACKOFF_MS)) return false;
   if (!readinessState.esimOrderSchemaCheckInFlight) {
     readinessState.esimOrderSchemaCheckInFlight = checkRequiredEsimOrderSchema()
       .then((ready) => {
@@ -635,7 +636,7 @@ async function checkRequiredPocketWifiFulfilmentSchema() {
 export async function hasRequiredPocketWifiFulfilmentSchema() {
   const now = Date.now();
   if (now < readinessState.pocketWifiFulfilmentSchemaReadyUntil) return true;
-  if (now < readinessState.pocketWifiFulfilmentSchemaRetryAfter) return false;
+  if (readinessFailureBackoffActive(readinessState.pocketWifiFulfilmentSchemaRetryAfter, now, READINESS_FAILURE_BACKOFF_MS)) return false;
   if (!readinessState.pocketWifiFulfilmentSchemaCheckInFlight) {
     readinessState.pocketWifiFulfilmentSchemaCheckInFlight = checkRequiredPocketWifiFulfilmentSchema()
       .then((ready) => {
@@ -825,7 +826,7 @@ async function checkRequiredOperationsSchema() {
 export async function hasRequiredOperationsSchema() {
   const now = Date.now();
   if (now < readinessState.operationsSchemaReadyUntil) return true;
-  if (now < readinessState.operationsSchemaRetryAfter) return false;
+  if (readinessFailureBackoffActive(readinessState.operationsSchemaRetryAfter, now, READINESS_FAILURE_BACKOFF_MS)) return false;
   if (!readinessState.operationsSchemaCheckInFlight) {
     readinessState.operationsSchemaCheckInFlight = checkRequiredOperationsSchema()
       .then((ready) => {

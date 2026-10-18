@@ -100,6 +100,7 @@ const { CONFIRMATION_REFRESH_INITIAL_DELAY_MS, CONFIRMATION_REFRESH_MAX_DELAY_MS
 const { formatSingaporeDate, formatSingaporeTimestamp } = require('../lib/singaporeTimestamp.ts');
 const { customerOrderReference } = require('../lib/customerOrderReference.ts');
 const { READINESS_PROBE_TIMEOUT_MS, ReadinessProbeTimeoutError, runReadinessProbe } = require('../lib/readinessProbe.ts');
+const { readinessFailureBackoffActive } = require('../lib/readinessBackoff.ts');
 
 test('production readiness has a real deadline even when a dependency ignores cancellation', async () => {
   let signal;
@@ -122,6 +123,19 @@ test('production readiness clears its deadline after successful dependency work'
     return 'ready';
   }, 100);
   assert.equal(result, 'ready');
+});
+
+test('production readiness failure backoff self-heals after wall-clock rollback', () => {
+  const now = 10_000;
+  assert.equal(readinessFailureBackoffActive(now + 5_000, now, 5_000), true);
+  assert.equal(readinessFailureBackoffActive(now + 1, now, 5_000), true);
+  assert.equal(readinessFailureBackoffActive(now, now, 5_000), false);
+  assert.equal(readinessFailureBackoffActive(now - 1, now, 5_000), false);
+
+  // This could only result from clock rollback or corrupt inherited state.
+  // Re-probe fail-closed instead of stretching a five-second outage window.
+  assert.equal(readinessFailureBackoffActive(now + 5_001, now, 5_000), false);
+  assert.equal(readinessFailureBackoffActive(Number.POSITIVE_INFINITY, now, 5_000), false);
 });
 
 test('inventory mutation conflicts are actionable without exposing database failures', () => {
@@ -9106,7 +9120,7 @@ test('production readiness probes share cache and in-flight work across Next rou
     assert.match(productionReadiness, new RegExp(`readinessState\\.${boundary}CheckInFlight`));
     assert.match(
       productionReadiness,
-      new RegExp(`if \\(now < readinessState\\.${boundary}RetryAfter\\) return false`),
+      new RegExp(`if \\(readinessFailureBackoffActive\\(readinessState\\.${boundary}RetryAfter, now, READINESS_FAILURE_BACKOFF_MS\\)\\) return false`),
       `${boundary} failures must stay fail-closed during the shared retry backoff`,
     );
     assert.match(
