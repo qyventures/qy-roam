@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse as FrameworkNextResponse } from 'next/server';
 import type Stripe from 'stripe';
 import { createStripeClient } from '../../../lib/stripeClient';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
@@ -19,6 +19,18 @@ import { scanActivePocketWifiStripeHolds } from '@/lib/pocketWifiStripeHolds';
 import { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } from '@/lib/pocketWifiRentalPeriod';
 
 export const dynamic = 'force-dynamic';
+
+// Every response from this route is a live inventory/date promise. Make its
+// non-cacheable contract structural so a newly added validation, overload, or
+// failure branch cannot leave a stale positive result (or transient outage)
+// in a browser or intermediary cache.
+const NextResponse = {
+  json(body: unknown, init: ResponseInit = {}) {
+    const headers = new Headers(init.headers);
+    headers.set('Cache-Control', 'no-store');
+    return FrameworkNextResponse.json(body, { ...init, headers });
+  },
+};
 
 // A live availability lookup performs a Stripe hold scan and an atomic database
 // snapshot. Keep ordinary date-picker retries responsive while preventing the
@@ -193,6 +205,14 @@ export async function GET(req: NextRequest) {
     console.error('availability_check_failed');
     return NextResponse.json({ available: false, remaining: 0, inventoryMode: 'unavailable', error: 'Live availability is temporarily unavailable. Please try again shortly or contact +65 8032 7183.' }, { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '30' } });
   }
+  } catch {
+    // Prerequisite and schema checks normally fail closed themselves, but a
+    // provider SDK/runtime regression can still reject unexpectedly before
+    // the narrower inventory-query catch above. Keep that failure inside the
+    // same public availability contract so the storefront can retry safely
+    // instead of receiving Next's generic, potentially ambiguous 500 page.
+    console.error('availability_check_failed');
+    return unavailableAvailability();
   } finally {
     releaseAvailability?.();
   }

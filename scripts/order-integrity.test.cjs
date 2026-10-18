@@ -236,6 +236,20 @@ test('live availability has a bounded non-queueing dependency-work budget', () =
   assert.match(availabilityRoute, /finally \{\s*releaseAvailability\?\.\(\);\s*\}/);
 });
 
+test('every live availability response is non-cacheable and unexpected prerequisite failures stay retryable', () => {
+  assert.match(availabilityRoute, /NextResponse as FrameworkNextResponse/);
+  assert.match(availabilityRoute, /headers\.set\('Cache-Control', 'no-store'\)/);
+  assert.equal(
+    (availabilityRoute.match(/FrameworkNextResponse\.json/g) || []).length,
+    1,
+    'availability must not bypass its structural non-cacheable response boundary',
+  );
+  assert.match(
+    availabilityRoute,
+    /catch \{[\s\S]*?console\.error\('availability_check_failed'\);[\s\S]*?return unavailableAvailability\(\);[\s\S]*?\} finally \{[\s\S]*?releaseAvailability\?\.\(\)/,
+  );
+});
+
 test('consented Meta PageView measurement follows App Router navigation', () => {
   assert.match(metaConsent, /usePathname/);
   assert.match(metaConsent, /const pathname = usePathname\(\)/);
