@@ -5938,8 +5938,16 @@ test('authenticated health readiness separates shared release controls from prod
   // require at least one complete checkout path. A restored process with
   // shared configuration but no saleable product is not a successful sales
   // recovery and must retain its recovery artifact for operator action.
-  assert.equal((deployScript.match(/result\.salesReady!==true/g) || []).length, 4);
-  assert.doesNotMatch(deployScript, /result\.launchReady!==true\|\|result\.service!=='qy-roam'/);
+  assert.equal((deployScript.match(/node scripts\/validate-sales-readiness\.mjs/g) || []).length, 4);
+  const readinessValidator = fs.readFileSync(require.resolve('./validate-sales-readiness.mjs'), 'utf8');
+  assert.match(readinessValidator, /result\.service !== 'qy-roam'/);
+  assert.match(readinessValidator, /result\.ok !== true/);
+  assert.match(readinessValidator, /result\.launchReady !== true/);
+  assert.match(readinessValidator, /result\.salesReady !== true/);
+  assert.match(readinessValidator, /typeof esim !== 'boolean'/);
+  assert.match(readinessValidator, /typeof pocketWifi !== 'boolean'/);
+  assert.match(readinessValidator, /esim !== true && pocketWifi !== true/);
+  assert.match(readinessValidator, /result\.checkoutReady !== \(esim && pocketWifi\)/);
   assert.doesNotMatch(healthRoute, /const coreReady/);
   // Checkout redirects customers to the server-created Stripe-hosted Session
   // URL and never uses Stripe.js. A stale or absent browser publishable key

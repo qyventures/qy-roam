@@ -147,7 +147,7 @@ assert.match(deploy, /if \[\[ "\$cutover_attempted" -eq 0 \]\]; then/);
 assert.match(deploy, /qyroam-rollback-health/);
 assert.match(
   deploy,
-  /rollback_health_header[\s\S]*?result\.launchReady!==true\|\|result\.salesReady!==true\|\|result\.service!==['"]qy-roam['"]/,
+  /rollback_health_header[\s\S]*?node scripts\/validate-sales-readiness\.mjs/,
   'automatic rollback must not report recovery when every checkout is blocked',
 );
 assert.match(deploy, /rollback_ready=0/);
@@ -177,7 +177,7 @@ assert.match(deploy, /http:\/\/127\.0\.0\.1:\$\{smoke_port\}\/api\/health/);
 assert.match(deploy, /smoke_health_header=/);
 assert.match(deploy, /chmod 600 "\$smoke_log" "\$smoke_health_header"/);
 assert.match(deploy, /curl --header "@\$smoke_health_header" --fail --silent --show-error --max-time "\$READINESS_CURL_TIMEOUT_SECONDS"/);
-assert.match(deploy, /result\.launchReady!==true\|\|result\.salesReady!==true\|\|result\.service!=='qy-roam'/);
+assert.equal((deploy.match(/node scripts\/validate-sales-readiness\.mjs/g) || []).length, 4);
 assert.match(deploy, /Built QY Roam artifact failed its isolated startup smoke test/);
 assert.match(standalonePackager, /resolve\(root, 'public'\)/);
 assert.match(standalonePackager, /resolve\(root, distDir, 'static'\)/);
