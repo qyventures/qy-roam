@@ -3456,6 +3456,12 @@ begin
 end;
 $$;
 
+-- Trigger functions receive PUBLIC execute by default even though they are
+-- intended to run only through their table trigger. This function writes CRM
+-- records with the owner's privileges, so keep direct invocation unavailable
+-- to API roles just like the helper it calls.
+revoke all on function public.qy_reconcile_customer_from_paid_order() from public;
+
 -- An UPDATE matters as much as an INSERT: delayed payment methods first
 -- create an awaiting-payment order and become a customer only when Stripe
 -- later confirms payment. Re-running this trigger on a duplicate paid event
@@ -3551,7 +3557,9 @@ as $$
   -- Stripe event before its first claim-owned processing attempt.
   -- Version 53 makes delivery retry counts and failure evidence writable only
   -- through the provider-attempt claim/failure state machine.
-  select 53;
+  -- Version 54 removes the default PUBLIC execution privilege from the
+  -- owner-privileged paid-order CRM reconciliation trigger.
+  select 54;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;

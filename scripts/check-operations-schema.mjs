@@ -468,6 +468,63 @@ assert.throws(
   /Duplicate CREATE FUNCTION declaration/,
 );
 
+// SECURITY DEFINER changes the effective database role and therefore must
+// never inherit a caller-controlled search_path or PostgreSQL's default
+// PUBLIC execute privilege. Keep this invariant structural for every current
+// and future privileged function, instead of relying on a hand-maintained
+// list of the RPCs that happen to be called by today's application.
+export function validateSecurityDefinerFunctions(sql) {
+  const source = sql
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/--[^\r\n]*/g, ' ');
+  const declaration = /\bcreate\s+(?:or\s+replace\s+)?function\s+([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\s*\([\s\S]*?\)\s*returns\b[\s\S]*?\bas\s+(\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$)[\s\S]*?\2\s*;/gi;
+
+  for (const match of source.matchAll(declaration)) {
+    const statement = match[0];
+    if (!/\bsecurity\s+definer\b/i.test(statement)) continue;
+
+    assert.match(
+      statement,
+      /\bset\s+search_path\s*=\s*[A-Za-z_][A-Za-z0-9_$]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_$]*)*\b/i,
+      `SECURITY DEFINER function ${match[1]} must set an explicit search_path`,
+    );
+
+    const escapedName = match[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const revoke = new RegExp(
+      `\\brevoke\\s+all\\s+on\\s+function\\s+${escapedName}\\s*\\([^;]*\\)\\s+from\\s+public\\s*;`,
+      'i',
+    );
+    assert.match(
+      source,
+      revoke,
+      `SECURITY DEFINER function ${match[1]} must revoke execution from PUBLIC`,
+    );
+  }
+}
+
+validateSecurityDefinerFunctions(schema);
+validateSecurityDefinerFunctions(`
+  create function public.example(p_value integer) returns integer
+  language sql security definer set search_path = pg_catalog, public
+  as $$ select p_value; $$;
+  revoke all on function public.example(integer) from public;
+`);
+assert.throws(
+  () => validateSecurityDefinerFunctions(`
+    create function public.example() returns integer language sql security definer
+    as $$ select 1; $$;
+    revoke all on function public.example() from public;
+  `),
+  /must set an explicit search_path/,
+);
+assert.throws(
+  () => validateSecurityDefinerFunctions(`
+    create function public.example() returns integer language sql security definer
+    set search_path = pg_catalog as $$ select 1; $$;
+  `),
+  /must revoke execution from PUBLIC/,
+);
+
 // Column upgrades, constraint replacement and RLS activation are expressed
 // through top-level ALTER TABLE statements throughout this clean-install
 // schema. The more specific ADD CONSTRAINT validator below cannot see a
@@ -1030,5 +1087,5 @@ assert.match(
 );
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure and terminators, table, index, trigger, view, function, ALTER TABLE, constraint and privilege declarations, function parameters, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
+  console.log(`Operations schema guard passed for ${requiredContracts.length} admin contracts, PL/pgSQL structure and terminators, table, index, trigger, view, function, ALTER TABLE, constraint and privilege declarations, SECURITY DEFINER isolation, function parameters, conflict-update assignments, RETURNING clauses, and clean-install dependency order.`);
 }
