@@ -1,13 +1,48 @@
-import { readFile } from 'node:fs/promises';
+import { open } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
+
+// The authenticated health document is currently well below 2 KiB. Keep the
+// release authority bounded even when a broken proxy, compromised upstream,
+// or accidentally supplied file returns an unlimited body. The chunk ceiling
+// also prevents a pathological stream from making the validator spend
+// unbounded per-chunk bookkeeping work inside the byte limit.
+export const SALES_READINESS_MAX_INPUT_BYTES = 64 * 1024;
+export const SALES_READINESS_MAX_INPUT_CHUNKS = 256;
+
+export async function readBoundedSalesReadinessInput(source) {
+  const chunks = [];
+  let total = 0;
+  let chunkCount = 0;
+  for await (const value of source) {
+    chunkCount += 1;
+    if (chunkCount > SALES_READINESS_MAX_INPUT_CHUNKS) {
+      throw new RangeError('Sales readiness input is too fragmented');
+    }
+    const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+    total += chunk.byteLength;
+    if (total > SALES_READINESS_MAX_INPUT_BYTES) {
+      throw new RangeError('Sales readiness input is too large');
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks, total).toString('utf8');
+}
 
 async function input() {
   const path = process.argv[2];
-  if (path) return readFile(path, 'utf8');
+  if (path) {
+    const file = await open(path, 'r');
+    try {
+      return await readBoundedSalesReadinessInput(file.createReadStream({
+        autoClose: false,
+        highWaterMark: Math.min(16 * 1024, SALES_READINESS_MAX_INPUT_BYTES + 1),
+      }));
+    } finally {
+      await file.close();
+    }
+  }
 
-  const chunks = [];
-  for await (const chunk of process.stdin) chunks.push(chunk);
-  return Buffer.concat(chunks).toString('utf8');
+  return readBoundedSalesReadinessInput(process.stdin);
 }
 
 function plainRecord(value) {

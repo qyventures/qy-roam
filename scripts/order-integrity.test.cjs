@@ -5961,8 +5961,11 @@ test('authenticated health readiness separates shared release controls from prod
 
 test('deployment readiness validator proves detailed evidence for every saleable product', async () => {
   const {
+    SALES_READINESS_MAX_INPUT_BYTES,
+    SALES_READINESS_MAX_INPUT_CHUNKS,
     SALES_READINESS_MAX_AGE_MS,
     SALES_READINESS_MAX_FUTURE_SKEW_MS,
+    readBoundedSalesReadinessInput,
     salesReadinessResponseIsValid: validate,
   } = await import('./validate-sales-readiness.mjs');
   const now = Date.parse('2026-10-19T01:30:00.000Z');
@@ -6033,6 +6036,28 @@ test('deployment readiness validator proves detailed evidence for every saleable
   assert.equal(validate({ ...wifiOnly, timestamp: 'not-an-instant' }, now), false);
   assert.equal(validate({ ...wifiOnly, timestamp: 123 }, now), false);
   assert.equal(validate(wifiOnly, Number.NaN), false);
+
+  assert.equal(
+    await readBoundedSalesReadinessInput([Buffer.from('{"ok":true}')]),
+    '{"ok":true}',
+  );
+  assert.equal(
+    (await readBoundedSalesReadinessInput([
+      Buffer.alloc(SALES_READINESS_MAX_INPUT_BYTES - 1, 0x20),
+      Buffer.from('\n'),
+    ])).length,
+    SALES_READINESS_MAX_INPUT_BYTES,
+  );
+  await assert.rejects(
+    readBoundedSalesReadinessInput([Buffer.alloc(SALES_READINESS_MAX_INPUT_BYTES + 1)]),
+    /too large/,
+  );
+  await assert.rejects(
+    readBoundedSalesReadinessInput(
+      Array.from({ length: SALES_READINESS_MAX_INPUT_CHUNKS + 1 }, () => Buffer.alloc(0)),
+    ),
+    /too fragmented/,
+  );
 });
 
 test('authenticated readiness checks fail fast under concurrency and release every slot', () => {
