@@ -99,6 +99,7 @@ const { saleablePocketWifiInventory: scanSaleablePocketWifiInventory } = require
 const { retryableStripeConfirmationFailure } = require('../lib/confirmationLookupFailure.ts');
 const { CONFIRMATION_REFRESH_INITIAL_DELAY_MS, CONFIRMATION_REFRESH_MAX_DELAY_MS, CONFIRMATION_REFRESH_MAX_ATTEMPTS, confirmationRefreshDelayMs } = require('../lib/confirmationRefresh.ts');
 const { formatSingaporeDate, formatSingaporeTimestamp } = require('../lib/singaporeTimestamp.ts');
+const { customerOrderReference } = require('../lib/customerOrderReference.ts');
 
 test('inventory mutation conflicts are actionable without exposing database failures', () => {
   assert.deepEqual(
@@ -170,6 +171,22 @@ const metaClient = fs.readFileSync(require.resolve('../lib/metaClient.ts'), 'utf
 const stripeClient = fs.readFileSync(require.resolve('../lib/stripeClient.ts'), 'utf8');
 const metaAttribution = fs.readFileSync(require.resolve('../lib/metaAttribution.ts'), 'utf8');
 const adminPage = fs.readFileSync(require.resolve('../app/admin/page.tsx'), 'utf8');
+
+test('customer and operations views share a safe non-capability support reference', () => {
+  const sessionId = 'cs_live_customer_support_reference_example';
+  const reference = customerOrderReference(sessionId);
+  assert.match(reference, /^QYR-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/);
+  assert.equal(customerOrderReference(sessionId), reference);
+  assert.notEqual(customerOrderReference(`${sessionId}2`), reference);
+  assert.equal(customerOrderReference('short'), null);
+  assert.equal(customerOrderReference('cs_live_bad reference'), null);
+  assert.doesNotMatch(reference, /cs_live|customer|support/i);
+  for (const page of [successPage, bookingPage]) {
+    assert.match(page, /customerOrderReference\(sessionId\)/);
+    assert.match(page, /Support reference:<\/strong> <code>\{orderReference\}<\/code>/);
+  }
+  assert.match(adminPage, /const supportReference = customerOrderReference\(o\.stripe_session_id\)/);
+});
 const inventoryPage = fs.readFileSync(require.resolve('../app/admin/inventory/page.tsx'), 'utf8');
 const reportsPage = fs.readFileSync(require.resolve('../app/admin/reports/page.tsx'), 'utf8');
 const crmPage = fs.readFileSync(require.resolve('../app/admin/crm/page.tsx'), 'utf8');

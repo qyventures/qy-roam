@@ -9,6 +9,7 @@ import OrderConfirmationRefresh from '@/components/OrderConfirmationRefresh';
 import { durableOrderMatchesFailedSession, durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 import { tryAcquireConfirmationConcurrency } from '@/lib/confirmationConcurrency';
 import { retryableStripeConfirmationFailure } from '@/lib/confirmationLookupFailure';
+import { customerOrderReference } from '@/lib/customerOrderReference';
 
 export const dynamic = 'force-dynamic';
 export const metadata = {
@@ -21,6 +22,7 @@ type Props = {
 
 export default async function SuccessPage({ searchParams }: Props) {
   const sessionId = validStripeCheckoutSessionId(searchParams?.session_id);
+  const orderReference = customerOrderReference(sessionId);
   const key = process.env.STRIPE_SECRET_KEY?.trim();
 
   let paid = false;
@@ -180,6 +182,7 @@ export default async function SuccessPage({ searchParams }: Props) {
       <h1>{orderPersisted ? 'Thank you — your QY Roam order is confirmed.' : 'Thank you — your payment is confirmed.'}</h1>
       {!orderPersisted && <OrderConfirmationRefresh />}
       {(destination || planName) && <p><strong>{planName || destination}</strong>{start && end ? ` · ${start} to ${end}` : ''}{amount ? ` · ${amount}` : ''}</p>}
+      {orderReference && <p><strong>Support reference:</strong> <code>{orderReference}</code></p>}
       {isEsim ? (
         <>
           {orderPersisted ? (

@@ -8,6 +8,7 @@ import { POCKET_WIFI_RETURN_GRACE_DAYS } from '@/lib/pocketWifiReturns';
 import { stripeSecretKeyMode } from '@/lib/stripeCheckoutConfig';
 import { tryAcquireAdminDashboardConcurrency } from '@/lib/adminDashboardConcurrency';
 import { formatSingaporeDate, formatSingaporeTimestamp } from '@/lib/singaporeTimestamp';
+import { customerOrderReference } from '@/lib/customerOrderReference';
 
 export const dynamic = 'force-dynamic';
 
@@ -461,8 +462,9 @@ async function renderAdminPage() {
             (fulfilmentNotificationActionable(o.product_type, o.fulfilment_status) && notification?.status !== 'sent') ||
             (metaCapiConfigured && o.measurement_consent === 'accepted' && metaDelivery?.status !== 'sent')
           );
+          const supportReference = customerOrderReference(o.stripe_session_id);
           return <tr id={`order-${o.id}`} key={o.id} style={{borderTop:'1px solid #e5e8ed',verticalAlign:'top'}}>
-            <td style={{padding:'14px 10px',maxWidth:220}}><code style={{overflowWrap:'anywhere'}}>{String(o.stripe_session_id || o.id)}</code><br/><small>{formatSingaporeTimestamp(o.created_at)} SGT</small></td>
+            <td style={{padding:'14px 10px',maxWidth:220}}>{supportReference && <><strong>{supportReference}</strong><br/></>}<code style={{overflowWrap:'anywhere'}}>{String(o.stripe_session_id || o.id)}</code><br/><small>{formatSingaporeTimestamp(o.created_at)} SGT</small></td>
             <td style={{padding:'14px 8px'}}>{o.customer_name || '-'}<br/><small>{o.phone || '-'}</small>{o.email && <><br/><small>{o.email}</small></>}</td>
             <td style={{padding:'14px 8px'}}><strong>{product}</strong>{o.plan_name && <><br/><small>{o.plan_name}</small></>}{isEsim(o) && o.plan_id && <><br/><small>Plan ID: {o.plan_id}</small></>}{isEsim(o) && o.data_allowance && <><br/><small>Data: {o.data_allowance}</small></>}<br/>{o.country || '-'}<br/><small>{o.travel_start || '-'} → {o.travel_end || '-'}</small>{flag && <><br/><small><strong>{flag}</strong></small></>}</td>
             <td style={{padding:'14px 8px'}}>{o.payment_status || '-'}<br/><small>{o.payment_status === 'paid' ? `${formatSingaporeTimestamp(o.payment_confirmed_at)} SGT` : 'Not confirmed'}</small></td>

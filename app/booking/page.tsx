@@ -12,6 +12,7 @@ import { custodyReferenceIssue, normalizeCustodyReference } from '@/lib/custodyR
 import { tryAcquireConfirmationConcurrency } from '@/lib/confirmationConcurrency';
 import OrderConfirmationRefresh from '@/components/OrderConfirmationRefresh';
 import { retryableStripeConfirmationFailure } from '@/lib/confirmationLookupFailure';
+import { customerOrderReference } from '@/lib/customerOrderReference';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,6 +42,7 @@ const statusLabels: Record<string, string> = {
 
 export default async function BookingPage({ searchParams }: Props) {
   const sessionId = validStripeCheckoutSessionId(searchParams?.session_id);
+  const orderReference = customerOrderReference(sessionId);
   const key = process.env.STRIPE_SECRET_KEY?.trim();
 
   // A customer-facing status page must not become a test-mode Stripe session
@@ -173,6 +175,7 @@ export default async function BookingPage({ searchParams }: Props) {
         <span className="eyebrow">Order status</span>
         <h1>{checkoutExpired ? 'This secure checkout session has expired' : paymentFailed ? 'Payment unsuccessful' : paid ? statusLabels[fulfilment] || 'Order confirmed' : 'Payment not yet confirmed'}</h1>
         <p><strong>{planName}</strong>{start && end ? ` · ${start} to ${end}` : ''}{amount ? ` · ${amount}` : ''}</p>
+        {orderReference && <p><strong>Support reference:</strong> <code>{orderReference}</code></p>}
 
         {checkoutExpired ? (
           <p>No payment was completed for this session. Return to the plans page to start a new secure checkout.</p>
