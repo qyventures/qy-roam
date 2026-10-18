@@ -1158,6 +1158,18 @@ begin
   -- matches the terminal timestamp boundary below without making normal
   -- application/database clock skew an operational incident.
   if tg_op = 'INSERT' then
+    -- New rows must represent the first live claim, never a pre-settled or
+    -- pre-failed event. A service-role import that can insert `processed_at`
+    -- could otherwise occupy a genuine Stripe event id before delivery and
+    -- make qy_claim_stripe_event acknowledge the real payment as a duplicate.
+    -- Recovery still goes through the claim RPC, then the claim-owned failure
+    -- or settlement RPC, preserving the same state machine as the webhook.
+    if new.attempts <> 1
+      or new.processed_at is not null
+      or new.last_failed_at is not null
+      or new.last_error is not null then
+      raise exception 'new Stripe event must begin as an active first claim';
+    end if;
     if new.received_at > clock_timestamp() + interval '1 day' then
       raise exception 'invalid Stripe event receipt time';
     end if;
@@ -3509,7 +3521,9 @@ as $$
   -- transition for both supported RPC writes and direct service-role writes.
   -- Version 51 makes Stripe event receipt time a bounded, immutable part of
   -- the durable idempotency identity, including direct service-role writes.
-  select 51;
+  -- Version 52 prevents a direct insert from pre-settling or pre-failing a
+  -- Stripe event before its first claim-owned processing attempt.
+  select 52;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
