@@ -1505,6 +1505,14 @@ begin
   if new.attempts < old.attempts then
     raise exception 'delivery ledger attempts cannot decrease';
   end if;
+  -- Retry counts are audit evidence for actual provider hand-off attempts.
+  -- They may advance only while acquiring the sending lease; a direct
+  -- service-role update must not fabricate attempts while the row remains
+  -- pending (or while settling it sent). At the integer ceiling the count is
+  -- intentionally unchanged and the fresh last_attempt_at remains the lease.
+  if new.attempts is distinct from old.attempts and new.status <> 'sending' then
+    raise exception 'delivery attempts can change only while claiming a send';
+  end if;
   if new.last_attempt_at is distinct from old.last_attempt_at
     and new.status <> 'sending' then
     raise exception 'delivery attempt time can change only while claiming a send';
@@ -1538,6 +1546,15 @@ begin
   if new.last_error is not null and (new.status <> 'pending' or new.attempts <= 0) then
     raise exception 'delivery failure requires a completed failed attempt';
   end if;
+  -- Failure evidence belongs to the attempt that just released its sending
+  -- lease. It may be written on sending -> pending and cleared on the next
+  -- pending -> sending claim, but must not be edited in place by repair SQL.
+  if new.last_error is distinct from old.last_error and not (
+    (old.status = 'sending' and new.status = 'pending' and new.last_error is not null)
+    or (old.status = 'pending' and new.status = 'sending' and new.last_error is null)
+  ) then
+    raise exception 'delivery failure evidence can change only on failure or reclaim';
+  end if;
   return new;
 end;
 $$;
@@ -1570,6 +1587,9 @@ begin
   if new.attempts < old.attempts then
     raise exception 'delivery ledger attempts cannot decrease';
   end if;
+  if new.attempts is distinct from old.attempts and new.status <> 'sending' then
+    raise exception 'delivery attempts can change only while claiming a send';
+  end if;
   if new.last_attempt_at is distinct from old.last_attempt_at
     and new.status <> 'sending' then
     raise exception 'delivery attempt time can change only while claiming a send';
@@ -1599,6 +1619,12 @@ begin
   end if;
   if new.last_error is not null and (new.status <> 'pending' or new.attempts <= 0) then
     raise exception 'delivery failure requires a completed failed attempt';
+  end if;
+  if new.last_error is distinct from old.last_error and not (
+    (old.status = 'sending' and new.status = 'pending' and new.last_error is not null)
+    or (old.status = 'pending' and new.status = 'sending' and new.last_error is null)
+  ) then
+    raise exception 'delivery failure evidence can change only on failure or reclaim';
   end if;
   if old.event_time is not null and new.event_time is distinct from old.event_time then
     raise exception 'Meta Purchase event time is immutable after assignment';
@@ -3523,7 +3549,9 @@ as $$
   -- the durable idempotency identity, including direct service-role writes.
   -- Version 52 prevents a direct insert from pre-settling or pre-failing a
   -- Stripe event before its first claim-owned processing attempt.
-  select 52;
+  -- Version 53 makes delivery retry counts and failure evidence writable only
+  -- through the provider-attempt claim/failure state machine.
+  select 53;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
