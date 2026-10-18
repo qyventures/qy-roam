@@ -91,7 +91,7 @@ function historicalEsimSnapshotIsConsistent(session: Stripe.Checkout.Session) {
  * session can also be created manually in a shared Stripe account. The source
  * marker alone must therefore not be enough to persist or fulfil an order.
  */
-export function validateQyRoamSession(session: Stripe.Checkout.Session): QyRoamSessionValidation {
+function validateQyRoamSessionSnapshot(session: Stripe.Checkout.Session): QyRoamSessionValidation {
   const productType = qyRoamProductType(session);
   if (!productType) return { valid: false, reason: 'unknown QY Roam product identity' };
   // QY Roam sells one-time travel products. The metadata HMAC authenticates
@@ -111,15 +111,6 @@ export function validateQyRoamSession(session: Stripe.Checkout.Session): QyRoamS
   // transition that our lifecycle understands.
   if (session.payment_status !== 'paid' && session.payment_status !== 'unpaid') {
     return { valid: false, reason: 'QY Roam order has an unsupported payment status' };
-  }
-  // Both checkout routes make the published terms mandatory. Treat Stripe's
-  // resulting acceptance record as part of the order authority, rather than
-  // assuming that a `complete`/`paid` state alone proves consent. This keeps
-  // webhook fulfilment, customer confirmation, and admin recovery closed if
-  // a future Checkout configuration regression omits the required consent or
-  // Stripe returns an incomplete Session shape at one of those boundaries.
-  if (session.consent?.terms_of_service !== 'accepted') {
-    return { valid: false, reason: 'QY Roam order is missing terms acceptance' };
   }
   if (!validCheckoutRequestId(session.metadata?.checkout_request_id)) {
     return { valid: false, reason: 'missing or invalid checkout request id' };
@@ -219,4 +210,26 @@ export function validateQyRoamSession(session: Stripe.Checkout.Session): QyRoamS
   }
 
   return { valid: true, productType };
+}
+
+/**
+ * Validate a terminal unpaid Session before recording its failure/expiry.
+ * A shopper can abandon Checkout before reaching Stripe's terms checkbox, so
+ * an authentic expired Session is not expected to carry accepted consent.
+ * The commercial identity, amount, product, and provenance remain mandatory;
+ * callers must independently prove the terminal unpaid Stripe event state.
+ */
+export function validateQyRoamTerminalUnpaidSession(session: Stripe.Checkout.Session): QyRoamSessionValidation {
+  return validateQyRoamSessionSnapshot(session);
+}
+
+export function validateQyRoamSession(session: Stripe.Checkout.Session): QyRoamSessionValidation {
+  // Every order or entitlement boundary requires the published terms. Keep
+  // this stricter public validator as the default for paid/unpaid completion,
+  // customer confirmation, and admin recovery. Only authenticated terminal
+  // unpaid cleanup uses the explicitly named validator above.
+  if (session.consent?.terms_of_service !== 'accepted') {
+    return { valid: false, reason: 'QY Roam order is missing terms acceptance' };
+  }
+  return validateQyRoamSessionSnapshot(session);
 }

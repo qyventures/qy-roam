@@ -5,7 +5,7 @@ import crypto from 'crypto';
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { sendSmtpMail, smtpSecureTransport } from '@/lib/smtp';
 import { getMetaCapiToken, hasRequiredMetaCapiPurchaseConfig, metaPixelId } from '@/lib/runtimeConfig';
-import { validateQyRoamSession } from '@/lib/qyRoamSession';
+import { validateQyRoamSession, validateQyRoamTerminalUnpaidSession } from '@/lib/qyRoamSession';
 import { validCheckoutRequestId } from '@/lib/checkoutValidation';
 import { hasOrderIntegritySigningConfig, validQyRoamProvenance } from '@/lib/orderProvenance';
 import { hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '@/lib/productionReadiness';
@@ -1077,7 +1077,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
       // Pocket WiFi the RPC also removes only the Session-linked reservation
       // while holding the global inventory lock, eliminating a release/write
       // gap in which another checkout could consume the same capacity.
-      const validation=validateQyRoamSession(session);
+      const validation=validateQyRoamTerminalUnpaidSession(session);
       if(!validation.valid) throw new Error(`Order integrity validation failed: ${validation.reason}`);
       await persistSession(session,event.type,expiryEventCreated);
       await settleStripeEvent(supabase,eventClaimId,claimStartedAt);

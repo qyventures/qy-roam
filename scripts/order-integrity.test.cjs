@@ -23,7 +23,7 @@ require.extensions['.ts'] = (module, filename) => {
 
 const { ESIM_PLANS, ESIM_PROMO, esimPromoIsActive } = require('../lib/esimPlans.ts');
 const { LAUNCH_PROMO, applyPromoCents, promoIsActive } = require('../lib/promotions.ts');
-const { validateQyRoamSession } = require('../lib/qyRoamSession.ts');
+const { validateQyRoamSession, validateQyRoamTerminalUnpaidSession } = require('../lib/qyRoamSession.ts');
 const { parseExactIsoDate, validCheckoutRequestId } = require('../lib/checkoutValidation.ts');
 const { operationalIsoDate, operationalIsoDateAfter, operationalDaysFromToday } = require('../lib/operationalDate.ts');
 const { POCKET_WIFI_RETURN_GRACE_DAYS } = require('../lib/pocketWifiReturns.ts');
@@ -2298,6 +2298,24 @@ test('requires Stripe-recorded terms acceptance at every trusted order boundary'
   assert.match(successPage, /validateQyRoamSession\(session\)/);
   assert.match(bookingPage, /validateQyRoamSession\(session\)/);
   assert.match(adminOrderRoute, /validateQyRoamSession\(session\)/);
+});
+
+test('terminal unpaid cleanup authenticates abandoned sessions without inventing terms acceptance', () => {
+  for (const session of [esimSession(ESIM_PLANS[0]), wifiSession(WIFI_PLANS[0])]) {
+    session.status = 'expired';
+    session.payment_status = 'unpaid';
+    delete session.consent;
+    assert.equal(validateQyRoamSession(session).valid, false,
+      'an abandoned session must never become a customer order');
+    assert.deepEqual(validateQyRoamTerminalUnpaidSession(session), {
+      valid: true,
+      productType: session.metadata.product_type,
+    });
+  }
+
+  const expiryBranch = webhookRoute.slice(webhookRoute.indexOf("if(event.type==='checkout.session.expired')"));
+  assert.match(expiryBranch, /validateQyRoamTerminalUnpaidSession\(session\)/);
+  assert.doesNotMatch(expiryBranch, /validateQyRoamSession\(session\)/);
 });
 
 test('Pocket WiFi payment capabilities must collect the fulfilment details required after charge', () => {
@@ -7612,7 +7630,7 @@ test('Supabase order-critical requests use a bounded shared transport', async ()
 
 test('expired authenticated sessions persist a terminal order before acknowledging Stripe', () => {
   const expiryBranch = webhookRoute.slice(webhookRoute.indexOf("if(event.type==='checkout.session.expired')"));
-  assert.match(expiryBranch, /const validation=validateQyRoamSession\(session\)/);
+  assert.match(expiryBranch, /const validation=validateQyRoamTerminalUnpaidSession\(session\)/);
   assert.match(expiryBranch, /await persistSession\(session,event\.type,expiryEventCreated\)/);
   assert.ok(
     expiryBranch.indexOf('await persistSession(session,event.type,expiryEventCreated)') <
