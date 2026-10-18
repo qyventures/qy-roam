@@ -477,7 +477,21 @@ export function validateSecurityDefinerFunctions(sql) {
   const source = sql
     .replace(/\/\*[\s\S]*?\*\//g, ' ')
     .replace(/--[^\r\n]*/g, ' ');
-  const declaration = /\bcreate\s+(?:or\s+replace\s+)?function\s+([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\s*\([\s\S]*?\)\s*returns\b[\s\S]*?\bas\s+(\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$)[\s\S]*?\2\s*;/gi;
+  const declaration = /\bcreate\s+(?:or\s+replace\s+)?function\s+([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\s*\(([\s\S]*?)\)\s*returns\b[\s\S]*?\bas\s+(\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$)[\s\S]*?\3\s*;/gi;
+
+  function canonicalArgumentTypes(argumentsSql) {
+    if (!argumentsSql.trim()) return '';
+    // Current schema RPC declarations use the conventional `name type`
+    // form with optional DEFAULT expressions. Keep the parser deliberately
+    // strict so an unsupported declaration cannot make a privilege check
+    // appear stronger than it is.
+    return argumentsSql.split(',').map((argument) => {
+      const withoutDefault = argument.replace(/\s+default\s+[\s\S]*$/i, '').trim();
+      const parameter = withoutDefault.match(/^[A-Za-z_][A-Za-z0-9_$]*\s+(.+)$/);
+      assert.ok(parameter, 'SECURITY DEFINER function has an unsupported argument declaration');
+      return parameter[1].replace(/\s+/g, ' ').trim().toLowerCase();
+    }).join(',');
+  }
 
   for (const match of source.matchAll(declaration)) {
     const statement = match[0];
@@ -490,8 +504,13 @@ export function validateSecurityDefinerFunctions(sql) {
     );
 
     const escapedName = match[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const argumentTypes = canonicalArgumentTypes(match[2]);
+    const escapedArgumentTypes = argumentTypes
+      .split(',')
+      .map((type) => type.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\ /g, '\\s+'))
+      .join('\\s*,\\s*');
     const revoke = new RegExp(
-      `\\brevoke\\s+all\\s+on\\s+function\\s+${escapedName}\\s*\\([^;]*\\)\\s+from\\s+public\\s*;`,
+      `\\brevoke\\s+all\\s+on\\s+function\\s+${escapedName}\\s*\\(\\s*${escapedArgumentTypes}\\s*\\)\\s+from\\s+public\\s*;`,
       'i',
     );
     assert.match(
@@ -521,6 +540,16 @@ assert.throws(
   () => validateSecurityDefinerFunctions(`
     create function public.example() returns integer language sql security definer
     set search_path = pg_catalog as $$ select 1; $$;
+  `),
+  /must revoke execution from PUBLIC/,
+);
+assert.throws(
+  () => validateSecurityDefinerFunctions(`
+    create function public.example(p_value integer) returns integer language sql security definer
+    set search_path = pg_catalog as $$ select p_value; $$;
+    create function public.example(p_value text) returns text language sql security definer
+    set search_path = pg_catalog as $$ select p_value; $$;
+    revoke all on function public.example(integer) from public;
   `),
   /must revoke execution from PUBLIC/,
 );
