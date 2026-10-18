@@ -7052,6 +7052,21 @@ test('failed third-party deliveries do not wait for an unused provider response 
   assert.match(deliveryClient, /return \{ok:true,status:response\.status,responseBody\}/);
 });
 
+test('paid-order delivery acknowledgements require an explicit JSON media type', () => {
+  const deliveryClient = webhookRoute.slice(
+    webhookRoute.indexOf('const MAX_DELIVERY_RESPONSE_BODY_BYTES'),
+    webhookRoute.indexOf('function metaPurchaseEligible'),
+  );
+  assert.match(deliveryClient, /const MAX_DELIVERY_CONTENT_TYPE_HEADER_LENGTH=256/);
+  assert.match(deliveryClient, /value\.length<=MAX_DELIVERY_CONTENT_TYPE_HEADER_LENGTH/);
+  assert.match(deliveryClient, /value\.split\(';',1\)\[0\]\.trim\(\)\.toLowerCase\(\)==='application\/json'/);
+
+  const successBoundary = deliveryClient.indexOf('if(!hasJsonDeliveryContentType(response.headers.get(\'content-type\')))');
+  const bodyRead = deliveryClient.indexOf('await readDeliveryResponseBody(response,deadline)');
+  assert.ok(successBoundary >= 0 && successBoundary < bodyRead);
+  assert.match(deliveryClient, /controller\.abort\(error\);\s*void response\.body\?\.cancel\(error\)\.catch\(\(\)=>undefined\);\s*throw error/);
+});
+
 test('paid-order delivery endpoints are fail-closed and never follow credential-bearing redirects', () => {
   // A relay typo must stop checkout before a customer pays, rather than
   // failing only when the webhook tries to send fulfilment data. Redirects

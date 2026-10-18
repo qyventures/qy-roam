@@ -223,6 +223,12 @@ function deliveryLeaseIsStale(updatedAt: string | null | undefined) {
 // need a short diagnostic snippet for the retry record.
 const MAX_DELIVERY_RESPONSE_BODY_BYTES=64 * 1024;
 const MAX_DELIVERY_RESPONSE_BODY_CHUNKS=1_024;
+const MAX_DELIVERY_CONTENT_TYPE_HEADER_LENGTH=256;
+
+function hasJsonDeliveryContentType(value:string|null) {
+  return Boolean(value&&value.length<=MAX_DELIVERY_CONTENT_TYPE_HEADER_LENGTH&&
+    value.split(';',1)[0].trim().toLowerCase()==='application/json');
+}
 
 async function readDeliveryResponseBody(response: Response, deadline: Promise<never>) {
   let contentLength:number|null;
@@ -335,6 +341,18 @@ async function postJsonWithTimeout(url:string,body:unknown,timeoutMs=DELIVERY_TI
       controller.abort(new Error('Delivery provider rejected the request'));
       void response.body?.cancel().catch(()=>undefined);
       return {ok:false,status:response.status,responseBody:''};
+    }
+    // A successful status alone does not identify the response as the JSON
+    // acknowledgement contract expected from Meta or the fulfilment relay.
+    // A reverse-proxy fallback can return a 2xx HTML/text page, and its body
+    // must never be allowed to settle an irreversible paid-order delivery.
+    // Reject before reading, and tear down both fetch and body stream so a
+    // malformed success cannot retain the webhook worker until the deadline.
+    if(!hasJsonDeliveryContentType(response.headers.get('content-type'))) {
+      const error=new Error('Delivery provider returned a non-JSON response');
+      controller.abort(error);
+      void response.body?.cancel(error).catch(()=>undefined);
+      throw error;
     }
     // Consume the response while the deadline is still active. A provider that
     // sends successful headers and then stalls its required acknowledgement
