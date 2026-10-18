@@ -96,6 +96,17 @@ if [[ ! -f package-lock.json ]]; then
 fi
 npm ci --no-audit --no-fund
 
+# Dependency lifecycle scripts execute before the production artifact is
+# compiled. Even with a committed lockfile, a compromised or accidentally
+# stateful package script could rewrite application source or add a route that
+# was not present in the reviewed commit. Re-establish the clean-worktree
+# invariant after installation so only ignored dependency/build directories
+# may have changed before pricing, integrity, and compilation checks run.
+if [[ -n "$(git status --porcelain=v1 --untracked-files=normal)" ]]; then
+  echo "Refusing to deploy: dependency installation modified tracked or untracked repository files" >&2
+  exit 1
+fi
+
 # Keep the last built standalone artifact recoverable until the replacement
 # has passed its live-port readiness check. The isolated smoke test below
 # catches application/configuration failures, but it cannot detect a conflict

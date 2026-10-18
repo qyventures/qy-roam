@@ -34,6 +34,25 @@ assert.doesNotMatch(deploy, /git diff --cached --quiet/);
 assert.doesNotMatch(deploy, /git checkout\s/);
 assert.match(deploy, /npm ci --no-audit --no-fund/);
 assert.doesNotMatch(deploy, /npm install --no-audit --no-fund/);
+// npm lifecycle scripts run with repository write access. A locked dependency
+// graph is reproducible, but it does not prove those scripts leave the
+// reviewed application source untouched. Require a second complete worktree
+// check after installation and before any release validation or build.
+const installBoundary = deploy.indexOf('npm ci --no-audit --no-fund');
+const postInstallCleanBoundary = deploy.indexOf(
+  'dependency installation modified tracked or untracked repository files',
+);
+const releaseChecksBoundary = deploy.indexOf('npm run check:esim-pricing');
+assert.notEqual(postInstallCleanBoundary, -1, 'deployment must reject dependency-modified source');
+assert.equal(
+  (deploy.match(/git status --porcelain=v1 --untracked-files=normal/g) || []).length,
+  2,
+  'deployment must verify worktree provenance before and after dependency installation',
+);
+assert.ok(
+  installBoundary < postInstallCleanBoundary && postInstallCleanBoundary < releaseChecksBoundary,
+  'post-install provenance must be verified before release checks and compilation',
+);
 // Runtime secrets are loaded with shell `source`, so deployment-owned names
 // must be immutable first. Otherwise an innocently duplicated APP_DIR,
 // service, health URL, or artifact variable can redirect cleanup, rollback,
