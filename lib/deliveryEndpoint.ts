@@ -15,6 +15,19 @@ export function safeHttpsDeliveryEndpoint(value: string | null | undefined) {
     // literal. DNS policy is owned by deployment infrastructure, but refusing
     // literal addresses also makes the expected public relay boundary clear.
     const hostname = url.hostname.replace(/^\[|\]$/g, '');
+    const normalizedHostname = hostname.toLowerCase();
+    // WHATWG URL parsing preserves a terminal dot on DNS names. Without an
+    // explicit check, `localhost.` bypasses the localhost comparison while
+    // resolving to the same loopback host. Single-label and special-use DNS
+    // suffixes are likewise deployment-local rather than public relay names.
+    // Reject them here so both readiness and the eventual credential-bearing
+    // delivery enforce the public-service boundary they advertise.
+    const hasPublicDnsShape =
+      normalizedHostname.includes('.') &&
+      !normalizedHostname.endsWith('.') &&
+      !['local', 'internal', 'localhost', 'test', 'invalid', 'home.arpa'].some(
+        (suffix) => normalizedHostname === suffix || normalizedHostname.endsWith(`.${suffix}`),
+      );
     if (
       url.protocol !== 'https:' ||
       !hostname ||
@@ -23,8 +36,7 @@ export function safeHttpsDeliveryEndpoint(value: string | null | undefined) {
       url.search ||
       url.hash ||
       isIP(hostname) ||
-      hostname.toLowerCase() === 'localhost' ||
-      hostname.toLowerCase().endsWith('.localhost')
+      !hasPublicDnsShape
     ) return null;
     return url.toString();
   } catch {
