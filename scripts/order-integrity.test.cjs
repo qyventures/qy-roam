@@ -97,6 +97,7 @@ const { validatedForecastRow } = require('../lib/forecastRow.ts');
 const { META_ATTRIBUTION_METADATA_KEYS, stripeMeasurementConsentDowngrade } = require('../lib/stripeMeasurementConsent.ts');
 const { saleablePocketWifiInventory: scanSaleablePocketWifiInventory } = require('../lib/pocketWifiStock.ts');
 const { retryableStripeConfirmationFailure } = require('../lib/confirmationLookupFailure.ts');
+const { CONFIRMATION_REFRESH_INITIAL_DELAY_MS, CONFIRMATION_REFRESH_MAX_DELAY_MS, CONFIRMATION_REFRESH_MAX_ATTEMPTS, confirmationRefreshDelayMs } = require('../lib/confirmationRefresh.ts');
 const { formatSingaporeDate, formatSingaporeTimestamp } = require('../lib/singaporeTimestamp.ts');
 
 test('inventory mutation conflicts are actionable without exposing database failures', () => {
@@ -2673,9 +2674,9 @@ test('success confirmation does not imply fulfilment is durable before the paid 
 
 test('paid confirmation automatically reconciles a delayed durable order without polling forever', () => {
   assert.match(successPage, /!orderPersisted && <OrderConfirmationRefresh \/>/);
-  assert.match(orderConfirmationRefresh, /const REFRESH_INTERVAL_MS = 3_000/);
-  assert.match(orderConfirmationRefresh, /const MAX_REFRESH_ATTEMPTS = 20/);
-  assert.match(orderConfirmationRefresh, /attempts >= MAX_REFRESH_ATTEMPTS/);
+  assert.equal(CONFIRMATION_REFRESH_INITIAL_DELAY_MS, 3_000);
+  assert.equal(CONFIRMATION_REFRESH_MAX_ATTEMPTS, 20);
+  assert.match(orderConfirmationRefresh, /attempts >= CONFIRMATION_REFRESH_MAX_ATTEMPTS/);
   assert.match(orderConfirmationRefresh, /document\.visibilityState !== 'visible'/);
   assert.match(orderConfirmationRefresh, /router\.refresh\(\)/);
   assert.match(orderConfirmationRefresh, /Please do not place a second order|checking the secure order record automatically/);
@@ -8959,6 +8960,25 @@ test('customer confirmation preserves its retry budget while offline and resumes
   assert.match(orderConfirmationRefresh, /document\.visibilityState !== 'visible'/);
   assert.match(orderConfirmationRefresh, /refreshStarted \|\|/);
   assert.match(orderConfirmationRefresh, /attemptsRef\.current \+= 1;[\s\S]*setAttempts\(attemptsRef\.current\);[\s\S]*router\.refresh\(\)/);
+});
+
+test('customer confirmation retry backoff survives a complete overload window', () => {
+  const delays = Array.from(
+    { length: CONFIRMATION_REFRESH_MAX_ATTEMPTS },
+    (_, attempt) => confirmationRefreshDelayMs(attempt),
+  );
+  assert.equal(delays[0], CONFIRMATION_REFRESH_INITIAL_DELAY_MS);
+  assert.ok(delays.every((delay, index) =>
+    Number.isSafeInteger(delay) && delay >= CONFIRMATION_REFRESH_INITIAL_DELAY_MS &&
+    delay <= CONFIRMATION_REFRESH_MAX_DELAY_MS && (index === 0 || delay >= delays[index - 1])
+  ));
+  assert.ok(
+    delays.slice(0, -1).reduce((total, delay) => total + delay, 0) > CONFIRMATION_RATE_LIMIT_WINDOW_MS,
+    'the final retry must begin after a full middleware throttle window',
+  );
+  assert.equal(confirmationRefreshDelayMs(-1), CONFIRMATION_REFRESH_INITIAL_DELAY_MS);
+  assert.equal(confirmationRefreshDelayMs(Number.NaN), CONFIRMATION_REFRESH_INITIAL_DELAY_MS);
+  assert.match(orderConfirmationRefresh, /confirmationRefreshDelayMs\(attemptsRef\.current\)/);
 });
 
 test('customer confirmation retries only authenticated orders or transient Stripe lookups', () => {

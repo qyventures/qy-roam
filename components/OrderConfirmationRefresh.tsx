@@ -2,9 +2,10 @@
 
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
-
-const REFRESH_INTERVAL_MS = 3_000;
-const MAX_REFRESH_ATTEMPTS = 20;
+import {
+  CONFIRMATION_REFRESH_MAX_ATTEMPTS,
+  confirmationRefreshDelayMs,
+} from '@/lib/confirmationRefresh';
 
 /**
  * A Stripe redirect can beat the signed webhook by a few seconds. Refresh the
@@ -17,7 +18,7 @@ export default function OrderConfirmationRefresh() {
   const attemptsRef = useRef(0);
 
   useEffect(() => {
-    if (attempts >= MAX_REFRESH_ATTEMPTS) return;
+    if (attempts >= CONFIRMATION_REFRESH_MAX_ATTEMPTS) return;
     // One effect owns the timer and wake-up listeners. A visibility/online
     // event can otherwise race the interval and spend two attempts on the
     // same render. The ref is advanced synchronously before router.refresh(),
@@ -27,7 +28,7 @@ export default function OrderConfirmationRefresh() {
     const refreshWhenReachable = () => {
       if (
         refreshStarted ||
-        attemptsRef.current >= MAX_REFRESH_ATTEMPTS ||
+        attemptsRef.current >= CONFIRMATION_REFRESH_MAX_ATTEMPTS ||
         document.visibilityState !== 'visible' ||
         !navigator.onLine
       ) return;
@@ -37,7 +38,12 @@ export default function OrderConfirmationRefresh() {
       setAttempts(attemptsRef.current);
       router.refresh();
     };
-    timer = window.setTimeout(refreshWhenReachable, REFRESH_INTERVAL_MS);
+    // Back off after the first few checks. A fixed three-second schedule
+    // spent all twenty attempts inside the middleware's one-minute overload
+    // window, so a paid traveller could stop reconciling just as capacity
+    // returned. This bounded schedule remains responsive while spanning more
+    // than a complete throttle window.
+    timer = window.setTimeout(refreshWhenReachable, confirmationRefreshDelayMs(attemptsRef.current));
     // Do not consume the finite reconciliation budget while the tab is
     // backgrounded or the device is offline. Resume immediately when the
     // customer can actually reach the server again instead of leaving a paid
@@ -53,7 +59,7 @@ export default function OrderConfirmationRefresh() {
 
   return (
     <p className="muted" role="status" aria-live="polite">
-      {attempts < MAX_REFRESH_ATTEMPTS
+      {attempts < CONFIRMATION_REFRESH_MAX_ATTEMPTS
         ? 'This page is checking the secure order record automatically.'
         : 'Automatic checking has paused. Refresh this page or contact support if the order is still pending.'}
     </p>
