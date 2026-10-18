@@ -4,7 +4,7 @@ import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig, hasRequir
 import { operationalConfig } from '@/lib/operationalConfig';
 import { isProductionQyRoamOrigin } from '@/lib/siteOrigin';
 import { hasOrderIntegritySigningConfig } from '@/lib/orderProvenance';
-import { healthCheckToken } from '@/lib/healthCheckToken';
+import { healthCheckToken, MAX_HEALTH_CHECK_TOKEN_LENGTH } from '@/lib/healthCheckToken';
 import { hasRequiredSupabaseAdminConfig } from '@/lib/supabaseAdmin';
 import { esimPromoIsActive } from '@/lib/esimPlans';
 import { hasSaleablePocketWifiInventory } from '@/lib/pocketWifiStock';
@@ -16,7 +16,8 @@ export const runtime = 'nodejs';
 // Health credentials are machine-issued bearer tokens, not an unbounded
 // request payload. Bound the comparison loop as a defence in depth measure
 // for deployments that do not enforce a proxy header limit.
-const MAX_HEALTH_AUTHORIZATION_HEADER_LENGTH = 1_024;
+const HEALTH_AUTHORIZATION_PREFIX = 'Bearer ';
+const MAX_HEALTH_AUTHORIZATION_HEADER_LENGTH = HEALTH_AUTHORIZATION_PREFIX.length + MAX_HEALTH_CHECK_TOKEN_LENGTH;
 function constantTimeEqual(a: string, b: string) {
   const encoder = new TextEncoder();
   const left = encoder.encode(a), right = encoder.encode(b);
@@ -31,9 +32,9 @@ function isAuthorized(req: Request) {
   if (!expected) return false;
   const supplied = req.headers.get('authorization');
   return Boolean(
-    supplied?.startsWith('Bearer ') &&
+    supplied?.startsWith(HEALTH_AUTHORIZATION_PREFIX) &&
     supplied.length <= MAX_HEALTH_AUTHORIZATION_HEADER_LENGTH &&
-    constantTimeEqual(supplied.slice(7), expected),
+    constantTimeEqual(supplied.slice(HEALTH_AUTHORIZATION_PREFIX.length), expected),
   );
 }
 

@@ -7840,7 +7840,7 @@ test('admin and authenticated health checks bound credential inputs before compa
   assert.match(middleware, /MAX_BASIC_AUTH_DECODED_LENGTH = 4_096/);
   assert.match(middleware, /auth\.length <= MAX_BASIC_AUTH_HEADER_LENGTH/);
   assert.match(middleware, /decoded\.length <= MAX_BASIC_AUTH_DECODED_LENGTH/);
-  assert.match(healthRoute, /MAX_HEALTH_AUTHORIZATION_HEADER_LENGTH = 1_024/);
+  assert.match(healthRoute, /MAX_HEALTH_AUTHORIZATION_HEADER_LENGTH = HEALTH_AUTHORIZATION_PREFIX\.length \+ MAX_HEALTH_CHECK_TOKEN_LENGTH/);
   assert.match(healthRoute, /const expected = healthCheckToken\(\)/);
   assert.match(healthCheckToken, /MAX_HEALTH_CHECK_TOKEN_LENGTH = 1_024/);
   assert.match(healthCheckToken, /value\.length > MAX_HEALTH_CHECK_TOKEN_LENGTH/);
@@ -9245,7 +9245,7 @@ test('Pocket WiFi rejects unreviewed prices before spending shared checkout capa
 });
 
 test('release health credentials survive HTTP header transport byte-for-byte', () => {
-  const { healthCheckToken } = require('../lib/healthCheckToken.ts');
+  const { healthCheckToken, MAX_HEALTH_CHECK_TOKEN_LENGTH } = require('../lib/healthCheckToken.ts');
   const valid = 'release-health_0123456789.ABC-xyz';
   assert.equal(healthCheckToken(valid), valid);
   for (const ambiguous of [
@@ -9254,4 +9254,12 @@ test('release health credentials survive HTTP header transport byte-for-byte', (
     `release health_0123456789.ABC-xyz`,
     `release\thealth_0123456789.ABC-xyz`,
   ]) assert.equal(healthCheckToken(ambiguous), null);
+
+  // The authenticated route bounds the complete Authorization field, not
+  // just the token. A token at the documented maximum must remain usable
+  // after the required `Bearer ` scheme is added by deployment automation.
+  assert.equal(healthCheckToken('x'.repeat(MAX_HEALTH_CHECK_TOKEN_LENGTH))?.length, MAX_HEALTH_CHECK_TOKEN_LENGTH);
+  assert.match(healthRoute, /MAX_HEALTH_AUTHORIZATION_HEADER_LENGTH = HEALTH_AUTHORIZATION_PREFIX\.length \+ MAX_HEALTH_CHECK_TOKEN_LENGTH/);
+  assert.match(healthRoute, /supplied\.slice\(HEALTH_AUTHORIZATION_PREFIX\.length\)/);
+  assert.doesNotMatch(healthRoute, /MAX_HEALTH_AUTHORIZATION_HEADER_LENGTH = 1_024/);
 });
