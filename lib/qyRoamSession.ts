@@ -220,6 +220,15 @@ function validateQyRoamSessionSnapshot(session: Stripe.Checkout.Session): QyRoam
  * callers must independently prove the terminal unpaid Stripe event state.
  */
 export function validateQyRoamTerminalUnpaidSession(session: Stripe.Checkout.Session): QyRoamSessionValidation {
+  // Keep the exceptional no-consent path self-contained. The webhook also
+  // validates the signed event and refreshed Session state before calling
+  // this helper, but a validator explicitly intended for terminal cleanup
+  // must not report a paid, open, or merely completed Session as safe if a
+  // future caller omits that separate routing check. Expiry is the only
+  // terminal state where QY Roam may legitimately lack terms acceptance.
+  if (session.status !== 'expired' || session.payment_status !== 'unpaid') {
+    return { valid: false, reason: 'QY Roam terminal unpaid cleanup requires an expired unpaid Checkout Session' };
+  }
   return validateQyRoamSessionSnapshot(session);
 }
 

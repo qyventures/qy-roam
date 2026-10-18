@@ -2311,6 +2311,14 @@ test('terminal unpaid cleanup authenticates abandoned sessions without inventing
       valid: true,
       productType: session.metadata.product_type,
     });
+
+    session.status = 'complete';
+    assert.equal(validateQyRoamTerminalUnpaidSession(session).valid, false,
+      'a completed unpaid session is not an expired cleanup authority');
+    session.status = 'expired';
+    session.payment_status = 'paid';
+    assert.equal(validateQyRoamTerminalUnpaidSession(session).valid, false,
+      'an expired paid session must never enter terminal unpaid cleanup');
   }
 
   const expiryBranch = webhookRoute.slice(webhookRoute.indexOf("if(event.type==='checkout.session.expired')"));
