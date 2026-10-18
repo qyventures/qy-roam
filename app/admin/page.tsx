@@ -4,7 +4,7 @@ import { fulfilmentNotificationActionable, isPocketWifiProduct, isSupportedProdu
 import { hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
 import { isSafeDigitalDeliveryReference } from '@/lib/digitalDeliveryReference';
 import { operationalDaysFromToday } from '@/lib/operationalDate';
-import { POCKET_WIFI_RETURN_GRACE_DAYS } from '@/lib/pocketWifiReturns';
+import { POCKET_WIFI_RETURN_GRACE_DAYS, pocketWifiReturnTiming } from '@/lib/pocketWifiReturns';
 import { stripeSecretKeyMode } from '@/lib/stripeCheckoutConfig';
 import { tryAcquireAdminDashboardConcurrency } from '@/lib/adminDashboardConcurrency';
 import { formatSingaporeDate, formatSingaporeTimestamp } from '@/lib/singaporeTimestamp';
@@ -117,9 +117,9 @@ function tripFlag(order: any) {
   if (typeof untilDeparture === 'number' && untilDeparture <= 2 && !['dispatched', 'with_customer', 'return_due', 'returned'].includes(order.fulfilment_status)) {
     return untilDeparture < 0 ? '⚠ Departure passed — dispatch unresolved' : `⚠ Departure in ${untilDeparture} day${untilDeparture === 1 ? '' : 's'} — dispatch check`;
   }
-  const afterTrip = daysFromToday(order.travel_end);
-  if (typeof afterTrip === 'number' && afterTrip < -POCKET_WIFI_RETURN_GRACE_DAYS && !['returned', 'closed'].includes(order.fulfilment_status)) return '⚠ Return overdue';
-  if (typeof afterTrip === 'number' && afterTrip < 0 && !['returned', 'closed'].includes(order.fulfilment_status)) return 'Return due';
+  const returnTiming = pocketWifiReturnTiming(order.travel_end, order.fulfilment_status);
+  if (returnTiming === 'overdue') return '⚠ Return overdue';
+  if (returnTiming === 'due') return 'Return due';
   return '';
 }
 

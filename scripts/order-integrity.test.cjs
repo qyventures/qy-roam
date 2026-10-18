@@ -26,7 +26,7 @@ const { LAUNCH_PROMO, applyPromoCents, promoIsActive } = require('../lib/promoti
 const { validateQyRoamSession, validateQyRoamTerminalUnpaidSession } = require('../lib/qyRoamSession.ts');
 const { parseExactIsoDate, validCheckoutRequestId } = require('../lib/checkoutValidation.ts');
 const { operationalIsoDate, operationalIsoDateAfter, operationalDaysFromToday } = require('../lib/operationalDate.ts');
-const { POCKET_WIFI_RETURN_GRACE_DAYS } = require('../lib/pocketWifiReturns.ts');
+const { POCKET_WIFI_RETURN_GRACE_DAYS, pocketWifiReturnTiming } = require('../lib/pocketWifiReturns.ts');
 const { WIFI_BENCHMARK, WIFI_PLANS } = require('../lib/wifiPlans.ts');
 const { pocketWifiRentalCents, sgdFromCents } = require('../lib/pocketWifiPricing.ts');
 const { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } = require('../lib/pocketWifiRentalPeriod.ts');
@@ -9109,6 +9109,26 @@ test('durably failed payments offer a clear fresh-checkout path on every custome
   assert.match(successPage, /checkoutExpired \|\| paymentFailed \? 'Choose a plan'/);
   assert.match(bookingPage, /!checkoutExpired && !paymentFailed && \(!paid \|\| !orderLifecycleValid\) && <OrderConfirmationRefresh \/>/);
   assert.match(bookingPage, /checkoutExpired \|\| paymentFailed \? 'Choose a plan'/);
+});
+
+test('Pocket WiFi return prompts follow the rental date even before an admin status transition', () => {
+  const today = operationalIsoDate();
+  const isoDaysAgo = (days) => operationalIsoDateAfter(-days);
+
+  assert.equal(pocketWifiReturnTiming(today, 'with_customer'), 'not_due');
+  assert.equal(pocketWifiReturnTiming(operationalIsoDateAfter(2), 'return_due'), 'due');
+  assert.equal(pocketWifiReturnTiming(isoDaysAgo(1), 'with_customer'), 'due');
+  assert.equal(pocketWifiReturnTiming(isoDaysAgo(5), 'dispatched'), 'due');
+  assert.equal(pocketWifiReturnTiming(isoDaysAgo(6), 'with_customer'), 'overdue');
+  assert.equal(pocketWifiReturnTiming(isoDaysAgo(6), 'returned'), 'complete');
+  assert.equal(pocketWifiReturnTiming(isoDaysAgo(6), 'closed'), 'complete');
+  assert.equal(pocketWifiReturnTiming(isoDaysAgo(6), 'cancelled'), 'complete');
+  assert.equal(pocketWifiReturnTiming('invalid', 'with_customer'), 'not_due');
+
+  assert.match(bookingPage, /pocketWifiReturnTiming\(order\.travel_end, fulfilment\)/);
+  assert.match(bookingPage, /returnTiming === 'due' \|\| returnTiming === 'overdue'/);
+  assert.match(bookingPage, /Your return is overdue\./);
+  assert.match(adminPage, /pocketWifiReturnTiming\(order\.travel_end, order\.fulfilment_status\)/);
 });
 
 test('Pocket WiFi rejects unreviewed prices before spending shared checkout capacity', () => {

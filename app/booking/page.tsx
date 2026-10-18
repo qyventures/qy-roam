@@ -4,7 +4,7 @@ import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { initialFulfilmentStatus, validFulfilmentStatus } from '@/lib/orderLifecycle';
 import { validateQyRoamSession } from '@/lib/qyRoamSession';
 import { validStripeCheckoutSessionId, validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
-import { POCKET_WIFI_RETURN_GRACE_DAYS } from '@/lib/pocketWifiReturns';
+import { POCKET_WIFI_RETURN_GRACE_DAYS, pocketWifiReturnTiming } from '@/lib/pocketWifiReturns';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { durableOrderMatchesFailedSession, durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
@@ -169,6 +169,14 @@ export default async function BookingPage({ searchParams }: Props) {
     const returnTracking = safeReturnTracking && !custodyReferenceIssue(safeReturnTracking)
       ? safeReturnTracking
       : '';
+    // Return instructions are date-driven. Staff may not have moved the
+    // lifecycle to `return_due` yet when the rental ends; withholding the
+    // prompt until that manual save would make a late admin update become a
+    // late customer return. The exact paid-order snapshot above authenticates
+    // this travel end before it is used here.
+    const returnTiming = !isEsim && order
+      ? pocketWifiReturnTiming(order.travel_end, fulfilment)
+      : 'not_due';
 
     return (
       <main className="wrap section legal">
@@ -209,7 +217,12 @@ export default async function BookingPage({ searchParams }: Props) {
               )}
               {courierTracking && <p><strong>Delivery tracking:</strong> {courierTracking}</p>}
               {returnTracking && <p><strong>Return tracking:</strong> {returnTracking}</p>}
-              {fulfilment === 'return_due' && <p>Please hand the complete device kit to the return courier within {POCKET_WIFI_RETURN_GRACE_DAYS} calendar days after your rental ends and keep the tracking receipt until QY Roam confirms receipt.</p>}
+              {(returnTiming === 'due' || returnTiming === 'overdue') && (
+                <div role={returnTiming === 'overdue' ? 'alert' : undefined}>
+                  <p><strong>{returnTiming === 'overdue' ? 'Your return is overdue.' : 'Your return is now due.'}</strong> Please hand the complete device kit to the return courier within {POCKET_WIFI_RETURN_GRACE_DAYS} calendar days after your rental ends and keep the tracking receipt until QY Roam confirms receipt.</p>
+                  {returnTiming === 'overdue' && <p>Contact <a href="tel:+6580327183"><strong>+65 8032 7183</strong></a> now if the kit is already in transit or you need return assistance.</p>}
+                </div>
+              )}
             </>
           )
         ) : (
