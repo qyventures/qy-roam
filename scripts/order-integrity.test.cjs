@@ -548,6 +548,17 @@ test('admin delivery recovery refreshes durable delivery status and exception to
   );
 });
 
+test('ambiguous admin mutation failures reconcile every server-owned ledger before retry', () => {
+  // A database commit can succeed after the browser has lost or rejected the
+  // response. Every operator mutation surface must refresh on its failure
+  // path so stale controls cannot invite a duplicate stock movement, order,
+  // delivery, CRM entry, forecast change, or accounting close.
+  assert.match(adminOrderActions, /catch \(error\) \{[\s\S]{0,700}router\.refresh\(\);[\s\S]{0,100}\}/);
+  assert.equal((adminOrderActions.match(/catch \(error\) \{[\s\S]{0,700}?router\.refresh\(\);/g) || []).length, 2);
+  assert.match(adminOpsForms, /catch\(e:any\)\{[\s\S]{0,600}router\.refresh\(\);return false/);
+  assert.match(manualOrderForm, /catch\(err\)\{[\s\S]{0,700}router\.refresh\(\)\}/);
+});
+
 test('admin fulfilment notes and cancellation evidence are rejected rather than silently truncated', () => {
   assert.match(adminOrderRoute, /const MAX_ORDER_NOTES_LENGTH = 2_500/);
   assert.match(adminOrderRoute, /Object\.prototype\.hasOwnProperty\.call\(body, 'notes'\)/);
@@ -1398,7 +1409,7 @@ test('manual paid-order entry is bounded and blocks concurrent duplicate submiss
   assert.match(manualOrderForm, /if\(inFlight\.current\)return;inFlight\.current=true/);
   assert.match(manualOrderForm, /await fetchCustomerJson\('\/api\/admin\/ops'/);
   assert.match(manualOrderForm, /instanceof CustomerRequestTimeoutError/);
-  assert.match(manualOrderForm, /Check the orders list before retrying with the same payment or sales reference/);
+  assert.match(manualOrderForm, /Check the refreshed orders list before retrying with the same payment or sales reference/);
   assert.match(manualOrderForm, /finally\{inFlight\.current=false;setBusy\(false\)\}/);
   assert.doesNotMatch(manualOrderForm, /await fetch\('/);
 });
@@ -3228,7 +3239,7 @@ test('admin operational mutations are single-flight and recover from stalled bro
   assert.match(adminOpsForms, /if\(inFlight\.current\)return false;inFlight\.current=true/);
   assert.match(adminOpsForms, /fetchCustomerJson\('\/api\/admin\/ops'/);
   assert.match(adminOpsForms, /inFlight\.current=false;setBusy\(false\)/);
-  assert.match(adminOpsForms, /Check the refreshed record before retrying/);
+  assert.match(adminOpsForms, /refreshed record is authoritative; check it before retrying/);
   assert.match(adminOpsForms, /Post movement<\/button>/);
   assert.match(adminOpsForms, /disabled=\{s\.busy\}>Post movement/);
 
@@ -3239,7 +3250,7 @@ test('admin operational mutations are single-flight and recover from stalled bro
   assert.equal((adminOrderActions.match(/fetchCustomerJson\(`/g) || []).length, 2);
   assert.match(adminOrderActions, /disabled=\{saving \|\| retrying \|\| statuses\.length < 2\}/);
   assert.match(adminOrderActions, /disabled=\{saving \|\| retrying\}/);
-  assert.match(adminOrderActions, /Refresh the order before retrying/);
+  assert.match(adminOrderActions, /order is being refreshed before you retry/);
 });
 
 test('admin sales-period close totals stable keyset pages instead of silently using its row cap', () => {

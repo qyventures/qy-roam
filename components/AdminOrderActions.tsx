@@ -78,7 +78,14 @@ export default function AdminOrderActions({ id, initialStatus, initialUpdatedAt,
       // control. The version-keyed component on the page remounts from the
       // authoritative row returned by that refresh.
       router.refresh();
-    } catch (error) { setMessage(error instanceof CustomerRequestTimeoutError ? 'The update timed out. Refresh the order before retrying.' : error instanceof Error ? error.message : 'Could not save'); }
+    } catch (error) {
+      setMessage(error instanceof CustomerRequestTimeoutError ? 'The update timed out. The order is being refreshed before you retry.' : error instanceof Error ? error.message : 'Could not save');
+      // A transport or response failure is ambiguous: the atomic database
+      // transition may already have committed even though this browser never
+      // received its acknowledgement. Reconcile from the server before the
+      // operator can act on stale order, custody, or inventory state.
+      router.refresh();
+    }
     finally { mutationInFlight.current = false; setSaving(false); }
   }
 
@@ -97,7 +104,13 @@ export default function AdminOrderActions({ id, initialStatus, initialUpdatedAt,
       // reflect that authoritative result instead of inviting a duplicate
       // operator retry from stale props.
       router.refresh();
-    } catch (error) { setMessage(error instanceof CustomerRequestTimeoutError ? 'The retry timed out. Refresh the order before retrying again.' : error instanceof Error ? error.message : 'Could not retry notifications'); }
+    } catch (error) {
+      setMessage(error instanceof CustomerRequestTimeoutError ? 'The retry timed out. Delivery status is being refreshed before you retry.' : error instanceof Error ? error.message : 'Could not retry notifications');
+      // SMTP or Meta delivery can settle after the browser loses the response.
+      // Refresh the durable delivery ledgers so stale retry eligibility cannot
+      // invite a duplicate operator attempt.
+      router.refresh();
+    }
     finally { mutationInFlight.current = false; setRetrying(false); }
   }
 
