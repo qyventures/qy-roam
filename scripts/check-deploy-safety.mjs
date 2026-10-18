@@ -5,6 +5,7 @@ const deploy = readFileSync(new URL('../deploy/deploy.sh', import.meta.url), 'ut
 const service = readFileSync(new URL('../deploy/qy-roam.service', import.meta.url), 'utf8');
 const nginx = readFileSync(new URL('../deploy/nginx-qyroam.conf', import.meta.url), 'utf8');
 const productionReadiness = readFileSync(new URL('../lib/productionReadiness.ts', import.meta.url), 'utf8');
+const readinessProbe = readFileSync(new URL('../lib/readinessProbe.ts', import.meta.url), 'utf8');
 const healthRoute = readFileSync(new URL('../app/api/health/route.ts', import.meta.url), 'utf8');
 const healthCheckToken = readFileSync(new URL('../lib/healthCheckToken.ts', import.meta.url), 'utf8');
 const standalonePackager = readFileSync(new URL('./package-standalone.mjs', import.meta.url), 'utf8');
@@ -274,7 +275,7 @@ assert.match(deploy, /QY Roam service restart failed/);
 // productionReadiness. Their transport deadline must be strictly longer than
 // the probe deadline or a valid readiness response can be aborted by curl and
 // cause an unnecessary rollback after the new process is already healthy.
-const readinessProbeTimeout = Number(productionReadiness.match(/const READINESS_PROBE_TIMEOUT_MS = ([\d_]+);/)?.[1].replaceAll('_', ''));
+const readinessProbeTimeout = Number(readinessProbe.match(/export const READINESS_PROBE_TIMEOUT_MS = ([\d_]+);/)?.[1].replaceAll('_', ''));
 const readinessCurlTimeout = Number(deploy.match(/^READINESS_CURL_TIMEOUT_SECONDS=(\d+)$/m)?.[1]);
 assert.ok(Number.isFinite(readinessProbeTimeout), 'application readiness probe timeout must remain explicit');
 assert.ok(Number.isFinite(readinessCurlTimeout), 'deployment readiness curl timeout must remain explicit');
