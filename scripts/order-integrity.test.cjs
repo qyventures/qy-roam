@@ -99,6 +99,30 @@ const { retryableStripeConfirmationFailure } = require('../lib/confirmationLooku
 const { CONFIRMATION_REFRESH_INITIAL_DELAY_MS, CONFIRMATION_REFRESH_MAX_DELAY_MS, CONFIRMATION_REFRESH_MAX_ATTEMPTS, confirmationRefreshDelayMs } = require('../lib/confirmationRefresh.ts');
 const { formatSingaporeDate, formatSingaporeTimestamp } = require('../lib/singaporeTimestamp.ts');
 const { customerOrderReference } = require('../lib/customerOrderReference.ts');
+const { READINESS_PROBE_TIMEOUT_MS, ReadinessProbeTimeoutError, runReadinessProbe } = require('../lib/readinessProbe.ts');
+
+test('production readiness has a real deadline even when a dependency ignores cancellation', async () => {
+  let signal;
+  const startedAt = Date.now();
+  await assert.rejects(
+    runReadinessProbe((receivedSignal) => {
+      signal = receivedSignal;
+      return new Promise(() => {});
+    }, 20),
+    ReadinessProbeTimeoutError,
+  );
+  assert.equal(signal.aborted, true);
+  assert.ok(Date.now() - startedAt < 1_000, 'readiness deadline must reject promptly');
+  assert.equal(READINESS_PROBE_TIMEOUT_MS, 8_000);
+});
+
+test('production readiness clears its deadline after successful dependency work', async () => {
+  const result = await runReadinessProbe(async (signal) => {
+    assert.equal(signal.aborted, false);
+    return 'ready';
+  }, 100);
+  assert.equal(result, 'ready');
+});
 
 test('inventory mutation conflicts are actionable without exposing database failures', () => {
   assert.deepEqual(
@@ -151,6 +175,7 @@ const manualOrderForm = fs.readFileSync(require.resolve('../components/ManualOrd
 const adminOpsForms = fs.readFileSync(require.resolve('../components/AdminOpsForms.tsx'), 'utf8');
 const adminOpsRoute = fs.readFileSync(require.resolve('../app/api/admin/ops/route.ts'), 'utf8');
 const productionReadiness = fs.readFileSync(require.resolve('../lib/productionReadiness.ts'), 'utf8');
+const readinessProbe = fs.readFileSync(require.resolve('../lib/readinessProbe.ts'), 'utf8');
 const runtimeConfig = fs.readFileSync(require.resolve('../lib/runtimeConfig.ts'), 'utf8');
 const stripeCheckoutConfig = fs.readFileSync(require.resolve('../lib/stripeCheckoutConfig.ts'), 'utf8');
 const stripeWebhookSecret = fs.readFileSync(require.resolve('../lib/stripeWebhookSecret.ts'), 'utf8');
@@ -3979,13 +4004,14 @@ test('checkout readiness rejects integrity triggers that fire only for replicati
 
 test('production readiness aborts stalled database probes instead of holding checkout workers', () => {
   // Readiness is evaluated on the public checkout path. A timeout must abort
-  // the underlying PostgREST request, not merely race its promise and leave
-  // unbounded background requests alive during a database/network incident.
-  assert.match(productionReadiness, /const READINESS_PROBE_TIMEOUT_MS = 8_000/);
-  assert.match(productionReadiness, /class ReadinessProbeTimeoutError extends Error/);
-  assert.match(productionReadiness, /const controller = new AbortController\(\)/);
-  assert.match(productionReadiness, /setTimeout\(\(\) => controller\.abort\(\), READINESS_PROBE_TIMEOUT_MS\)/);
-  assert.match(productionReadiness, /throw new ReadinessProbeTimeoutError\('Production readiness probe timed out'\)/);
+  // the underlying PostgREST request and independently reject the caller;
+  // AbortSignal support alone cannot guarantee a deadline.
+  assert.match(readinessProbe, /READINESS_PROBE_TIMEOUT_MS = 8_000/);
+  assert.match(readinessProbe, /class ReadinessProbeTimeoutError extends Error/);
+  assert.match(readinessProbe, /const controller = new AbortController\(\)/);
+  assert.match(readinessProbe, /controller\.abort\(\);[\s\S]{0,160}reject\(new ReadinessProbeTimeoutError\('Production readiness probe timed out'\)\)/);
+  assert.match(readinessProbe, /Promise\.race\(\[Promise\.resolve\(\)\.then\(\(\) => probe\(controller\.signal\)\), deadline\]\)/);
+  assert.match(productionReadiness, /import \{ runReadinessProbe \} from '@\/lib\/readinessProbe'/);
   assert.match(productionReadiness, /\.select\(columns\)\.limit\(1\)\.abortSignal\(signal\)/);
   assert.match(productionReadiness, /qy_pocket_wifi_availability_snapshot[\s\S]{0,700}\.abortSignal\(signal\)/);
   assert.match(productionReadiness, /production_payment_availability_snapshot_rpc_check_failed/);

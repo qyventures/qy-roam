@@ -5,6 +5,7 @@ import { safeHttpsDeliveryEndpoint } from '@/lib/deliveryEndpoint';
 import { stripeWebhookSigningSecrets } from '@/lib/stripeWebhookSecret';
 import { createStripeClient } from '@/lib/stripeClient';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/stripeCheckoutConfig';
+import { runReadinessProbe } from '@/lib/readinessProbe';
 export { hasRequiredStripeCheckoutConfig };
 
 // Checkout invokes these guards immediately before creating a payable Stripe
@@ -19,7 +20,6 @@ const READINESS_CACHE_MS = 15_000;
 // here can exhaust server workers during a network partition. Abort the
 // probe itself (rather than only racing its result) so a failed dependency
 // produces the existing fail-closed response within a bounded time.
-const READINESS_PROBE_TIMEOUT_MS = 8_000;
 // Bump this whenever the order-integrity functions, triggers, constraints, or
 // delivery-ledger contract in supabase/schema.sql changes. Object-presence
 // probes cannot distinguish an old function body from the current one; this
@@ -69,8 +69,6 @@ const readinessState = ((globalThis as ProductionReadinessGlobal).__qyRoamProduc
   operationsSchemaCheckInFlight: null,
   pocketWifiFulfilmentSchemaCheckInFlight: null,
 });
-
-class ReadinessProbeTimeoutError extends Error {}
 
 // Key syntax alone cannot prove that production can open Checkout. A revoked
 // key, account-access change, or Stripe connectivity failure would otherwise
@@ -134,19 +132,6 @@ async function hasCurrentOrderIntegritySchema(database: any, signal: AbortSignal
     return false;
   }
   return true;
-}
-
-async function runReadinessProbe<T>(probe: (signal: AbortSignal) => Promise<T>) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), READINESS_PROBE_TIMEOUT_MS);
-  try {
-    return await probe(controller.signal);
-  } catch (error) {
-    if (controller.signal.aborted) throw new ReadinessProbeTimeoutError('Production readiness probe timed out');
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-  }
 }
 
 const REQUIRED_PAYMENT_SCHEMA = [
