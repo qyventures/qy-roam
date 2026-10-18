@@ -59,6 +59,13 @@ export function safeHttpsDeliveryEndpoint(value: string | null | undefined) {
       );
     if (
       url.protocol !== 'https:' ||
+      // The relay request carries both paid-order PII and reusable SMTP
+      // credentials. Keep it on the standard HTTPS service boundary instead
+      // of allowing a deployment typo (for example `:8443`) to send that
+      // payload to an unrelated service listening on the same public host.
+      // WHATWG URL parsing canonicalizes an explicit `:443` to an empty port,
+      // so normal explicit and implicit HTTPS configuration both pass.
+      url.port ||
       !hostname ||
       url.username ||
       url.password ||

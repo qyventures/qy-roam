@@ -7173,6 +7173,7 @@ test('paid-order delivery endpoints are fail-closed and never follow credential-
   assert.match(productionReadiness, /const relayUrl = process\.env\.SMTP_RELAY_URL\?\.trim\(\)/);
   assert.match(productionReadiness, /const relaySecret = process\.env\.SMTP_RELAY_SECRET\?\.trim\(\)/);
   assert.equal(safeHttpsDeliveryEndpoint('https://relay.vendor.co/orders'), 'https://relay.vendor.co/orders');
+  assert.equal(safeHttpsDeliveryEndpoint('https://relay.vendor.co:443/orders'), 'https://relay.vendor.co/orders');
   for (const unsafe of [
     'http://relay.example.com/orders',
     'https://user:pass@relay.example.com/orders',
@@ -7195,6 +7196,7 @@ test('paid-order delivery endpoints are fail-closed and never follow credential-
     'https://relay.arpa/orders',
     'https://relay.onion/orders',
     'https://relay.alt/orders',
+    'https://relay.vendor.co:8443/orders',
     'https://-relay.example.co/orders',
     'https://relay-.example.co/orders',
     'https://relay_name.example.co/orders',
