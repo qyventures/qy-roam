@@ -8774,7 +8774,7 @@ test('public Pocket WiFi booking terms stay aligned with the checkout authority'
   assert.match(bookingTermsRoute, /minDeliveryLeadDays:\s*config\.minDeliveryLeadDays/);
   assert.match(bookingTermsRoute, /courierFeeSgd:\s*config\.courierFeeCents \/ 100/);
   assert.match(bookingTermsRoute, /'Cache-Control':\s*'no-store'/);
-  assert.match(homePage, /fetchCustomerJson\('\/api\/booking-terms',\s*\{\s*cache:\s*'no-store'\s*\}\)/);
+  assert.match(homePage, /fetchCustomerJson\('\/api\/booking-terms',\s*\{\s*cache:\s*'no-store',\s*signal:\s*controller\.signal\s*\}\)/);
   assert.match(homePage, /parsePocketWifiBookingTerms\(value\)/);
   assert.match(homePage, /setDeliveryLeadDays\(authoritativeLeadDays\)/);
   assert.match(homePage, /setCourierFeeSgd\(terms\.courierFeeSgd\)/);
@@ -8818,6 +8818,18 @@ test('initial Pocket WiFi booking terms require one coherent cent-precise price 
   assert.match(homePage, /setCourierFeeSgd\(data\.courierFeeSgd\);\s*setBookingTermsLoaded\(true\)/);
   assert.match(homePage, /bookingTermsLoaded \? <>\{courierFeeSgd > 0/);
   assert.match(homePage, /availability\?\.available && bookingTermsLoaded \? `Reserve for S\$\$\{payableTotal\.toFixed\(2\)\}` : 'Check availability'/);
+});
+
+test('live Pocket WiFi availability supersedes the initial booking-terms request', () => {
+  assert.match(homePage, /const bookingTermsAbortController = useRef<AbortController \| null>\(null\)/);
+  assert.match(homePage, /fetchCustomerJson\('\/api\/booking-terms', \{ cache: 'no-store', signal: controller\.signal \}\)/);
+  assert.match(homePage, /controller\.abort\(\);[\s\S]{0,180}bookingTermsAbortController\.current === controller/);
+
+  const availabilityStart = homePage.indexOf('async function checkAvailability()');
+  const availabilityEnd = homePage.indexOf('async function checkout()', availabilityStart);
+  assert.ok(availabilityStart >= 0 && availabilityEnd > availabilityStart);
+  const availability = homePage.slice(availabilityStart, availabilityEnd);
+  assert.match(availability, /bookingTermsAbortController\.current\?\.abort\(\);\s*bookingTermsAbortController\.current = null;[\s\S]*availabilityAbortController\.current\?\.abort\(\)/);
 });
 
 test('Pocket WiFi rental duration is one shared customer and paid-order boundary', () => {

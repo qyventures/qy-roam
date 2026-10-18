@@ -97,6 +97,7 @@ export default function Home() {
   const activeCheckoutAttempt = useRef<CheckoutAttempt | null>(null);
   const checkoutInFlight = useRef(false);
   const checkoutAbortController = useRef<AbortController | null>(null);
+  const bookingTermsAbortController = useRef<AbortController | null>(null);
   const availabilityAbortController = useRef<AbortController | null>(null);
   const availabilityRequest = useRef(0);
   const selectedBooking = useRef({ country, start, end });
@@ -127,7 +128,9 @@ export default function Home() {
   }, [launchPromoActive]);
   useEffect(() => {
     let active = true;
-    void fetchCustomerJson('/api/booking-terms', { cache: 'no-store' }).then(({ response, value }) => {
+    const controller = new AbortController();
+    bookingTermsAbortController.current = controller;
+    void fetchCustomerJson('/api/booking-terms', { cache: 'no-store', signal: controller.signal }).then(({ response, value }) => {
       if (!active || !response.ok || !value || typeof value !== 'object' || Array.isArray(value)) return;
       // Treat the initial public terms as one coherent price/date snapshot.
       // Applying only one valid field from a malformed or partially deployed
@@ -146,14 +149,24 @@ export default function Home() {
       // already selected while this small terms request was in flight.
       setStart(current => current === previousDefault ? nextEarliest : current);
       setEnd(current => current === previousDefault ? nextEarliest : current);
-    }).catch(() => undefined);
-    return () => { active = false; };
+    }).catch(() => undefined).finally(() => {
+      if (bookingTermsAbortController.current === controller) bookingTermsAbortController.current = null;
+    });
+    return () => {
+      active = false;
+      controller.abort();
+      if (bookingTermsAbortController.current === controller) bookingTermsAbortController.current = null;
+    };
   }, []);
   useEffect(() => () => {
     // Checkout may be reconciling a paid Session through several bounded
     // polls. Leaving the storefront owns cancellation of that complete cycle.
     checkoutAbortController.current?.abort();
     checkoutAbortController.current = null;
+    // The initial booking-terms request is only a fast first-render hint.
+    // Never retain it after the storefront has gone away.
+    bookingTermsAbortController.current?.abort();
+    bookingTermsAbortController.current = null;
     // Availability can be waiting on a paginated Stripe hold scan and an
     // inventory snapshot. A detached storefront has no use for that promise,
     // so release the browser connection instead of retaining it until the
@@ -213,6 +226,13 @@ export default function Home() {
     const checkedCountry = country;
     const checkedStart = start;
     const checkedEnd = end;
+    // Availability returns the current booking terms together with the stock
+    // snapshot. Once this more authoritative request starts, an older initial
+    // `/api/booking-terms` response must not arrive later and overwrite its
+    // lead time or courier fee, making the displayed total stale immediately
+    // before checkout.
+    bookingTermsAbortController.current?.abort();
+    bookingTermsAbortController.current = null;
     availabilityAbortController.current?.abort();
     const controller = new AbortController();
     availabilityAbortController.current = controller;
