@@ -27,24 +27,40 @@ function constantTimeEqual(a: string, b: string) {
   return diff === 0;
 }
 
-function isAuthorized(req: Request) {
-  const expected = healthCheckToken();
-  if (!expected) return false;
+type HealthAuthorization = 'public' | 'authorized' | 'invalid';
+
+function healthAuthorization(req: Request): HealthAuthorization {
   const supplied = req.headers.get('authorization');
-  return Boolean(
-    supplied?.startsWith(HEALTH_AUTHORIZATION_PREFIX) &&
+  // Absence deliberately selects the dependency-free public liveness probe.
+  // Once a caller supplies credentials, however, never silently downgrade a
+  // malformed or stale token to that HTTP-200 response: status-only monitors
+  // could otherwise report readiness while authenticating with the wrong
+  // release credential.
+  if (supplied === null) return 'public';
+  const expected = healthCheckToken();
+  const valid = Boolean(
+    expected &&
+    supplied.startsWith(HEALTH_AUTHORIZATION_PREFIX) &&
     supplied.length <= MAX_HEALTH_AUTHORIZATION_HEADER_LENGTH &&
     constantTimeEqual(supplied.slice(HEALTH_AUTHORIZATION_PREFIX.length), expected),
   );
+  return valid ? 'authorized' : 'invalid';
 }
 
 export async function GET(req: Request) {
   const headers = { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' };
 
-  // Public probes get only liveness and must not trigger external dependency
-  // checks or disclose production configuration.
-  if (!isAuthorized(req)) {
+  const authorization = healthAuthorization(req);
+  // Public probes with no credentials get only liveness and must not trigger
+  // external dependency checks or disclose production configuration.
+  if (authorization === 'public') {
     return NextResponse.json({ ok: true, service: 'qy-roam' }, { status: 200, headers });
+  }
+  if (authorization === 'invalid') {
+    return NextResponse.json({ ok: false, service: 'qy-roam', error: 'Invalid health credentials.' }, {
+      status: 401,
+      headers: { ...headers, 'WWW-Authenticate': 'Bearer realm="qy-roam-health"' },
+    });
   }
 
   // A valid probe performs several provider-backed checks in parallel. When

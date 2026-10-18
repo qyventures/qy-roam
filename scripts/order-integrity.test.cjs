@@ -7848,6 +7848,24 @@ test('admin and authenticated health checks bound credential inputs before compa
   assert.match(healthRoute, /supplied\.length <= MAX_HEALTH_AUTHORIZATION_HEADER_LENGTH/);
 });
 
+test('invalid health credentials cannot downgrade into successful public liveness', () => {
+  // Public process supervision intentionally receives dependency-free HTTP
+  // 200 only when it sends no credential. A stale deployment/monitor token
+  // must be distinguishable from liveness, even for clients that inspect only
+  // the status code and not the richer readiness JSON body.
+  assert.match(healthRoute, /type HealthAuthorization = 'public' \| 'authorized' \| 'invalid'/);
+  assert.match(healthRoute, /if \(supplied === null\) return 'public'/);
+  assert.match(healthRoute, /return valid \? 'authorized' : 'invalid'/);
+  assert.match(healthRoute, /if \(authorization === 'public'\)[\s\S]*?status: 200/);
+  assert.match(healthRoute, /if \(authorization === 'invalid'\)[\s\S]*?status: 401/);
+  assert.match(healthRoute, /'WWW-Authenticate': 'Bearer realm="qy-roam-health"'/);
+  assert.ok(
+    healthRoute.indexOf("if (authorization === 'invalid')") < healthRoute.indexOf('tryAcquireHealthConcurrency()'),
+    'invalid credentials must fail before consuming readiness capacity',
+  );
+  assert.doesNotMatch(healthRoute, /if \(!isAuthorized\(req\)\)/);
+});
+
 test('paid orders reconcile into CRM records idempotently without overwriting operator workflow fields', () => {
   // The CRM must follow the authoritative paid-orders ledger, including a
   // delayed payment that changes an existing order from awaiting payment to
