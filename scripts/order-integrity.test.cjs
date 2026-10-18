@@ -2662,14 +2662,17 @@ test('Stripe retries cannot revive fulfilment work after the order lifecycle has
     webhookRoute.indexOf('export async function deliverFulfilmentNotification'),
     webhookRoute.indexOf('export async function deliverMetaPurchase'),
   );
-  const lifecycleRead = delivery.indexOf(".select('payment_status,product_type,fulfilment_status,customer_name,email,phone,shipping_address')");
+  const lifecycleRead = delivery.indexOf(".select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,fulfilment_status,customer_name,email,phone,shipping_address')");
   const actionableGuard = delivery.indexOf('fulfilmentNotificationActionable(order.data.product_type,order.data.fulfilment_status)');
+  const commercialGuard = delivery.indexOf('durableOrderMatchesPaidSession(order.data,session,productType)');
   const notificationClaim = delivery.indexOf(".from('fulfilment_notifications')");
   assert.ok(lifecycleRead >= 0, 'delivery must read the current durable order lifecycle');
   assert.ok(actionableGuard > lifecycleRead, 'delivery must validate the current lifecycle after reading it');
-  assert.ok(notificationClaim > actionableGuard, 'a non-actionable order must be rejected before notification state is claimed');
+  assert.ok(commercialGuard > actionableGuard, 'delivery must re-authenticate the durable commercial snapshot after reading it');
+  assert.ok(notificationClaim > commercialGuard, 'a non-actionable or mismatched order must be rejected before notification state is claimed');
   assert.match(delivery, /if\(!order\.data\) throw new Error\('Paid order is missing before fulfilment notification delivery'\)/);
-  assert.match(delivery, /if\(order\.data\.product_type!==session\.metadata\?\.product_type\) throw new Error\('Stored order product does not match its Stripe session'\)/);
+  assert.match(delivery, /if\(productType!=='esim'&&productType!=='pocket_wifi'\) throw new Error\('Stored order product does not match its Stripe session'\)/);
+  assert.match(delivery, /if\(!durableOrderMatchesPaidSession\(order\.data,session,productType\)\)/);
 });
 
 test('fulfilment retries use durable staff-corrected contact and delivery details', () => {
@@ -2684,7 +2687,7 @@ test('fulfilment retries use durable staff-corrected contact and delivery detail
   assert.match(delivery, /customer_details:\{\s*\.\.\.session\.customer_details,\s*name:order\.data\.customer_name,\s*email:order\.data\.email,\s*phone:order\.data\.phone,/);
   assert.match(delivery, /shipping_details:order\.data\.shipping_address \? \{/);
   assert.match(delivery, /address:order\.data\.shipping_address/);
-  assert.match(delivery, /paidFulfilmentDetailsIssue\(fulfilmentSession,order\.data\.product_type\)/);
+  assert.match(delivery, /paidFulfilmentDetailsIssue\(fulfilmentSession,productType\)/);
   assert.match(delivery, /await sendHumanFulfilmentEmail\(fulfilmentSession\)/);
   assert.doesNotMatch(delivery, /await sendHumanFulfilmentEmail\(session\)/);
 });
@@ -8560,7 +8563,7 @@ test('paid checkout replays require the same exact durable commercial snapshot a
 });
 
 test('Stripe webhook side effects require an exact durable persistence acknowledgement', () => {
-  assert.match(webhookRoute, /import \{ durablePaidOrderMatchesPaymentEvent, durableOrderMatchesUnpaidOrAlreadyPaidSession \} from '@\/lib\/durableOrderSnapshot'/);
+  assert.match(webhookRoute, /import \{ durableOrderMatchesPaidSession, durablePaidOrderMatchesPaymentEvent, durableOrderMatchesUnpaidOrAlreadyPaidSession \} from '@\/lib\/durableOrderSnapshot'/);
   assert.match(webhookRoute, /paid && !durablePaidOrderMatchesPaymentEvent\(persistedOrder,session,'pocket_wifi',eventCreated\)/);
   assert.match(webhookRoute, /!paid && !durableOrderMatchesUnpaidOrAlreadyPaidSession\(persistedOrder,session,'pocket_wifi'\)/);
   assert.match(webhookRoute, /paid && !durablePaidOrderMatchesPaymentEvent\(persistedOrder,session,'esim',eventCreated\)/);

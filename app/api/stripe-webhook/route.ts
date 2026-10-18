@@ -31,7 +31,7 @@ import { hasIdentityRequestContentEncoding, isJsonRequestContentType } from '@/l
 import { databaseTimestampInstantEquals, exactDatabaseTimestampToken, exactStripeClaimToken } from '@/lib/stripeClaimToken';
 import { exactRpcRow } from '@/lib/exactRpcRow';
 import { acknowledgedPaidDeliveryClaim, acknowledgedPaidDeliveryFailure, acknowledgedPaidDeliverySettlement } from '@/lib/paidDeliveryAcknowledgement';
-import { durablePaidOrderMatchesPaymentEvent, durableOrderMatchesUnpaidOrAlreadyPaidSession } from '@/lib/durableOrderSnapshot';
+import { durableOrderMatchesPaidSession, durablePaidOrderMatchesPaymentEvent, durableOrderMatchesUnpaidOrAlreadyPaidSession } from '@/lib/durableOrderSnapshot';
 import { acknowledgedStripeEventFailure } from '@/lib/stripeEventFailureAcknowledgement';
 import {
   tryAcquireStripeWebhookProcessing,
@@ -650,13 +650,24 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
     // the paid order is deliberately allowed to carry staff-corrected contact
     // and delivery details. A retry must use those durable corrections rather
     // than resend the historical Checkout snapshot to fulfilment staff.
-    .select('payment_status,product_type,fulfilment_status,customer_name,email,phone,shipping_address')
+    .select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,fulfilment_status,customer_name,email,phone,shipping_address')
     .eq('stripe_session_id',session.id)
     .maybeSingle();
   if(order.error) throw order.error;
   if(!order.data) throw new Error('Paid order is missing before fulfilment notification delivery');
   if(order.data.payment_status!=='paid'||!fulfilmentNotificationActionable(order.data.product_type,order.data.fulfilment_status)) return;
-  if(order.data.product_type!==session.metadata?.product_type) throw new Error('Stored order product does not match its Stripe session');
+  const productType=session.metadata?.product_type;
+  if(productType!=='esim'&&productType!=='pocket_wifi') throw new Error('Stored order product does not match its Stripe session');
+  // A webhook retry can arrive long after the original persistence
+  // acknowledgement. Re-prove the complete immutable commercial join before
+  // claiming an outbound notification: a service-role repair or damaged row
+  // with the same Session id must not create fulfilment work for a different
+  // plan, amount, destination, rental period, or consent state. Contact and
+  // shipping details remain deliberately staff-correctable and are overlaid
+  // below only after this Stripe-authenticated order identity has matched.
+  if(!durableOrderMatchesPaidSession(order.data,session,productType)) {
+    throw new Error('Stored order details do not match its Stripe session');
+  }
   const fulfilmentSession={
     ...session,
     customer_details:{
@@ -674,7 +685,7 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
   // Validate the exact durable details that will enter the outbound message.
   // A malformed manual repair must stay retryable and visible instead of
   // silently falling back to stale Stripe contact data.
-  const fulfilmentDetailsIssue=paidFulfilmentDetailsIssue(fulfilmentSession,order.data.product_type);
+  const fulfilmentDetailsIssue=paidFulfilmentDetailsIssue(fulfilmentSession,productType);
   if(fulfilmentDetailsIssue) throw new Error(fulfilmentDetailsIssue);
 
   let existing=await supabase.from('fulfilment_notifications').select('status,updated_at,attempts').eq('stripe_session_id',session.id).maybeSingle();
