@@ -7897,6 +7897,19 @@ test('release verification enforces the complete customer ingress security bound
     deployScript.lastIndexOf('verify_checkout_ingress "$PUBLIC_ORIGIN"') < deployScript.indexOf('release_verified=1'),
     'a side-effect-free checkout POST must cross public TLS before rollback protection is discarded',
   );
+  // A green readiness response proves that signing secrets are configured,
+  // but it cannot prove that either Stripe POST route survived standalone
+  // packaging and the Nginx routing boundary. Keep both the canonical route
+  // and the migration alias in the isolated and post-cutover smoke contract.
+  assert.match(deployScript, /verify_webhook_ingress\(\)/);
+  assert.match(deployScript, /for webhook_path in \/api\/stripe\/webhook \/api\/stripe-webhook/);
+  assert.match(deployScript, /Content-Type: application\/json[\s\S]*?\$\{base_url\}\$\{webhook_path\}/);
+  assert.match(deployScript, /value\?\.error!==['"]Invalid signature['"]/);
+  assert.equal((deployScript.match(/verify_webhook_ingress "/g) || []).length, 2);
+  assert.ok(
+    deployScript.lastIndexOf('verify_webhook_ingress "$PUBLIC_ORIGIN"') < deployScript.indexOf('release_verified=1'),
+    'an inert Stripe webhook POST must cross public TLS before rollback protection is discarded',
+  );
 
   const hstsHeaders = nginxConfig.match(/add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;/g) || [];
   assert.equal(hstsHeaders.length, 2, 'both canonical and www TLS servers must emit HSTS');
