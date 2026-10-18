@@ -4065,8 +4065,9 @@ test('Stripe webhook signature freshness is an explicit bounded release contract
   assert.match(webhookRoute, /STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS\s*=\s*300/);
   assert.match(
     webhookRoute,
-    /constructEvent\(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS,undefined,Math\.floor\(receivedAtMs\/1_000\)\)/,
+    /constructEvent\(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS,undefined,receivedAtMs\)/,
   );
+  assert.doesNotMatch(webhookRoute, /constructEvent\([^\n]*Math\.floor\(receivedAtMs\s*\/\s*1_000\)/);
 });
 
 test('production checkout and recovery reject test-mode Stripe server credentials', () => {
@@ -6997,7 +6998,17 @@ test('Stripe webhook enforces a symmetric signature freshness window before slow
   assert.match(admission, /validStripeSignatureHeader\(req\.headers\.get\('stripe-signature'\),receivedAtMs\)/);
   assert.match(webhookRoute, /stripeSignatureTimestampWithinTolerance\(value, STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS,receivedAtMs\)/);
   assert.match(webhookRoute, /handleStripeWebhook\(req,releaseUpload,receivedAtMs\)/);
-  assert.match(webhookRoute, /constructEvent\(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS,undefined,Math\.floor\(receivedAtMs\/1_000\)\)/);
+  // stripe-node treats receivedAt like Date.now() and divides it by 1000
+  // internally. Passing Unix seconds would make the SDK calculate signature
+  // age against 1970, so its own stale-signature defence would never fire.
+  assert.match(
+    webhookRoute,
+    /constructEvent\(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS,undefined,receivedAtMs\)/,
+  );
+  assert.doesNotMatch(
+    webhookRoute,
+    /constructEvent\([^\n]*Math\.floor\(receivedAtMs\s*\/\s*1_000\)/,
+  );
 });
 
 test('Stripe webhook rejects non-JSON payloads before reading request bodies', () => {

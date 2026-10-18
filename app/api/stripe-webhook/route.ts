@@ -874,7 +874,13 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
       // accepted before a bounded upload, then rejected only because the SDK
       // samples a later clock after reading the body. The 15-second absolute
       // body deadline still bounds how long this captured instant is usable.
-      verifiedEvent=stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS,undefined,Math.floor(receivedAtMs/1_000));
+      // stripe-node's optional `receivedAt` value has the same millisecond
+      // unit as Date.now(); the SDK converts it to Unix seconds internally.
+      // Passing seconds here would make its timestamp-age calculation use a
+      // 1970-era clock, silently disabling the SDK's stale-signature check
+      // behind our own admission guard and risking different behaviour after
+      // an SDK upgrade. Preserve the exact captured request-arrival instant.
+      verifiedEvent=stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS,undefined,receivedAtMs);
       break;
     }catch{}
   }
