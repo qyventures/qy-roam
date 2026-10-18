@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
 
 async function input() {
   const path = process.argv[2];
@@ -13,24 +14,42 @@ function plainRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-try {
-  const result = JSON.parse(await input());
+function allTrue(record, names) {
+  return names.every((name) => record[name] === true);
+}
+
+export function salesReadinessResponseIsValid(result) {
   if (!plainRecord(result) || result.service !== 'qy-roam' || result.ok !== true ||
       result.launchReady !== true || result.salesReady !== true ||
-      !plainRecord(result.checkoutChecks)) {
-    process.exitCode = 1;
-  } else {
-    const { esim, pocketWifi } = result.checkoutChecks;
-    // Require the complete named product contract, not an arbitrary truthy
-    // field. This makes deployment/recovery prove the same at-least-one-path
-    // invariant as the health route while retaining visibility of which
-    // checkout is actually saleable.
-    if (typeof esim !== 'boolean' || typeof pocketWifi !== 'boolean' ||
-        (esim !== true && pocketWifi !== true) ||
-        result.checkoutReady !== (esim && pocketWifi)) {
-      process.exitCode = 1;
-    }
+      !plainRecord(result.checks) || !plainRecord(result.checkoutChecks) ||
+      !plainRecord(result.availabilityChecks)) {
+    return false;
   }
-} catch {
-  process.exitCode = 1;
+
+  const { esim, pocketWifi } = result.checkoutChecks;
+  const launchEvidence = [
+    'stripe', 'stripeApi', 'siteUrl', 'webhook', 'orderIntegrity',
+    'supabase', 'operationsSchema', 'admin', 'fulfilmentEmail',
+  ];
+  // Require the complete named product contract, not an arbitrary truthy
+  // field. This makes deployment/recovery prove the same at-least-one-path
+  // invariant as the health route while retaining visibility of which
+  // checkout is actually saleable.
+  return typeof esim === 'boolean' && typeof pocketWifi === 'boolean' &&
+    (esim === true || pocketWifi === true) &&
+    result.checkoutReady === (esim && pocketWifi) &&
+    allTrue(result.checks, launchEvidence) &&
+    (!esim || result.checks.esimOrderSchema === true) &&
+    (!pocketWifi || allTrue(result.checks, [
+      'paymentSchema', 'pocketWifiFulfilmentSchema', 'inventory',
+    ])) &&
+    (!pocketWifi || result.availabilityChecks.pocketWifiStock === true);
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    if (!salesReadinessResponseIsValid(JSON.parse(await input()))) process.exitCode = 1;
+  } catch {
+    process.exitCode = 1;
+  }
 }

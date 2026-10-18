@@ -5944,10 +5944,12 @@ test('authenticated health readiness separates shared release controls from prod
   assert.match(readinessValidator, /result\.ok !== true/);
   assert.match(readinessValidator, /result\.launchReady !== true/);
   assert.match(readinessValidator, /result\.salesReady !== true/);
-  assert.match(readinessValidator, /typeof esim !== 'boolean'/);
-  assert.match(readinessValidator, /typeof pocketWifi !== 'boolean'/);
-  assert.match(readinessValidator, /esim !== true && pocketWifi !== true/);
-  assert.match(readinessValidator, /result\.checkoutReady !== \(esim && pocketWifi\)/);
+  assert.match(readinessValidator, /typeof esim === 'boolean'/);
+  assert.match(readinessValidator, /typeof pocketWifi === 'boolean'/);
+  assert.match(readinessValidator, /esim === true \|\| pocketWifi === true/);
+  assert.match(readinessValidator, /result\.checkoutReady === \(esim && pocketWifi\)/);
+  assert.match(readinessValidator, /allTrue\(result\.checks, launchEvidence\)/);
+  assert.match(readinessValidator, /result\.availabilityChecks\.pocketWifiStock === true/);
   assert.doesNotMatch(healthRoute, /const coreReady/);
   // Checkout redirects customers to the server-created Stripe-hosted Session
   // URL and never uses Stripe.js. A stale or absent browser publishable key
@@ -5955,6 +5957,54 @@ test('authenticated health readiness separates shared release controls from prod
   // checkout routes can safely accept and fulfil an order.
   assert.doesNotMatch(healthRoute, /publishableKey:/);
   assert.doesNotMatch(healthRoute, /NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY/);
+});
+
+test('deployment readiness validator proves detailed evidence for every saleable product', async () => {
+  const { salesReadinessResponseIsValid: validate } = await import('./validate-sales-readiness.mjs');
+  const checks = {
+    stripe: true,
+    stripeApi: true,
+    siteUrl: true,
+    webhook: true,
+    orderIntegrity: true,
+    supabase: true,
+    operationsSchema: true,
+    admin: true,
+    fulfilmentEmail: true,
+    esimOrderSchema: true,
+    paymentSchema: true,
+    pocketWifiFulfilmentSchema: true,
+    inventory: true,
+  };
+  const response = {
+    service: 'qy-roam',
+    ok: true,
+    launchReady: true,
+    salesReady: true,
+    checkoutReady: true,
+    checks,
+    checkoutChecks: { esim: true, pocketWifi: true },
+    availabilityChecks: { pocketWifiStock: true },
+  };
+  assert.equal(validate(response), true);
+  assert.equal(validate({ ...response, checks: { ...checks, webhook: false } }), false);
+  assert.equal(validate({ ...response, checks: { ...checks, esimOrderSchema: false } }), false);
+  assert.equal(validate({ ...response, checks: { ...checks, inventory: false } }), false);
+  assert.equal(validate({ ...response, availabilityChecks: { pocketWifiStock: false } }), false);
+
+  // A deliberately paused product need not have its product-only evidence,
+  // but the remaining saleable path must still be proven in full.
+  const wifiOnly = {
+    ...response,
+    checkoutReady: false,
+    checks: { ...checks, esimOrderSchema: false },
+    checkoutChecks: { esim: false, pocketWifi: true },
+  };
+  assert.equal(validate(wifiOnly), true);
+  assert.equal(validate({
+    ...wifiOnly,
+    checks: { ...wifiOnly.checks, pocketWifiFulfilmentSchema: false },
+  }), false);
 });
 
 test('authenticated readiness checks fail fast under concurrency and release every slot', () => {
