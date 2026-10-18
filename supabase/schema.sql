@@ -1151,6 +1151,22 @@ security invoker
 set search_path = public
 as $$
 begin
+  -- Receipt time is part of the event's durable audit identity. Reject an
+  -- impossible direct insert before it can become the primary-key occupant
+  -- for a real Stripe retry, and do not let privileged repair tooling rewrite
+  -- when an existing event first reached QY Roam. The one-day allowance
+  -- matches the terminal timestamp boundary below without making normal
+  -- application/database clock skew an operational incident.
+  if tg_op = 'INSERT' then
+    if new.received_at > clock_timestamp() + interval '1 day' then
+      raise exception 'invalid Stripe event receipt time';
+    end if;
+    if new.processing_started_at < new.received_at then
+      raise exception 'Stripe event processing cannot predate receipt';
+    end if;
+  elsif new.received_at is distinct from old.received_at then
+    raise exception 'Stripe event receipt time is immutable';
+  end if;
   -- A future settlement can suppress this event until an operator notices an
   -- impossible audit date, even though no worker actually completed its work.
   -- Use the same one-day clock-skew allowance as paid-order timestamps while
@@ -3491,7 +3507,9 @@ as $$
   -- payment-path relation part of the pre-payment readiness boundary.
   -- Version 50 binds eSIM delivery references to the actual digital hand-off
   -- transition for both supported RPC writes and direct service-role writes.
-  select 50;
+  -- Version 51 makes Stripe event receipt time a bounded, immutable part of
+  -- the durable idempotency identity, including direct service-role writes.
+  select 51;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
