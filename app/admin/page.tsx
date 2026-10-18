@@ -118,6 +118,7 @@ function tripFlag(order: any) {
     return untilDeparture < 0 ? '⚠ Departure passed — dispatch unresolved' : `⚠ Departure in ${untilDeparture} day${untilDeparture === 1 ? '' : 's'} — dispatch check`;
   }
   const returnTiming = pocketWifiReturnTiming(order.travel_end, order.fulfilment_status);
+  if (returnTiming === 'schedule_unknown') return '⚠ Return schedule unavailable — reconcile rental dates';
   if (returnTiming === 'overdue') return '⚠ Return overdue';
   if (returnTiming === 'due') return 'Return due';
   return '';
@@ -341,6 +342,14 @@ async function renderAdminPage() {
   const overdueReturnOrders = returnDueOrders.filter((o:any) => {
     return pocketWifiReturnTiming(o.travel_end, o.fulfilment_status) === 'overdue';
   });
+  // A router in recorded customer custody must never vanish from operations
+  // merely because a legacy/repair write damaged its itinerary. Keep these
+  // separate from genuinely due returns: staff must reconcile the booked
+  // dates before deciding what promise or deadline applies to the customer.
+  const returnScheduleExceptions = active.filter((o:any) =>
+    isPocketWifiProduct(o.product_type) &&
+    pocketWifiReturnTiming(o.travel_end, o.fulfilment_status) === 'schedule_unknown'
+  );
 
   return <main className="wrap section legal" style={{maxWidth:1280}}>
     <span className="eyebrow">QY Roam Operations & CRM</span>
@@ -391,6 +400,7 @@ async function renderAdminPage() {
             <div style={cardStyle}><small>WiFi dispatch exceptions</small><div style={metricStyle}>{wifiDispatchExceptions.length}</div><small>departing within 2 days / unresolved</small></div>
             <div style={cardStyle}><small>eSIM fulfilment exceptions</small><div style={metricStyle}>{esimExceptions.length}</div><small>departing within 2 days / unresolved</small></div>
             <div style={cardStyle}><small>WiFi returns due</small><div style={metricStyle}>{returnDueOrders.length}</div><small>{overdueReturnOrders.length} more than {POCKET_WIFI_RETURN_GRACE_DAYS} days overdue</small></div>
+            <div style={cardStyle}><small>WiFi return schedule exceptions</small><div style={metricStyle}>{returnScheduleExceptions.length}</div><small>in-custody routers with invalid rental end dates</small></div>
             <div style={cardStyle}><small>Ops email exceptions</small><div style={metricStyle}>{notificationExceptions.length}</div><small>paid Stripe-order notifications not confirmed sent</small></div>
             <div style={cardStyle}><small>Meta CAPI exceptions</small><div style={metricStyle}>{metaDeliveryExceptions.length}</div><small>consented purchases not confirmed delivered</small></div>
           </>}
@@ -416,6 +426,17 @@ async function renderAdminPage() {
             </li>;
           })}</ul>
           {returnDueOrders.length > 50 && <div><strong>{returnDueOrders.length - 50} more due returns are not expanded here.</strong> Review the flagged order rows below to reconcile the full queue.</div>}
+        </div>}
+        {!ordersIncomplete && returnScheduleExceptions.length > 0 && <div role="alert" style={{...cardStyle,borderColor:'#dc2626',background:'#fef2f2',marginTop:14}}>
+          <strong>Pocket WiFi return schedules need reconciliation.</strong>
+          <div style={{marginTop:6}}>These paid orders record a router outside operations but do not have a valid rental end date. Verify the durable order against Stripe and the customer booking before giving return instructions or releasing inventory.</div>
+          <ul>{returnScheduleExceptions.slice(0,50).map((order:any)=><li key={order.id} style={{marginBottom:8}}>
+            <a href={`#order-${order.id}`}><strong>Order #{order.id}</strong></a>
+            {' · '}{order.customer_name || order.email || order.phone || 'Customer details unavailable'}
+            {' · '}status <code>{order.fulfilment_status || 'unknown'}</code>
+            {' · '}rental end <code>{order.travel_end || 'missing'}</code>
+          </li>)}</ul>
+          {returnScheduleExceptions.length > 50 && <div><strong>{returnScheduleExceptions.length - 50} more schedule exceptions are not expanded here.</strong> Review the flagged order rows below to reconcile the full queue.</div>}
         </div>}
         {!stripeEventResult.error && webhookFailures.length > 0 && <div role="alert" style={{...cardStyle,borderColor:'#dc2626',background:'#fef2f2',marginTop:14}}>
           <strong>Payment processing needs attention.</strong>

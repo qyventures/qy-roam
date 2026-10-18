@@ -9126,10 +9126,16 @@ test('Pocket WiFi return prompts follow the rental date even before an admin sta
   assert.equal(pocketWifiReturnTiming(isoDaysAgo(6), 'paid'), 'not_due');
   assert.equal(pocketWifiReturnTiming(isoDaysAgo(6), 'packing'), 'not_due');
   assert.equal(pocketWifiReturnTiming(isoDaysAgo(6), 'awaiting_payment'), 'not_due');
+  // A router already outside operations must not disappear from every return
+  // queue when its durable itinerary is damaged or missing.
+  assert.equal(pocketWifiReturnTiming(null, 'dispatched'), 'schedule_unknown');
+  assert.equal(pocketWifiReturnTiming('', 'with_customer'), 'schedule_unknown');
+  assert.equal(pocketWifiReturnTiming('2026-02-30', 'with_customer'), 'schedule_unknown');
+  assert.equal(pocketWifiReturnTiming(null, 'paid'), 'not_due');
   assert.equal(pocketWifiReturnTiming(isoDaysAgo(6), 'returned'), 'complete');
   assert.equal(pocketWifiReturnTiming(isoDaysAgo(6), 'closed'), 'complete');
   assert.equal(pocketWifiReturnTiming(isoDaysAgo(6), 'cancelled'), 'complete');
-  assert.equal(pocketWifiReturnTiming('invalid', 'with_customer'), 'not_due');
+  assert.equal(pocketWifiReturnTiming('invalid', 'with_customer'), 'schedule_unknown');
 
   assert.match(bookingPage, /pocketWifiReturnTiming\(order\.travel_end, fulfilment\)/);
   assert.match(bookingPage, /returnTiming === 'due' \|\| returnTiming === 'overdue'/);
@@ -9137,6 +9143,10 @@ test('Pocket WiFi return prompts follow the rental date even before an admin sta
   assert.match(adminPage, /pocketWifiReturnTiming\(order\.travel_end, order\.fulfilment_status\)/);
   assert.match(adminPage, /const timing = pocketWifiReturnTiming\(o\.travel_end, o\.fulfilment_status\);/);
   assert.match(adminPage, /timing === 'due' \|\| timing === 'overdue'/);
+  assert.match(adminPage, /const returnScheduleExceptions = active\.filter/);
+  assert.match(adminPage, /pocketWifiReturnTiming\(o\.travel_end, o\.fulfilment_status\) === 'schedule_unknown'/);
+  assert.match(adminPage, /WiFi return schedule exceptions/);
+  assert.match(adminPage, /Pocket WiFi return schedules need reconciliation\./);
 });
 
 test('Pocket WiFi rejects unreviewed prices before spending shared checkout capacity', () => {

@@ -5,7 +5,7 @@ import { operationalDaysFromToday } from './operationalDate';
 // surrounding operational-date helper always evaluates travel dates in SG.
 export const POCKET_WIFI_RETURN_GRACE_DAYS = 5;
 
-export type PocketWifiReturnTiming = 'not_due' | 'due' | 'overdue' | 'complete';
+export type PocketWifiReturnTiming = 'not_due' | 'due' | 'overdue' | 'schedule_unknown' | 'complete';
 
 /**
  * Derive the customer and operations return prompt from the booked rental end,
@@ -30,6 +30,12 @@ export function pocketWifiReturnTiming(
   // Only custody states can become date-driven return work.
   if (!['dispatched', 'with_customer'].includes(fulfilmentStatus || '')) return 'not_due';
   const daysUntilEnd = operationalDaysFromToday(travelEnd);
-  if (typeof daysUntilEnd !== 'number' || daysUntilEnd >= 0) return 'not_due';
+  // Once a router has left operations, a missing or malformed rental end is
+  // not evidence that no return is due. Surface it as a schedule exception so
+  // the assigned physical device cannot disappear from both the dispatch and
+  // return queues indefinitely. Valid future dates remain ordinary not-due
+  // rentals and customer-facing pages do not invent a deadline.
+  if (typeof daysUntilEnd !== 'number') return 'schedule_unknown';
+  if (daysUntilEnd >= 0) return 'not_due';
   return daysUntilEnd < -POCKET_WIFI_RETURN_GRACE_DAYS ? 'overdue' : 'due';
 }
