@@ -4,7 +4,7 @@ import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { fulfilmentNotificationActionable, validFulfilmentStatus, validFulfilmentTransition } from '@/lib/orderLifecycle';
 import { validateQyRoamSession } from '@/lib/qyRoamSession';
 import { deliverFulfilmentNotification, deliverMetaPurchase } from '@/app/api/stripe-webhook/route';
-import { hasIdentityRequestContentEncoding, InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '@/lib/requestBody';
+import { hasIdentityRequestContentEncoding, InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, validateLimitedRequestContentLength } from '@/lib/requestBody';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/productionReadiness';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
 import { hasRequiredMetaCapiPurchaseConfig } from '@/lib/runtimeConfig';
@@ -139,6 +139,15 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   // upstream proxy or the application runtime decoded the request stream.
   if (!hasIdentityRequestContentEncoding(req.headers.get('content-encoding'))) {
     return NextResponse.json({ error: 'Unsupported request content encoding' }, { status: 415 });
+  }
+  // A declared oversized or malformed body needs no stream work. Reject it
+  // before an authenticated stale client can retain this route until the
+  // body deadline despite having already supplied a conclusive header.
+  try {
+    validateLimitedRequestContentLength(req, MAX_ADMIN_ORDER_BODY_BYTES);
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) return NextResponse.json({ error: 'Request too large' }, { status: 413 });
+    return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
   }
   let body: Record<string, unknown>;
   try {
@@ -560,6 +569,16 @@ async function retryOrderDeliveries(_req: Request, { params }: { params: { id: s
 export async function POST(req: Request, context: { params: { id: string } }) {
   if (!hasIdentityRequestContentEncoding(req.headers.get('content-encoding'))) {
     return NextResponse.json({ error: 'Unsupported request content encoding' }, { status: 415, headers: { 'Cache-Control': 'no-store' } });
+  }
+  // This command is bodyless, so any positive or malformed declared length
+  // can be rejected without waiting for the peer to send (or stall) a body.
+  try {
+    validateLimitedRequestContentLength(req, 0);
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) {
+      return NextResponse.json({ error: 'Delivery retry requests must not include a body' }, { status: 413, headers: { 'Cache-Control': 'no-store' } });
+    }
+    return NextResponse.json({ error: 'Invalid request' }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
   }
   try {
     await readLimitedRequestText(req, 0, ADMIN_DELIVERY_RETRY_BODY_TIMEOUT_MS);

@@ -3,7 +3,7 @@ import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { initialFulfilmentStatus, validFulfilmentStatus } from '@/lib/orderLifecycle';
 import { parseExactIsoDate } from '@/lib/checkoutValidation';
 import { operationalConfig } from '@/lib/operationalConfig';
-import { hasIdentityRequestContentEncoding, InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError } from '@/lib/requestBody';
+import { hasIdentityRequestContentEncoding, InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, validateLimitedRequestContentLength } from '@/lib/requestBody';
 import { isSafeSmtpMailbox } from '@/lib/smtp';
 import { getEsimPlan } from '@/lib/esimPlans';
 import { manualOrderReference, manualOrderSessionId } from '@/lib/manualOrderReference';
@@ -180,6 +180,15 @@ export async function POST(req: NextRequest) {
   // cannot turn a small declared admin request into a larger mutation body.
   if (!hasIdentityRequestContentEncoding(req.headers.get('content-encoding'))) {
     return NextResponse.json({ error: 'Unsupported request content encoding' }, { status: 415 });
+  }
+  // Reject an impossible declared size before entering the streaming reader.
+  // An authenticated client can otherwise hold this route until the upload
+  // deadline even though its headers already prove the mutation is invalid.
+  try {
+    validateLimitedRequestContentLength(req, MAX_ADMIN_OPS_BODY_BYTES);
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) return NextResponse.json({ error: 'Request too large' }, { status: 413 });
+    return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
   }
   let raw: string;
   try {

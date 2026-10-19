@@ -3339,6 +3339,21 @@ test('admin mutation body limits cannot be bypassed through content coding', () 
   }
 });
 
+test('admin mutations reject impossible declared body lengths before streaming', () => {
+  for (const source of [adminOpsRoute, adminOrderRoute]) {
+    const declaredLengthCheck = source.indexOf('validateLimitedRequestContentLength(req,');
+    const bodyRead = source.indexOf('readLimitedRequestText(req,');
+    assert.ok(declaredLengthCheck >= 0, 'admin mutation must validate its declared body length');
+    assert.ok(bodyRead > declaredLengthCheck, 'admin mutation must reject an impossible declared length before reading the body');
+  }
+
+  const postHandler = adminOrderRoute.slice(adminOrderRoute.indexOf('export async function POST'));
+  const declaredLengthCheck = postHandler.indexOf('validateLimitedRequestContentLength(req, 0)');
+  const bodyRead = postHandler.indexOf('readLimitedRequestText(req, 0, ADMIN_DELIVERY_RETRY_BODY_TIMEOUT_MS)');
+  assert.ok(declaredLengthCheck >= 0, 'bodyless delivery retry must validate its declared length');
+  assert.ok(bodyRead > declaredLengthCheck, 'bodyless delivery retry must reject a declared body before streaming');
+});
+
 test('bodyless admin delivery retries reject stalled or oversized uploads before recovery admission', () => {
   const postHandler = adminOrderRoute.slice(adminOrderRoute.indexOf('export async function POST'));
   const encodingGuard = postHandler.indexOf("hasIdentityRequestContentEncoding(req.headers.get('content-encoding'))");
