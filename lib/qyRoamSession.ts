@@ -41,6 +41,7 @@ function historicalPocketWifiSnapshotIsConsistent(session: Stripe.Checkout.Sessi
   const metadata = session.metadata;
   const country = metadata?.country || '';
   const daily = moneyMetadataCents(metadata?.daily_rate_sgd);
+  const benchmark = moneyMetadataCents(metadata?.benchmark_rate_sgd);
   const rental = moneyMetadataCents(metadata?.rental_before_promo_sgd);
   const discount = moneyMetadataCents(metadata?.promo_discount_sgd);
   const courierFee = moneyMetadataCents(metadata?.courier_fee_sgd);
@@ -49,9 +50,17 @@ function historicalPocketWifiSnapshotIsConsistent(session: Stripe.Checkout.Sessi
     daily === null || daily < 1 || rental === null || discount === null || courierFee === null ||
     !checkoutAmountSnapshotIsConsistent(session) || !Number.isSafeInteger(checkoutAmount) || checkoutAmount < 1 ||
     !metadata?.benchmark_provider || metadata.benchmark_provider.length > 100 ||
-    moneyMetadataCents(metadata?.benchmark_rate_sgd) === null || !/^\d{4}-\d{2}-\d{2}$/.test(metadata?.benchmark_verified_on || '')) {
+    benchmark === null || benchmark < 1 || !/^\d{4}-\d{2}-\d{2}$/.test(metadata?.benchmark_verified_on || '')) {
     return false;
   }
+  // A retired or repriced catalogue row cannot re-authorise the public
+  // below-benchmark claim from today's plan data. Reconstruct that claim from
+  // the signed integer-cent snapshot instead. The HMAC proves authorship, but
+  // it must not make a server-side construction defect (such as recording a
+  // benchmark equal to or below QY's price) saleable or fulfilment-worthy.
+  // Cross multiplication keeps the comparison exact and aligned with the
+  // catalogue's approved minimum discount without floating-point rounding.
+  if (daily * 100 > benchmark * (100 - WIFI_BENCHMARK.minimumDiscountPercent)) return false;
   const expectedRental = pocketWifiRentalCents(daily / 100, days);
   const expectedDiscount = metadata?.promo_code === LAUNCH_PROMO.code
     ? Math.floor((expectedRental * LAUNCH_PROMO.percent) / 100)

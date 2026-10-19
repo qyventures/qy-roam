@@ -2287,6 +2287,35 @@ test('accepts every server-authored Pocket WiFi catalogue session', () => {
   for (const plan of WIFI_PLANS) assert.deepEqual(validateQyRoamSession(wifiSession(plan)), { valid: true, productType: 'pocket_wifi' });
 });
 
+test('accepts an authenticated historical Pocket WiFi plan after it is retired', () => {
+  const plan = WIFI_PLANS[0];
+  const session = wifiSession(plan);
+  WIFI_PLANS.splice(0, 1);
+  try {
+    assert.deepEqual(validateQyRoamSession(session), { valid: true, productType: 'pocket_wifi' });
+  } finally {
+    WIFI_PLANS.unshift(plan);
+  }
+});
+
+test('historical Pocket WiFi snapshots retain the approved below-benchmark price basis', () => {
+  const plan = WIFI_PLANS[0];
+  const session = wifiSession(plan);
+  // Model a server-side construction defect rather than external tampering:
+  // all commercial fields remain internally consistent and are signed, but
+  // the archived benchmark no longer supports the approved minimum discount.
+  session.metadata.benchmark_rate_sgd = session.metadata.daily_rate_sgd;
+  session.metadata.qyroam_provenance = signedQyRoamProvenance(session.id, session.metadata);
+  WIFI_PLANS.splice(0, 1);
+  try {
+    const validation = validateQyRoamSession(session);
+    assert.equal(validation.valid, false);
+    assert.match(validation.reason, /historical snapshot/);
+  } finally {
+    WIFI_PLANS.unshift(plan);
+  }
+});
+
 test('rejects Pocket WiFi amount, dates, promo, and catalogue tampering', () => {
   for (const mutate of [
     (s) => { s.amount_total -= 1; },
