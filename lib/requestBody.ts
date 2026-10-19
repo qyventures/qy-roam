@@ -35,6 +35,23 @@ function validRequestBodyLimit(maxBytes: number, timeoutMs: number) {
     Number.isSafeInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= MAX_REQUEST_BODY_TIMEOUT_MS;
 }
 
+// Content-Length is only a hint until the streaming reader compares it with
+// the bytes actually received, but an invalid or already-oversized hint can be
+// rejected before a request occupies a scarce slow-upload slot. Keep the
+// classification shared with the reader so pre-admission and final validation
+// cannot disagree about whether a request is malformed or too large.
+export function validateLimitedRequestContentLength(req: Request, maxBytes: number) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > MAX_REQUEST_BODY_LIMIT_BYTES) {
+    throw new InvalidRequestBodyLimitError('Invalid request body limit');
+  }
+  try {
+    return declaredContentLength(req.headers.get('content-length'), maxBytes);
+  } catch (error) {
+    if (error instanceof RangeError) throw new RequestBodyTooLargeError('Request body is too large');
+    throw new InvalidRequestBodyLengthError('Invalid request body length');
+  }
+}
+
 /**
  * Accept JSON media types with optional parameters (for example a charset),
  * but do not treat a lookalike type such as `application/jsonp` as JSON.
@@ -70,13 +87,7 @@ export async function readLimitedRequestText(req: Request, maxBytes: number, tim
   if (!validRequestBodyLimit(maxBytes, timeoutMs)) {
     throw new InvalidRequestBodyLimitError('Invalid request body limits');
   }
-  let contentLength: number | null;
-  try {
-    contentLength = declaredContentLength(req.headers.get('content-length'), maxBytes);
-  } catch (error) {
-    if (error instanceof RangeError) throw new RequestBodyTooLargeError('Request body is too large');
-    throw new InvalidRequestBodyLengthError('Invalid request body length');
-  }
+  const contentLength = validateLimitedRequestContentLength(req, maxBytes);
   if (!req.body) {
     if (!contentLengthMatches(contentLength, 0)) throw new InvalidRequestBodyLengthError('Request body length does not match Content-Length');
     return '';

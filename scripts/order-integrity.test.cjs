@@ -35,7 +35,7 @@ const { MAX_POCKET_WIFI_INVENTORY, operationalConfig } = require('../lib/operati
 const { validStripeCheckoutSessionId, validStripeCheckoutSessionIdForMode } = require('../lib/stripeSessionId.ts');
 const { validStripeEventCreated, validStripePaymentEventCreated, STRIPE_EVENT_CREATED_MIN_SECONDS, STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS } = require('../lib/stripeEventCreated.ts');
 const { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesEvent, stripeWebhookCheckoutSessionMatchesSnapshot, stripeWebhookEventEnvelope } = require('../lib/stripeWebhookObject.ts');
-const { hasIdentityRequestContentEncoding, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError, InvalidRequestBodyLimitError, MAX_REQUEST_BODY_CHUNKS, MAX_JSON_CONTENT_TYPE_HEADER_LENGTH, MAX_CONTENT_ENCODING_HEADER_LENGTH } = require('../lib/requestBody.ts');
+const { hasIdentityRequestContentEncoding, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError, InvalidRequestBodyLimitError, MAX_REQUEST_BODY_CHUNKS, MAX_JSON_CONTENT_TYPE_HEADER_LENGTH, MAX_CONTENT_ENCODING_HEADER_LENGTH, validateLimitedRequestContentLength } = require('../lib/requestBody.ts');
 const { checkoutClientKey, createCheckoutAttemptLimiter, createGlobalAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { ADMIN_AUTH_GLOBAL_MAX_FAILURES, adminAuthClientKey, createFailedAdminAuthLimiter, createGlobalFailedAdminAuthLimiter } = require('../lib/adminAuthRateLimit.ts');
 const { CONFIRMATION_RATE_LIMIT_WINDOW_MS, CONFIRMATION_CLIENT_RATE_LIMIT_MAX_ATTEMPTS, CONFIRMATION_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS } = require('../lib/confirmationRateLimit.ts');
@@ -3139,6 +3139,33 @@ test('checkout request bodies are bounded for chunked, malformed, and slow uploa
     body: new ReadableStream({ pull() { return new Promise(() => {}); } }),
   };
   await assert.rejects(() => readLimitedRequestText(stalled, 4096, 20), RequestBodyTimeoutError);
+});
+
+test('checkout rejects impossible declared body lengths before upload admission', () => {
+  assert.equal(
+    validateLimitedRequestContentLength(new Request('https://qyroam.test', {
+      headers: { 'content-length': '4096' },
+    }), 4096),
+    4096,
+  );
+  assert.throws(
+    () => validateLimitedRequestContentLength(new Request('https://qyroam.test', {
+      headers: { 'content-length': '4097' },
+    }), 4096),
+    RequestBodyTooLargeError,
+  );
+  assert.throws(
+    () => validateLimitedRequestContentLength(new Request('https://qyroam.test', {
+      headers: { 'content-length': 'not-a-number' },
+    }), 4096),
+    InvalidRequestBodyLengthError,
+  );
+
+  for (const route of [wifiCheckoutRoute, esimCheckoutRoute]) {
+    const declaredLengthCheck = route.indexOf('validateLimitedRequestContentLength(req,');
+    const uploadAdmission = route.indexOf('tryAcquireCheckoutUpload()');
+    assert.ok(declaredLengthCheck > 0 && uploadAdmission > declaredLengthCheck);
+  }
 });
 
 test('declared Content-Length values are canonical, safely bounded, and exact', () => {
