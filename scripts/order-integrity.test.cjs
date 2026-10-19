@@ -2535,7 +2535,9 @@ test('checkout provenance configuration rejects malformed rotation keys before p
 test('accepts an authenticated historical price snapshot after a catalogue update', () => {
   const session = esimSession();
   // This represents a Checkout Session issued before a legitimate reprice.
-  // Its v2 signature binds the amount snapshot and all order metadata.
+  // Its v2 signature binds the amount snapshot and all order metadata, while
+  // the historical validator independently proves the advertised discount.
+  session.metadata.benchmark_price_sgd = (ESIM_PLANS[0].benchmarkPriceSgd + 0.01).toFixed(2);
   session.amount_total += 1;
   session.metadata.checkout_amount_cents = String(session.amount_total);
   session.metadata.qyroam_provenance = signedQyRoamProvenance(session.id, session.metadata);
@@ -2569,6 +2571,25 @@ test('retired eSIM plans require a complete signed data entitlement snapshot', (
   const plan = ESIM_PLANS[0];
   const session = esimSession(plan);
   delete session.metadata.data_allowance;
+  session.metadata.qyroam_provenance = signedQyRoamProvenance(session.id, session.metadata);
+  ESIM_PLANS.splice(0, 1);
+  try {
+    const validation = validateQyRoamSession(session);
+    assert.equal(validation.valid, false);
+    assert.match(validation.reason, /historical snapshot/);
+  } finally {
+    ESIM_PLANS.unshift(plan);
+  }
+});
+
+test('retired eSIM plans require the signed charge to match the advertised historical discount', () => {
+  const plan = ESIM_PLANS[0];
+  const session = esimSession(plan);
+  // Model a server-side construction defect, not external metadata tampering:
+  // the malformed snapshot is validly signed and internally agrees with the
+  // Stripe charge, but is not 15% below its recorded benchmark.
+  session.amount_total += 1;
+  session.metadata.checkout_amount_cents = String(session.amount_total);
   session.metadata.qyroam_provenance = signedQyRoamProvenance(session.id, session.metadata);
   ESIM_PLANS.splice(0, 1);
   try {

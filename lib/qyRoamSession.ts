@@ -66,6 +66,7 @@ function historicalEsimSnapshotIsConsistent(session: Stripe.Checkout.Session) {
   const country = metadata?.country || '';
   const planName = metadata?.plan_name || '';
   const checkoutAmount = Number(metadata?.checkout_amount_cents);
+  const benchmarkPrice = moneyMetadataCents(metadata?.benchmark_price_sgd);
   const dataAllowance = metadata?.data_allowance;
   // The checkout provenance authenticates this immutable-at-creation snapshot.
   // These checks still reject malformed records if a historic plan has since
@@ -80,8 +81,14 @@ function historicalEsimSnapshotIsConsistent(session: Stripe.Checkout.Session) {
     // could not provision unambiguously).
     typeof dataAllowance === 'string' && dataAllowance.length > 0 && dataAllowance.length <= 200 &&
     metadata?.promo_code === ESIM_PROMO.code && metadata?.promo_discount_percent === String(ESIM_PROMO.percent) &&
-    moneyMetadataCents(metadata?.benchmark_price_sgd) !== null &&
+    benchmarkPrice !== null && benchmarkPrice > 0 &&
     checkoutAmountSnapshotIsConsistent(session) && Number.isSafeInteger(checkoutAmount) && checkoutAmount >= 50 &&
+    // A retired plan has no live catalogue row to re-authorise its price.
+    // Reconstruct the advertised cent-floored launch price from the signed
+    // benchmark instead of treating any positive signed amount as a valid
+    // digital entitlement. This preserves legitimate historical sessions
+    // while catching malformed server-authored snapshots before fulfilment.
+    checkoutAmount === Math.floor(benchmarkPrice * (100 - ESIM_PROMO.percent) / 100) &&
     session.currency?.toLowerCase() === 'sgd';
 }
 
