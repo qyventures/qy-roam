@@ -28,10 +28,19 @@ function customerRequestInputIsSameOrigin(input: RequestInfo | URL) {
   const raw = input instanceof Request ? input.url : input instanceof URL ? input.href : input;
 
   // Relative application paths remain testable outside a browser, while an
-  // absolute input needs the browser's current origin as its authority. A
-  // scheme-relative URL is absolute for security purposes even though URL's
-  // parser accepts it against a base.
-  if (typeof raw === 'string' && raw.startsWith('/') && !raw.startsWith('//')) return true;
+  // absolute input needs the browser's current origin as its authority. Parse
+  // even an apparently root-relative path: for special URL schemes browsers
+  // normalise backslashes as path separators, so `/\\example.com` resolves to
+  // a cross-origin authority rather than an application path.
+  if (typeof raw === 'string' && raw.startsWith('/') && !raw.startsWith('//')) {
+    try {
+      const relativeBase = new URL('https://qy-roam.invalid/');
+      const target = new URL(raw, relativeBase);
+      return target.protocol === relativeBase.protocol && target.origin === relativeBase.origin;
+    } catch {
+      return false;
+    }
+  }
   if (typeof window === 'undefined') return false;
 
   try {

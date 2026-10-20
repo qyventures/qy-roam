@@ -1280,6 +1280,13 @@ test('customer checkout requests release a stuck browser without rotating their 
       /current application origin/,
     );
     await assert.rejects(
+      // WHATWG URL parsing treats backslashes like slashes for HTTPS URLs.
+      // A superficial root-relative check would send this capability-bearing
+      // request to example.com after the browser normalises its authority.
+      () => fetchCustomerRequest('/\\example.com/api/checkout', { method: 'POST' }, 100),
+      /current application origin/,
+    );
+    await assert.rejects(
       // A caller cannot opt back into Fetch's default redirect following or
       // broaden credential delivery. Checkout and confirmation capabilities
       // must come directly from the selected same-origin endpoint.
