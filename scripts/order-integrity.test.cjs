@@ -2975,12 +2975,19 @@ test('paid orders fail into the durable webhook recovery ledger when fulfilment 
     paidFulfilmentDetailsIssue({ ...paidWifi, customer_details: { ...paidWifi.customer_details, phone: '123' } }, 'pocket_wifi'),
     'Paid Pocket WiFi order is missing a valid customer phone number',
   );
-  for (const phone of [65_8032_7183, `+65 ${' '.repeat(30)}8032 7183`, '+65 8032 7183\n']) {
+  for (const phone of [
+    65_8032_7183,
+    `+65 ${' '.repeat(30)}8032 7183`,
+    '+65 8032 7183\n',
+    'callmeABC81234567',
+    '65+80327183',
+  ]) {
     assert.equal(
       paidFulfilmentDetailsIssue({ ...paidWifi, customer_details: { ...paidWifi.customer_details, phone } }, 'pocket_wifi'),
       'Paid Pocket WiFi order is missing a valid customer phone number',
     );
   }
+  assert.match(schema, /coalesce\(phone, ''\) ~ '\^\\\+\?\[0-9 \(\)-\]\+\$'/);
   assert.equal(
     paidFulfilmentDetailsIssue({ ...paidWifi, shipping_details: { address: { country: 'MY', line1: '1 Road', postal_code: '12345' } } }, 'pocket_wifi'),
     'Paid Pocket WiFi order is missing a complete Singapore delivery address',

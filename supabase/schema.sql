@@ -707,6 +707,10 @@ alter table public.orders add constraint orders_paid_stripe_fulfilment_details_c
       product_type = 'esim' or
       (
         product_type = 'pocket_wifi' and
+        -- Keep direct service-role writes on the same dialable-character
+        -- boundary as the webhook. Merely counting digits would also accept
+        -- arbitrary letters or an embedded plus sign around those digits.
+        coalesce(phone, '') ~ '^\+?[0-9 ()-]+$' and
         length(regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g')) between 7 and 15 and
         jsonb_typeof(shipping_address) = 'object' and
         shipping_address ->> 'country' = 'SG' and
