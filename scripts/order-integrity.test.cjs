@@ -2421,6 +2421,35 @@ test('rejects unsupported Stripe payment states before order persistence', () =>
   assert.match(schema, /if p_payment_failed and p_payment_status <> 'unpaid' then raise exception 'failed payment must be unpaid'/);
 });
 
+test('shared order validation rejects impossible paid Checkout lifecycle combinations', () => {
+  for (const createSession of [esimSession, wifiSession]) {
+    for (const status of ['open', 'expired']) {
+      const session = createSession();
+      session.status = status;
+      session.payment_status = 'paid';
+      assert.deepEqual(validateQyRoamSession(session), {
+        valid: false,
+        reason: 'QY Roam paid order is not a complete Checkout Session',
+      });
+    }
+
+    const completedPaid = createSession();
+    completedPaid.status = 'complete';
+    completedPaid.payment_status = 'paid';
+    assert.deepEqual(validateQyRoamSession(completedPaid), {
+      valid: true,
+      productType: completedPaid.metadata.product_type,
+    });
+
+    const completedUnpaid = createSession();
+    completedUnpaid.status = 'complete';
+    assert.deepEqual(validateQyRoamSession(completedUnpaid), {
+      valid: true,
+      productType: completedUnpaid.metadata.product_type,
+    });
+  }
+});
+
 test('requires Stripe-recorded terms acceptance at every trusted order boundary', () => {
   for (const createSession of [esimSession, wifiSession]) {
     const missing = createSession();

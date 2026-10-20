@@ -157,6 +157,17 @@ function validateQyRoamSessionSnapshot(session: Stripe.Checkout.Session): QyRoam
   if (session.payment_status !== 'paid' && session.payment_status !== 'unpaid') {
     return { valid: false, reason: 'QY Roam order has an unsupported payment status' };
   }
+  // The individual values above are not sufficient: Stripe's lifecycle also
+  // constrains which combinations can describe a real positive-value Checkout
+  // Session. A paid Session is complete; an open or expired Session is still
+  // unpaid. Keep that invariant in this shared authority so confirmation,
+  // booking status, admin recovery, and any future caller cannot authenticate
+  // an impossible provider response merely because each field is recognised.
+  // Completed + unpaid remains valid for asynchronous payment methods while
+  // Stripe is waiting for their later succeeded/failed event.
+  if (session.payment_status === 'paid' && session.status !== 'complete') {
+    return { valid: false, reason: 'QY Roam paid order is not a complete Checkout Session' };
+  }
   if (!validCheckoutRequestId(session.metadata?.checkout_request_id)) {
     return { valid: false, reason: 'missing or invalid checkout request id' };
   }
