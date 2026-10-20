@@ -1263,13 +1263,21 @@ test('customer checkout requests release a stuck browser without rotating their 
 
   const originalFetch = global.fetch;
   let receivedSignal;
-  global.fetch = async (_input, init) => new Promise(() => { receivedSignal = init.signal; });
+  let receivedRedirect;
+  global.fetch = async (_input, init) => new Promise(() => {
+    receivedSignal = init.signal;
+    receivedRedirect = init.redirect;
+  });
   try {
     await assert.rejects(
-      () => fetchCustomerRequest('/api/checkout', { method: 'POST' }, 1),
+      // A caller cannot opt back into Fetch's default redirect following.
+      // Checkout and confirmation capabilities must come directly from the
+      // same-origin endpoint selected by the storefront request.
+      () => fetchCustomerRequest('/api/checkout', { method: 'POST', redirect: 'follow' }, 1),
       CustomerRequestTimeoutError,
     );
     assert.equal(receivedSignal.aborted, true);
+    assert.equal(receivedRedirect, 'error');
 
     // Receiving headers is not completion: a proxy or dropped mobile
     // connection can stall while the browser consumes the JSON body. The

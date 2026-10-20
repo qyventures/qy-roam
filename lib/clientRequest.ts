@@ -196,7 +196,15 @@ async function runCustomerRequest<T>(
   else callerSignal?.addEventListener('abort', abortFromCaller, { once: true });
 
   try {
-    const operation = fetch(input, { ...init, signal: controller.signal })
+    // These helpers are an authority boundary for checkout URLs and completed
+    // Session ids returned by QY Roam's same-origin APIs. Fetch follows
+    // redirects by default, including POST redirects that can change the
+    // method to GET. A proxy, service worker, or future route regression must
+    // not be able to move that request to another response authority before
+    // the bounded JSON and capability validators run. Keep this after the
+    // caller's init so an accidental `redirect: 'follow'` cannot weaken the
+    // shared contract.
+    const operation = fetch(input, { ...init, signal: controller.signal, redirect: 'error' })
       .then((response) => consume(response, controller.signal));
     return await Promise.race([operation, deadline]);
   } finally {
