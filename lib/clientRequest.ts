@@ -24,6 +24,25 @@ type CustomerJsonResponse = {
   value: unknown;
 };
 
+function customerRequestInputIsSameOrigin(input: RequestInfo | URL) {
+  const raw = input instanceof Request ? input.url : input instanceof URL ? input.href : input;
+
+  // Relative application paths remain testable outside a browser, while an
+  // absolute input needs the browser's current origin as its authority. A
+  // scheme-relative URL is absolute for security purposes even though URL's
+  // parser accepts it against a base.
+  if (typeof raw === 'string' && raw.startsWith('/') && !raw.startsWith('//')) return true;
+  if (typeof window === 'undefined') return false;
+
+  try {
+    const target = new URL(raw, window.location.href);
+    return (target.protocol === 'https:' || target.protocol === 'http:') &&
+      target.origin === window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
 export function isCustomerJsonResponseContentType(value: string | null) {
   if (!value || value.length > CUSTOMER_JSON_CONTENT_TYPE_MAX_LENGTH) return false;
   const parts = value.split(';').map((part) => part.trim());
@@ -171,6 +190,9 @@ async function runCustomerRequest<T>(
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
     throw new RangeError('Invalid customer request timeout');
   }
+  if (!customerRequestInputIsSameOrigin(input)) {
+    throw new TypeError('Customer requests must use the current application origin');
+  }
 
   const controller = new AbortController();
   const callerSignal = init.signal;
@@ -204,7 +226,12 @@ async function runCustomerRequest<T>(
     // the bounded JSON and capability validators run. Keep this after the
     // caller's init so an accidental `redirect: 'follow'` cannot weaken the
     // shared contract.
-    const operation = fetch(input, { ...init, signal: controller.signal, redirect: 'error' })
+    const operation = fetch(input, {
+      ...init,
+      signal: controller.signal,
+      redirect: 'error',
+      credentials: 'same-origin',
+    })
       .then((response) => consume(response, controller.signal));
     return await Promise.race([operation, deadline]);
   } finally {
