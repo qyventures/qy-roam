@@ -138,6 +138,15 @@ function validateQyRoamSessionSnapshot(session: Stripe.Checkout.Session): QyRoam
   if (session.mode !== 'payment') {
     return { valid: false, reason: 'QY Roam orders must use one-time payment Checkout mode' };
   }
+  // Customer confirmation and protected delivery recovery read Checkout
+  // Sessions directly from Stripe, while webhook callers validate a signed
+  // event transition before reaching this shared boundary. Do not make the
+  // direct-read callers rely on that webhook-only check: a missing, malformed,
+  // or future lifecycle value must not authenticate as an order snapshot that
+  // downstream code may persist, display, or use for fulfilment decisions.
+  if (session.status !== 'open' && session.status !== 'complete' && session.status !== 'expired') {
+    return { valid: false, reason: 'QY Roam order has an unsupported Checkout Session status' };
+  }
   // Every QY Roam Checkout Session has a positive payable amount. Stripe's
   // `no_payment_required` state (and any future/unknown SDK value) therefore
   // cannot represent one of our orders. Keep this explicit at the shared

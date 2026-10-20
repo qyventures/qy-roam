@@ -2192,6 +2192,7 @@ function esimSession(plan = ESIM_PLANS[0]) {
     livemode: false,
     created: Math.floor(Date.now() / 1000),
     mode: 'payment',
+    status: 'open',
     payment_status: 'unpaid',
     consent: { terms_of_service: 'accepted' },
     currency: 'sgd',
@@ -2223,6 +2224,7 @@ function wifiSession(plan = WIFI_PLANS[0]) {
     livemode: false,
     created: Math.floor(Date.now() / 1000),
     mode: 'payment',
+    status: 'open',
     payment_status: 'unpaid',
     consent: { terms_of_service: 'accepted' },
     currency: 'sgd',
@@ -2386,6 +2388,25 @@ test('rejects non-payment Checkout modes even with valid signed order metadata',
   assert.match(esimCheckoutRoute, /return session\.mode === 'payment' &&/);
   assert.match(wifiCheckoutRoute, /return session\.mode==='payment' &&/);
   assert.match(pocketWifiStripeHolds, /if \(session\.mode !== 'payment' \|\| session\.status !== 'open' \|\|[\s\S]*?!Number\.isSafeInteger\(session\.created\) \|\| session\.created < cutoff/);
+});
+
+test('shared order validation rejects unsupported Checkout lifecycle states', () => {
+  for (const createSession of [esimSession, wifiSession]) {
+    for (const status of [undefined, 'pending', 'cancelled']) {
+      const session = createSession();
+      session.status = status;
+      assert.deepEqual(validateQyRoamSession(session), {
+        valid: false,
+        reason: 'QY Roam order has an unsupported Checkout Session status',
+      });
+    }
+
+    for (const status of ['open', 'complete', 'expired']) {
+      const session = createSession();
+      session.status = status;
+      assert.equal(validateQyRoamSession(session).valid, true);
+    }
+  }
 });
 
 test('rejects unsupported Stripe payment states before order persistence', () => {
