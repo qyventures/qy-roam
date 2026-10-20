@@ -391,6 +391,38 @@ verify_webhook_ingress() {
   rm -f "$response_headers" "$response_body"
 }
 
+# Readiness proves that strong admin credentials are configured, but it does
+# not prove that the built middleware still protects the operations pages (or
+# that the public proxy preserves its authentication challenge). Exercise the
+# dashboard without credentials and require the exact fail-closed boundary.
+# This request is read-only and deliberately never submits operator secrets.
+verify_admin_ingress() {
+  local base_url="$1"
+  shift
+  local response_headers response_body status
+  response_headers="$(mktemp /tmp/qyroam-admin-headers.XXXXXX)"
+  response_body="$(mktemp /tmp/qyroam-admin-body.XXXXXX)"
+
+  status="$("$@" \
+    --dump-header "$response_headers" \
+    --output "$response_body" \
+    --write-out '%{http_code}' \
+    "$base_url/admin")" || {
+      rm -f "$response_headers" "$response_body"
+      return 1
+    }
+
+  if [[ "$status" != "401" ]] ||
+     ! grep -Eiq '^www-authenticate:[[:space:]]*Basic realm="QY Roam Admin"[[:space:]]*$' "$response_headers" ||
+     ! grep -Eiq '^cache-control:.*no-store' "$response_headers" ||
+     grep -Eiq '^cache-control:.*(public|s-maxage)' "$response_headers"; then
+    rm -f "$response_headers" "$response_body"
+    return 1
+  fi
+
+  rm -f "$response_headers" "$response_body"
+}
+
 echo "[6/11] Smoke-testing the production artifact"
 # A successful compilation does not prove that the standalone server can boot
 # or accept an order with the deployed runtime configuration. Test the exact
@@ -471,6 +503,10 @@ if ! verify_checkout_ingress "http://127.0.0.1:${smoke_port}" curl --silent --sh
 fi
 if ! verify_webhook_ingress "http://127.0.0.1:${smoke_port}" curl --silent --show-error --max-time 10; then
   echo "Built QY Roam artifact does not preserve the Stripe webhook ingress contract" >&2
+  exit 1
+fi
+if ! verify_admin_ingress "http://127.0.0.1:${smoke_port}" curl --silent --show-error --max-time 10; then
+  echo "Built QY Roam artifact does not preserve the protected admin ingress contract" >&2
   exit 1
 fi
 cleanup_smoke
@@ -638,6 +674,10 @@ if ! verify_checkout_ingress "$PUBLIC_ORIGIN" "${public_mutation_curl[@]}"; then
 fi
 if ! verify_webhook_ingress "$PUBLIC_ORIGIN" "${public_mutation_curl[@]}"; then
   echo "QY Roam public TLS ingress does not preserve the Stripe webhook ingress contract" >&2
+  exit 1
+fi
+if ! verify_admin_ingress "$PUBLIC_ORIGIN" "${public_mutation_curl[@]}"; then
+  echo "QY Roam public TLS ingress does not preserve the protected admin ingress contract" >&2
   exit 1
 fi
 

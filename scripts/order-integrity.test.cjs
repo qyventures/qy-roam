@@ -8799,6 +8799,19 @@ test('release verification enforces the complete customer ingress security bound
     deployScript.lastIndexOf('verify_webhook_ingress "$PUBLIC_ORIGIN"') < deployScript.indexOf('release_verified=1'),
     'an inert Stripe webhook POST must cross public TLS before rollback protection is discarded',
   );
+  // Readiness checks credential quality, but only an end-to-end request proves
+  // that middleware and the public proxy actually keep customer/order data
+  // behind Basic Auth. Verify the challenge before cutover and again before
+  // the known-good rollback artifact is discarded.
+  assert.match(deployScript, /verify_admin_ingress\(\)/);
+  assert.match(deployScript, /\$base_url\/admin/);
+  assert.match(deployScript, /\[\[ "\$status" != "401" \]\]/);
+  assert.match(deployScript, /www-authenticate:\[\[:space:\]\]\*Basic realm="QY Roam Admin"/);
+  assert.equal((deployScript.match(/verify_admin_ingress "/g) || []).length, 2);
+  assert.ok(
+    deployScript.lastIndexOf('verify_admin_ingress "$PUBLIC_ORIGIN"') < deployScript.indexOf('release_verified=1'),
+    'the unauthenticated admin challenge must cross public TLS before rollback protection is discarded',
+  );
 
   const hstsHeaders = nginxConfig.match(/add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;/g) || [];
   assert.equal(hstsHeaders.length, 2, 'both canonical and www TLS servers must emit HSTS');
