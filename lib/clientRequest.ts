@@ -10,6 +10,7 @@ export const CUSTOMER_JSON_RESPONSE_MAX_CHUNKS = 1_024;
 // cannot be useful to a customer response and should not make browser work
 // scale with a malformed proxy or service-worker header.
 export const CUSTOMER_JSON_CONTENT_TYPE_MAX_LENGTH = 256;
+export const CUSTOMER_JSON_CONTENT_ENCODING_MAX_LENGTH = 64;
 
 export class CustomerRequestTimeoutError extends Error {
   constructor() {
@@ -46,6 +47,21 @@ export function isCustomerJsonResponseContentType(value: string | null) {
   return true;
 }
 
+function customerResponseContentEncoding(value: string | null) {
+  if (value === null) return null;
+  // Fetch normally exposes the decoded representation while retaining the
+  // wire Content-Encoding header. Bound and validate that header before any
+  // normalisation so a malformed proxy/service-worker response cannot make
+  // checkout work scale with attacker-controlled metadata. Multiple or
+  // parameterised encodings are not valid for this compact same-origin JSON
+  // contract and therefore cannot waive the identity length check below.
+  if (!value || value.length > CUSTOMER_JSON_CONTENT_ENCODING_MAX_LENGTH ||
+      !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(value)) {
+    throw new Error('Invalid customer response content encoding');
+  }
+  return value.toLowerCase();
+}
+
 async function readBoundedJson(response: Response) {
   // Checkout URLs and completed-session ids are browser capabilities. A
   // proxy error page or stale service worker must not become authoritative
@@ -60,7 +76,10 @@ async function readBoundedJson(response: Response) {
     // Content-Length is bytes on the wire. Browsers may expose a decoded body
     // while retaining the encoded length, so it is useful as an early upper
     // bound but not as an exact decoded-length assertion.
-    if (!/^\d+$/.test(declared.trim())) {
+    // A safe integer has at most 16 decimal digits. Check the raw header
+    // before regex/number conversion; surrounding whitespace is not part of
+    // the canonical browser capability-response contract.
+    if (declared.length > String(Number.MAX_SAFE_INTEGER).length || !/^\d+$/.test(declared)) {
       void response.body?.cancel().catch(() => undefined);
       throw new Error('Invalid customer response length');
     }
@@ -69,6 +88,13 @@ async function readBoundedJson(response: Response) {
       void response.body?.cancel().catch(() => undefined);
       throw new Error('Customer response is too large');
     }
+  }
+  let contentEncoding: string | null;
+  try {
+    contentEncoding = customerResponseContentEncoding(response.headers.get('content-encoding'));
+  } catch (error) {
+    void response.body?.cancel().catch(() => undefined);
+    throw error;
   }
   if (!response.body) throw new Error('Customer response body is missing');
 
@@ -101,7 +127,6 @@ async function readBoundedJson(response: Response) {
   // Same-origin checkout APIs are uncompressed at the application boundary;
   // a short or overlong body there must not become an authoritative payment
   // capability merely because its available prefix is still valid JSON.
-  const contentEncoding = response.headers.get('content-encoding')?.trim().toLowerCase();
   if (declaredBytes !== null && (!contentEncoding || contentEncoding === 'identity') && total !== declaredBytes) {
     throw new Error('Customer response body length does not match Content-Length');
   }
