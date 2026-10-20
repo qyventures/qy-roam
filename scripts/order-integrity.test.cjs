@@ -3550,7 +3550,9 @@ test('declared Content-Length values are canonical, safely bounded, and exact', 
 
 test('bounded request readers do not retain one allocation per fragmented chunk', async () => {
   // The shared reader copies fragmented input into one bounded buffer and
-  // still preserves the exact payload.
+  // still preserves the exact payload. The webhook reader may replace its
+  // contiguous buffer geometrically for an undeclared length, but never
+  // retains a chunk array whose allocation count follows attacker input.
   const fragments = {
     headers: new Headers(),
     body: new ReadableStream({
@@ -3562,7 +3564,7 @@ test('bounded request readers do not retain one allocation per fragmented chunk'
   };
   assert.equal(await readLimitedRequestText(fragments, 1024, 100), '{"ok":true}');
   assert.match(fs.readFileSync(require.resolve('../lib/requestBody.ts'), 'utf8'), /const body = Buffer\.allocUnsafe\(maxBytes\)/);
-  assert.match(webhookRoute, /const body = Buffer\.allocUnsafe\(storageBytes\)/);
+  assert.match(webhookRoute, /let body = Buffer\.allocUnsafe\(storageBytes\)/);
   assert.match(webhookRoute, /const body=Buffer\.allocUnsafe\(storageBytes\)/);
   assert.doesNotMatch(webhookRoute, /const chunks: Uint8Array\[\] = \[\]/);
 });
@@ -7599,14 +7601,17 @@ test('fulfilment email retries retain one safe per-order message identity', () =
 
 test('Stripe webhook bounds raw payload memory before signature verification', () => {
   assert.match(webhookRoute, /const MAX_STRIPE_WEBHOOK_BODY_BYTES = 1_000_000/);
+  assert.match(webhookRoute, /const INITIAL_STRIPE_WEBHOOK_BODY_BYTES = 16 \* 1024/);
   assert.match(webhookRoute, /const MAX_STRIPE_SIGNATURE_HEADER_BYTES = 8_192/);
   assert.match(webhookRoute, /const STRIPE_WEBHOOK_BODY_TIMEOUT_MS = 15_000/);
   assert.match(webhookRoute, /class StripeWebhookBodyTimeoutError extends Error/);
   assert.match(webhookRoute, /async function readStripeWebhookBody\(req: Request\): Promise<Buffer>/);
   assert.match(webhookRoute, /declaredContentLength\(req\.headers\.get\('content-length'\),MAX_STRIPE_WEBHOOK_BODY_BYTES\)/);
-  assert.match(webhookRoute, /const storageBytes = contentLength \?\? MAX_STRIPE_WEBHOOK_BODY_BYTES/);
+  assert.match(webhookRoute, /const storageBytes = contentLength \?\? Math\.min\(INITIAL_STRIPE_WEBHOOK_BODY_BYTES,MAX_STRIPE_WEBHOOK_BODY_BYTES\)/);
   assert.match(webhookRoute, /Buffer\.allocUnsafe\(storageBytes\)/);
-  assert.match(webhookRoute, /if \(total > storageBytes\)[\s\S]{0,300}InvalidStripeWebhookBodyLengthError/);
+  assert.match(webhookRoute, /if \(contentLength !== null && total > storageBytes\)[\s\S]{0,300}InvalidStripeWebhookBodyLengthError/);
+  assert.match(webhookRoute, /while\(nextBytes<total\) nextBytes=Math\.min\(MAX_STRIPE_WEBHOOK_BODY_BYTES,Math\.max\(total,nextBytes\*2\)\)/);
+  assert.match(webhookRoute, /body\.copy\(grown,0,0,total-value\.byteLength\)/);
   assert.match(webhookRoute, /contentLengthMatches\(contentLength,total\)/);
   assert.match(webhookRoute, /InvalidStripeWebhookBodyLengthError/);
   assert.match(webhookRoute, /total > MAX_STRIPE_WEBHOOK_BODY_BYTES/);

@@ -45,6 +45,13 @@ export const runtime = 'nodejs';
 // body-size setting that may differ between production environments.
 const MAX_STRIPE_WEBHOOK_BODY_BYTES = 1_000_000;
 const MAX_STRIPE_WEBHOOK_BODY_CHUNKS = 4_096;
+// Stripe events are normally only a few KiB. Chunked HTTP requests do not
+// declare their final size, so reserving the full public limit for every
+// concurrent upload would turn the 32-slot admission pool into a guaranteed
+// 32 MB allocation even under ordinary traffic. Start small and grow one
+// contiguous buffer geometrically; the byte and chunk ceilings below still
+// bound both memory and copying for hostile streams.
+const INITIAL_STRIPE_WEBHOOK_BODY_BYTES = 16 * 1024;
 // Headers are ordinarily capped by the reverse proxy, but this public route
 // must remain safe when it is reached through a different proxy or directly
 // in an application runtime. Stripe's signed header is compact ASCII; reject
@@ -124,11 +131,11 @@ async function readStripeWebhookBody(req: Request): Promise<Buffer> {
   // A canonical Content-Length has already been bounded above. Most Stripe
   // events are only a few KiB, so reserve exactly that declared size instead
   // of charging every concurrent delivery the full 1 MB safety ceiling.
-  // Chunked requests still receive the fixed maximum; in both cases one
-  // contiguous allocation prevents fragmented input from multiplying stored
-  // payload memory. The independent chunk ceiling below bounds read work.
-  const storageBytes = contentLength ?? MAX_STRIPE_WEBHOOK_BODY_BYTES;
-  const body = Buffer.allocUnsafe(storageBytes);
+  // Chunked requests grow a single bounded buffer rather than reserving the
+  // full public ceiling up front. The independent chunk ceiling below bounds
+  // read work, while geometric growth keeps copy work logarithmic.
+  const storageBytes = contentLength ?? Math.min(INITIAL_STRIPE_WEBHOOK_BODY_BYTES,MAX_STRIPE_WEBHOOK_BODY_BYTES);
+  let body = Buffer.allocUnsafe(storageBytes);
   let total = 0;
   let chunks = 0;
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -165,9 +172,20 @@ async function readStripeWebhookBody(req: Request): Promise<Buffer> {
       // Besides keeping the allocation exact, this preserves the intended
       // malformed-length response rather than leaking a runtime RangeError
       // from the copy operation and misclassifying it as an oversized body.
-      if (total > storageBytes) {
+      if (contentLength !== null && total > storageBytes) {
         void reader.cancel().catch(() => undefined);
         throw new InvalidStripeWebhookBodyLengthError('Stripe webhook body length does not match Content-Length');
+      }
+      if (total > body.byteLength) {
+        // `total` has already passed the absolute byte ceiling above. Grow to
+        // the next power-of-two-like capacity without ever allocating beyond
+        // that ceiling, then retain only the bytes already authenticated as
+        // part of this request stream.
+        let nextBytes=body.byteLength;
+        while(nextBytes<total) nextBytes=Math.min(MAX_STRIPE_WEBHOOK_BODY_BYTES,Math.max(total,nextBytes*2));
+        const grown=Buffer.allocUnsafe(nextBytes);
+        body.copy(grown,0,0,total-value.byteLength);
+        body=grown;
       }
       body.set(value, total - value.byteLength);
     }

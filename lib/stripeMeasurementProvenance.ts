@@ -20,7 +20,11 @@ export function signedStripeMeasurementConsentDowngrade(
   const downgrade = stripeMeasurementConsentDowngrade(metadata, measurementConsent);
   if (!downgrade || !metadata) return null;
 
-  const narrowedMetadata = {
+  // Preserve the dynamic Stripe metadata map type after overriding consent.
+  // Without the annotation TypeScript narrows this object to only the known
+  // consent property, which rejects the deliberate attribution-key deletes
+  // and provenance re-signing during a production build.
+  const narrowedMetadata: Record<string, string> = {
     ...metadata,
     measurement_consent: 'essential',
   };
