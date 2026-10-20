@@ -17,7 +17,7 @@ import { durableOrderMatchesFailedSession, durableOrderMatchesPaidSession } from
 import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhookObject';
 import { tryAcquireCheckoutConcurrency, tryAcquireCheckoutUpload } from '@/lib/checkoutConcurrency';
-import { stripeMeasurementConsentDowngrade } from '@/lib/stripeMeasurementConsent';
+import { signedStripeMeasurementConsentDowngrade } from '@/lib/stripeMeasurementProvenance';
 
 export const runtime = 'nodejs';
 
@@ -312,7 +312,7 @@ export async function POST(req: Request) {
       });
     }
 
-    const consentDowngrade = stripeMeasurementConsentDowngrade(session.metadata, body.measurementConsent);
+    const consentDowngrade = signedStripeMeasurementConsentDowngrade(createdSessionId, session.metadata, body.measurementConsent);
     if (consentDowngrade) {
       const updated = await stripe.checkout.sessions.update(createdSessionId, { metadata: consentDowngrade });
       if (!stripeWebhookCheckoutSessionMatchesSnapshot(session, updated) ||

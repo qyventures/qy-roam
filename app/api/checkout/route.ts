@@ -22,7 +22,7 @@ import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhookObject';
 import { tryAcquireCheckoutConcurrency, tryAcquireCheckoutUpload } from '@/lib/checkoutConcurrency';
 import { scanActivePocketWifiStripeHolds } from '@/lib/pocketWifiStripeHolds';
-import { stripeMeasurementConsentDowngrade } from '@/lib/stripeMeasurementConsent';
+import { signedStripeMeasurementConsentDowngrade } from '@/lib/stripeMeasurementProvenance';
 import { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } from '@/lib/pocketWifiRentalPeriod';
 import { acknowledgedExpiredCheckoutReservationRelease, acknowledgedLinkedReservationRelease, acknowledgedUnlinkedReservationRelease } from '@/lib/checkoutReservationAcknowledgement';
 
@@ -316,7 +316,7 @@ export async function POST(req: Request) {
     if(!matchesRequestedPocketWifi(existing,requestId,requested,origin)){
       return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.',checkoutRequestConflict:true},{status:409,headers:{'Cache-Control':'no-store'}});
     }
-    const consentDowngrade=stripeMeasurementConsentDowngrade(existing.metadata,body.measurementConsent);
+    const consentDowngrade=signedStripeMeasurementConsentDowngrade(existing.id,existing.metadata,body.measurementConsent);
     if(consentDowngrade){
       const updated=await stripe.checkout.sessions.update(existing.id,{metadata:consentDowngrade});
       if(!stripeWebhookCheckoutSessionMatchesSnapshot(existing,updated)||
@@ -491,7 +491,7 @@ export async function POST(req: Request) {
     await releaseUnlinkedReservation(supabase,requestId);
     return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.',checkoutRequestConflict:true},{status:409,headers:{'Cache-Control':'no-store'}});
   }
-  const consentDowngrade=stripeMeasurementConsentDowngrade(session.metadata,body.measurementConsent);
+  const consentDowngrade=signedStripeMeasurementConsentDowngrade(createdSessionId,session.metadata,body.measurementConsent);
   if(consentDowngrade){
     const updated=await stripe.checkout.sessions.update(createdSessionId,{metadata:consentDowngrade});
     if(!stripeWebhookCheckoutSessionMatchesSnapshot(session,updated)||

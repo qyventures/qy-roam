@@ -94,6 +94,7 @@ const { STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS, STRIPE_WEBHOOK_MAX_CONCURRENT_UP
 const { validatedSalesReportRow } = require('../lib/salesReportRow.ts');
 const { validatedForecastRow } = require('../lib/forecastRow.ts');
 const { META_ATTRIBUTION_METADATA_KEYS, stripeMeasurementConsentDowngrade } = require('../lib/stripeMeasurementConsent.ts');
+const { signedStripeMeasurementConsentDowngrade } = require('../lib/stripeMeasurementProvenance.ts');
 const { saleablePocketWifiInventory: scanSaleablePocketWifiInventory } = require('../lib/pocketWifiStock.ts');
 const { retryableStripeConfirmationFailure } = require('../lib/confirmationLookupFailure.ts');
 const { CONFIRMATION_REFRESH_INITIAL_DELAY_MS, CONFIRMATION_REFRESH_MAX_DELAY_MS, CONFIRMATION_REFRESH_MAX_ATTEMPTS, confirmationRefreshDelayMs } = require('../lib/confirmationRefresh.ts');
@@ -1203,6 +1204,9 @@ test('checkout attempt identity follows commercial selections, not optional meas
 
 test('same-session checkout recovery honours measurement consent revocation', () => {
   const accepted = {
+    source: 'qyroam.com',
+    product_type: 'esim',
+    checkout_request_id: 'consent-race-request',
     measurement_consent: 'accepted',
     meta_fbp: 'fb.1.1234567890.browser',
     meta_fbc: 'fb.1.1234567890.click',
@@ -1216,18 +1220,37 @@ test('same-session checkout recovery honours measurement consent revocation', ()
     ...Object.fromEntries(META_ATTRIBUTION_METADATA_KEYS.map((key) => [key, null])),
   });
 
+  const sessionId = 'cs_test_consent_atomic123';
+  accepted.qyroam_provenance = signedQyRoamProvenance(sessionId, accepted);
+  const atomicDowngrade = signedStripeMeasurementConsentDowngrade(sessionId, accepted, false);
+  assert.ok(atomicDowngrade, 'revocation must produce one atomic metadata update');
+  assert.deepEqual(atomicDowngrade, {
+    measurement_consent: 'essential',
+    ...Object.fromEntries(META_ATTRIBUTION_METADATA_KEYS.map((key) => [key, null])),
+    qyroam_provenance: atomicDowngrade.qyroam_provenance,
+  });
+  const narrowed = { ...accepted, ...atomicDowngrade };
+  for (const key of META_ATTRIBUTION_METADATA_KEYS) {
+    if (narrowed[key] === null) delete narrowed[key];
+  }
+  assert.equal(validQyRoamProvenance(sessionId, narrowed), true,
+    'the same Stripe update that scrubs consent must leave webhook-verifiable provenance');
+  assert.equal(signedStripeMeasurementConsentDowngrade(sessionId, accepted, true), null);
+
   // Both products reuse the original Stripe idempotency key on retry, so both
-  // must narrow an accepted Session before re-signing it or exposing its URL.
+  // must narrow and re-sign an accepted Session in the same Stripe update
+  // before exposing its URL. This prevents payment completion from observing
+  // a scrubbed metadata map with the obsolete pre-revocation signature.
   for (const route of [wifiCheckoutRoute, esimCheckoutRoute]) {
-    assert.match(route, /stripeMeasurementConsentDowngrade\([^\n]+body\.measurementConsent\)/);
+    assert.match(route, /signedStripeMeasurementConsentDowngrade\([^\n]+body\.measurementConsent\)/);
     assert.match(route, /sessions\.update\([^\n]+\{\s*metadata:\s*consentDowngrade\s*\}/);
   }
   assert.ok(
-    wifiCheckoutRoute.indexOf('stripeMeasurementConsentDowngrade(existing.metadata,body.measurementConsent)') <
+    wifiCheckoutRoute.indexOf('signedStripeMeasurementConsentDowngrade(existing.id,existing.metadata,body.measurementConsent)') <
       wifiCheckoutRoute.indexOf('const metadata={...existing.metadata}'),
   );
   assert.ok(
-    esimCheckoutRoute.indexOf('stripeMeasurementConsentDowngrade(session.metadata, body.measurementConsent)') <
+    esimCheckoutRoute.indexOf('signedStripeMeasurementConsentDowngrade(createdSessionId, session.metadata, body.measurementConsent)') <
       esimCheckoutRoute.indexOf('const metadata = { ...session.metadata }'),
   );
 });
