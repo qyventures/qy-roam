@@ -20,7 +20,7 @@ import { metaPurchaseEventSourceUrl } from '@/lib/siteOrigin';
 import { fulfilmentRelayAcknowledged } from '@/lib/deliveryAcknowledgement';
 import { safeProviderDeliveryFailure, safeWebhookProcessingFailure } from '@/lib/deliveryFailure';
 import { nextRetryAttempt } from '@/lib/retryAttempt';
-import { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesEvent, stripeWebhookCheckoutSessionMatchesSnapshot, stripeWebhookEventEnvelope } from '@/lib/stripeWebhookObject';
+import { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesCommercialSnapshot, stripeWebhookCheckoutSessionMatchesEvent, stripeWebhookEventEnvelope } from '@/lib/stripeWebhookObject';
 import { metaCapiPurchaseAcknowledged } from '@/lib/metaCapiAcknowledgement';
 import { stripeCheckoutEventStateIssue, type QyRoamCheckoutEventType } from '@/lib/stripeCheckoutEventState';
 import { contentLengthMatches, declaredContentLength } from '@/lib/contentLength';
@@ -1047,7 +1047,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
   // integration defect must never let a different Session (or a different
   // Stripe mode) inherit this event's authority and reach persistence or
   // fulfilment side effects.
-  if(!stripeWebhookCheckoutSessionMatchesSnapshot(eventSession,session)){
+  if(!stripeWebhookCheckoutSessionMatchesCommercialSnapshot(eventSession,session)){
     console.error('stripe_webhook_session_identity_mismatch',{eventId:stripeEventId});
     if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,new Error('Retrieved Checkout Session does not match webhook event'));
     return webhookRetryJson({error:'Retrieved Checkout Session does not match webhook event'});

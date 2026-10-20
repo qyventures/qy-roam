@@ -34,7 +34,7 @@ const { allowedFulfilmentStatuses, fulfilmentNotificationActionable, validFulfil
 const { MAX_POCKET_WIFI_INVENTORY, operationalConfig } = require('../lib/operationalConfig.ts');
 const { validStripeCheckoutSessionId, validStripeCheckoutSessionIdForMode } = require('../lib/stripeSessionId.ts');
 const { validStripeEventCreated, validStripePaymentEventCreated, STRIPE_EVENT_CREATED_MIN_SECONDS, STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS } = require('../lib/stripeEventCreated.ts');
-const { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesEvent, stripeWebhookCheckoutSessionMatchesSnapshot, stripeWebhookEventEnvelope } = require('../lib/stripeWebhookObject.ts');
+const { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesCommercialSnapshot, stripeWebhookCheckoutSessionMatchesEvent, stripeWebhookCheckoutSessionMatchesSnapshot, stripeWebhookEventEnvelope } = require('../lib/stripeWebhookObject.ts');
 const { hasIdentityRequestContentEncoding, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError, InvalidRequestBodyLimitError, MAX_REQUEST_BODY_CHUNKS, MAX_JSON_CONTENT_TYPE_HEADER_LENGTH, MAX_CONTENT_ENCODING_HEADER_LENGTH, validateLimitedRequestContentLength } = require('../lib/requestBody.ts');
 const { checkoutClientKey, createCheckoutAttemptLimiter, createGlobalAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { ADMIN_AUTH_GLOBAL_MAX_FAILURES, adminAuthClientKey, createFailedAdminAuthLimiter, createGlobalFailedAdminAuthLimiter } = require('../lib/adminAuthRateLimit.ts');
@@ -2009,10 +2009,59 @@ test('refreshed Checkout Sessions retain the signed immutable creation identity'
   assert.equal(stripeWebhookCheckoutSessionMatchesSnapshot({ ...signed, created: undefined }, { ...signed, created: undefined }), false);
 
   const refresh = webhookRoute.indexOf('refreshedSession=await stripe.checkout.sessions.retrieve(eventSessionId)');
-  const identity = webhookRoute.indexOf('stripeWebhookCheckoutSessionMatchesSnapshot(eventSession,session)', refresh);
+  const identity = webhookRoute.indexOf('stripeWebhookCheckoutSessionMatchesCommercialSnapshot(eventSession,session)', refresh);
   const chronology = webhookRoute.indexOf('validStripePaymentEventCreated(event.created,session.created)', identity);
   assert.ok(identity > refresh, 'the fresh API object must be bound to the signed Session snapshot');
   assert.ok(chronology > identity, 'event chronology must use creation time only after snapshot identity is established');
+});
+
+test('webhook refresh cannot replace the signed commercial Checkout snapshot', () => {
+  const signed = {
+    object: 'checkout.session',
+    id: 'cs_test_commercial_snapshot',
+    livemode: false,
+    created: 1_700_000_000,
+    mode: 'payment',
+    currency: 'sgd',
+    amount_total: 481,
+    expires_at: 1_700_001_800,
+    metadata: {
+      source: 'qyroam.com',
+      product_type: 'esim',
+      plan_id: 'jp-10d-500mb-daily',
+    },
+  };
+  assert.equal(stripeWebhookCheckoutSessionMatchesCommercialSnapshot(signed, {
+    ...signed,
+    // Post-Checkout customer fields are intentionally allowed to become more
+    // complete on the authenticated refresh.
+    customer_details: { email: 'traveller@example.com' },
+  }), true);
+
+  for (const changed of [
+    { amount_total: 482 },
+    { currency: 'usd' },
+    { mode: 'subscription' },
+    { expires_at: signed.expires_at + 1 },
+    { metadata: { ...signed.metadata, plan_id: 'different-plan' } },
+    { metadata: { ...signed.metadata, added_later: 'unexpected' } },
+    { metadata: null },
+  ]) {
+    assert.equal(
+      stripeWebhookCheckoutSessionMatchesCommercialSnapshot(signed, { ...signed, ...changed }),
+      false,
+    );
+  }
+
+  // Object key order is not a commercial difference in Stripe metadata.
+  assert.equal(stripeWebhookCheckoutSessionMatchesCommercialSnapshot(signed, {
+    ...signed,
+    metadata: {
+      plan_id: signed.metadata.plan_id,
+      product_type: signed.metadata.product_type,
+      source: signed.metadata.source,
+    },
+  }), true);
 });
 
 test('lookalike payment sessions are ignored before persistence and durable event claims', () => {
@@ -7177,11 +7226,11 @@ test('Stripe terminal events refresh the Checkout Session before persisting or d
   const sessionIdBoundary = processing.indexOf('const eventSessionId=validStripeCheckoutSessionIdForMode(eventSession.id,eventSession.livemode)');
   const refresh = processing.indexOf('refreshedSession=await stripe.checkout.sessions.retrieve(eventSessionId)');
   const refreshedObjectBoundary = processing.indexOf('const session=stripeWebhookCheckoutSession(refreshedSession)');
-  const identityBoundary = processing.indexOf('if(!stripeWebhookCheckoutSessionMatchesSnapshot(eventSession,session))');
+  const identityBoundary = processing.indexOf('if(!stripeWebhookCheckoutSessionMatchesCommercialSnapshot(eventSession,session))');
   const eventState = processing.indexOf('const eventStateIssue=stripeCheckoutEventStateIssue(event.type as QyRoamCheckoutEventType,eventSession)');
   assert.ok(sourceBoundary >= 0 && sessionIdBoundary > sourceBoundary && refresh > sessionIdBoundary, 'only QY Roam events with a valid bounded Session id should cause a Stripe Session refresh');
   assert.ok(refreshedObjectBoundary > refresh, 'the refreshed Stripe response must be validated before its fields are read');
-  assert.ok(identityBoundary > refreshedObjectBoundary, 'the refreshed Session must match the signed event identity, mode, and creation epoch');
+  assert.ok(identityBoundary > refreshedObjectBoundary, 'the refreshed Session must match the signed event identity and commercial snapshot');
   assert.ok(eventState > identityBoundary, 'terminal-state validation must occur after the refreshed Session identity boundary');
   assert.match(processing, /stripe_webhook_invalid_session_id/);
   assert.match(processing, /stripe_webhook_session_retrieve_error/);

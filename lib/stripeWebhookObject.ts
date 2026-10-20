@@ -64,6 +64,38 @@ export function stripeWebhookCheckoutSessionMatchesSnapshot(
     refreshedSession.created === signedSession.created;
 }
 
+function exactStringRecordMatches(left: unknown, right: unknown) {
+  if (!plainRecord(left) || !plainRecord(right)) return false;
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return leftKeys.length === rightKeys.length &&
+    leftKeys.every((key, index) => key === rightKeys[index] &&
+      typeof left[key] === 'string' && left[key] === right[key]);
+}
+
+/**
+ * A fresh Stripe read is useful for the final customer and delivery details,
+ * but the signed event remains the authority for the commercial order that
+ * triggered this transition. Checkout metadata is mutable through Stripe's
+ * API, so an identity-only match would allow a delayed event for one plan to
+ * persist a later amount/plan snapshot under the older event's timestamp.
+ *
+ * Compare the immutable-at-checkout commercial surface exactly. Customer and
+ * shipping fields are deliberately excluded because the webhook refreshes
+ * those fields to obtain Stripe's complete post-Checkout representation.
+ */
+export function stripeWebhookCheckoutSessionMatchesCommercialSnapshot(
+  signedSession: Stripe.Checkout.Session,
+  refreshedSession: Stripe.Checkout.Session,
+) {
+  return stripeWebhookCheckoutSessionMatchesSnapshot(signedSession, refreshedSession) &&
+    signedSession.mode === refreshedSession.mode &&
+    signedSession.currency === refreshedSession.currency &&
+    signedSession.amount_total === refreshedSession.amount_total &&
+    signedSession.expires_at === refreshedSession.expires_at &&
+    exactStringRecordMatches(signedSession.metadata, refreshedSession.metadata);
+}
+
 // Stripe's Event envelope and its embedded object both carry `livemode`.
 // Credential-mode validation on the envelope is not enough by itself: an
 // unexpected API shape or malformed signed fixture must not let an embedded
