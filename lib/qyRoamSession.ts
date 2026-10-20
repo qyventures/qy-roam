@@ -110,6 +110,15 @@ function historicalEsimSnapshotIsConsistent(session: Stripe.Checkout.Session) {
  * marker alone must therefore not be enough to persist or fulfil an order.
  */
 function validateQyRoamSessionSnapshot(session: Stripe.Checkout.Session): QyRoamSessionValidation {
+  // Webhook callers validate this discriminator while deserialising the
+  // signed event, but confirmation and protected admin recovery also pass
+  // direct Stripe API reads through this shared authority. Keep the object
+  // boundary here as well: an unexpected API shape must not become a durable
+  // order, customer-visible confirmation, or fulfilment entitlement merely
+  // because it carries copied Session fields and valid signed metadata.
+  if (session.object !== 'checkout.session') {
+    return { valid: false, reason: 'invalid Stripe Checkout Session object' };
+  }
   const productType = qyRoamProductType(session);
   if (!productType) return { valid: false, reason: 'unknown QY Roam product identity' };
   // This validator is the reusable order/fulfilment authority, so it must not

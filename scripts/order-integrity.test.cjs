@@ -2188,6 +2188,7 @@ test('Pocket WiFi admin transitions expose only approved operational conflicts',
 
 function esimSession(plan = ESIM_PLANS[0]) {
   const session = {
+    object: 'checkout.session',
     id: 'cs_test_esim',
     livemode: false,
     created: Math.floor(Date.now() / 1000),
@@ -2220,6 +2221,7 @@ function wifiSession(plan = WIFI_PLANS[0]) {
   const rental = pocketWifiRentalCents(plan.daily, days);
   const discount = Math.floor((rental * LAUNCH_PROMO.percent) / 100);
   const session = {
+    object: 'checkout.session',
     id: 'cs_test_wifi',
     livemode: false,
     created: Math.floor(Date.now() / 1000),
@@ -2271,6 +2273,19 @@ test('Pocket WiFi public pricing uses the same integer-cent totals as checkout',
 
 test('accepts every server-authored eSIM catalogue session', () => {
   for (const plan of ESIM_PLANS) assert.deepEqual(validateQyRoamSession(esimSession(plan)), { valid: true, productType: 'esim' });
+});
+
+test('shared order validation requires the Stripe Checkout Session object discriminator', () => {
+  for (const makeSession of [esimSession, wifiSession]) {
+    for (const object of [undefined, 'payment_intent', 'checkout.session.completed']) {
+      const malformed = makeSession();
+      malformed.object = object;
+      assert.deepEqual(validateQyRoamSession(malformed), {
+        valid: false,
+        reason: 'invalid Stripe Checkout Session object',
+      });
+    }
+  }
 });
 
 test('shared order validation binds Checkout Session identity to Stripe mode', () => {
