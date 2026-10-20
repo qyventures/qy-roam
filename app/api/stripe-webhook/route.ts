@@ -11,7 +11,6 @@ import { hasOrderIntegritySigningConfig, validQyRoamProvenance } from '@/lib/ord
 import { hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '@/lib/productionReadiness';
 import { stripeWebhookSigningSecrets } from '@/lib/stripeWebhookSecret';
 import { stripeEventMatchesConfiguredMode } from '@/lib/stripeCheckoutConfig';
-import { getEsimPlan } from '@/lib/esimPlans';
 import { fulfilmentNotificationActionable } from '@/lib/orderLifecycle';
 import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { validStripeEventId } from '@/lib/stripeEventId';
@@ -429,7 +428,7 @@ async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
   // into an apparently actionable fulfilment alert.
   const fulfilmentDetailsIssue=paidFulfilmentDetailsIssue(session,productType);
   if(fulfilmentDetailsIssue) throw new Error(fulfilmentDetailsIssue);
-  const isEsim=productType==='esim', destination=session.metadata?.country||'', planName=session.metadata?.plan_name||'', planId=session.metadata?.plan_id||'', esimPlan=isEsim?getEsimPlan(planId):undefined, dataAllowance=session.metadata?.data_allowance||esimPlan?.data||'', start=session.metadata?.start||'', end=session.metadata?.end||'', customer=session.customer_details, amount=((session.amount_total||0)/100).toFixed(2), shipping=session.shipping_details?.address, messageId=fulfilmentMessageId(session.id);
+  const isEsim=productType==='esim', destination=session.metadata?.country||'', planName=session.metadata?.plan_name||'', planId=session.metadata?.plan_id||'', dataAllowance=session.metadata?.data_allowance||'', start=session.metadata?.start||'', end=session.metadata?.end||'', customer=session.customer_details, amount=((session.amount_total||0)/100).toFixed(2), shipping=session.shipping_details?.address, messageId=fulfilmentMessageId(session.id);
   // eSIM is a digital entitlement. Even if an old or dashboard-created
   // Stripe Session carries shipping data, do not copy that unrelated address
   // into the operations message.
@@ -481,11 +480,10 @@ async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.E
   if(productType!=='esim'&&productType!=='pocket_wifi') throw new Error('Unknown or missing product_type on Stripe session');
   const paymentConfirmedAt=new Date(eventCreated*1000).toISOString();
   const measurementConsent=session.metadata?.measurement_consent==='accepted'?'accepted':'essential';
-  const esimPlan=productType==='esim'?getEsimPlan(session.metadata?.plan_id):undefined;
   // Shipping belongs only to the physical-rental contract. Avoid retaining
   // an incidental address on a digital order, and keep the durable product
   // snapshot unambiguous for confirmation and recovery.
-  const orderSnapshot={stripe_session_id:session.id,payment_status:session.payment_status,customer_name:session.customer_details?.name,email:session.customer_details?.email,phone:session.customer_details?.phone,amount_sgd:(session.amount_total||0)/100,product_type:productType,plan_id:session.metadata?.plan_id||null,plan_name:session.metadata?.plan_name||null,data_allowance:session.metadata?.data_allowance||esimPlan?.data||null,country:session.metadata?.country,travel_start:session.metadata?.start||null,travel_end:session.metadata?.end||null,measurement_consent:measurementConsent,shipping_address:productType==='pocket_wifi'?session.shipping_details?.address||null:null};
+  const orderSnapshot={stripe_session_id:session.id,payment_status:session.payment_status,customer_name:session.customer_details?.name,email:session.customer_details?.email,phone:session.customer_details?.phone,amount_sgd:(session.amount_total||0)/100,product_type:productType,plan_id:session.metadata?.plan_id||null,plan_name:session.metadata?.plan_name||null,data_allowance:session.metadata?.data_allowance||null,country:session.metadata?.country,travel_start:session.metadata?.start||null,travel_end:session.metadata?.end||null,measurement_consent:measurementConsent,shipping_address:productType==='pocket_wifi'?session.shipping_details?.address||null:null};
 
   if(productType==='pocket_wifi'){
     // Persist the durable inventory commitment and retire its temporary hold

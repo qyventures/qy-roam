@@ -2804,18 +2804,21 @@ test('retired eSIM plans require the signed charge to match the advertised histo
   }
 });
 
-test('accepts a signed legacy eSIM session opened before data allowance snapshots', () => {
+test('current eSIM plans require their exact signed digital entitlement snapshot', () => {
   const session = esimSession();
   delete session.metadata.data_allowance;
   session.metadata.qyroam_provenance = signedQyRoamProvenance(session.id, session.metadata);
-  assert.deepEqual(validateQyRoamSession(session), { valid: true, productType: 'esim' });
+  const validation = validateQyRoamSession(session);
+  assert.equal(validation.valid, false);
+  assert.match(validation.reason, /catalogue metadata/);
 });
 
 test('eSIM fulfilment preserves the exact plan identity and data allowance', () => {
   assert.match(esimCheckoutRoute, /data_allowance: plan\.data/);
   assert.match(esimCheckoutRoute, /session\.metadata\?\.data_allowance === plan\.data/);
   assert.match(webhookRoute, /plan_id:session\.metadata\?\.plan_id\|\|null/);
-  assert.match(webhookRoute, /data_allowance:session\.metadata\?\.data_allowance\|\|esimPlan\?\.data\|\|null/);
+  assert.match(webhookRoute, /data_allowance:session\.metadata\?\.data_allowance\|\|null/);
+  assert.doesNotMatch(webhookRoute, /data_allowance:session\.metadata\?\.data_allowance\|\|esimPlan\?\.data/);
   assert.match(webhookRoute, /`Plan ID: \$\{planId\|\|'-'\}`/);
   assert.match(webhookRoute, /`Data allowance: \$\{dataAllowance\|\|'-'\}`/);
   assert.match(productionReadiness, /product_type,plan_id,plan_name,data_allowance,country/);
@@ -8941,11 +8944,10 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
     { ...esimSession, id: 'not-a-checkout-session' },
     'esim',
   ), false);
-  // Sessions opened during the data-allowance metadata rollout are accepted
-  // against a current catalogue plan. Webhook persistence fills that same
-  // catalogue entitlement, so confirmation must not leave a genuine paid
-  // order permanently stuck at "finalising" merely because the older Stripe
-  // Session has no allowance snapshot.
+  // Missing entitlement metadata must never be reconstructed from today's
+  // catalogue. A catalogue edit after payment could otherwise make the
+  // durable join certify a different data package from the signed Checkout
+  // snapshot.
   const currentPlan = ESIM_PLANS[0];
   assert.ok(currentPlan);
   const legacyEsimSession = {
@@ -8969,7 +8971,7 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
     legacyEsimOrder,
     legacyEsimSession,
     'esim',
-  ), true);
+  ), false);
   assert.equal(durableOrderMatchesPaidSession(
     { ...legacyEsimOrder, data_allowance: 'Different data package' },
     legacyEsimSession,

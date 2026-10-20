@@ -1,6 +1,5 @@
 import type Stripe from 'stripe';
 import type { QyRoamProductType } from './qyRoamSession';
-import { getEsimPlan } from './esimPlans';
 import { validStripeCheckoutSessionIdForMode } from './stripeSessionId';
 
 export type DurableOrderSnapshot = {
@@ -73,17 +72,8 @@ export function durableOrderMatchesPaidSession(
   }
 
   if (productType === 'esim') {
-    // Checkout Sessions created during the rollout of data-allowance
-    // snapshots can legitimately omit this metadata field. The webhook uses
-    // the then-current catalogue plan as the entitlement source for exactly
-    // those validated sessions, so customer confirmation must reconcile
-    // against the same value. A retired plan cannot take this fallback path:
-    // validateQyRoamSession requires retired Sessions to carry their complete
-    // signed historical entitlement snapshot.
-    const expectedDataAllowance = session.metadata?.data_allowance ??
-      getEsimPlan(session.metadata?.plan_id)?.data ?? null;
     return order.plan_id === (session.metadata?.plan_id || null) &&
-      order.data_allowance === expectedDataAllowance &&
+      order.data_allowance === (session.metadata?.data_allowance || null) &&
       // Stripe eSIM checkout never creates a physical rental period. Keep
       // product-inapplicable fields in this exact durable join as well: a
       // service-role import or repair with stray travel dates must not unlock
@@ -158,10 +148,8 @@ export function durableOrderMatchesFailedSession(
   }
 
   if (productType === 'esim') {
-    const expectedDataAllowance = session.metadata?.data_allowance ??
-      getEsimPlan(session.metadata?.plan_id)?.data ?? null;
     return order.plan_id === (session.metadata?.plan_id || null) &&
-      order.data_allowance === expectedDataAllowance &&
+      order.data_allowance === (session.metadata?.data_allowance || null) &&
       order.travel_start === null && order.travel_end === null &&
       order.shipping_address === null;
   }

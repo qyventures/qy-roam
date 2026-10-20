@@ -285,7 +285,12 @@ function validateQyRoamSessionSnapshot(session: Stripe.Checkout.Session): QyRoam
     if (
       session.metadata?.country !== plan.destination ||
       session.metadata?.plan_name !== `${plan.destination} · ${plan.days} days` ||
-      (session.metadata?.data_allowance !== undefined && session.metadata.data_allowance !== plan.data) ||
+      // The data package is the digital entitlement, not presentation-only
+      // catalogue text. Never reconstruct a missing signed snapshot from the
+      // current plan: the catalogue can change after Checkout while a paid
+      // webhook is retrying, which would otherwise fulfil a different package
+      // from the one recorded when the customer paid.
+      session.metadata?.data_allowance !== plan.data ||
       session.metadata?.promo_code !== ESIM_PROMO.code ||
       session.metadata?.benchmark_price_sgd !== plan.benchmarkPriceSgd.toFixed(2) ||
       session.metadata?.promo_discount_percent !== String(ESIM_PROMO.percent)
