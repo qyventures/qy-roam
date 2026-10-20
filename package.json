@@ -14,7 +14,8 @@
     "check:deploy-safety": "node scripts/check-deploy-safety.mjs",
     "check:operations-schema": "node scripts/check-operations-schema.mjs",
     "check:esim-pricing": "node scripts/check-esim-pricing.mjs",
-    "check:wifi-pricing": "node scripts/check-wifi-pricing.mjs"
+    "check:wifi-pricing": "node scripts/check-wifi-pricing.mjs",
+    "verify:release": "npm run check:esim-pricing && npm run check:wifi-pricing && npm run check:operations-schema && npm run check:deploy-safety && npm run test:order-integrity && npm run build"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",

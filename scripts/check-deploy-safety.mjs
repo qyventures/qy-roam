@@ -20,6 +20,11 @@ assert.equal(
   'NEXT_IGNORE_INCORRECT_LOCKFILE=1 next build && node scripts/package-standalone.mjs',
   'production build must package browser and public assets into the standalone artifact',
 );
+assert.equal(
+  packageJson.scripts['verify:release'],
+  'npm run check:esim-pricing && npm run check:wifi-pricing && npm run check:operations-schema && npm run check:deploy-safety && npm run test:order-integrity && npm run build',
+  'the local release preflight must retain every repository guard used before the deployment build',
+);
 assert.match(deploy, /process\.versions\.node\.split/);
 assert.match(deploy, /Node\.js 22\.x is required/);
 assert.ok(
