@@ -2190,6 +2190,7 @@ function esimSession(plan = ESIM_PLANS[0]) {
   const session = {
     id: 'cs_test_esim',
     livemode: false,
+    created: Math.floor(Date.now() / 1000),
     mode: 'payment',
     payment_status: 'unpaid',
     consent: { terms_of_service: 'accepted' },
@@ -2220,6 +2221,7 @@ function wifiSession(plan = WIFI_PLANS[0]) {
   const session = {
     id: 'cs_test_wifi',
     livemode: false,
+    created: Math.floor(Date.now() / 1000),
     mode: 'payment',
     payment_status: 'unpaid',
     consent: { terms_of_service: 'accepted' },
@@ -2286,6 +2288,19 @@ test('shared order validation binds Checkout Session identity to Stripe mode', (
       valid: false,
       reason: 'invalid or mode-mismatched Stripe Checkout Session identity',
     });
+  }
+});
+
+test('shared order validation requires a plausible Stripe Session creation epoch', () => {
+  for (const makeSession of [esimSession, wifiSession]) {
+    for (const created of [undefined, 1_262_303_999, Math.floor(Date.now() / 1000) + 86_401]) {
+      const malformed = makeSession();
+      malformed.created = created;
+      assert.deepEqual(validateQyRoamSession(malformed), {
+        valid: false,
+        reason: 'invalid Stripe Checkout Session creation time',
+      });
+    }
   }
 });
 

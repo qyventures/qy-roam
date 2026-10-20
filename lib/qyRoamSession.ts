@@ -8,6 +8,7 @@ import { operationalConfig } from './operationalConfig';
 import { pocketWifiRentalCents } from './pocketWifiPricing';
 import { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } from './pocketWifiRentalPeriod';
 import { validStripeCheckoutSessionIdForMode } from './stripeSessionId';
+import { validStripeEventCreated } from './stripeEventCreated';
 
 export type QyRoamProductType = 'esim' | 'pocket_wifi';
 
@@ -119,6 +120,15 @@ function validateQyRoamSessionSnapshot(session: Stripe.Checkout.Session): QyRoam
   // order that confirmation, admin recovery, or a future worker may fulfil.
   if (!validStripeCheckoutSessionIdForMode(session.id, session.livemode)) {
     return { valid: false, reason: 'invalid or mode-mismatched Stripe Checkout Session identity' };
+  }
+  // Stripe's creation epoch is the immutable chronology anchor used by paid
+  // webhook events and admin delivery recovery. The webhook validates it at
+  // its deserialisation boundary, but this shared validator is also called on
+  // direct Stripe API reads by customer confirmation and protected recovery
+  // paths. Keep those callers from accepting an equally malformed signed
+  // snapshot with a missing, pre-Stripe, or implausibly future creation time.
+  if (!validStripeEventCreated(session.created)) {
+    return { valid: false, reason: 'invalid Stripe Checkout Session creation time' };
   }
   // QY Roam sells one-time travel products. The metadata HMAC authenticates
   // the server-authored order snapshot, but it does not itself bind Stripe's
