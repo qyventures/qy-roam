@@ -1923,6 +1923,18 @@ test('SMTP fulfilment waits for complete, coherent protocol replies', () => {
   assert.match(smtpClient, /code = completeSmtpResponseCode\(buffer\)/);
 });
 
+test('SMTP fulfilment does not retry a message accepted before connection shutdown', () => {
+  const sendMessage = smtpClient.slice(smtpClient.indexOf('async function sendMessage'));
+  const accepted = sendMessage.indexOf('await waitForResponse(socket, [250])');
+  const quit = sendMessage.indexOf("await command(socket, 'QUIT', [221])");
+  assert.ok(accepted >= 0 && quit > accepted, 'DATA must be accepted before the client attempts QUIT');
+  assert.match(
+    sendMessage.slice(accepted, quit + "await command(socket, 'QUIT', [221])".length),
+    /await waitForResponse\(socket, \[250\]\);\s*try \{\s*await command\(socket, 'QUIT', \[221\]\)/,
+    'a failed QUIT reply must not turn an accepted paid-order email into a retryable failure',
+  );
+});
+
 test('SMTP fulfilment fails promptly when a relay disconnects before its reply or TLS handshake', async () => {
   const responseSocket = new EventEmitter();
   const response = waitForResponse(responseSocket, [250]);

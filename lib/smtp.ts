@@ -305,6 +305,19 @@ async function sendMessage(socket: net.Socket | tls.TLSSocket, options: SmtpOpti
     '.'
   ].join('\r\n');
   socket.write(`${message}\r\n`);
+  // SMTP's final 250 reply to DATA is the irreversible provider-acceptance
+  // boundary. Once it arrives, a missing QUIT reply only means the orderly
+  // connection shutdown failed; it does not mean the relay rejected the
+  // message. Treating that post-acceptance disconnect as a delivery failure
+  // would put the durable notification back into the retry path and could
+  // send a second fulfilment instruction for the same paid order. Attempt
+  // QUIT for protocol hygiene, but never revoke an already-confirmed handoff.
   await waitForResponse(socket, [250]);
-  await command(socket, 'QUIT', [221]);
+  try {
+    await command(socket, 'QUIT', [221]);
+  } catch {
+    // The caller destroys the socket in its finally block. Message-ID still
+    // provides provider-side deduplication for the narrower ambiguous case
+    // where the DATA acknowledgement itself was lost.
+  }
 }
