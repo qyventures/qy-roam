@@ -1,4 +1,6 @@
 import type Stripe from 'stripe';
+import { QY_ROAM_PROVENANCE_METADATA_KEY } from './orderProvenance';
+import { META_ATTRIBUTION_METADATA_KEYS } from './stripeMeasurementConsent';
 
 // Stripe's SDK types describe the current API shape, but webhook data is
 // deserialised input. Validate the small identity surface this application
@@ -73,6 +75,31 @@ function exactStringRecordMatches(left: unknown, right: unknown) {
       typeof left[key] === 'string' && left[key] === right[key]);
 }
 
+function metadataMatchesAfterConsentNarrowing(left: unknown, right: unknown) {
+  if (exactStringRecordMatches(left, right)) return true;
+  if (!plainRecord(left) || !plainRecord(right) ||
+    left.measurement_consent !== 'accepted' || right.measurement_consent !== 'essential') return false;
+
+  // Checkout retries may remove an already-revoked measurement grant while a
+  // signed Stripe event is in flight. That supported update also removes the
+  // optional browser identifiers and re-signs the complete metadata map. It
+  // must not make an authentic payment permanently unrecoverable, but no
+  // other metadata drift is permitted across this event/refresh boundary.
+  if (META_ATTRIBUTION_METADATA_KEYS.some((key) => key in right)) return false;
+  const mutableKeys = new Set<string>([
+    'measurement_consent',
+    QY_ROAM_PROVENANCE_METADATA_KEY,
+    ...META_ATTRIBUTION_METADATA_KEYS,
+  ]);
+  const leftKeys = Object.keys(left).filter((key) => !mutableKeys.has(key)).sort();
+  const rightKeys = Object.keys(right).filter((key) => !mutableKeys.has(key)).sort();
+  return typeof left[QY_ROAM_PROVENANCE_METADATA_KEY] === 'string' &&
+    typeof right[QY_ROAM_PROVENANCE_METADATA_KEY] === 'string' &&
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every((key, index) => key === rightKeys[index] &&
+      typeof left[key] === 'string' && left[key] === right[key]);
+}
+
 /**
  * A fresh Stripe read is useful for the final customer and delivery details,
  * but the signed event remains the authority for the commercial order that
@@ -93,7 +120,7 @@ export function stripeWebhookCheckoutSessionMatchesCommercialSnapshot(
     signedSession.currency === refreshedSession.currency &&
     signedSession.amount_total === refreshedSession.amount_total &&
     signedSession.expires_at === refreshedSession.expires_at &&
-    exactStringRecordMatches(signedSession.metadata, refreshedSession.metadata);
+    metadataMatchesAfterConsentNarrowing(signedSession.metadata, refreshedSession.metadata);
 }
 
 // Stripe's Event envelope and its embedded object both carry `livemode`.

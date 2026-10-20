@@ -2064,6 +2064,49 @@ test('webhook refresh cannot replace the signed commercial Checkout snapshot', (
   }), true);
 });
 
+test('webhook refresh permits only a fully scrubbed measurement-consent revocation', () => {
+  const signed = {
+    object: 'checkout.session',
+    id: 'cs_test_consent_race',
+    livemode: false,
+    created: 1_700_000_000,
+    mode: 'payment',
+    currency: 'sgd',
+    amount_total: 481,
+    expires_at: 1_700_001_800,
+    metadata: {
+      source: 'qyroam.com',
+      product_type: 'esim',
+      plan_id: 'jp-10d-500mb-daily',
+      measurement_consent: 'accepted',
+      meta_fbp: 'fb.1.1700000000.browser',
+      meta_client_user_agent: 'safe-agent',
+      qyroam_provenance: `v2.${'a'.repeat(64)}`,
+    },
+  };
+  const revoked = {
+    ...signed,
+    metadata: {
+      source: 'qyroam.com',
+      product_type: 'esim',
+      plan_id: 'jp-10d-500mb-daily',
+      measurement_consent: 'essential',
+      qyroam_provenance: `v2.${'b'.repeat(64)}`,
+    },
+  };
+
+  assert.equal(stripeWebhookCheckoutSessionMatchesCommercialSnapshot(signed, revoked), true);
+  assert.equal(stripeWebhookCheckoutSessionMatchesCommercialSnapshot(revoked, signed), false, 'consent cannot be granted during refresh');
+  assert.equal(stripeWebhookCheckoutSessionMatchesCommercialSnapshot(signed, {
+    ...revoked,
+    metadata: { ...revoked.metadata, meta_fbp: signed.metadata.meta_fbp },
+  }), false, 'revocation must remove every attribution identifier');
+  assert.equal(stripeWebhookCheckoutSessionMatchesCommercialSnapshot(signed, {
+    ...revoked,
+    metadata: { ...revoked.metadata, plan_id: 'different-plan' },
+  }), false, 'commercial metadata remains immutable');
+});
+
 test('lookalike payment sessions are ignored before persistence and durable event claims', () => {
   // The public source marker routes shared-account events, but only the
   // Session-id-bound HMAC proves that a Checkout Session was issued by QY
