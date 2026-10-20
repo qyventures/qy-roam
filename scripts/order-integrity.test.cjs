@@ -55,7 +55,7 @@ const { safeHttpsDeliveryEndpoint } = require('../lib/deliveryEndpoint.ts');
 const { fulfilmentRelayAcknowledged } = require('../lib/deliveryAcknowledgement.ts');
 const { safeProviderDeliveryFailure, safeWebhookProcessingFailure } = require('../lib/deliveryFailure.ts');
 const { nextRetryAttempt } = require('../lib/retryAttempt.ts');
-const { completeSmtpResponseCode, isSafeSmtpHost, smtpSecureTransport, waitForResponse, waitForTlsHandshake } = require('../lib/smtp.ts');
+const { completeSmtpResponseCode, isSafeSmtpHost, isSafeSmtpMailbox, smtpSecureTransport, waitForResponse, waitForTlsHandshake } = require('../lib/smtp.ts');
 const { safeStripeCheckoutUrl } = require('../lib/stripeCheckoutUrl.ts');
 const { metaCapiPurchaseAcknowledged } = require('../lib/metaCapiAcknowledgement.ts');
 const { stripeCheckoutEventStateIssue } = require('../lib/stripeCheckoutEventState.ts');
@@ -4684,6 +4684,34 @@ test('SMTP transport independently validates the envelope and message header bou
   assert.match(productionReadiness, /isSafeSmtpMailbox/);
   assert.match(webhookRoute, /from=\(process\.env\.SMTP_FROM\|\|user\|\|''\)\.trim\(\)/);
   assert.match(webhookRoute, /to=\(process\.env\.ORDER_FULFILMENT_EMAIL\|\|process\.env\.FULFILMENT_TO\|\|''\)\.trim\(\)/);
+});
+
+test('SMTP mailboxes cannot inject envelope framing or hidden control bytes', () => {
+  for (const mailbox of [
+    'orders@example.com',
+    'sales+travel@example.com',
+    "customer.o'connor@example.co.uk",
+  ]) assert.equal(isSafeSmtpMailbox(mailbox), true);
+
+  for (const mailbox of [
+    'sender<override@example.com',
+    'sender>@example.com',
+    'sender\0@example.com',
+    'sender\u001b@example.com',
+    'sender\u007f@example.com',
+  ]) assert.equal(isSafeSmtpMailbox(mailbox), false);
+
+  const paidEsim = {
+    payment_status: 'paid',
+    customer_details: { email: 'buyer\u0000@example.com', phone: null },
+    shipping_details: null,
+  };
+  assert.equal(
+    paidFulfilmentDetailsIssue(paidEsim, 'esim'),
+    'Paid order is missing a valid customer email',
+    'the paid-order persistence boundary must share the SMTP mailbox guard',
+  );
+  assert.match(schema, /email !~ '\[\[:cntrl:\]\]'/);
 });
 
 test('SMTP authentication waits for an authorized modern TLS channel', () => {

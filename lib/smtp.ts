@@ -43,7 +43,15 @@ export function smtpSecureTransport(value: string | undefined, port: number) {
 // into SMTP envelope commands and message headers, so trimming alone is not a
 // sufficient safeguard against malformed configuration or header injection.
 export function isSafeSmtpMailbox(value: string | undefined) {
-  return Boolean(value && value.length <= 254 && /^[^\s@\r\n]+@[^\s@\r\n]+\.[^\s@\r\n]+$/.test(value));
+  // The value is placed inside SMTP's `<...>` envelope syntax. Newlines are
+  // not the only unsafe bytes at that boundary: other ASCII controls can
+  // produce malformed protocol input, while literal angle brackets can end
+  // or reopen the path even without a newline. Keep broad mailbox support,
+  // but reject those framing characters before readiness, persistence, or a
+  // paid-order delivery attempt accepts the address.
+  return Boolean(value && value.length <= 254 &&
+    !/[\u0000-\u001f\u007f<>]/.test(value) &&
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value));
 }
 
 function normalizedMailbox(value: string, field: 'from' | 'to') {

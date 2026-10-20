@@ -702,6 +702,8 @@ alter table public.orders add constraint orders_paid_stripe_fulfilment_details_c
     -- webhook is required to send.
     email = btrim(email) and
     length(email) <= 254 and
+    email !~ '[[:cntrl:]]' and
+    email !~ '[<>]' and
     email ~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$' and
     (
       product_type = 'esim' or
@@ -758,6 +760,8 @@ alter table public.orders add constraint orders_paid_esim_delivery_email_check c
     email is not null and
     email = btrim(email) and
     length(email) <= 254 and
+    email !~ '[[:cntrl:]]' and
+    email !~ '[<>]' and
     email ~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$'
   )
 ) not valid;
