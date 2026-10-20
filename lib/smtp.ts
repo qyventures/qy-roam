@@ -131,7 +131,11 @@ export function completeSmtpResponseCode(buffer: string) {
   return Number(code);
 }
 
-export function waitForResponse(socket: net.Socket | tls.TLSSocket, expected: number[]) {
+export function waitForResponse(
+  socket: net.Socket | tls.TLSSocket,
+  expected: number[],
+  initiate?: () => void,
+) {
   return new Promise<string>((resolve, reject) => {
     let buffer = '';
     let responseBytes = 0;
@@ -185,12 +189,22 @@ export function waitForResponse(socket: net.Socket | tls.TLSSocket, expected: nu
     socket.on('timeout', onTimeout);
     socket.on('end', onDisconnect);
     socket.on('close', onDisconnect);
+    // Arm every completion and failure listener before initiating a command.
+    // This matters for fast local relays and socket-compatible transports
+    // whose write callback can synchronously make a response available. If
+    // the response arrives first, the paid-order worker otherwise waits until
+    // timeout and can ambiguously retry an already accepted message.
+    try {
+      initiate?.();
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
   });
 }
 
 async function command(socket: net.Socket | tls.TLSSocket, value: string, expected: number[]) {
-  socket.write(`${value}\r\n`);
-  return waitForResponse(socket, expected);
+  return waitForResponse(socket, expected, () => socket.write(`${value}\r\n`));
 }
 
 function smtpTlsOptions(host: string) {
@@ -304,7 +318,7 @@ async function sendMessage(socket: net.Socket | tls.TLSSocket, options: SmtpOpti
     dotStuff(options.text),
     '.'
   ].join('\r\n');
-  socket.write(`${message}\r\n`);
+  const accepted = waitForResponse(socket, [250], () => socket.write(`${message}\r\n`));
   // SMTP's final 250 reply to DATA is the irreversible provider-acceptance
   // boundary. Once it arrives, a missing QUIT reply only means the orderly
   // connection shutdown failed; it does not mean the relay rejected the
@@ -312,7 +326,7 @@ async function sendMessage(socket: net.Socket | tls.TLSSocket, options: SmtpOpti
   // would put the durable notification back into the retry path and could
   // send a second fulfilment instruction for the same paid order. Attempt
   // QUIT for protocol hygiene, but never revoke an already-confirmed handoff.
-  await waitForResponse(socket, [250]);
+  await accepted;
   try {
     await command(socket, 'QUIT', [221]);
   } catch {

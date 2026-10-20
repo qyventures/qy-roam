@@ -1923,14 +1923,37 @@ test('SMTP fulfilment waits for complete, coherent protocol replies', () => {
   assert.match(smtpClient, /code = completeSmtpResponseCode\(buffer\)/);
 });
 
+test('SMTP fulfilment arms response handling before writing protocol data', async () => {
+  const socket = new EventEmitter();
+  socket.destroy = () => undefined;
+  let wrote = false;
+  const response = waitForResponse(socket, [250], () => {
+    wrote = true;
+    socket.emit('data', Buffer.from('250 accepted\r\n'));
+  });
+
+  assert.equal(wrote, true);
+  assert.equal(await response, '250 accepted\r\n');
+  assert.equal(socket.listenerCount('data'), 0);
+  assert.equal(socket.listenerCount('error'), 0);
+
+  const command = smtpClient.slice(
+    smtpClient.indexOf('async function command'),
+    smtpClient.indexOf('function smtpTlsOptions'),
+  );
+  assert.match(command, /waitForResponse\(socket, expected, \(\) => socket\.write/);
+  const sendMessage = smtpClient.slice(smtpClient.indexOf('async function sendMessage'));
+  assert.match(sendMessage, /const accepted = waitForResponse\(socket, \[250\], \(\) => socket\.write/);
+});
+
 test('SMTP fulfilment does not retry a message accepted before connection shutdown', () => {
   const sendMessage = smtpClient.slice(smtpClient.indexOf('async function sendMessage'));
-  const accepted = sendMessage.indexOf('await waitForResponse(socket, [250])');
+  const accepted = sendMessage.indexOf('await accepted');
   const quit = sendMessage.indexOf("await command(socket, 'QUIT', [221])");
   assert.ok(accepted >= 0 && quit > accepted, 'DATA must be accepted before the client attempts QUIT');
   assert.match(
     sendMessage.slice(accepted, quit + "await command(socket, 'QUIT', [221])".length),
-    /await waitForResponse\(socket, \[250\]\);\s*try \{\s*await command\(socket, 'QUIT', \[221\]\)/,
+    /await accepted;\s*try \{\s*await command\(socket, 'QUIT', \[221\]\)/,
     'a failed QUIT reply must not turn an accepted paid-order email into a retryable failure',
   );
 });
