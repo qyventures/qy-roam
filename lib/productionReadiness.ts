@@ -7,6 +7,7 @@ import { createStripeClient } from '@/lib/stripeClient';
 import { hasRequiredStripeCheckoutConfig } from '@/lib/stripeCheckoutConfig';
 import { runReadinessProbe } from '@/lib/readinessProbe';
 import { readinessFailureBackoffActive, readinessWindowActive } from '@/lib/readinessBackoff';
+import { exactRpcRow } from '@/lib/exactRpcRow';
 export { hasRequiredStripeCheckoutConfig };
 
 // Checkout invokes these guards immediately before creating a payable Stripe
@@ -354,9 +355,10 @@ async function checkRequiredPaymentSchema() {
         p_inventory: 0,
         p_stripe_hold_request_ids: [],
       }).abortSignal(signal);
-      const availabilityRow = Array.isArray(availabilityProbe.data)
-        ? availabilityProbe.data[0]
-        : availabilityProbe.data;
+      // The live route requires one exact atomic snapshot. Keep readiness on
+      // that same response-shape boundary so health cannot promote a release
+      // that would later reject (or ambiguously interpret) customer stock.
+      const availabilityRow = exactRpcRow(availabilityProbe.data);
       if (
         availabilityProbe.error ||
         !availabilityRow ||

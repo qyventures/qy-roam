@@ -5114,6 +5114,21 @@ test('Pocket WiFi availability bounds public Stripe and database capacity scans'
   assert.match(availabilityRoute, /'Retry-After': '60'/);
 });
 
+test('Pocket WiFi availability requires one exact atomic inventory snapshot row', () => {
+  // The shared acknowledgement parser accepts the two legitimate PostgREST
+  // representations, but never chooses a row from an ambiguous result set.
+  const row = { committed: 1, saleable_inventory: 3 };
+  assert.equal(exactRpcRow(row), row);
+  assert.equal(exactRpcRow([row]), row);
+  assert.equal(exactRpcRow([]), null);
+  assert.equal(exactRpcRow([row, { committed: 2, saleable_inventory: 3 }]), null);
+
+  assert.match(availabilityRoute, /const row = exactRpcRow\(snapshot\.data\)/);
+  assert.doesNotMatch(availabilityRoute, /Array\.isArray\(snapshot\.data\) \? snapshot\.data\[0\]/);
+  assert.match(productionReadiness, /const availabilityRow = exactRpcRow\(availabilityProbe\.data\)/);
+  assert.doesNotMatch(productionReadiness, /Array\.isArray\(availabilityProbe\.data\)[\s\S]{0,100}availabilityProbe\.data\[0\]/);
+});
+
 test('Pocket WiFi checkout retries bind the complete server-priced booking', () => {
   assert.match(wifiCheckoutRoute, /function matchesRequestedPocketWifi/);
   assert.match(wifiCheckoutRoute, /session\.metadata\?\.promo_code===requested\.promoCode/);

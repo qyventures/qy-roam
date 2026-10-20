@@ -17,6 +17,7 @@ import { availabilityAttemptLimited, availabilityGloballyLimited } from '@/lib/c
 import { tryAcquireAvailabilityConcurrency } from '@/lib/availabilityConcurrency';
 import { scanActivePocketWifiStripeHolds } from '@/lib/pocketWifiStripeHolds';
 import { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } from '@/lib/pocketWifiRentalPeriod';
+import { exactRpcRow } from '@/lib/exactRpcRow';
 
 export const dynamic = 'force-dynamic';
 
@@ -71,7 +72,11 @@ async function committedInventory(start: string, end: string, stripeHoldRequestI
     p_stripe_hold_request_ids: [...stripeHoldRequestIds],
   });
   if (snapshot.error) throw snapshot.error;
-  const row = Array.isArray(snapshot.data) ? snapshot.data[0] : snapshot.data;
+  // This SECURITY DEFINER RPC owns the atomic stock promise and is defined to
+  // return exactly one row. Never turn an empty or multi-row response caused
+  // by schema/PostgREST drift into a plausible availability result by taking
+  // its first row; checkout must fail closed until the contract is restored.
+  const row = exactRpcRow(snapshot.data);
   const committed = Number(row?.committed);
   const saleableInventory = Number(row?.saleable_inventory);
   if (!Number.isSafeInteger(committed) || committed < 0 ||
