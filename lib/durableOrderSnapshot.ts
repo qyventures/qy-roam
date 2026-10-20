@@ -44,6 +44,17 @@ function durableShippingAddressMatchesSession(value: unknown, session: Stripe.Ch
   if (!expected || !value || typeof value !== 'object' || Array.isArray(value)) return false;
   const stored = value as Record<string, unknown>;
 
+  // This JSON is copied into fulfilment and can also be shown in protected
+  // operations views. Matching the six known Stripe fields is not sufficient
+  // if a damaged import or stale privileged function retained additional
+  // attacker-controlled properties beside them. Require the complete stored
+  // object to use only Stripe's canonical address vocabulary so this helper
+  // remains an exact durable-snapshot acknowledgement, rather than a partial
+  // projection that silently blesses unreviewed delivery data.
+  if (Object.keys(stored).some((field) =>
+    !STRIPE_ADDRESS_FIELDS.includes(field as (typeof STRIPE_ADDRESS_FIELDS)[number])
+  )) return false;
+
   // Supabase can round-trip absent optional JSON fields as either missing or
   // null. Compare the complete Stripe address vocabulary after normalising
   // only that representation detail; never stringify objects, where key order

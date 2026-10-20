@@ -9070,6 +9070,10 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
   assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, amount_sgd: '5.520' }, wifiSession, 'pocket_wifi'), false);
   assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, amount_sgd: 1e21 }, wifiSession, 'pocket_wifi'), false);
   assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, shipping_address: { ...wifiOrder.shipping_address, line1: '2 Wrong Street' } }, wifiSession, 'pocket_wifi'), false);
+  assert.equal(durableOrderMatchesPaidSession({
+    ...wifiOrder,
+    shipping_address: { ...wifiOrder.shipping_address, delivery_instructions: 'Leave unattended' },
+  }, wifiSession, 'pocket_wifi'), false);
   assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, shipping_address: null }, wifiSession, 'pocket_wifi'), false);
 
   for (const page of [successPage, bookingPage]) {
