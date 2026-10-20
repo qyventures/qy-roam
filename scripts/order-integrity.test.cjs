@@ -2370,6 +2370,28 @@ test('historical Pocket WiFi snapshots retain the approved below-benchmark price
   }
 });
 
+test('historical Pocket WiFi snapshots require canonical fulfilment and benchmark metadata', () => {
+  const plan = WIFI_PLANS[0];
+  const mutations = [
+    (session) => { session.metadata.country = ` ${plan.country}`; session.metadata.plan_name = ` ${plan.country} Pocket WiFi`; },
+    (session) => { session.metadata.benchmark_provider = `${WIFI_BENCHMARK.provider}\ninternal`; },
+    (session) => { session.metadata.benchmark_verified_on = '2026-99-99'; },
+  ];
+  WIFI_PLANS.splice(0, 1);
+  try {
+    for (const mutate of mutations) {
+      const session = wifiSession(plan);
+      mutate(session);
+      session.metadata.qyroam_provenance = signedQyRoamProvenance(session.id, session.metadata);
+      const validation = validateQyRoamSession(session);
+      assert.equal(validation.valid, false);
+      assert.match(validation.reason, /historical snapshot/);
+    }
+  } finally {
+    WIFI_PLANS.unshift(plan);
+  }
+});
+
 test('rejects Pocket WiFi amount, dates, promo, and catalogue tampering', () => {
   for (const mutate of [
     (s) => { s.amount_total -= 1; },
@@ -2708,6 +2730,27 @@ test('retired eSIM plans require a complete signed data entitlement snapshot', (
     const validation = validateQyRoamSession(session);
     assert.equal(validation.valid, false);
     assert.match(validation.reason, /historical snapshot/);
+  } finally {
+    ESIM_PLANS.unshift(plan);
+  }
+});
+
+test('retired eSIM plans require canonical fulfilment text', () => {
+  const plan = ESIM_PLANS[0];
+  const mutations = [
+    (session) => { session.metadata.country = ` ${plan.destination}`; session.metadata.plan_name = ` ${plan.destination} · ${plan.days} days`; },
+    (session) => { session.metadata.data_allowance = `${plan.data}\ninternal`; },
+  ];
+  ESIM_PLANS.splice(0, 1);
+  try {
+    for (const mutate of mutations) {
+      const session = esimSession(plan);
+      mutate(session);
+      session.metadata.qyroam_provenance = signedQyRoamProvenance(session.id, session.metadata);
+      const validation = validateQyRoamSession(session);
+      assert.equal(validation.valid, false);
+      assert.match(validation.reason, /historical snapshot/);
+    }
   } finally {
     ESIM_PLANS.unshift(plan);
   }

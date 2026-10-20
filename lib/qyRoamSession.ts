@@ -28,6 +28,11 @@ function moneyMetadataCents(value?: string) {
   return Number.isSafeInteger(cents) ? cents : null;
 }
 
+function canonicalMetadataText(value: unknown, maxLength: number) {
+  return typeof value === 'string' && value.length > 0 && value.length <= maxLength &&
+    value === value.trim() && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
 function checkoutAmountSnapshotIsConsistent(session: Stripe.Checkout.Session) {
   const amount = session.amount_total;
   // Keep the amount snapshot canonical as well as signed. A valid HMAC proves
@@ -51,8 +56,9 @@ function historicalPocketWifiSnapshotIsConsistent(session: Stripe.Checkout.Sessi
   if (!country || country.length > 100 || metadata?.plan_name !== `${country} Pocket WiFi` ||
     daily === null || daily < 1 || rental === null || discount === null || courierFee === null ||
     !checkoutAmountSnapshotIsConsistent(session) || !Number.isSafeInteger(checkoutAmount) || checkoutAmount < 1 ||
-    !metadata?.benchmark_provider || metadata.benchmark_provider.length > 100 ||
-    benchmark === null || benchmark < 1 || !/^\d{4}-\d{2}-\d{2}$/.test(metadata?.benchmark_verified_on || '')) {
+    !canonicalMetadataText(country, 100) || !canonicalMetadataText(metadata?.plan_name, 120) ||
+    !canonicalMetadataText(metadata?.benchmark_provider, 100) ||
+    benchmark === null || benchmark < 1 || !parseExactIsoDate(metadata?.benchmark_verified_on)) {
     return false;
   }
   // A retired or repriced catalogue row cannot re-authorise the public
@@ -82,7 +88,8 @@ function historicalEsimSnapshotIsConsistent(session: Stripe.Checkout.Session) {
   // The checkout provenance authenticates this immutable-at-creation snapshot.
   // These checks still reject malformed records if a historic plan has since
   // been retired or repriced in the live catalogue.
-  return /^[a-z0-9][a-z0-9-]{1,80}$/.test(planId) && country.length > 0 && country.length <= 100 &&
+  return /^[a-z0-9][a-z0-9-]{1,80}$/.test(planId) && canonicalMetadataText(country, 100) &&
+    canonicalMetadataText(planName, 200) &&
     planName.startsWith(`${country} · `) && / · [1-9]\d{0,2} days$/.test(planName) &&
     // A current catalogue plan can safely supply a missing allowance for a
     // legacy in-flight Session. Once that plan is retired, however, this
@@ -90,7 +97,7 @@ function historicalEsimSnapshotIsConsistent(session: Stripe.Checkout.Session) {
     // webhook and fulfilment team. Require it to identify the actual package
     // instead of accepting an order that the database must reject (and staff
     // could not provision unambiguously).
-    typeof dataAllowance === 'string' && dataAllowance.length > 0 && dataAllowance.length <= 200 &&
+    canonicalMetadataText(dataAllowance, 200) &&
     metadata?.promo_code === ESIM_PROMO.code && metadata?.promo_discount_percent === String(ESIM_PROMO.percent) &&
     benchmarkPrice !== null && benchmarkPrice > 0 &&
     checkoutAmountSnapshotIsConsistent(session) && Number.isSafeInteger(checkoutAmount) && checkoutAmount >= 50 &&
