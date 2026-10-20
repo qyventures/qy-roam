@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { createStripeClient } from '../../../lib/stripeClient';
 import crypto from 'crypto';
-import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
+import { getSupabaseAdmin, hasRequiredSupabaseAdminConfig } from '@/lib/supabaseAdmin';
 import { sendSmtpMail, smtpSecureTransport } from '@/lib/smtp';
 import { getMetaCapiToken, hasRequiredMetaCapiPurchaseConfig, metaPixelId } from '@/lib/runtimeConfig';
 import { validateQyRoamSession, validateQyRoamTerminalUnpaidSession } from '@/lib/qyRoamSession';
@@ -116,8 +116,8 @@ function validStripeSignatureHeader(value: string | null, receivedAtMs = Date.no
 
 function stripeWebhookConfigurationReady() {
   return hasRequiredStripeCheckoutConfig() && hasRequiredStripeWebhookConfig() &&
-    hasOrderIntegritySigningConfig() && Boolean(process.env.STRIPE_SECRET_KEY?.trim()) &&
-    Boolean(stripeWebhookSigningSecrets());
+    hasOrderIntegritySigningConfig() && hasRequiredSupabaseAdminConfig() &&
+    Boolean(process.env.STRIPE_SECRET_KEY?.trim()) && Boolean(stripeWebhookSigningSecrets());
 }
 
 async function readStripeWebhookBody(req: Request): Promise<Buffer> {
@@ -872,7 +872,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
   // makes every authentic Stripe delivery look like a bad signature (400),
   // which prevents a configuration outage from being surfaced and retried as
   // a service dependency failure.
-  if(!hasRequiredStripeCheckoutConfig()||!hasRequiredStripeWebhookConfig()||!hasOrderIntegritySigningConfig()||!key||!webhookSecrets) {
+  if(!hasRequiredStripeCheckoutConfig()||!hasRequiredStripeWebhookConfig()||!hasOrderIntegritySigningConfig()||!hasRequiredSupabaseAdminConfig()||!key||!webhookSecrets) {
     return webhookRetryJson({error:'Webhook configuration incomplete'},503,'30');
   }
   // Stripe signs JSON Checkout event bytes. A different media type cannot be

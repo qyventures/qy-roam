@@ -9401,7 +9401,14 @@ test('an unconfigured webhook fails before reserving slow-upload capacity', () =
     publicPost.slice(configurationGate, uploadAdmission),
     /webhookRetryJson\(\{error:'Webhook configuration incomplete'\},503,'30'\)/,
   );
-  assert.match(webhookRoute, /if\(!hasRequiredStripeCheckoutConfig\(\)\|\|!hasRequiredStripeWebhookConfig\(\)\|\|!hasOrderIntegritySigningConfig\(\)\|\|!key\|\|!webhookSecrets\)/);
+  assert.match(
+    webhookRoute,
+    /function stripeWebhookConfigurationReady\(\) \{[\s\S]{0,300}hasRequiredSupabaseAdminConfig\(\)/,
+  );
+  assert.match(
+    webhookRoute,
+    /if\(!hasRequiredStripeCheckoutConfig\(\)\|\|!hasRequiredStripeWebhookConfig\(\)\|\|!hasOrderIntegritySigningConfig\(\)\|\|!hasRequiredSupabaseAdminConfig\(\)\|\|!key\|\|!webhookSecrets\)/,
+  );
 });
 
 test('unauthenticated slow webhook uploads cannot occupy paid-order processing slots', () => {
