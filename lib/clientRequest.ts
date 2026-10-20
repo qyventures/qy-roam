@@ -5,6 +5,11 @@ export const CUSTOMER_REQUEST_TIMEOUT_MS = 120_000;
 // button and safely retry with the same idempotency key.
 export const CUSTOMER_JSON_RESPONSE_MAX_BYTES = 64 * 1024;
 export const CUSTOMER_JSON_RESPONSE_MAX_CHUNKS = 1_024;
+// This value is inspected before splitting or normalising Content-Type. The
+// application emits the short canonical JSON media type, so a larger value
+// cannot be useful to a customer response and should not make browser work
+// scale with a malformed proxy or service-worker header.
+export const CUSTOMER_JSON_CONTENT_TYPE_MAX_LENGTH = 256;
 
 export class CustomerRequestTimeoutError extends Error {
   constructor() {
@@ -19,7 +24,7 @@ type CustomerJsonResponse = {
 };
 
 export function isCustomerJsonResponseContentType(value: string | null) {
-  if (!value) return false;
+  if (!value || value.length > CUSTOMER_JSON_CONTENT_TYPE_MAX_LENGTH) return false;
   const parts = value.split(';').map((part) => part.trim());
   if (parts.shift()?.toLowerCase() !== 'application/json') return false;
 

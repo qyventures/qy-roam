@@ -50,7 +50,7 @@ const { metaMeasurementAllowed, metaPageViewAllowed, setMetaMeasurementConsent }
 const { digitalDeliveryReferenceIssue, isSafeDigitalDeliveryReference } = require('../lib/digitalDeliveryReference.ts');
 const { SUPABASE_REQUEST_TIMEOUT_MS, SUPABASE_REQUEST_TIMEOUT_MAX_MS, SUPABASE_RESPONSE_MAX_BYTES, SUPABASE_RESPONSE_MAX_CHUNKS, canonicalSupabaseProjectUrl, fetchSupabaseWithTimeout, hasRequiredSupabaseAdminConfig, supabaseServiceRoleKey } = require('../lib/supabaseAdmin.ts');
 const { checkoutAttempt, clearCheckoutAttempt, CHECKOUT_ATTEMPT_MAX_AGE_MS } = require('../lib/checkoutAttempt.ts');
-const { CUSTOMER_REQUEST_TIMEOUT_MS, CUSTOMER_JSON_RESPONSE_MAX_BYTES, CUSTOMER_JSON_RESPONSE_MAX_CHUNKS, CustomerRequestTimeoutError, fetchCustomerJson, fetchCustomerRequest, isCustomerJsonResponseContentType } = require('../lib/clientRequest.ts');
+const { CUSTOMER_REQUEST_TIMEOUT_MS, CUSTOMER_JSON_RESPONSE_MAX_BYTES, CUSTOMER_JSON_RESPONSE_MAX_CHUNKS, CUSTOMER_JSON_CONTENT_TYPE_MAX_LENGTH, CustomerRequestTimeoutError, fetchCustomerJson, fetchCustomerRequest, isCustomerJsonResponseContentType } = require('../lib/clientRequest.ts');
 const { safeHttpsDeliveryEndpoint } = require('../lib/deliveryEndpoint.ts');
 const { fulfilmentRelayAcknowledged } = require('../lib/deliveryAcknowledgement.ts');
 const { safeProviderDeliveryFailure, safeWebhookProcessingFailure } = require('../lib/deliveryFailure.ts');
@@ -1301,6 +1301,11 @@ test('customer checkout requests release a stuck browser without rotating their 
     for (const value of [null, '', 'text/html', 'application/problem+json', 'application/jsonp', 'application/json; charset=iso-8859-1', 'application/json; profile=checkout', 'application/json; charset=utf-8; charset=utf-8']) {
       assert.equal(isCustomerJsonResponseContentType(value), false);
     }
+    assert.equal(CUSTOMER_JSON_CONTENT_TYPE_MAX_LENGTH, 256);
+    assert.equal(
+      isCustomerJsonResponseContentType(`application/json; charset=utf-8; padding=${'a'.repeat(CUSTOMER_JSON_CONTENT_TYPE_MAX_LENGTH)}`),
+      false,
+    );
 
     let wrongTypeCancelled = false;
     global.fetch = async () => new Response(new ReadableStream({
