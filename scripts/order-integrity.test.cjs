@@ -100,6 +100,7 @@ const { retryableStripeConfirmationFailure } = require('../lib/confirmationLooku
 const { CONFIRMATION_REFRESH_INITIAL_DELAY_MS, CONFIRMATION_REFRESH_MAX_DELAY_MS, CONFIRMATION_REFRESH_MAX_ATTEMPTS, confirmationRefreshDelayMs } = require('../lib/confirmationRefresh.ts');
 const { formatSingaporeDate, formatSingaporeTimestamp } = require('../lib/singaporeTimestamp.ts');
 const { customerOrderReference } = require('../lib/customerOrderReference.ts');
+const { metaPurchaseIdentity: deriveMetaPurchaseIdentity } = require('../lib/metaPurchaseIdentity.ts');
 const { READINESS_PROBE_TIMEOUT_MS, ReadinessProbeTimeoutError, runReadinessProbe } = require('../lib/readinessProbe.ts');
 const { readinessFailureBackoffActive, readinessWindowActive } = require('../lib/readinessBackoff.ts');
 
@@ -220,6 +221,7 @@ const orderConfirmationRefresh = fs.readFileSync(require.resolve('../components/
 const metaPurchase = fs.readFileSync(require.resolve('../components/MetaPurchase.tsx'), 'utf8');
 const metaConsent = fs.readFileSync(require.resolve('../components/MetaConsent.tsx'), 'utf8');
 const metaClient = fs.readFileSync(require.resolve('../lib/metaClient.ts'), 'utf8');
+const metaPurchaseIdentity = fs.readFileSync(require.resolve('../lib/metaPurchaseIdentity.ts'), 'utf8');
 const stripeClient = fs.readFileSync(require.resolve('../lib/stripeClient.ts'), 'utf8');
 const metaAttribution = fs.readFileSync(require.resolve('../lib/metaAttribution.ts'), 'utf8');
 const adminPage = fs.readFileSync(require.resolve('../app/admin/page.tsx'), 'utf8');
@@ -7619,15 +7621,28 @@ test('admin Meta recovery rejects corrupt, pre-Checkout, or future payment times
 });
 
 test('consented browser and CAPI Purchases share a stable deduplication identity', () => {
-  assert.match(successPage, /<MetaPurchase sessionId=\{sessionId\}/);
+  const sessionId = 'cs_live_metaPurchaseIdentityExample123';
+  const identity = deriveMetaPurchaseIdentity(sessionId);
+  assert.match(identity, /^qyr_purchase_[a-f0-9]{64}$/);
+  assert.equal(deriveMetaPurchaseIdentity(sessionId), identity);
+  assert.notEqual(deriveMetaPurchaseIdentity(`${sessionId}2`), identity);
+  assert.equal(deriveMetaPurchaseIdentity('invalid'), null);
+  assert.equal(identity.includes(sessionId), false);
+  assert.match(successPage, /purchaseIdentity = metaPurchaseIdentity\(sessionId\)/);
+  assert.match(successPage, /<MetaPurchase sessionId=\{sessionId\} purchaseIdentity=\{purchaseIdentity\}/);
   assert.doesNotMatch(successPage, /measurementConsent=\{measurementConsent\}/);
   assert.match(metaPurchase, /metaMeasurementAllowed\(\)/);
   assert.match(metaPurchase, /qyroam_meta_purchase_/);
-  assert.match(metaPurchase, /eventID: `stripe_\$\{sessionId\}`/);
+  assert.match(metaPurchase, /eventID: purchaseIdentity/);
   assert.match(metaPurchase, /content_ids: \[contentId\]/);
   assert.match(metaClient, /trackMetaWhenReady/);
   assert.match(metaClient, /attemptsLeft = 20/);
-  assert.match(webhookRoute, /event_id:`stripe_\$\{session\.id\}`/);
+  assert.match(webhookRoute, /purchaseIdentity=metaPurchaseIdentity\(session\.id\)/);
+  assert.match(webhookRoute, /event_id:purchaseIdentity/);
+  assert.match(webhookRoute, /order_id:purchaseIdentity/);
+  assert.doesNotMatch(webhookRoute, /order_id:session\.id/);
+  assert.match(metaPurchaseIdentity, /update\('qy-roam-meta-purchase\\0'/);
+  assert.match(metaPurchaseIdentity, /return `qyr_purchase_\$\{digest\}`/);
   assert.match(webhookRoute, /content_ids:\[contentId\]/);
   assert.match(webhookRoute, /content_type:'product'/);
 });
@@ -7640,7 +7655,7 @@ test('browser Purchase waits for the same durable paid-order boundary as CAPI', 
   assert.match(successPage, /orderPersisted=\{orderPersisted\}/);
   assert.match(metaPurchase, /orderPersisted: boolean/);
   assert.match(metaPurchase, /if \(!orderPersisted \|\| !metaMeasurementAllowed\(\)/);
-  assert.match(metaPurchase, /\[consentRevision, contentId, orderPersisted, productType, sessionId, value\]/);
+  assert.match(metaPurchase, /\[consentRevision, contentId, orderPersisted, productType, purchaseIdentity, sessionId, value\]/);
   const persisted = webhookRoute.indexOf('await persistSession(sessionForEvent,event.type,eventCreated)');
   const capi = webhookRoute.indexOf('await deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated)');
   assert.ok(persisted >= 0 && capi > persisted, 'CAPI must remain after durable order persistence');
@@ -7662,7 +7677,7 @@ test('first-time consent on the confirmation page delivers Purchase without a re
   assert.match(metaPurchase, /window\.addEventListener\(META_CONSENT_CHANGED_EVENT, consentChanged\)/);
   assert.doesNotMatch(metaPurchase, /!measurementConsent/);
   assert.match(metaPurchase, /if \(!orderPersisted \|\| !metaMeasurementAllowed\(\)/);
-  assert.match(metaPurchase, /\[consentRevision, contentId, orderPersisted, productType, sessionId, value\]/);
+  assert.match(metaPurchase, /\[consentRevision, contentId, orderPersisted, productType, purchaseIdentity, sessionId, value\]/);
   assert.match(metaConsent, /f\('consent', 'grant'\)/);
   assert.match(metaConsent, /window\.fbq\?\.\('consent', 'revoke'\)/);
 });
@@ -9320,7 +9335,7 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
     assert.match(page, /durableOrderMatchesPaidSession\(/);
     assert.match(page, /stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent/);
   }
-  assert.match(successPage, /<MetaPurchase sessionId=\{sessionId\} orderPersisted=\{orderPersisted\}/);
+  assert.match(successPage, /<MetaPurchase sessionId=\{sessionId\} purchaseIdentity=\{purchaseIdentity\} orderPersisted=\{orderPersisted\}/);
   assert.match(bookingPage, /const order = orderLifecycleValid \? storedOrder : null/);
 
   assert.match(schema, /orders_stripe_product_snapshot_separation_check/);

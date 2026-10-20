@@ -22,6 +22,7 @@ import { safeProviderDeliveryFailure, safeWebhookProcessingFailure } from '@/lib
 import { nextRetryAttempt } from '@/lib/retryAttempt';
 import { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesCommercialSnapshot, stripeWebhookCheckoutSessionMatchesEvent, stripeWebhookEventEnvelope } from '@/lib/stripeWebhookObject';
 import { metaCapiPurchaseAcknowledged } from '@/lib/metaCapiAcknowledgement';
+import { metaPurchaseIdentity } from '@/lib/metaPurchaseIdentity';
 import { stripeCheckoutEventStateIssue, type QyRoamCheckoutEventType } from '@/lib/stripeCheckoutEventState';
 import { contentLengthMatches, declaredContentLength } from '@/lib/contentLength';
 import { paidFulfilmentDetailsIssue } from '@/lib/paidFulfilmentDetails';
@@ -418,7 +419,9 @@ async function sendMetaPurchase(session: Stripe.Checkout.Session, eventTime: num
   if(fbp) userData.fbp=fbp; if(fbc) userData.fbc=fbc;
   const productType=session.metadata?.product_type||'pocket_wifi';
   const contentId=productType==='esim' ? `esim:${session.metadata?.plan_id||''}` : `pocket_wifi:${session.metadata?.country||''}`;
-  const payload={data:[{event_name:'Purchase',event_time:eventTime,action_source:'website',event_source_url:metaPurchaseEventSourceUrl(),event_id:`stripe_${session.id}`,user_data:{...userData,...(clientUserAgent?{client_user_agent:clientUserAgent}:{}),...(clientIp?{client_ip_address:clientIp}:{})},custom_data:{currency:'SGD',value:(session.amount_total||0)/100,order_id:session.id,content_type:'product',content_ids:[contentId],contents:[{id:contentId,quantity:1}],content_category:productType==='esim'?'Travel eSIM':'Pocket WiFi'}}]};
+  const purchaseIdentity=metaPurchaseIdentity(session.id);
+  if(!purchaseIdentity) throw new Error('Invalid Meta Purchase identity');
+  const payload={data:[{event_name:'Purchase',event_time:eventTime,action_source:'website',event_source_url:metaPurchaseEventSourceUrl(),event_id:purchaseIdentity,user_data:{...userData,...(clientUserAgent?{client_user_agent:clientUserAgent}:{}),...(clientIp?{client_ip_address:clientIp}:{})},custom_data:{currency:'SGD',value:(session.amount_total||0)/100,order_id:purchaseIdentity,content_type:'product',content_ids:[contentId],contents:[{id:contentId,quantity:1}],content_category:productType==='esim'?'Travel eSIM':'Pocket WiFi'}}]};
   // Keep the CAPI credential out of the URL. Query strings are commonly
   // retained by reverse proxies, request tracing, and provider diagnostics;
   // an Authorization header reaches the same Graph endpoint without making a

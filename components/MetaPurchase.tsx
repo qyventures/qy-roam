@@ -5,6 +5,7 @@ import { META_CONSENT_CHANGED_EVENT, metaMeasurementAllowed, trackMetaWhenReady 
 
 type Props = {
   sessionId: string;
+  purchaseIdentity: string;
   orderPersisted: boolean;
   productType: 'esim' | 'pocket_wifi';
   contentId: string;
@@ -24,7 +25,7 @@ const PURCHASE_KEY_PREFIX = 'qyroam_meta_purchase_';
 // snapshot captured at checkout, but a visitor who first opts in on this
 // confirmation page has just authorised the browser Purchase and should not
 // need to reload before it is delivered.
-export default function MetaPurchase({ sessionId, orderPersisted, productType, contentId, value }: Props) {
+export default function MetaPurchase({ sessionId, purchaseIdentity, orderPersisted, productType, contentId, value }: Props) {
   const [consentRevision, setConsentRevision] = useState(0);
 
   useEffect(() => {
@@ -49,14 +50,14 @@ export default function MetaPurchase({ sessionId, orderPersisted, productType, c
       content_ids: [contentId],
       contents: [{ id: contentId, quantity: 1 }],
       content_category: productType === 'esim' ? 'Travel eSIM' : 'Pocket WiFi',
-    }, { eventID: `stripe_${sessionId}` }, () => {
+    }, { eventID: purchaseIdentity }, () => {
       try {
         window.sessionStorage.setItem(key, '1');
       } catch {
         // The stable eventID still deduplicates browser and CAPI delivery.
       }
     });
-  }, [consentRevision, contentId, orderPersisted, productType, sessionId, value]);
+  }, [consentRevision, contentId, orderPersisted, productType, purchaseIdentity, sessionId, value]);
 
   return null;
 }

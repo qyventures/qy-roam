@@ -10,6 +10,7 @@ import { durableOrderMatchesFailedSession, durableOrderMatchesPaidSession } from
 import { tryAcquireConfirmationConcurrency } from '@/lib/confirmationConcurrency';
 import { retryableStripeConfirmationFailure } from '@/lib/confirmationLookupFailure';
 import { customerOrderReference } from '@/lib/customerOrderReference';
+import { metaPurchaseIdentity } from '@/lib/metaPurchaseIdentity';
 
 export const dynamic = 'force-dynamic';
 export const metadata = {
@@ -175,9 +176,10 @@ export default async function SuccessPage({ searchParams }: Props) {
   const isEsim = productType === 'esim';
   const contentId = isEsim ? `esim:${planId}` : `pocket_wifi:${destination}`;
   const purchaseValue = amount ? Number(amount.slice(2)) : Number.NaN;
+  const purchaseIdentity = metaPurchaseIdentity(sessionId);
   return (
     <main className="wrap section legal">
-      {sessionId && <MetaPurchase sessionId={sessionId} orderPersisted={orderPersisted} productType={productType} contentId={contentId} value={purchaseValue} />}
+      {sessionId && purchaseIdentity && <MetaPurchase sessionId={sessionId} purchaseIdentity={purchaseIdentity} orderPersisted={orderPersisted} productType={productType} contentId={contentId} value={purchaseValue} />}
       <span className="eyebrow">{orderPersisted ? 'Order confirmed' : 'Payment confirmed'}</span>
       <h1>{orderPersisted ? 'Thank you — your QY Roam order is confirmed.' : 'Thank you — your payment is confirmed.'}</h1>
       {!orderPersisted && <OrderConfirmationRefresh />}
