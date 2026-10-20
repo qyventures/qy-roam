@@ -5350,8 +5350,42 @@ test('an asynchronous-payment commitment acknowledges only its exact durable sna
   assert.equal(durableOrderMatchesUnpaidOrAlreadyPaidSession(pendingOrder, session, 'pocket_wifi'), true);
   assert.equal(durableOrderMatchesUnpaidOrAlreadyPaidSession({ ...pendingOrder, amount_sgd: '4.82' }, session, 'pocket_wifi'), false);
   assert.equal(durableOrderMatchesUnpaidOrAlreadyPaidSession({ ...pendingOrder, travel_end: '2026-11-03' }, session, 'pocket_wifi'), false);
+  assert.equal(durableOrderMatchesUnpaidOrAlreadyPaidSession({ ...pendingOrder, shipping_address: { ...pendingOrder.shipping_address, line1: '2 Wrong Street' } }, session, 'pocket_wifi'), false);
+  assert.equal(durableOrderMatchesUnpaidOrAlreadyPaidSession({ ...pendingOrder, shipping_address: null }, session, 'pocket_wifi'), false);
   assert.equal(durableOrderMatchesUnpaidOrAlreadyPaidSession({ ...pendingOrder, payment_status: 'paid' }, session, 'pocket_wifi'), true);
   assert.equal(durableOrderMatchesUnpaidOrAlreadyPaidSession(pendingOrder, { ...session, status: 'open' }, 'pocket_wifi'), false);
+});
+
+test('expired Checkout tombstones acknowledge the exact released order snapshot', () => {
+  const session = {
+    id: 'cs_live_expiredCommitment123', livemode: true, mode: 'payment',
+    status: 'expired', payment_status: 'unpaid', currency: 'sgd', amount_total: 481,
+    metadata: {
+      product_type: 'pocket_wifi', measurement_consent: 'essential',
+      plan_name: 'Japan Pocket WiFi', country: 'Japan', start: '2026-11-01', end: '2026-11-02',
+    },
+  };
+  const expiredOrder = {
+    stripe_session_id: session.id, payment_status: 'unpaid', product_type: 'pocket_wifi', amount_sgd: '4.81',
+    plan_id: null, plan_name: 'Japan Pocket WiFi', data_allowance: null, country: 'Japan',
+    travel_start: '2026-11-01', travel_end: '2026-11-02', measurement_consent: 'essential',
+    shipping_address: null,
+  };
+
+  assert.equal(durableOrderMatchesUnpaidOrAlreadyPaidSession(expiredOrder, session, 'pocket_wifi'), true);
+  assert.equal(durableOrderMatchesUnpaidOrAlreadyPaidSession({ ...expiredOrder, amount_sgd: '4.82' }, session, 'pocket_wifi'), false);
+  assert.equal(durableOrderMatchesUnpaidOrAlreadyPaidSession({ ...expiredOrder, shipping_address: { country: 'SG', line1: 'Unexpected' } }, session, 'pocket_wifi'), false);
+  assert.equal(durableOrderMatchesFailedSession(expiredOrder, session, 'pocket_wifi'), false);
+
+  const addressedSession = {
+    ...session,
+    shipping_details: { address: { city: 'Singapore', country: 'SG', line1: '1 Test Street', line2: null, postal_code: '123456', state: null } },
+  };
+  assert.equal(durableOrderMatchesUnpaidOrAlreadyPaidSession(
+    { ...expiredOrder, shipping_address: addressedSession.shipping_details.address },
+    addressedSession,
+    'pocket_wifi',
+  ), true);
 });
 
 test('paid persistence acknowledgements retain the exact signed payment event time', () => {

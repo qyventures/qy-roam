@@ -55,6 +55,50 @@ function durableShippingAddressMatchesSession(value: unknown, session: Stripe.Ch
   });
 }
 
+function durableUnpaidOrderMatchesSession(
+  order: DurableOrderSnapshot | null | undefined,
+  session: Stripe.Checkout.Session,
+  productType: QyRoamProductType,
+) {
+  const sessionId = validStripeCheckoutSessionIdForMode(session.id, session.livemode);
+  const expectedMeasurementConsent = session.metadata?.measurement_consent === 'accepted'
+    ? 'accepted'
+    : 'essential';
+  if (!order || !sessionId || order.stripe_session_id !== sessionId ||
+    order.payment_status !== 'unpaid' || order.product_type !== productType ||
+    session.metadata?.product_type !== productType ||
+    order.measurement_consent !== expectedMeasurementConsent ||
+    session.mode !== 'payment' ||
+    (session.status !== 'complete' && session.status !== 'expired') ||
+    session.payment_status !== 'unpaid' ||
+    session.currency?.toLowerCase() !== 'sgd' ||
+    typeof session.amount_total !== 'number' || !Number.isSafeInteger(session.amount_total) || session.amount_total <= 0 ||
+    sgdCents(order.amount_sgd) !== session.amount_total ||
+    order.plan_name !== (session.metadata?.plan_name || null) ||
+    order.country !== (session.metadata?.country || null)) {
+    return false;
+  }
+
+  if (productType === 'esim') {
+    return order.plan_id === (session.metadata?.plan_id || null) &&
+      order.data_allowance === (session.metadata?.data_allowance || null) &&
+      order.travel_start === null && order.travel_end === null &&
+      order.shipping_address === null;
+  }
+
+  const sessionAddress = session.shipping_details?.address;
+  return order.travel_start === (session.metadata?.start || null) &&
+    order.travel_end === (session.metadata?.end || null) &&
+    order.plan_id === null && order.data_allowance === null &&
+    // A completed asynchronous-payment commitment has already collected the
+    // courier destination, so its durable acknowledgement must retain that
+    // exact address. An abandoned expired Checkout may legitimately have no
+    // address yet; in that case require the database tombstone to retain none.
+    (sessionAddress
+      ? durableShippingAddressMatchesSession(order.shipping_address, session)
+      : session.status === 'expired' && order.shipping_address === null);
+}
+
 /**
  * Prove that the durable row shown to a customer is the paid snapshot created
  * from this authenticated Checkout Session. The Session id is the lookup key,
@@ -154,33 +198,12 @@ export function durableOrderMatchesFailedSession(
   session: Stripe.Checkout.Session,
   productType: QyRoamProductType,
 ) {
-  const sessionId = validStripeCheckoutSessionIdForMode(session.id, session.livemode);
-  const expectedMeasurementConsent = session.metadata?.measurement_consent === 'accepted'
-    ? 'accepted'
-    : 'essential';
-  if (!order || !sessionId || order.stripe_session_id !== sessionId ||
-    order.payment_status !== 'unpaid' || order.product_type !== productType ||
-    session.metadata?.product_type !== productType ||
-    order.measurement_consent !== expectedMeasurementConsent ||
-    session.mode !== 'payment' || session.status !== 'complete' || session.payment_status !== 'unpaid' ||
-    session.currency?.toLowerCase() !== 'sgd' ||
-    typeof session.amount_total !== 'number' || !Number.isSafeInteger(session.amount_total) || session.amount_total <= 0 ||
-    sgdCents(order.amount_sgd) !== session.amount_total ||
-    order.plan_name !== (session.metadata?.plan_name || null) ||
-    order.country !== (session.metadata?.country || null)) {
-    return false;
-  }
-
-  if (productType === 'esim') {
-    return order.plan_id === (session.metadata?.plan_id || null) &&
-      order.data_allowance === (session.metadata?.data_allowance || null) &&
-      order.travel_start === null && order.travel_end === null &&
-      order.shipping_address === null;
-  }
-
-  return order.travel_start === (session.metadata?.start || null) &&
-    order.travel_end === (session.metadata?.end || null) &&
-    order.plan_id === null && order.data_allowance === null;
+  // Customer-facing payment failure is an asynchronous terminal transition
+  // from a completed Checkout. Expiry uses the broader persistence helper
+  // below, but must not make a browser rotate its payment attempt as though
+  // Stripe had emitted async_payment_failed.
+  return session.status === 'complete' &&
+    durableUnpaidOrderMatchesSession(order, session, productType);
 }
 
 /**
@@ -211,7 +234,7 @@ export function durableOrderMatchesUnpaidOrAlreadyPaidSession(
   session: Stripe.Checkout.Session,
   productType: QyRoamProductType,
 ) {
-  if (durableOrderMatchesFailedSession(order, session, productType)) return true;
+  if (durableUnpaidOrderMatchesSession(order, session, productType)) return true;
   if (session.status !== 'complete' || session.payment_status !== 'unpaid') return false;
   return durableOrderMatchesPaidSession(
     order,
