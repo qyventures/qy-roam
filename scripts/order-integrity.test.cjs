@@ -35,7 +35,7 @@ const { MAX_POCKET_WIFI_INVENTORY, operationalConfig } = require('../lib/operati
 const { validStripeCheckoutSessionId, validStripeCheckoutSessionIdForMode } = require('../lib/stripeSessionId.ts');
 const { validStripeEventCreated, validStripePaymentEventCreated, STRIPE_EVENT_CREATED_MIN_SECONDS, STRIPE_EVENT_CREATED_MAX_FUTURE_SECONDS } = require('../lib/stripeEventCreated.ts');
 const { hasQyRoamWebhookSource, stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesCommercialSnapshot, stripeWebhookCheckoutSessionMatchesEvent, stripeWebhookCheckoutSessionMatchesSnapshot, stripeWebhookEventEnvelope } = require('../lib/stripeWebhookObject.ts');
-const { hasIdentityRequestContentEncoding, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyLengthError, InvalidRequestBodyLimitError, MAX_REQUEST_BODY_CHUNKS, MAX_JSON_CONTENT_TYPE_HEADER_LENGTH, MAX_CONTENT_ENCODING_HEADER_LENGTH, validateLimitedRequestContentLength } = require('../lib/requestBody.ts');
+const { hasIdentityRequestContentEncoding, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, InvalidRequestBodyEncodingError, InvalidRequestBodyLengthError, InvalidRequestBodyLimitError, MAX_REQUEST_BODY_CHUNKS, MAX_JSON_CONTENT_TYPE_HEADER_LENGTH, MAX_CONTENT_ENCODING_HEADER_LENGTH, validateLimitedRequestContentLength } = require('../lib/requestBody.ts');
 const { checkoutClientKey, createCheckoutAttemptLimiter, createGlobalAttemptLimiter } = require('../lib/checkoutRateLimit.ts');
 const { ADMIN_AUTH_GLOBAL_MAX_FAILURES, adminAuthClientKey, createFailedAdminAuthLimiter, createGlobalFailedAdminAuthLimiter } = require('../lib/adminAuthRateLimit.ts');
 const { CONFIRMATION_RATE_LIMIT_WINDOW_MS, CONFIRMATION_CLIENT_RATE_LIMIT_MAX_ATTEMPTS, CONFIRMATION_GLOBAL_RATE_LIMIT_MAX_ATTEMPTS } = require('../lib/confirmationRateLimit.ts');
@@ -3415,6 +3415,28 @@ test('checkout request bodies are bounded for chunked, malformed, and slow uploa
     body: new ReadableStream({ pull() { return new Promise(() => {}); } }),
   };
   await assert.rejects(() => readLimitedRequestText(stalled, 4096, 20), RequestBodyTimeoutError);
+});
+
+test('mutation request bodies reject malformed UTF-8 instead of silently changing audit data', async () => {
+  const validUnicode = new TextEncoder().encode('{"note":"returned at Changi ✓"}');
+  const validRequest = {
+    headers: new Headers({ 'content-length': String(validUnicode.byteLength) }),
+    body: new ReadableStream({ start(controller) { controller.enqueue(validUnicode); controller.close(); } }),
+  };
+  assert.equal(await readLimitedRequestText(validRequest, 4096, 100), '{"note":"returned at Changi ✓"}');
+
+  // C3 28 is not a valid UTF-8 sequence. Buffer#toString would previously
+  // turn it into U+FFFD followed by "(", allowing different text to reach
+  // checkout/admin validation than the bytes supplied by the caller.
+  const malformed = Uint8Array.from([0x7b, 0x22, 0x78, 0x22, 0x3a, 0x22, 0xc3, 0x28, 0x22, 0x7d]);
+  const malformedRequest = {
+    headers: new Headers({ 'content-length': String(malformed.byteLength) }),
+    body: new ReadableStream({ start(controller) { controller.enqueue(malformed); controller.close(); } }),
+  };
+  await assert.rejects(
+    () => readLimitedRequestText(malformedRequest, 4096, 100),
+    InvalidRequestBodyEncodingError,
+  );
 });
 
 test('checkout rejects impossible declared body lengths before upload admission', () => {

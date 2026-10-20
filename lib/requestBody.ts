@@ -7,6 +7,7 @@ export class RequestBodyTooLargeError extends Error {}
 export class RequestBodyTimeoutError extends Error {}
 export class InvalidRequestBodyLengthError extends Error {}
 export class InvalidRequestBodyLimitError extends Error {}
+export class InvalidRequestBodyEncodingError extends Error {}
 
 // Route handlers currently need only a few KiB of JSON. Keep the shared
 // streaming helper safe if a future endpoint accidentally passes a value from
@@ -148,5 +149,15 @@ export async function readLimitedRequestText(req: Request, maxBytes: number, tim
   if (!contentLengthMatches(contentLength, total)) {
     throw new InvalidRequestBodyLengthError('Request body length does not match Content-Length');
   }
-  return body.subarray(0, total).toString('utf8');
+  // Buffer#toString('utf8') silently replaces malformed byte sequences with
+  // U+FFFD. That is unsafe for mutation requests: the application could
+  // validate and persist text different from the bytes the customer or
+  // operator actually sent, including values used as durable idempotency or
+  // audit evidence. JSON is defined over Unicode, so reject a non-UTF-8 body
+  // before JSON parsing instead of normalising it invisibly.
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(body.subarray(0, total));
+  } catch {
+    throw new InvalidRequestBodyEncodingError('Request body is not valid UTF-8');
+  }
 }
