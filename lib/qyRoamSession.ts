@@ -9,6 +9,7 @@ import { pocketWifiRentalCents } from './pocketWifiPricing';
 import { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } from './pocketWifiRentalPeriod';
 import { validStripeCheckoutSessionIdForMode } from './stripeSessionId';
 import { validStripeEventCreated } from './stripeEventCreated';
+import { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_HOLD_SCAN_WINDOW_SECONDS } from './checkoutExpiry';
 
 export type QyRoamProductType = 'esim' | 'pocket_wifi';
 
@@ -145,6 +146,20 @@ function validateQyRoamSessionSnapshot(session: Stripe.Checkout.Session): QyRoam
   // snapshot with a missing, pre-Stripe, or implausibly future creation time.
   if (!validStripeEventCreated(session.created)) {
     return { valid: false, reason: 'invalid Stripe Checkout Session creation time' };
+  }
+  // Both QY Roam checkout routes create a short, explicit payment window.
+  // Stripe's object shape makes `expires_at` nullable at compile time, and a
+  // valid metadata HMAC only proves that this application signed the
+  // snapshot; neither is evidence that the Session retained the reviewed
+  // payment window. Bind the fulfilment authority to the same lower bound
+  // Stripe enforces and the same upper bound used by inventory hold scans.
+  // This relationship remains valid for historical webhook retries because
+  // both timestamps are immutable properties of the Checkout Session.
+  const expiresAt = session.expires_at;
+  const minimumExpiry = session.created + CHECKOUT_PAYMENT_WINDOW_MINUTES * 60;
+  const maximumExpiry = session.created + STRIPE_HOLD_SCAN_WINDOW_SECONDS;
+  if (!Number.isSafeInteger(expiresAt) || expiresAt < minimumExpiry || expiresAt > maximumExpiry) {
+    return { valid: false, reason: 'invalid QY Roam Checkout Session expiry window' };
   }
   // QY Roam sells one-time travel products. The metadata HMAC authenticates
   // the server-authored order snapshot, but it does not itself bind Stripe's

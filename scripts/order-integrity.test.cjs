@@ -2192,6 +2192,7 @@ function esimSession(plan = ESIM_PLANS[0]) {
     id: 'cs_test_esim',
     livemode: false,
     created: Math.floor(Date.now() / 1000),
+    expires_at: Math.floor(Date.now() / 1000) + CHECKOUT_HOLD_WINDOW_SECONDS,
     mode: 'payment',
     status: 'open',
     payment_status: 'unpaid',
@@ -2225,6 +2226,7 @@ function wifiSession(plan = WIFI_PLANS[0]) {
     id: 'cs_test_wifi',
     livemode: false,
     created: Math.floor(Date.now() / 1000),
+    expires_at: Math.floor(Date.now() / 1000) + CHECKOUT_HOLD_WINDOW_SECONDS,
     mode: 'payment',
     status: 'open',
     payment_status: 'unpaid',
@@ -2318,6 +2320,33 @@ test('shared order validation requires a plausible Stripe Session creation epoch
         reason: 'invalid Stripe Checkout Session creation time',
       });
     }
+  }
+});
+
+test('shared order validation binds fulfilment to QY Roam\'s reviewed Checkout expiry window', () => {
+  for (const makeSession of [esimSession, wifiSession]) {
+    for (const expiryFromCreation of [
+      undefined,
+      CHECKOUT_PAYMENT_WINDOW_MINUTES * 60 - 1,
+      STRIPE_HOLD_SCAN_WINDOW_SECONDS + 1,
+    ]) {
+      const malformed = makeSession();
+      malformed.expires_at = expiryFromCreation === undefined
+        ? undefined
+        : malformed.created + expiryFromCreation;
+      assert.deepEqual(validateQyRoamSession(malformed), {
+        valid: false,
+        reason: 'invalid QY Roam Checkout Session expiry window',
+      });
+    }
+
+    const minimum = makeSession();
+    minimum.expires_at = minimum.created + CHECKOUT_PAYMENT_WINDOW_MINUTES * 60;
+    assert.equal(validateQyRoamSession(minimum).valid, true);
+
+    const maximum = makeSession();
+    maximum.expires_at = maximum.created + STRIPE_HOLD_SCAN_WINDOW_SECONDS;
+    assert.equal(validateQyRoamSession(maximum).valid, true);
   }
 });
 
