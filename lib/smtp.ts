@@ -25,6 +25,10 @@ type SmtpOptions = {
 // on the paid-order webhook path: a malformed relay must not turn one pending
 // fulfilment notification into an avoidable worker-memory exhaustion.
 const MAX_SMTP_RESPONSE_BYTES = 64 * 1024;
+// RFC 5321 limits a DATA line to 1,000 octets including its terminating
+// CRLF. Reserve one additional octet before dot-stuffing so a line beginning
+// with `.` remains inside that limit after the escape is added.
+export const MAX_SMTP_DATA_LINE_BYTES = 998;
 const MIN_SMTP_TLS_VERSION = 'TLSv1.2' as const;
 
 // Keep deployment parsing shared by checkout readiness and the paid-order
@@ -94,8 +98,30 @@ function encode(value: string) {
   return Buffer.from(value, 'utf8').toString('base64');
 }
 
-function dotStuff(text: string) {
-  return text.replace(/(^|\r?\n)\./g, '$1..').replace(/\r?\n/g, '\r\n');
+export function smtpDataText(text: string) {
+  const physicalLines: string[] = [];
+  // Treat a bare CR as a line boundary too. Passing it through verbatim can
+  // create a transport-dependent message representation, while SMTP DATA is
+  // explicitly a sequence of CRLF-terminated lines.
+  for (const logicalLine of text.split(/\r\n|\r|\n/)) {
+    let line = '';
+    let lineBytes = 0;
+    for (const character of logicalLine) {
+      const characterBytes = Buffer.byteLength(character, 'utf8');
+      // Use the conservative limit for every line. This makes subsequent
+      // dot-stuffing safe without having to move a character after discovering
+      // that a freshly wrapped line happens to begin with a dot.
+      if (line && lineBytes + characterBytes > MAX_SMTP_DATA_LINE_BYTES - 1) {
+        physicalLines.push(line.startsWith('.') ? `.${line}` : line);
+        line = '';
+        lineBytes = 0;
+      }
+      line += character;
+      lineBytes += characterBytes;
+    }
+    physicalLines.push(line.startsWith('.') ? `.${line}` : line);
+  }
+  return physicalLines.join('\r\n');
 }
 
 function safeMessageId(value: string | undefined) {
@@ -315,7 +341,7 @@ async function sendMessage(socket: net.Socket | tls.TLSSocket, options: SmtpOpti
     'Content-Type: text/plain; charset=UTF-8',
     'Content-Transfer-Encoding: 8bit',
     '',
-    dotStuff(options.text),
+    smtpDataText(options.text),
     '.'
   ].join('\r\n');
   const accepted = waitForResponse(socket, [250], () => socket.write(`${message}\r\n`));

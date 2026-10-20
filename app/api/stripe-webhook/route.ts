@@ -456,9 +456,17 @@ async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
   // eSIM is a digital entitlement. Even if an old or dashboard-created
   // Stripe Session carries shipping data, do not copy that unrelated address
   // into the operations message.
-  const shippingText=!isEsim&&shipping?[shipping.line1,shipping.line2,shipping.city,shipping.state,shipping.postal_code,shipping.country].filter(Boolean).join(', '):'Not applicable / not supplied';
+  // Keep physical address components on separate message lines. Stripe fields
+  // are individually bounded at the paid-order boundary, but concatenating
+  // all of them can exceed SMTP's 1,000-octet DATA-line limit (especially for
+  // multibyte Unicode) and strand a valid paid order in notification retries.
+  // This also keeps the HTTPS relay payload directly renderable by a strict
+  // SMTP adapter instead of relying only on the in-process transport's fold.
+  const deliveryLines=isEsim||!shipping
+    ? ['Delivery address: Not applicable / not supplied']
+    : ['Delivery address:',...[shipping.line1,shipping.line2,shipping.city,shipping.state,shipping.postal_code,shipping.country].filter((value):value is string=>Boolean(value)).map(value=>`  ${value}`)];
   const subject=`[QY Roam] Paid ${isEsim?'eSIM':'Pocket WiFi'} order — ${destination||planName||session.id}`;
-  const text=['A paid QY Roam order requires human fulfilment.','',`Order reference: ${session.id}`,`Product: ${isEsim?'Travel eSIM':'Pocket WiFi'}`,`Destination: ${destination||'-'}`,`Plan: ${planName||'-'}`,...(isEsim?[`Plan ID: ${planId||'-'}`,`Data allowance: ${dataAllowance||'-'}`]:[]),`Travel dates: ${start||'-'}${end?` to ${end}`:''}`,`Amount paid: S$${amount}`,`Promo code: ${session.metadata?.promo_code||'-'}`,'',`Customer name: ${customer?.name||'-'}`,`Email: ${customer?.email||'-'}`,`Phone: ${customer?.phone||'-'}`,`Delivery address: ${shippingText}`,'',isEsim?'Action: Please process the eSIM manually and send the QR code / activation instructions to the customer.':'Action: Please prepare and fulfil the Pocket WiFi order according to the travel dates and delivery details.','','Customer support: +65 8032 7183'].join('\n');
+  const text=['A paid QY Roam order requires human fulfilment.','',`Order reference: ${session.id}`,`Product: ${isEsim?'Travel eSIM':'Pocket WiFi'}`,`Destination: ${destination||'-'}`,`Plan: ${planName||'-'}`,...(isEsim?[`Plan ID: ${planId||'-'}`,`Data allowance: ${dataAllowance||'-'}`]:[]),`Travel dates: ${start||'-'}${end?` to ${end}`:''}`,`Amount paid: S$${amount}`,`Promo code: ${session.metadata?.promo_code||'-'}`,'',`Customer name: ${customer?.name||'-'}`,`Email: ${customer?.email||'-'}`,`Phone: ${customer?.phone||'-'}`,...deliveryLines,'',isEsim?'Action: Please process the eSIM manually and send the QR code / activation instructions to the customer.':'Action: Please prepare and fulfil the Pocket WiFi order according to the travel dates and delivery details.','','Customer support: +65 8032 7183'].join('\n');
   // Readiness trims the relay secret before validating it. Use the exact same
   // canonical credential here so a common deployment formatting artifact
   // (for example a trailing newline from a secret manager) cannot make

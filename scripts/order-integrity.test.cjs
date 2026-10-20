@@ -55,7 +55,7 @@ const { safeHttpsDeliveryEndpoint } = require('../lib/deliveryEndpoint.ts');
 const { fulfilmentRelayAcknowledged } = require('../lib/deliveryAcknowledgement.ts');
 const { safeProviderDeliveryFailure, safeWebhookProcessingFailure } = require('../lib/deliveryFailure.ts');
 const { nextRetryAttempt } = require('../lib/retryAttempt.ts');
-const { completeSmtpResponseCode, isSafeSmtpHost, isSafeSmtpMailbox, smtpSecureTransport, waitForResponse, waitForTlsHandshake } = require('../lib/smtp.ts');
+const { completeSmtpResponseCode, isSafeSmtpHost, isSafeSmtpMailbox, MAX_SMTP_DATA_LINE_BYTES, smtpDataText, smtpSecureTransport, waitForResponse, waitForTlsHandshake } = require('../lib/smtp.ts');
 const { safeStripeCheckoutUrl } = require('../lib/stripeCheckoutUrl.ts');
 const { metaCapiPurchaseAcknowledged } = require('../lib/metaCapiAcknowledgement.ts');
 const { stripeCheckoutEventStateIssue } = require('../lib/stripeCheckoutEventState.ts');
@@ -1921,6 +1921,26 @@ test('SMTP fulfilment waits for complete, coherent protocol replies', () => {
   assert.throws(() => completeSmtpResponseCode('relay ready\r\n'), /Invalid SMTP response/);
 
   assert.match(smtpClient, /code = completeSmtpResponseCode\(buffer\)/);
+});
+
+test('SMTP fulfilment keeps Unicode DATA lines within the protocol limit', () => {
+  const encoded = smtpDataText(`${'旅'.repeat(600)}\n.leading dot\rbare carriage return`);
+  const lines = encoded.split('\r\n');
+
+  assert.ok(lines.length >= 4, 'oversized logical lines and every newline form must be folded');
+  assert.ok(lines.every((line) => Buffer.byteLength(line, 'utf8') <= MAX_SMTP_DATA_LINE_BYTES));
+  assert.ok(lines.includes('..leading dot'), 'a physical line beginning with a dot must be escaped');
+  assert.ok(lines.includes('bare carriage return'));
+  assert.equal(MAX_SMTP_DATA_LINE_BYTES, 998);
+  assert.match(smtpClient, /smtpDataText\(options\.text\)/);
+
+  const mailer = webhookRoute.slice(
+    webhookRoute.indexOf('async function sendHumanFulfilmentEmail'),
+    webhookRoute.indexOf('async function persistSession'),
+  );
+  assert.match(mailer, /const deliveryLines=/);
+  assert.doesNotMatch(mailer, /filter\(Boolean\)\.join\(', '\)/);
+  assert.match(mailer, /\.\.\.deliveryLines/);
 });
 
 test('SMTP fulfilment arms response handling before writing protocol data', async () => {
