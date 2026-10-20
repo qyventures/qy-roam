@@ -2958,6 +2958,14 @@ test('paid orders fail into the durable webhook recovery ledger when fulfilment 
     paidFulfilmentDetailsIssue({ ...paidEsim, customer_details: { email: 'not-an-email', phone: null } }, 'esim'),
     'Paid order is missing a valid customer email',
   );
+  for (const email of [' traveller@example.com', 'traveller@example.com ', '\ttraveller@example.com']) {
+    assert.equal(
+      paidFulfilmentDetailsIssue({ ...paidEsim, customer_details: { email, phone: null } }, 'esim'),
+      'Paid order is missing a valid customer email',
+      'the webhook must not approve an exact email snapshot that durable persistence rejects',
+    );
+  }
+  assert.match(schema, /email = btrim\(email\) and/);
   for (const name of ['Buyer\nBcc: operations@example.com', 'x'.repeat(201), 42]) {
     assert.equal(
       paidFulfilmentDetailsIssue({ ...paidEsim, customer_details: { email: 'buyer@example.com', name } }, 'esim'),

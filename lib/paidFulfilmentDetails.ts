@@ -61,7 +61,13 @@ export function paidFulfilmentDetailsIssue(
 
   const rawEmail: unknown = session.customer_details?.email;
   const email = typeof rawEmail === 'string' ? rawEmail.trim() : undefined;
-  if (!isSafeSmtpMailbox(email)) return 'Paid order is missing a valid customer email';
+  // Persist the exact provider value after this check. The orders table and
+  // SMTP boundary both require a canonical mailbox, so accepting a value only
+  // after trimming would let validation succeed and then make the atomic
+  // persistence RPC fail forever on the untrimmed snapshot.
+  if (rawEmail !== email || !isSafeSmtpMailbox(email)) {
+    return 'Paid order is missing a valid customer email';
+  }
   if (!safeCustomerName(session.customer_details?.name)) {
     return 'Paid order has an invalid customer name';
   }
