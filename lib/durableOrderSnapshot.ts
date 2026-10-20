@@ -16,6 +16,7 @@ export type DurableOrderSnapshot = {
   travel_end?: unknown;
   measurement_consent?: unknown;
   payment_confirmed_at?: unknown;
+  shipping_address?: unknown;
 };
 
 function sgdCents(value: unknown) {
@@ -88,7 +89,11 @@ export function durableOrderMatchesPaidSession(
       // service-role import or repair with stray travel dates must not unlock
       // customer confirmation or admin delivery recovery as though it were
       // the row persisted from this digital Checkout Session.
-      order.travel_start === null && order.travel_end === null;
+      order.travel_start === null && order.travel_end === null &&
+      // eSIM fulfilment is entirely digital. The webhook deliberately drops
+      // incidental Stripe shipping data, so an address here cannot be part
+      // of the exact order snapshot created by that boundary.
+      order.shipping_address === null;
   }
 
   return order.travel_start === (session.metadata?.start || null) &&
@@ -157,7 +162,8 @@ export function durableOrderMatchesFailedSession(
       getEsimPlan(session.metadata?.plan_id)?.data ?? null;
     return order.plan_id === (session.metadata?.plan_id || null) &&
       order.data_allowance === expectedDataAllowance &&
-      order.travel_start === null && order.travel_end === null;
+      order.travel_start === null && order.travel_end === null &&
+      order.shipping_address === null;
   }
 
   return order.travel_start === (session.metadata?.start || null) &&

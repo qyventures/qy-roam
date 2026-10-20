@@ -444,7 +444,7 @@ async function retryOrderDeliveries(_req: Request, { params }: { params: { id: s
   try {
     const { data: order, error } = await supabase
       .from('orders')
-      .select('stripe_session_id,payment_status,payment_confirmed_at,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,fulfilment_status,measurement_consent')
+      .select('stripe_session_id,payment_status,payment_confirmed_at,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,shipping_address,fulfilment_status,measurement_consent')
       .eq('id', id)
       .maybeSingle();
     if (error) throw error;

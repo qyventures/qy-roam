@@ -186,7 +186,7 @@ alter table public.orders add constraint orders_esim_plan_identity_shape_check c
 alter table public.orders drop constraint if exists orders_stripe_product_snapshot_separation_check;
 alter table public.orders add constraint orders_stripe_product_snapshot_separation_check check (
   stripe_session_id !~ '^cs_(test|live)_[A-Za-z0-9]+$' or
-  (product_type = 'esim' and travel_start is null and travel_end is null) or
+  (product_type = 'esim' and travel_start is null and travel_end is null and shipping_address is null) or
   (product_type = 'pocket_wifi' and plan_id is null and data_allowance is null)
 ) not valid;
 

@@ -430,7 +430,10 @@ async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
   const fulfilmentDetailsIssue=paidFulfilmentDetailsIssue(session,productType);
   if(fulfilmentDetailsIssue) throw new Error(fulfilmentDetailsIssue);
   const isEsim=productType==='esim', destination=session.metadata?.country||'', planName=session.metadata?.plan_name||'', planId=session.metadata?.plan_id||'', esimPlan=isEsim?getEsimPlan(planId):undefined, dataAllowance=session.metadata?.data_allowance||esimPlan?.data||'', start=session.metadata?.start||'', end=session.metadata?.end||'', customer=session.customer_details, amount=((session.amount_total||0)/100).toFixed(2), shipping=session.shipping_details?.address, messageId=fulfilmentMessageId(session.id);
-  const shippingText=shipping?[shipping.line1,shipping.line2,shipping.city,shipping.state,shipping.postal_code,shipping.country].filter(Boolean).join(', '):'Not applicable / not supplied';
+  // eSIM is a digital entitlement. Even if an old or dashboard-created
+  // Stripe Session carries shipping data, do not copy that unrelated address
+  // into the operations message.
+  const shippingText=!isEsim&&shipping?[shipping.line1,shipping.line2,shipping.city,shipping.state,shipping.postal_code,shipping.country].filter(Boolean).join(', '):'Not applicable / not supplied';
   const subject=`[QY Roam] Paid ${isEsim?'eSIM':'Pocket WiFi'} order — ${destination||planName||session.id}`;
   const text=['A paid QY Roam order requires human fulfilment.','',`Order reference: ${session.id}`,`Product: ${isEsim?'Travel eSIM':'Pocket WiFi'}`,`Destination: ${destination||'-'}`,`Plan: ${planName||'-'}`,...(isEsim?[`Plan ID: ${planId||'-'}`,`Data allowance: ${dataAllowance||'-'}`]:[]),`Travel dates: ${start||'-'}${end?` to ${end}`:''}`,`Amount paid: S$${amount}`,`Promo code: ${session.metadata?.promo_code||'-'}`,'',`Customer name: ${customer?.name||'-'}`,`Email: ${customer?.email||'-'}`,`Phone: ${customer?.phone||'-'}`,`Delivery address: ${shippingText}`,'',isEsim?'Action: Please process the eSIM manually and send the QR code / activation instructions to the customer.':'Action: Please prepare and fulfil the Pocket WiFi order according to the travel dates and delivery details.','','Customer support: +65 8032 7183'].join('\n');
   // Readiness trims the relay secret before validating it. Use the exact same
@@ -479,7 +482,10 @@ async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.E
   const paymentConfirmedAt=new Date(eventCreated*1000).toISOString();
   const measurementConsent=session.metadata?.measurement_consent==='accepted'?'accepted':'essential';
   const esimPlan=productType==='esim'?getEsimPlan(session.metadata?.plan_id):undefined;
-  const orderSnapshot={stripe_session_id:session.id,payment_status:session.payment_status,customer_name:session.customer_details?.name,email:session.customer_details?.email,phone:session.customer_details?.phone,amount_sgd:(session.amount_total||0)/100,product_type:productType,plan_id:session.metadata?.plan_id||null,plan_name:session.metadata?.plan_name||null,data_allowance:session.metadata?.data_allowance||esimPlan?.data||null,country:session.metadata?.country,travel_start:session.metadata?.start||null,travel_end:session.metadata?.end||null,measurement_consent:measurementConsent,shipping_address:session.shipping_details?.address||null};
+  // Shipping belongs only to the physical-rental contract. Avoid retaining
+  // an incidental address on a digital order, and keep the durable product
+  // snapshot unambiguous for confirmation and recovery.
+  const orderSnapshot={stripe_session_id:session.id,payment_status:session.payment_status,customer_name:session.customer_details?.name,email:session.customer_details?.email,phone:session.customer_details?.phone,amount_sgd:(session.amount_total||0)/100,product_type:productType,plan_id:session.metadata?.plan_id||null,plan_name:session.metadata?.plan_name||null,data_allowance:session.metadata?.data_allowance||esimPlan?.data||null,country:session.metadata?.country,travel_start:session.metadata?.start||null,travel_end:session.metadata?.end||null,measurement_consent:measurementConsent,shipping_address:productType==='pocket_wifi'?session.shipping_details?.address||null:null};
 
   if(productType==='pocket_wifi'){
     // Persist the durable inventory commitment and retire its temporary hold
