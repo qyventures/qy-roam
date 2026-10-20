@@ -37,6 +37,24 @@ function sgdCents(value: unknown) {
   return Number.isSafeInteger(cents) ? cents : null;
 }
 
+const STRIPE_ADDRESS_FIELDS = ['city', 'country', 'line1', 'line2', 'postal_code', 'state'] as const;
+
+function durableShippingAddressMatchesSession(value: unknown, session: Stripe.Checkout.Session) {
+  const expected = session.shipping_details?.address;
+  if (!expected || !value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const stored = value as Record<string, unknown>;
+
+  // Supabase can round-trip absent optional JSON fields as either missing or
+  // null. Compare the complete Stripe address vocabulary after normalising
+  // only that representation detail; never stringify objects, where key order
+  // could make an exact address look different (or hide an unexpected type).
+  return STRIPE_ADDRESS_FIELDS.every((field) => {
+    const actual = stored[field] ?? null;
+    const authoritative = expected[field] ?? null;
+    return (typeof actual === 'string' || actual === null) && actual === authoritative;
+  });
+}
+
 /**
  * Prove that the durable row shown to a customer is the paid snapshot created
  * from this authenticated Checkout Session. The Session id is the lookup key,
@@ -91,7 +109,13 @@ export function durableOrderMatchesPaidSession(
     // Pocket WiFi has no digital package entitlement. Reject a cross-product
     // or partially repaired row instead of silently ignoring those fields at
     // the paid-order authority boundary.
-    order.plan_id === null && order.data_allowance === null;
+    order.plan_id === null && order.data_allowance === null &&
+    // The courier address is part of the physical fulfilment obligation.
+    // Require the RPC/read acknowledgement to retain the exact Stripe address
+    // before payment is reported as durable or any downstream side effect is
+    // released. A matching Session id, amount and rental period cannot make a
+    // different database delivery address safe.
+    durableShippingAddressMatchesSession(order.shipping_address, session);
 }
 
 /**

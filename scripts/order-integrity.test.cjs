@@ -4855,7 +4855,7 @@ test('Pocket WiFi failed-payment replays rotate only after an exact durable orde
     ['open-session replay', replayBranch, 'existing'],
     ['idempotent create replay', createBranch, 'currentSession'],
   ]) {
-    assert.match(branch, /select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,fulfilment_status'\)/,
+    assert.match(branch, /select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address,fulfilment_status'\)/,
       `${name} must load every field in the durable commercial join`);
     const lifecycleGuard = branch.indexOf("fulfilment_status==='payment_failed'");
     const durableGuard = branch.indexOf(`durableOrderMatchesFailedSession(order.data,${sessionObject},'pocket_wifi')`);
@@ -5334,6 +5334,7 @@ test('an asynchronous-payment commitment acknowledges only its exact durable sna
   const session = {
     id: 'cs_live_pendingCommitment123', livemode: true, mode: 'payment',
     status: 'complete', payment_status: 'unpaid', currency: 'sgd', amount_total: 481,
+    shipping_details: { address: { city: 'Singapore', country: 'SG', line1: '1 Test Street', line2: null, postal_code: '123456', state: null } },
     metadata: {
       product_type: 'pocket_wifi', measurement_consent: 'accepted',
       plan_name: 'Japan Pocket WiFi', country: 'Japan', start: '2026-11-01', end: '2026-11-02',
@@ -5343,6 +5344,7 @@ test('an asynchronous-payment commitment acknowledges only its exact durable sna
     stripe_session_id: session.id, payment_status: 'unpaid', product_type: 'pocket_wifi', amount_sgd: '4.81',
     plan_id: null, plan_name: 'Japan Pocket WiFi', data_allowance: null, country: 'Japan',
     travel_start: '2026-11-01', travel_end: '2026-11-02', measurement_consent: 'accepted',
+    shipping_address: session.shipping_details.address,
   };
 
   assert.equal(durableOrderMatchesUnpaidOrAlreadyPaidSession(pendingOrder, session, 'pocket_wifi'), true);
@@ -9001,6 +9003,7 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
     payment_status: 'paid',
     currency: 'sgd',
     amount_total: 552,
+    shipping_details: { address: { city: 'Singapore', country: 'SG', line1: '1 Test Street', line2: '#02-03', postal_code: '123456', state: null } },
     metadata: {
       product_type: 'pocket_wifi',
       measurement_consent: 'accepted',
@@ -9022,6 +9025,7 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
     travel_start: '2026-10-10',
     travel_end: '2026-10-12',
     measurement_consent: 'accepted',
+    shipping_address: wifiSession.shipping_details.address,
   };
   assert.equal(durableOrderMatchesPaidSession(wifiOrder, wifiSession, 'pocket_wifi'), true);
   assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, plan_id: 'jp-7d' }, wifiSession, 'pocket_wifi'), false);
@@ -9031,6 +9035,8 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
   assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, amount_sgd: 5.521 }, wifiSession, 'pocket_wifi'), false);
   assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, amount_sgd: '5.520' }, wifiSession, 'pocket_wifi'), false);
   assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, amount_sgd: 1e21 }, wifiSession, 'pocket_wifi'), false);
+  assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, shipping_address: { ...wifiOrder.shipping_address, line1: '2 Wrong Street' } }, wifiSession, 'pocket_wifi'), false);
+  assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, shipping_address: null }, wifiSession, 'pocket_wifi'), false);
 
   for (const page of [successPage, bookingPage]) {
     assert.match(page, /durableOrderMatchesPaidSession\(/);
@@ -9047,7 +9053,7 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
 test('paid checkout replays require the same exact durable commercial snapshot as confirmation', () => {
   for (const route of [esimCheckoutRoute, wifiCheckoutRoute]) {
     assert.match(route, /import \{ durableOrderMatchesFailedSession, durableOrderMatchesPaidSession \} from '@\/lib\/durableOrderSnapshot';/);
-    assert.match(route, /select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent(?:,shipping_address)?'\)/);
+    assert.match(route, /select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address'\)/);
   }
   assert.match(esimCheckoutRoute, /!durableOrderMatchesPaidSession\(order\.data, currentSession, 'esim'\)/);
   assert.match(wifiCheckoutRoute, /durableOrderMatchesPaidSession\(order\.data,currentSession,'pocket_wifi'\)/);

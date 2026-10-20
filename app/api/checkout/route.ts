@@ -355,7 +355,7 @@ export async function POST(req: Request) {
       // The signed terminal webhook normally removes this hold. Keep it linked
       // if order persistence is still catching up, or remove only this exact
       // session's hold once the paid order is durable.
-      const order=await supabase.from('orders').select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent').eq('stripe_session_id',existing.id).maybeSingle();
+      const order=await supabase.from('orders').select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address').eq('stripe_session_id',existing.id).maybeSingle();
       if(order.error) throw order.error;
       if(durableOrderMatchesPaidSession(order.data,existing,'pocket_wifi')){
         const released=await supabase.from('checkout_reservations').delete()
@@ -378,7 +378,7 @@ export async function POST(req: Request) {
       return NextResponse.json({completed:true,sessionId:existing.id},{headers:{'Cache-Control':'no-store'}});
     }
     if(existing.status==='complete'&&existing.payment_status==='unpaid'){
-      const order=await supabase.from('orders').select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,fulfilment_status').eq('stripe_session_id',existing.id).maybeSingle();
+      const order=await supabase.from('orders').select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address,fulfilment_status').eq('stripe_session_id',existing.id).maybeSingle();
       if(order.error) throw order.error;
       // Stripe's terminal failure state remains `unpaid`; the webhook records
       // the durable outcome in our fulfilment lifecycle as `payment_failed`.
@@ -551,7 +551,7 @@ export async function POST(req: Request) {
   // order. If persistence is still catching up, link the reservation first so
   // the terminal webhook can release it once it records the paid booking.
   if(currentSession.status==='complete'&&currentSession.payment_status==='paid'){
-    const order=await supabase.from('orders').select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent').eq('stripe_session_id',currentSession.id).maybeSingle();
+    const order=await supabase.from('orders').select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address').eq('stripe_session_id',currentSession.id).maybeSingle();
     if(order.error) throw order.error;
     // Only an exact durable commercial snapshot can turn an idempotent
     // checkout replay into a completed-order response. A mismatched imported
@@ -586,7 +586,7 @@ export async function POST(req: Request) {
   // recorded that failure; before then, preserving the attempt protects an
   // in-flight payment and its linked inventory reservation.
   if(currentSession.status==='complete'&&currentSession.payment_status==='unpaid'){
-    const order=await supabase.from('orders').select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,fulfilment_status').eq('stripe_session_id',currentSession.id).maybeSingle();
+    const order=await supabase.from('orders').select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address,fulfilment_status').eq('stripe_session_id',currentSession.id).maybeSingle();
     if(order.error) throw order.error;
     // The Session id and lifecycle label alone are not enough to abandon this
     // durable attempt. A service-role import or repair can leave a row under
