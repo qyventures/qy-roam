@@ -9386,6 +9386,24 @@ test('obviously invalid webhook traffic cannot consume paid-order processing slo
   assert.doesNotMatch(beforeAdmission, /readStripeWebhookBody\(|constructEvent\(/);
 });
 
+test('an unconfigured webhook fails before reserving slow-upload capacity', () => {
+  const postBoundary = webhookRoute.indexOf('export async function POST(req:Request)');
+  const publicPost = webhookRoute.slice(postBoundary);
+  const configurationGate = publicPost.indexOf('if(!stripeWebhookConfigurationReady())');
+  const uploadAdmission = publicPost.indexOf('const release=tryAcquireStripeWebhookUpload()');
+  const bodyHandling = publicPost.indexOf('return await handleStripeWebhook(req,releaseUpload,receivedAtMs)');
+
+  assert.ok(postBoundary >= 0);
+  assert.ok(configurationGate >= 0);
+  assert.ok(uploadAdmission > configurationGate);
+  assert.ok(bodyHandling > uploadAdmission);
+  assert.match(
+    publicPost.slice(configurationGate, uploadAdmission),
+    /webhookRetryJson\(\{error:'Webhook configuration incomplete'\},503,'30'\)/,
+  );
+  assert.match(webhookRoute, /if\(!hasRequiredStripeCheckoutConfig\(\)\|\|!hasRequiredStripeWebhookConfig\(\)\|\|!hasOrderIntegritySigningConfig\(\)\|\|!key\|\|!webhookSecrets\)/);
+});
+
 test('unauthenticated slow webhook uploads cannot occupy paid-order processing slots', () => {
   const handlerBoundary = webhookRoute.slice(
     webhookRoute.indexOf('async function handleStripeWebhook'),

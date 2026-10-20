@@ -114,6 +114,12 @@ function validStripeSignatureHeader(value: string | null, receivedAtMs = Date.no
     : null;
 }
 
+function stripeWebhookConfigurationReady() {
+  return hasRequiredStripeCheckoutConfig() && hasRequiredStripeWebhookConfig() &&
+    hasOrderIntegritySigningConfig() && Boolean(process.env.STRIPE_SECRET_KEY?.trim()) &&
+    Boolean(stripeWebhookSigningSecrets());
+}
+
 async function readStripeWebhookBody(req: Request): Promise<Buffer> {
   let contentLength: number | null;
   try {
@@ -1213,6 +1219,17 @@ export async function POST(req:Request){
   }
   if(!validStripeSignatureHeader(req.headers.get('stripe-signature'),receivedAtMs)) {
     return webhookJson({error:'Invalid signature'},{status:400});
+  }
+  // Configuration is deployment-owned and can be checked without reading
+  // attacker-controlled bytes. Fail before reserving a slow-upload slot when
+  // this worker cannot authenticate or persist any payment event. Without
+  // this early gate, requests carrying a cheap, structurally plausible
+  // signature can pin every upload slot for the full body deadline during a
+  // configuration outage, delaying recovery probes and authentic Stripe
+  // retries after the deployment is repaired. Keep the identical check in
+  // handleStripeWebhook as a defence-in-depth boundary for internal callers.
+  if(!stripeWebhookConfigurationReady()) {
+    return webhookRetryJson({error:'Webhook configuration incomplete'},503,'30');
   }
   // Content-Length is only a bounded header hint, so it cannot replace the
   // exact byte-count check performed while reading the signed payload. It can
