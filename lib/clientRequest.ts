@@ -62,7 +62,7 @@ function customerResponseContentEncoding(value: string | null) {
   return value.toLowerCase();
 }
 
-async function readBoundedJson(response: Response) {
+async function readBoundedJson(response: Response, signal: AbortSignal) {
   // Checkout URLs and completed-session ids are browser capabilities. A
   // proxy error page or stale service worker must not become authoritative
   // merely because its body happens to parse as JSON.
@@ -102,9 +102,24 @@ async function readBoundedJson(response: Response) {
   const bytes = new Uint8Array(CUSTOMER_JSON_RESPONSE_MAX_BYTES);
   let total = 0;
   let chunks = 0;
+  let rejectCancellation: ((reason: unknown) => void) | undefined;
+  const cancellation = new Promise<never>((_, reject) => { rejectCancellation = reject; });
+  const cancelFromSignal = () => {
+    const reason = signal.reason instanceof Error
+      ? signal.reason
+      : new Error('Customer response cancelled');
+    // An explicit race releases the UI even when a custom/proxy-backed
+    // response reader ignores fetch's AbortSignal. Cancel the locked reader
+    // as well so that the underlying stream is not left consuming network or
+    // service-worker work after the caller has already recovered.
+    rejectCancellation?.(reason);
+    void reader.cancel(reason).catch(() => undefined);
+  };
+  if (signal.aborted) cancelFromSignal();
+  else signal.addEventListener('abort', cancelFromSignal, { once: true });
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      const { done, value } = await Promise.race([reader.read(), cancellation]);
       if (done) break;
       chunks += 1;
       if (chunks > CUSTOMER_JSON_RESPONSE_MAX_CHUNKS) {
@@ -119,7 +134,15 @@ async function readBoundedJson(response: Response) {
       }
       bytes.set(value, total - value.byteLength);
     }
+  } catch (error) {
+    // Parsing, size, fragmentation and cancellation failures are all
+    // terminal. Stop the source explicitly; releasing a reader lock alone
+    // does not cancel its stream and can leave a response running unnoticed.
+    void reader.cancel(error).catch(() => undefined);
+    throw error;
   } finally {
+    signal.removeEventListener('abort', cancelFromSignal);
+    rejectCancellation = undefined;
     try { reader.releaseLock(); } catch {}
   }
   // Fetch can expose a decoded stream while retaining the compressed wire
@@ -143,7 +166,7 @@ async function runCustomerRequest<T>(
   input: RequestInfo | URL,
   init: RequestInit,
   timeoutMs: number,
-  consume: (response: Response) => Promise<T>,
+  consume: (response: Response, signal: AbortSignal) => Promise<T>,
 ) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
     throw new RangeError('Invalid customer request timeout');
@@ -174,7 +197,7 @@ async function runCustomerRequest<T>(
 
   try {
     const operation = fetch(input, { ...init, signal: controller.signal })
-      .then(consume);
+      .then((response) => consume(response, controller.signal));
     return await Promise.race([operation, deadline]);
   } finally {
     clearTimeout(timeout);
@@ -207,8 +230,8 @@ export async function fetchCustomerJson(
   init: RequestInit = {},
   timeoutMs = CUSTOMER_REQUEST_TIMEOUT_MS,
 ): Promise<CustomerJsonResponse> {
-  return runCustomerRequest(input, init, timeoutMs, async (response) => ({
+  return runCustomerRequest(input, init, timeoutMs, async (response, signal) => ({
     response,
-    value: await readBoundedJson(response),
+    value: await readBoundedJson(response, signal),
   }));
 }

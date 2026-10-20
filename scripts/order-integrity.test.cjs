@@ -1274,9 +1274,13 @@ test('customer checkout requests release a stuck browser without rotating their 
     // Receiving headers is not completion: a proxy or dropped mobile
     // connection can stall while the browser consumes the JSON body. The
     // sales UI must regain control under the same bounded deadline.
+    let stalledBodyCancelled = false;
     global.fetch = async (_input, init) => {
       receivedSignal = init.signal;
-      return new Response(new ReadableStream({ pull: () => new Promise(() => {}) }), {
+      return new Response(new ReadableStream({
+        pull: () => new Promise(() => {}),
+        cancel() { stalledBodyCancelled = true; },
+      }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       });
@@ -1286,6 +1290,28 @@ test('customer checkout requests release a stuck browser without rotating their 
       CustomerRequestTimeoutError,
     );
     assert.equal(receivedSignal.aborted, true);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(stalledBodyCancelled, true);
+
+    // Navigation/unmount cancellation has the same teardown guarantee as the
+    // local deadline. It must not merely restore the button while leaving a
+    // response reader alive behind the abandoned storefront request.
+    let callerCancelledBody = false;
+    const callerController = new AbortController();
+    global.fetch = async () => new Response(new ReadableStream({
+      pull: () => new Promise(() => {}),
+      cancel() { callerCancelledBody = true; },
+    }), { headers: { 'content-type': 'application/json' } });
+    const callerCancelledRequest = fetchCustomerJson(
+      '/api/checkout',
+      { method: 'POST', signal: callerController.signal },
+      100,
+    );
+    await new Promise(resolve => setImmediate(resolve));
+    callerController.abort(new Error('storefront unmounted'));
+    await assert.rejects(() => callerCancelledRequest, /storefront unmounted/);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(callerCancelledBody, true);
 
     global.fetch = async () => new Response(JSON.stringify({ url: 'safe' }), {
       status: 200,
