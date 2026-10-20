@@ -109,12 +109,18 @@ function tripFlag(order: any) {
   if (['closed', 'cancelled', 'payment_failed'].includes(order.fulfilment_status)) return '';
   const untilDeparture = daysFromToday(order.travel_start);
   if (isEsim(order)) {
+    if (['fulfilled','closed'].includes(order.fulfilment_status)) return '';
+    // A missing/corrupt departure must be louder than an ordinary future
+    // trip. Otherwise it is excluded from both the urgency queue and row flag.
+    if (typeof untilDeparture !== 'number') return '⚠ Departure schedule unavailable — reconcile travel dates';
     if (typeof untilDeparture === 'number' && untilDeparture <= 2 && !['fulfilled','closed'].includes(order.fulfilment_status)) {
       return untilDeparture < 0 ? '⚠ Departure passed — eSIM fulfilment unresolved' : `⚠ Departure in ${untilDeparture} day${untilDeparture === 1 ? '' : 's'} — issue eSIM`;
     }
     return '';
   }
-  if (typeof untilDeparture === 'number' && untilDeparture <= 2 && !['dispatched', 'with_customer', 'return_due', 'returned'].includes(order.fulfilment_status)) {
+  const awaitingDispatch = !['dispatched', 'with_customer', 'return_due', 'returned'].includes(order.fulfilment_status);
+  if (awaitingDispatch && typeof untilDeparture !== 'number') return '⚠ Departure schedule unavailable — reconcile travel dates';
+  if (typeof untilDeparture === 'number' && untilDeparture <= 2 && awaitingDispatch) {
     return untilDeparture < 0 ? '⚠ Departure passed — dispatch unresolved' : `⚠ Departure in ${untilDeparture} day${untilDeparture === 1 ? '' : 's'} — dispatch check`;
   }
   const returnTiming = pocketWifiReturnTiming(order.travel_end, order.fulfilment_status);
@@ -334,6 +340,18 @@ async function renderAdminPage() {
     const days = daysFromToday(o.travel_start);
     return typeof days === 'number' && days <= 2 && !['fulfilled','closed'].includes(o.fulfilment_status);
   });
+  // Date-based urgency can only classify a coherent itinerary. Keep paid,
+  // actionable orders with invalid starts in a dedicated queue instead of
+  // silently treating them as not urgent. Terminal states were removed from
+  // `active` above; custody/fulfilled states no longer need a departure action.
+  const departureScheduleExceptions = active.filter((o:any) => {
+    if (typeof daysFromToday(o.travel_start) === 'number') return false;
+    if (isEsim(o)) return !['fulfilled','closed'].includes(o.fulfilment_status);
+    if (isPocketWifiProduct(o.product_type)) {
+      return !['dispatched','with_customer','return_due','returned'].includes(o.fulfilment_status);
+    }
+    return false;
+  });
   const returnDueOrders = active.filter((o:any) => {
     if (!isPocketWifiProduct(o.product_type)) return false;
     const timing = pocketWifiReturnTiming(o.travel_end, o.fulfilment_status);
@@ -399,6 +417,7 @@ async function renderAdminPage() {
           {!fulfilmentSummaryIncomplete && <>
             <div style={cardStyle}><small>WiFi dispatch exceptions</small><div style={metricStyle}>{wifiDispatchExceptions.length}</div><small>departing within 2 days / unresolved</small></div>
             <div style={cardStyle}><small>eSIM fulfilment exceptions</small><div style={metricStyle}>{esimExceptions.length}</div><small>departing within 2 days / unresolved</small></div>
+            <div style={cardStyle}><small>Departure schedule exceptions</small><div style={metricStyle}>{departureScheduleExceptions.length}</div><small>paid unresolved orders with invalid travel starts</small></div>
             <div style={cardStyle}><small>WiFi returns due</small><div style={metricStyle}>{returnDueOrders.length}</div><small>{overdueReturnOrders.length} more than {POCKET_WIFI_RETURN_GRACE_DAYS} days overdue</small></div>
             <div style={cardStyle}><small>WiFi return schedule exceptions</small><div style={metricStyle}>{returnScheduleExceptions.length}</div><small>in-custody routers with invalid rental end dates</small></div>
             <div style={cardStyle}><small>Ops email exceptions</small><div style={metricStyle}>{notificationExceptions.length}</div><small>paid Stripe-order notifications not confirmed sent</small></div>
@@ -408,6 +427,18 @@ async function renderAdminPage() {
             ? <><div style={{...metricStyle,fontSize:22}}>Unavailable</div><small>complete recovery ledger required</small></>
             : <><div style={metricStyle}>{webhookFailures.length}</div><small>failed or abandoned events awaiting a signed retry</small></>}</div>
         </div>
+        {!ordersIncomplete && departureScheduleExceptions.length > 0 && <div role="alert" style={{...cardStyle,borderColor:'#dc2626',background:'#fef2f2',marginTop:14}}>
+          <strong>Paid-order departure schedules need reconciliation.</strong>
+          <div style={{marginTop:6}}>These orders still require dispatch or digital fulfilment but have no valid travel start date. Verify the durable order against Stripe or the protected manual-sale record, contact the customer when necessary, and correct the source record before relying on departure urgency.</div>
+          <ul>{departureScheduleExceptions.slice(0,50).map((order:any)=><li key={order.id} style={{marginBottom:8}}>
+            <a href={`#order-${order.id}`}><strong>Order #{order.id}</strong></a>
+            {' · '}{order.customer_name || order.email || order.phone || 'Customer details unavailable'}
+            {' · '}{isEsim(order) ? 'eSIM' : 'Pocket WiFi'}
+            {' · '}status <code>{order.fulfilment_status || 'unknown'}</code>
+            {' · '}travel start <code>{order.travel_start || 'missing'}</code>
+          </li>)}</ul>
+          {departureScheduleExceptions.length > 50 && <div><strong>{departureScheduleExceptions.length - 50} more departure schedule exceptions are not expanded here.</strong> Review the flagged order rows below to reconcile the full queue.</div>}
+        </div>}
         {!ordersIncomplete && returnDueOrders.length > 0 && <div role="alert" style={{...cardStyle,borderColor:overdueReturnOrders.length > 0 ? '#dc2626' : '#b45309',background:overdueReturnOrders.length > 0 ? '#fef2f2' : '#fffbeb',marginTop:14}}>
           <strong>{overdueReturnOrders.length > 0 ? 'Pocket WiFi returns need immediate follow-up.' : 'Pocket WiFi returns are due.'}</strong>
           <div style={{marginTop:6}}>Confirm the device is in transit, record the return tracking reference, and use the protected receipt action only after the physical router is received and inspected.</div>
