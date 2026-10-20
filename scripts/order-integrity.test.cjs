@@ -2189,6 +2189,7 @@ test('Pocket WiFi admin transitions expose only approved operational conflicts',
 function esimSession(plan = ESIM_PLANS[0]) {
   const session = {
     id: 'cs_test_esim',
+    livemode: false,
     mode: 'payment',
     payment_status: 'unpaid',
     consent: { terms_of_service: 'accepted' },
@@ -2218,6 +2219,7 @@ function wifiSession(plan = WIFI_PLANS[0]) {
   const discount = Math.floor((rental * LAUNCH_PROMO.percent) / 100);
   const session = {
     id: 'cs_test_wifi',
+    livemode: false,
     mode: 'payment',
     payment_status: 'unpaid',
     consent: { terms_of_service: 'accepted' },
@@ -2265,6 +2267,26 @@ test('Pocket WiFi public pricing uses the same integer-cent totals as checkout',
 
 test('accepts every server-authored eSIM catalogue session', () => {
   for (const plan of ESIM_PLANS) assert.deepEqual(validateQyRoamSession(esimSession(plan)), { valid: true, productType: 'esim' });
+});
+
+test('shared order validation binds Checkout Session identity to Stripe mode', () => {
+  for (const makeSession of [esimSession, wifiSession]) {
+    const malformed = makeSession();
+    malformed.id = 'not_a_checkout_session';
+    malformed.metadata.qyroam_provenance = signedQyRoamProvenance(malformed.id, malformed.metadata);
+    assert.deepEqual(validateQyRoamSession(malformed), {
+      valid: false,
+      reason: 'invalid or mode-mismatched Stripe Checkout Session identity',
+    });
+
+    const crossMode = makeSession();
+    crossMode.id = 'cs_live_crossmode';
+    crossMode.metadata.qyroam_provenance = signedQyRoamProvenance(crossMode.id, crossMode.metadata);
+    assert.deepEqual(validateQyRoamSession(crossMode), {
+      valid: false,
+      reason: 'invalid or mode-mismatched Stripe Checkout Session identity',
+    });
+  }
 });
 
 test('rejects eSIM amount, identity, and catalogue metadata tampering', () => {

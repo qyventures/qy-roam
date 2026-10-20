@@ -7,6 +7,7 @@ import { validQyRoamProvenance } from './orderProvenance';
 import { operationalConfig } from './operationalConfig';
 import { pocketWifiRentalCents } from './pocketWifiPricing';
 import { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } from './pocketWifiRentalPeriod';
+import { validStripeCheckoutSessionIdForMode } from './stripeSessionId';
 
 export type QyRoamProductType = 'esim' | 'pocket_wifi';
 
@@ -110,6 +111,15 @@ function historicalEsimSnapshotIsConsistent(session: Stripe.Checkout.Session) {
 function validateQyRoamSessionSnapshot(session: Stripe.Checkout.Session): QyRoamSessionValidation {
   const productType = qyRoamProductType(session);
   if (!productType) return { valid: false, reason: 'unknown QY Roam product identity' };
+  // This validator is the reusable order/fulfilment authority, so it must not
+  // depend on every caller remembering to validate the Stripe capability
+  // first. Bind the opaque Checkout Session identity to its live/test mode
+  // before spending HMAC work or accepting its signed commercial snapshot.
+  // A correctly signed but malformed or cross-mode identity is not a QY Roam
+  // order that confirmation, admin recovery, or a future worker may fulfil.
+  if (!validStripeCheckoutSessionIdForMode(session.id, session.livemode)) {
+    return { valid: false, reason: 'invalid or mode-mismatched Stripe Checkout Session identity' };
+  }
   // QY Roam sells one-time travel products. The metadata HMAC authenticates
   // the server-authored order snapshot, but it does not itself bind Stripe's
   // Checkout mode. Keep this payment boundary explicit so a future checkout
