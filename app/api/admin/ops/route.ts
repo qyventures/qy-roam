@@ -292,6 +292,14 @@ export async function POST(req: NextRequest) {
         updated_at: recordedAt
       };
       if (!row.email && !row.phone) return NextResponse.json({ error: 'Customer email or phone is required' }, { status: 400 });
+      // A phone-only Pocket WiFi sale is valid, but an email that is supplied
+      // becomes durable customer/CRM identity and can later be used for
+      // support or fulfilment follow-up. Do not persist a malformed mailbox
+      // merely because the same record also has a phone number. eSIM keeps
+      // the stricter rule below that a safe email must actually be present.
+      if (row.email && !isSafeSmtpMailbox(row.email)) {
+        return NextResponse.json({ error: 'Enter a valid customer email or leave it blank for a phone-only Pocket WiFi order' }, { status: 400 });
+      }
       // A manual eSIM sale joins the same fulfilment lifecycle as a Stripe
       // sale, but it does not receive Stripe Checkout's required-email field.
       // Do not let an offline entry create an apparently paid digital order

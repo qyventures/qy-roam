@@ -10341,3 +10341,19 @@ test('release health credentials survive HTTP header transport byte-for-byte', (
   assert.match(healthRoute, /supplied\.slice\(HEALTH_AUTHORIZATION_PREFIX\.length\)/);
   assert.doesNotMatch(healthRoute, /MAX_HEALTH_AUTHORIZATION_HEADER_LENGTH = 1_024/);
 });
+
+test('manual sales never persist a supplied malformed customer email', () => {
+  // Pocket WiFi may be entered with only a phone number, but a non-empty
+  // email becomes durable order and CRM identity. Validate it independently
+  // of the phone fallback, while preserving the stricter eSIM requirement.
+  const contactRequired = adminOpsRoute.indexOf("if (!row.email && !row.phone)");
+  const suppliedEmailValidation = adminOpsRoute.indexOf("if (row.email && !isSafeSmtpMailbox(row.email))");
+  const esimEmailRequired = adminOpsRoute.indexOf("if (product === 'esim' && !isSafeSmtpMailbox(row.email || undefined))");
+  const persistence = adminOpsRoute.indexOf("if (product === 'pocket_wifi' && paymentStatus === 'paid')");
+
+  assert.ok(contactRequired > -1, 'manual orders must retain a customer contact requirement');
+  assert.ok(suppliedEmailValidation > contactRequired, 'supplied email validation must follow contact normalization');
+  assert.ok(esimEmailRequired > suppliedEmailValidation, 'eSIM must retain its email-required boundary');
+  assert.ok(persistence > esimEmailRequired, 'all manual-order contact validation must precede persistence');
+  assert.match(adminOpsRoute, /Enter a valid customer email or leave it blank for a phone-only Pocket WiFi order/);
+});
