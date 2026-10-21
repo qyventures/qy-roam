@@ -42,6 +42,7 @@ const { CONFIRMATION_RATE_LIMIT_WINDOW_MS, CONFIRMATION_CLIENT_RATE_LIMIT_MAX_AT
 const { ADMIN_MUTATION_HEADER, ADMIN_MUTATION_HEADER_VALUE, adminMutationHeaders } = require('../lib/adminMutation.ts');
 const { hasRequiredStripeCheckoutConfig, stripeEventMatchesConfiguredMode, stripeSecretKeyMode } = require('../lib/stripeCheckoutConfig.ts');
 const { stripeWebhookSigningSecret, stripeWebhookSigningSecrets } = require('../lib/stripeWebhookSecret.ts');
+const { stripeWebhookVerificationFailure } = require('../lib/stripeWebhookVerification.ts');
 const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
 const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_EXPIRY_CREATION_MARGIN_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, CHECKOUT_ATTEMPT_MAX_FUTURE_MS, STRIPE_HOLD_SCAN_WINDOW_SECONDS, STRIPE_HOLD_CREATED_MAX_FUTURE_SECONDS, STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, STRIPE_HOLD_SCAN_TIMEOUT_MS, checkoutAttemptExpiresAt, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
 const { checkoutSiteOrigin, isProductionQyRoamOrigin, metaPurchaseEventSourceUrl } = require('../lib/siteOrigin.ts');
@@ -4764,6 +4765,36 @@ test('Stripe webhook secret rotation accepts only one valid prior secret', () =>
     else process.env.STRIPE_WEBHOOK_SECRET_PREVIOUS = previous;
   }
   assert.match(webhookRoute, /for\(const webhookSecret of webhookSecrets\)/);
+});
+
+test('Stripe webhook retries unexpected verifier failures instead of misreporting them as bad signatures', () => {
+  const Stripe = require('stripe');
+  const stripe = new Stripe(`sk_test_${'a'.repeat(24)}`, { apiVersion: '2024-06-20' });
+  const secret = 'whsec_abcdefghijklmnopqrstuvwxyz';
+  const timestamp = Math.floor(Date.now() / 1_000);
+
+  let signatureError;
+  try {
+    stripe.webhooks.constructEvent(
+      Buffer.from('{}'),
+      `t=${timestamp},v1=${'0'.repeat(64)}`,
+      secret,
+      300,
+      undefined,
+      Date.now(),
+    );
+  } catch (error) {
+    signatureError = error;
+  }
+  assert.equal(stripeWebhookVerificationFailure(signatureError), 'signature');
+  assert.equal(stripeWebhookVerificationFailure(new SyntaxError('malformed signed JSON')), 'payload');
+  assert.equal(stripeWebhookVerificationFailure(new Error('unexpected SDK failure')), null);
+
+  assert.match(webhookRoute, /const failure=stripeWebhookVerificationFailure\(error\)/);
+  assert.match(webhookRoute, /if\(failure==='signature'\) continue/);
+  assert.match(webhookRoute, /if\(failure==='payload'\)/);
+  assert.match(webhookRoute, /throw error/);
+  assert.match(webhookRoute, /if\(malformedSignedPayload\) return webhookJson\(\{error:'Invalid webhook payload'\},\{status:400\}\)/);
 });
 
 test('Stripe webhook signature freshness is an explicit bounded release contract', () => {

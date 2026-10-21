@@ -37,6 +37,7 @@ import {
   tryAcquireStripeWebhookProcessing,
   tryAcquireStripeWebhookUpload,
 } from '@/lib/stripeWebhookConcurrency';
+import { stripeWebhookVerificationFailure } from '@/lib/stripeWebhookVerification';
 
 export const runtime = 'nodejs';
 
@@ -917,6 +918,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
   // previous secret without weakening the signature boundary or exposing
   // which key matched. The helper keeps this list valid and bounded to two.
   let verifiedEvent:Stripe.Event|undefined;
+  let malformedSignedPayload=false;
   for(const webhookSecret of webhookSecrets){
     try{
       // Use the same request-arrival instant as the cheap admission check.
@@ -932,8 +934,23 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
       // an SDK upgrade. Preserve the exact captured request-arrival instant.
       verifiedEvent=stripe.webhooks.constructEvent(payload,stripeSignature,webhookSecret,STRIPE_WEBHOOK_SIGNATURE_TOLERANCE_SECONDS,undefined,receivedAtMs);
       break;
-    }catch{}
+    }catch(error){
+      const failure=stripeWebhookVerificationFailure(error);
+      if(failure==='signature') continue;
+      // JSON parsing happens only after stripe-node has matched an HMAC. A
+      // correctly signed but malformed provider payload is still a permanent
+      // request defect, so report it distinctly and do not try another secret.
+      if(failure==='payload'){
+        malformedSignedPayload=true;
+        break;
+      }
+      // Do not turn an unexpected SDK/runtime failure into a terminal bad
+      // signature response. The outer webhook boundary adds Retry-After and
+      // lets Stripe redeliver the authentic event after the worker recovers.
+      throw error;
+    }
   }
+  if(malformedSignedPayload) return webhookJson({error:'Invalid webhook payload'},{status:400});
   if(!verifiedEvent) return webhookJson({error:'Invalid signature'},{status:400});
   event=verifiedEvent;
   const webhookEvent=stripeWebhookEventEnvelope(event);
