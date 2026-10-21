@@ -9,6 +9,7 @@ import { stripeSecretKeyMode } from '@/lib/stripeCheckoutConfig';
 import { tryAcquireAdminDashboardConcurrency } from '@/lib/adminDashboardConcurrency';
 import { formatSingaporeDate, formatSingaporeTimestamp } from '@/lib/singaporeTimestamp';
 import { customerOrderReference } from '@/lib/customerOrderReference';
+import { validatedDeliveryLedgerRow, validatedStripeEventRecoveryRow } from '@/lib/adminDeliveryRow';
 
 export const dynamic = 'force-dynamic';
 
@@ -201,12 +202,12 @@ async function renderAdminPage() {
           return query;
         }, row => Number.isSafeInteger(row?.id) && row.id > 0 ? row.id : null),
         loadKeysetPages((after, limit) => {
-          let query = supabase.from('fulfilment_notifications').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('stripe_session_id').limit(limit);
+          let query = supabase.from('fulfilment_notifications').select('stripe_session_id,status,attempts,last_error,last_attempt_at,sent_at').order('stripe_session_id').limit(limit);
           if (typeof after === 'string') query = query.gt('stripe_session_id', after);
           return query;
         }, row => typeof row?.stripe_session_id === 'string' && row.stripe_session_id ? row.stripe_session_id : null),
         loadKeysetPages((after, limit) => {
-          let query = supabase.from('meta_purchase_deliveries').select('stripe_session_id,status,last_error,last_attempt_at,sent_at').order('stripe_session_id').limit(limit);
+          let query = supabase.from('meta_purchase_deliveries').select('stripe_session_id,status,attempts,last_error,last_attempt_at,sent_at').order('stripe_session_id').limit(limit);
           if (typeof after === 'string') query = query.gt('stripe_session_id', after);
           return query;
         }, row => typeof row?.stripe_session_id === 'string' && row.stripe_session_id ? row.stripe_session_id : null),
@@ -238,7 +239,9 @@ async function renderAdminPage() {
   const orderByStripeSession = new Map(orders.map((order:any)=>[order.stripe_session_id,order]));
   const inventoryItems: any[] = (inventoryResult.data ?? []).sort((a:any,b:any) =>
     String(a.name || '').localeCompare(String(b.name || '')) || Number(a.id || 0) - Number(b.id || 0));
-  const notifications: any[] = notificationResult.data ?? [];
+  const notificationRows = (notificationResult.data ?? []).map(validatedDeliveryLedgerRow);
+  const notifications = notificationRows.filter((row): row is NonNullable<typeof row> => row !== null);
+  if (notificationRows.some(row => row === null)) notificationResult.error = new Error('Fulfilment notification ledger contains malformed data');
   const notificationBySession = new Map(notifications.map((n:any)=>[n.stripe_session_id,n]));
   // A webhook failure before the notification ledger is created leaves no row
   // to count here. Include every paid Stripe order without a confirmed send so
@@ -250,7 +253,9 @@ async function renderAdminPage() {
     fulfilmentNotificationActionable(order.product_type, order.fulfilment_status) &&
     notificationBySession.get(order.stripe_session_id)?.status !== 'sent',
   );
-  const metaDeliveries: any[] = metaDeliveryResult.data ?? [];
+  const metaDeliveryRows = (metaDeliveryResult.data ?? []).map(validatedDeliveryLedgerRow);
+  const metaDeliveries = metaDeliveryRows.filter((row): row is NonNullable<typeof row> => row !== null);
+  if (metaDeliveryRows.some(row => row === null)) metaDeliveryResult.error = new Error('Meta delivery ledger contains malformed data');
   const metaDeliveryBySession = new Map(metaDeliveries.map((delivery:any)=>[delivery.stripe_session_id,delivery]));
   const metaCapiConfigured = hasRequiredMetaCapiPurchaseConfig();
   // A missing CAPI ledger is actionable only when the buyer gave measurement
@@ -263,7 +268,10 @@ async function renderAdminPage() {
     metaCapiConfigured &&
     metaDeliveryBySession.get(order.stripe_session_id)?.status !== 'sent',
   );
-  const webhookFailures: any[] = (stripeEventResult.data ?? []).filter((event:any) => {
+  const stripeEventRows = (stripeEventResult.data ?? []).map(validatedStripeEventRecoveryRow);
+  const stripeEvents = stripeEventRows.filter((row): row is NonNullable<typeof row> => row !== null);
+  if (stripeEventRows.some(row => row === null)) stripeEventResult.error = new Error('Stripe webhook recovery ledger contains malformed data');
+  const webhookFailures = stripeEvents.filter((event) => {
     return !stripeEventClaimInProgress(event.processing_started_at, event.last_error);
   });
   const failedPanels = [

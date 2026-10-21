@@ -98,6 +98,7 @@ const { validatedForecastRow } = require('../lib/forecastRow.ts');
 const { validatedClosingPeriodRow } = require('../lib/closingPeriodRow.ts');
 const { validatedCrmActivity, validatedCrmCustomer, validatedCrmOpportunity } = require('../lib/crmRow.ts');
 const { validatedCheckoutReservation, validatedInventoryCustodyOrder, validatedInventoryItem, validatedInventoryMovement } = require('../lib/inventoryAdminRow.ts');
+const { validatedDeliveryLedgerRow, validatedStripeEventRecoveryRow } = require('../lib/adminDeliveryRow.ts');
 const { META_ATTRIBUTION_METADATA_KEYS, stripeMeasurementConsentDowngrade } = require('../lib/stripeMeasurementConsent.ts');
 const { signedStripeMeasurementConsentDowngrade } = require('../lib/stripeMeasurementProvenance.ts');
 const { saleablePocketWifiInventory: scanSaleablePocketWifiInventory } = require('../lib/pocketWifiStock.ts');
@@ -6669,6 +6670,39 @@ test('admin operational pagination fails closed on malformed or duplicate provid
   assert.match(adminPage, /Operational ledger returned an invalid page/);
   assert.match(adminPage, /Operational ledger returned an invalid pagination cursor/);
   assert.match(adminPage, /Operational ledger returned an invalid truncation probe/);
+});
+
+test('admin delivery and webhook recovery ledgers reject malformed operational state', () => {
+  const delivery = {
+    stripe_session_id: 'cs_live_delivery123', status: 'pending', attempts: 2,
+    last_attempt_at: '2026-10-21T02:00:00Z', sent_at: null,
+    last_error: 'SMTP delivery timed out',
+  };
+  assert.equal(validatedDeliveryLedgerRow(delivery)?.attempts, 2);
+  assert.equal(validatedDeliveryLedgerRow({ ...delivery, status: 'sent', sent_at: '2026-10-21T02:01:00Z', last_error: null })?.status, 'sent');
+  assert.equal(validatedDeliveryLedgerRow({ ...delivery, status: 'failed' }), null);
+  assert.equal(validatedDeliveryLedgerRow({ ...delivery, attempts: -1 }), null);
+  assert.equal(validatedDeliveryLedgerRow({ ...delivery, status: 'sent', sent_at: null, last_error: null }), null);
+  assert.equal(validatedDeliveryLedgerRow({ ...delivery, last_error: 'x'.repeat(501) }), null);
+
+  const event = {
+    event_id: 'stripe:evt_abcdefgh1234', event_type: 'checkout.session.completed',
+    stripe_session_id: 'cs_live_delivery123', received_at: '2026-10-21T02:00:00Z',
+    attempts: 1, processing_started_at: '2026-10-21T02:00:01Z',
+    last_failed_at: '2026-10-21T02:00:02Z', last_error: 'Stripe webhook processing failed; retry or inspect the affected event.',
+  };
+  assert.equal(validatedStripeEventRecoveryRow(event)?.event_id, event.event_id);
+  assert.equal(validatedStripeEventRecoveryRow({ ...event, event_type: 'payment_intent.succeeded' }), null);
+  assert.equal(validatedStripeEventRecoveryRow({ ...event, event_id: 'stripe:evt_bad\nlog' }), null);
+  assert.equal(validatedStripeEventRecoveryRow({ ...event, last_failed_at: null }), null);
+  assert.equal(validatedStripeEventRecoveryRow({ ...event, last_failed_at: null, last_error: null })?.attempts, 1);
+
+  assert.match(adminPage, /\.map\(validatedDeliveryLedgerRow\)/);
+  assert.match(adminPage, /\.map\(validatedStripeEventRecoveryRow\)/);
+  assert.match(adminPage, /notificationResult\.error = new Error\('Fulfilment notification ledger contains malformed data'\)/);
+  assert.match(adminPage, /metaDeliveryResult\.error = new Error\('Meta delivery ledger contains malformed data'\)/);
+  assert.match(adminPage, /stripeEventResult\.error = new Error\('Stripe webhook recovery ledger contains malformed data'\)/);
+  assert.match(adminPage, /select\('stripe_session_id,status,attempts,last_error,last_attempt_at,sent_at'\)/);
 });
 
 test('CRM and sales report pagination fail closed on malformed or duplicate provider pages', () => {
