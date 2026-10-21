@@ -95,6 +95,7 @@ const { ADMIN_DASHBOARD_MAX_CONCURRENT_REQUESTS, tryAcquireAdminDashboardConcurr
 const { STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS, STRIPE_WEBHOOK_MAX_CONCURRENT_UPLOADS, tryAcquireStripeWebhookProcessing, tryAcquireStripeWebhookUpload } = require('../lib/stripeWebhookConcurrency.ts');
 const { validatedSalesReportRow } = require('../lib/salesReportRow.ts');
 const { validatedForecastRow } = require('../lib/forecastRow.ts');
+const { validatedClosingPeriodRow } = require('../lib/closingPeriodRow.ts');
 const { validatedCrmActivity, validatedCrmCustomer, validatedCrmOpportunity } = require('../lib/crmRow.ts');
 const { validatedCheckoutReservation, validatedInventoryItem, validatedInventoryMovement } = require('../lib/inventoryAdminRow.ts');
 const { META_ATTRIBUTION_METADATA_KEYS, stripeMeasurementConsentDowngrade } = require('../lib/stripeMeasurementConsent.ts');
@@ -6486,6 +6487,34 @@ test('admin reporting screens do not present failed database reads as empty oper
   assert.match(closingPage, /const periodsUnavailable=Boolean\(periodsResult\?\.error\)/);
   assert.match(closingPage, /Closing-period data is currently unavailable/);
   assert.match(closingPage, /periodsUnavailable\?<p>Closing-period data is unavailable/);
+});
+
+test('month-end closing rejects malformed or inconsistent financial rows and bounded totals', () => {
+  const valid = {
+    id: '7', period_start: '2026-09-01', period_end: '2026-09-30', status: 'closed',
+    gross_sales_sgd: '1000.00', refunds_sgd: '25.10', net_sales_sgd: '974.90',
+    fees_sgd: '30.00', cogs_sgd: '400.25', gross_profit_sgd: '544.65',
+    closed_by: 'finance', closed_at: '2026-10-01T02:00:00Z',
+  };
+  assert.deepEqual(validatedClosingPeriodRow(valid), {
+    id: 7, period_start: '2026-09-01', period_end: '2026-09-30', status: 'closed',
+    gross_sales_cents: 100000, refunds_cents: 2510, net_sales_cents: 97490,
+    fees_cents: 3000, cogs_cents: 40025, gross_profit_cents: 54465,
+    closed_by: 'finance', closed_at: '2026-10-01T02:00:00Z',
+  });
+  for (const changed of [
+    { gross_sales_sgd: 'Infinity' }, { net_sales_sgd: '974.91' },
+    { gross_profit_sgd: '544.64' }, { refunds_sgd: '-1.00' },
+    { period_end: '2026-09-31' }, { status: 'closed', closed_by: null },
+    { status: 'open', closed_by: 'finance', closed_at: '2026-10-01T02:00:00Z' },
+  ]) assert.equal(validatedClosingPeriodRow({ ...valid, ...changed }), null);
+
+  assert.match(closingPage, /\.limit\(CLOSING_PERIOD_DISPLAY_LIMIT\+1\)/);
+  assert.match(closingPage, /\.map\(validatedClosingPeriodRow\)/);
+  assert.match(closingPage, /const reportingIncomplete=periodsUnavailable\|\|historyTruncated\|\|malformed/);
+  assert.match(closingPage, /Closing-period data failed financial validation/);
+  assert.match(closingPage, /Only the newest \{CLOSING_PERIOD_DISPLAY_LIMIT\} periods are shown/);
+  assert.doesNotMatch(closingPage, /Number\(x\.gross_profit_sgd\|\|0\)/);
 });
 
 test('forecasting rejects malformed financial rows instead of coercing them into planning totals', () => {
