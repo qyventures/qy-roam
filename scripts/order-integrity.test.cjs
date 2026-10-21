@@ -5790,12 +5790,14 @@ test('unpaid webhook acknowledgements prove the exact committed lifecycle transi
   const session = {
     id: 'cs_live_unpaidLifecycleAck123', livemode: true, mode: 'payment',
     status: 'complete', payment_status: 'unpaid', currency: 'sgd', amount_total: 1290,
+    customer_details: { name: 'Test Traveller', email: 'traveller@example.com', phone: null },
     metadata: { product_type: 'esim', measurement_consent: 'essential', plan_id: 'jp-7d', plan_name: 'Japan · 7 days', data_allowance: '10 GB', country: 'Japan' },
   };
   const order = {
     stripe_session_id: session.id, payment_status: 'unpaid', product_type: 'esim', amount_sgd: '12.90',
     plan_id: 'jp-7d', plan_name: 'Japan · 7 days', data_allowance: '10 GB', country: 'Japan',
     travel_start: null, travel_end: null, measurement_consent: 'essential', shipping_address: null,
+    customer_name: 'Test Traveller', email: 'traveller@example.com', phone: null,
     fulfilment_status: 'awaiting_payment', payment_confirmed_at: null,
   };
 
@@ -5804,6 +5806,8 @@ test('unpaid webhook acknowledgements prove the exact committed lifecycle transi
   assert.equal(durableOrderMatchesUnpaidPaymentEvent({ ...order, fulfilment_status: 'payment_failed' }, session, 'esim', true), true);
   assert.equal(durableOrderMatchesUnpaidPaymentEvent(order, session, 'esim', true), false);
   assert.equal(durableOrderMatchesUnpaidPaymentEvent({ ...order, fulfilment_status: 'fulfilled' }, session, 'esim', true), false);
+  assert.equal(durableOrderMatchesUnpaidPaymentEvent({ ...order, email: 'wrong@example.com' }, session, 'esim', false), false);
+  assert.equal(durableOrderMatchesUnpaidPaymentEvent({ ...order, customer_name: null }, session, 'esim', false), false);
 
   const paidOrder = { ...order, payment_status: 'paid', fulfilment_status: 'fulfilled', payment_confirmed_at: '2026-10-20T01:02:03.000Z' };
   assert.equal(durableOrderMatchesUnpaidPaymentEvent(paidOrder, session, 'esim', false), true);
@@ -5847,6 +5851,7 @@ test('paid persistence acknowledgements retain the exact signed payment event ti
   const session = {
     id: 'cs_live_paymentEventAck123', livemode: true, mode: 'payment',
     status: 'complete', payment_status: 'paid', currency: 'sgd', amount_total: 1290,
+    customer_details: { name: 'Test Traveller', email: 'traveller@example.com', phone: '+65 8123 4567' },
     metadata: {
       product_type: 'esim', measurement_consent: 'essential', plan_id: 'jp-7d',
       plan_name: 'Japan 7 Days', data_allowance: '1 GB/day', country: 'Japan',
@@ -5856,6 +5861,7 @@ test('paid persistence acknowledgements retain the exact signed payment event ti
     stripe_session_id: session.id, payment_status: 'paid', product_type: 'esim', amount_sgd: '12.90',
     plan_id: 'jp-7d', plan_name: 'Japan 7 Days', data_allowance: '1 GB/day', country: 'Japan',
     travel_start: null, travel_end: null, measurement_consent: 'essential', shipping_address: null,
+    customer_name: 'Test Traveller', email: 'traveller@example.com', phone: '+65 8123 4567',
     payment_confirmed_at: new Date(eventCreated * 1000).toISOString(),
   };
 
@@ -5864,6 +5870,13 @@ test('paid persistence acknowledgements retain the exact signed payment event ti
   assert.equal(durablePaidOrderMatchesPaymentEvent({ ...order, payment_confirmed_at: new Date((eventCreated + 1) * 1000).toISOString() }, session, 'esim', eventCreated), false);
   assert.equal(durablePaidOrderMatchesPaymentEvent(order, session, 'esim', eventCreated + 1), false);
   assert.equal(durablePaidOrderMatchesPaymentEvent(order, session, 'esim', 1.5), false);
+  for (const patch of [
+    { customer_name: 'Different Traveller' },
+    { email: 'wrong@example.com' },
+    { phone: null },
+  ]) {
+    assert.equal(durablePaidOrderMatchesPaymentEvent({ ...order, ...patch }, session, 'esim', eventCreated), false);
+  }
 });
 
 test('database enforces product-specific fulfilment status domains on new order writes', () => {

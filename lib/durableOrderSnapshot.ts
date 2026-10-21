@@ -6,6 +6,9 @@ import { exactDatabaseTimestampToken } from './stripeClaimToken';
 export type DurableOrderSnapshot = {
   stripe_session_id?: unknown;
   payment_status?: unknown;
+  customer_name?: unknown;
+  email?: unknown;
+  phone?: unknown;
   product_type?: unknown;
   amount_sgd?: unknown;
   plan_id?: unknown;
@@ -19,6 +22,23 @@ export type DurableOrderSnapshot = {
   shipping_address?: unknown;
   fulfilment_status?: unknown;
 };
+
+function durableCustomerDetailsMatchSession(
+  order: DurableOrderSnapshot | null | undefined,
+  session: Stripe.Checkout.Session,
+) {
+  if (!order) return false;
+  const details = session.customer_details;
+  // This helper is intentionally used only by the webhook's immediate RPC
+  // acknowledgement. Customer contacts remain staff-correctable after the
+  // order is durable, so the broader commercial matcher must not compare
+  // them during later fulfilment retries. At the initial persistence
+  // boundary, however, accepting a stale email would make an eSIM payment
+  // look safely recorded while its digital-delivery destination was wrong.
+  return order.customer_name === (details?.name ?? null) &&
+    order.email === (details?.email ?? null) &&
+    order.phone === (details?.phone ?? null);
+}
 
 function sgdCents(value: unknown) {
   if (typeof value !== 'number' && typeof value !== 'string') return null;
@@ -178,12 +198,12 @@ export function durableOrderMatchesPaidSession(
 }
 
 /**
- * Prove that a paid persistence acknowledgement also retained the signed
- * Stripe event time that authorized the payment transition. The commercial
- * join above is necessary but not sufficient for the webhook: fulfilment and
- * Purchase delivery must not begin when an old database function, malformed
- * gateway response, or manual repair returned a paid row with a missing or
- * different accounting timestamp.
+ * Prove that a paid persistence acknowledgement also retained the customer
+ * contact snapshot and signed Stripe event time that authorized the payment
+ * transition. The commercial join above is necessary but not sufficient for
+ * the webhook: fulfilment and Purchase delivery must not begin when an old
+ * database function, malformed gateway response, or manual repair returned a
+ * paid row with stale contact data or a missing/different accounting time.
  */
 export function durablePaidOrderMatchesPaymentEvent(
   order: DurableOrderSnapshot | null | undefined,
@@ -192,6 +212,7 @@ export function durablePaidOrderMatchesPaymentEvent(
   eventCreated: number,
 ) {
   if (!durableOrderMatchesPaidSession(order, session, productType) ||
+    !durableCustomerDetailsMatchSession(order, session) ||
     !Number.isSafeInteger(eventCreated) || eventCreated <= 0 ||
     typeof order?.payment_confirmed_at !== 'string') {
     return false;
@@ -239,7 +260,8 @@ export function durableOrderMatchesUnpaidPaymentEvent(
     durableOrderMatchesPaidSession(order, { ...session, payment_status: 'paid' }, productType)) {
     return true;
   }
-  return order?.fulfilment_status === (paymentFailed ? 'payment_failed' : 'awaiting_payment') &&
+  return durableCustomerDetailsMatchSession(order, session) &&
+    order?.fulfilment_status === (paymentFailed ? 'payment_failed' : 'awaiting_payment') &&
     durableUnpaidOrderMatchesSession(order, session, productType);
 }
 
