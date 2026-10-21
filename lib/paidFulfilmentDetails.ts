@@ -1,24 +1,8 @@
 import type Stripe from 'stripe';
 import { isSafeSmtpMailbox } from './smtp';
+import { normalizedCustomerPhone } from './customerPhone';
 
 export type PaidFulfilmentProductType = 'esim' | 'pocket_wifi';
-
-function normalizedPhone(value: unknown) {
-  // Checkout Session objects are provider JSON at runtime. Do not invoke a
-  // string method until the field has crossed that boundary; a malformed
-  // paid snapshot must become an actionable validation failure rather than
-  // throwing before the webhook can classify it.
-  if (typeof value !== 'string' || value.length > 32 || /[\u0000-\u001f\u007f]/.test(value)) return null;
-  // Stripe normally validates collected phone numbers, but its Checkout
-  // Session remains provider input at this boundary. Counting digits alone
-  // would accept values such as `callmeABC81234567`, leaving a paid physical
-  // order with a contact value that courier tooling cannot safely dial. Keep
-  // ordinary international formatting, while allowing `+` only as the first
-  // character and rejecting every other character class.
-  if (!/^\+?[0-9 ()-]+$/.test(value)) return null;
-  const digits = value.replace(/\D/g, '');
-  return digits.length >= 7 && digits.length <= 15 ? digits : null;
-}
 
 function safeCustomerName(value: unknown) {
   // Names are optional for eSIM delivery, but when Stripe supplies one it is
@@ -73,7 +57,7 @@ export function paidFulfilmentDetailsIssue(
   }
   if (productType === 'esim') return null;
 
-  if (!normalizedPhone(session.customer_details?.phone)) {
+  if (!normalizedCustomerPhone(session.customer_details?.phone)) {
     return 'Paid Pocket WiFi order is missing a valid customer phone number';
   }
   const shipping = session.shipping_details?.address;

@@ -2152,6 +2152,13 @@ begin
   if p_amount_sgd is null or p_amount_sgd <= 0 or p_amount_sgd > 99999999.99 or p_amount_sgd <> round(p_amount_sgd, 2) then
     raise exception 'manual order amount must be positive whole cents within the order ledger range';
   end if;
+  if p_phone is not null and (
+    length(p_phone) > 32
+    or p_phone !~ '^\+?[0-9 ()-]+$'
+    or length(regexp_replace(p_phone, '[^0-9]', '', 'g')) not between 7 and 15
+  ) then
+    raise exception 'manual order customer phone is invalid';
+  end if;
   if coalesce(length(trim(p_country)), 0) = 0 then raise exception 'Pocket WiFi destination is required'; end if;
   if p_travel_start is null or p_travel_end is null or p_travel_end < p_travel_start then raise exception 'invalid Pocket WiFi travel dates'; end if;
   -- This SECURITY DEFINER function is a second entry point into the same
@@ -2612,6 +2619,13 @@ begin
     or p_email ~ '[[:cntrl:]]'
     or p_email !~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$' then
     raise exception 'manual eSIM order requires a valid customer email';
+  end if;
+  if p_phone is not null and (
+    length(p_phone) > 32
+    or p_phone !~ '^\+?[0-9 ()-]+$'
+    or length(regexp_replace(p_phone, '[^0-9]', '', 'g')) not between 7 and 15
+  ) then
+    raise exception 'manual order customer phone is invalid';
   end if;
   if p_plan_id is null or p_plan_id !~ '^[a-z0-9][a-z0-9-]{1,80}$' then raise exception 'invalid eSIM plan id'; end if;
   if coalesce(length(p_plan_name), 0) not between 1 and 200 or p_plan_name <> btrim(p_plan_name) or p_plan_name ~ '[[:cntrl:]]' then raise exception 'invalid eSIM plan name'; end if;
@@ -3567,7 +3581,7 @@ as $$
   -- through the provider-attempt claim/failure state machine.
   -- Version 54 removes the default PUBLIC execution privilege from the
   -- owner-privileged paid-order CRM reconciliation trigger.
-  select 54;
+  select 55;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;

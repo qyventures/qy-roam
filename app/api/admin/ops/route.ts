@@ -15,6 +15,7 @@ import { acknowledgedClosingPeriod } from '@/lib/closingPeriodAcknowledgement';
 import { acknowledgedAdminRecord } from '@/lib/adminRecordAcknowledgement';
 import { validAdminOperationId } from '@/lib/adminOperationId';
 import { inventoryMutationFailure } from '@/lib/inventoryMutationFailure';
+import { normalizedCustomerPhone } from '@/lib/customerPhone';
 
 export const dynamic = 'force-dynamic';
 
@@ -299,6 +300,9 @@ export async function POST(req: NextRequest) {
       // the stricter rule below that a safe email must actually be present.
       if (row.email && !isSafeSmtpMailbox(row.email)) {
         return NextResponse.json({ error: 'Enter a valid customer email or leave it blank for a phone-only Pocket WiFi order' }, { status: 400 });
+      }
+      if (row.phone && !normalizedCustomerPhone(row.phone)) {
+        return NextResponse.json({ error: 'Enter a valid customer phone number or leave it blank when a valid email is supplied' }, { status: 400 });
       }
       // A manual eSIM sale joins the same fulfilment lifecycle as a Stripe
       // sale, but it does not receive Stripe Checkout's required-email field.
