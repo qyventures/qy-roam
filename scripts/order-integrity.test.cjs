@@ -95,6 +95,7 @@ const { ADMIN_DASHBOARD_MAX_CONCURRENT_REQUESTS, tryAcquireAdminDashboardConcurr
 const { STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS, STRIPE_WEBHOOK_MAX_CONCURRENT_UPLOADS, tryAcquireStripeWebhookProcessing, tryAcquireStripeWebhookUpload } = require('../lib/stripeWebhookConcurrency.ts');
 const { validatedSalesReportRow } = require('../lib/salesReportRow.ts');
 const { validatedForecastRow } = require('../lib/forecastRow.ts');
+const { validatedCrmCustomer, validatedCrmOpportunity } = require('../lib/crmRow.ts');
 const { META_ATTRIBUTION_METADATA_KEYS, stripeMeasurementConsentDowngrade } = require('../lib/stripeMeasurementConsent.ts');
 const { signedStripeMeasurementConsentDowngrade } = require('../lib/stripeMeasurementProvenance.ts');
 const { saleablePocketWifiInventory: scanSaleablePocketWifiInventory } = require('../lib/pocketWifiStock.ts');
@@ -6530,8 +6531,38 @@ test('CRM headline metrics page through bounded data and warn when totals can be
   assert.match(crmPage, /\.order\('created_at',\{ascending:false\}\)\.order\('id',\{ascending:false\}\)\.range\(from,to\)/);
   assert.match(crmPage, /const truncatedPanels=/);
   assert.match(crmPage, /CRM view limit reached/);
-  assert.match(crmPage, /Headline totals and lists may be incomplete/);
+  assert.match(crmPage, /Headline totals are hidden and lists may be incomplete/);
+  assert.match(crmPage, /const metricsIncomplete=unavailablePanels\.length>0\|\|truncatedPanels\.length>0\|\|malformedPanels\.length>0/);
+  assert.match(crmPage, /const metric=\(value:string\|number\)=>metricsIncomplete\?'—':value/);
   assert.doesNotMatch(crmPage, /\.limit\((?:200|500)\)/);
+});
+
+test('CRM financial metrics reject malformed provider rows instead of coercing them', () => {
+  assert.deepEqual(validatedCrmCustomer({
+    id: '7', total_orders: '3', lifetime_value_sgd: '123.40', name: 'Customer',
+  }), {
+    id: 7, total_orders: 3, lifetime_value_sgd: '123.40', name: 'Customer', lifetime_value_cents: 12340,
+  });
+  assert.deepEqual(validatedCrmOpportunity({
+    id: 8, expected_value_sgd: '500.25', probability: '12.50', title: 'Group trip',
+  }), {
+    id: 8, expected_value_sgd: '500.25', probability: '12.50', title: 'Group trip',
+    expected_value_cents: 50025, probability_basis_points: 1250,
+  });
+  for (const row of [
+    { id: 0, total_orders: 1, lifetime_value_sgd: 10 },
+    { id: 1, total_orders: '1.5', lifetime_value_sgd: 10 },
+    { id: 1, total_orders: 1, lifetime_value_sgd: 'NaN' },
+    { id: 1, total_orders: 1, lifetime_value_sgd: '1.001' },
+  ]) assert.equal(validatedCrmCustomer(row), null);
+  for (const row of [
+    { id: 0, expected_value_sgd: 10, probability: 50 },
+    { id: 1, expected_value_sgd: -1, probability: 50 },
+    { id: 1, expected_value_sgd: 10, probability: '100.01' },
+    { id: 1, expected_value_sgd: 'Infinity', probability: 50 },
+  ]) assert.equal(validatedCrmOpportunity(row), null);
+  assert.match(crmPage, /Math\.round\(x\.expected_value_cents\*x\.probability_basis_points\/10_000\)/);
+  assert.doesNotMatch(crmPage, /Number\(x\.expected_value_sgd/);
 });
 
 test('admin operational visibility pages beyond one Supabase response and warns before a bounded view can hide work', () => {
