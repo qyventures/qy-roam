@@ -97,7 +97,7 @@ export default async function SuccessPage({ searchParams }: Props) {
         } else {
           const orderResult = await supabase
             .from('orders')
-            .select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address,fulfilment_status')
+            .select('stripe_session_id,payment_status,payment_confirmed_at,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address,fulfilment_status')
             .eq('stripe_session_id', session.id)
             .maybeSingle();
           // A previously received asynchronous-completion event can have

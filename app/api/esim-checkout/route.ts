@@ -390,7 +390,7 @@ export async function POST(req: Request) {
       if (!supabase) throw new Error('Order persistence unavailable');
       const order = await supabase
         .from('orders')
-        .select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address')
+        .select('stripe_session_id,payment_status,payment_confirmed_at,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address')
         .eq('stripe_session_id', currentSession.id)
         .maybeSingle();
       if (order.error) throw order.error;

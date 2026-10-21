@@ -1,6 +1,7 @@
 import type Stripe from 'stripe';
 import type { QyRoamProductType } from './qyRoamSession';
 import { validStripeCheckoutSessionIdForMode } from './stripeSessionId';
+import { exactDatabaseTimestampToken } from './stripeClaimToken';
 
 export type DurableOrderSnapshot = {
   stripe_session_id?: unknown;
@@ -78,6 +79,7 @@ function durableUnpaidOrderMatchesSession(
     : 'essential';
   if (!order || !sessionId || order.stripe_session_id !== sessionId ||
     order.payment_status !== 'unpaid' || order.product_type !== productType ||
+    order.payment_confirmed_at !== null ||
     session.metadata?.product_type !== productType ||
     order.measurement_consent !== expectedMeasurementConsent ||
     session.mode !== 'payment' ||
@@ -134,6 +136,7 @@ export function durableOrderMatchesPaidSession(
     : 'essential';
   if (!order || !sessionId || order.stripe_session_id !== sessionId ||
     order.payment_status !== 'paid' || order.product_type !== productType ||
+    !exactDatabaseTimestampToken(order.payment_confirmed_at) ||
     session.metadata?.product_type !== productType ||
     order.measurement_consent !== expectedMeasurementConsent ||
     session.mode !== 'payment' || session.status !== 'complete' || session.payment_status !== 'paid' ||

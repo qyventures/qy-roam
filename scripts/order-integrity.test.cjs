@@ -3342,7 +3342,7 @@ test('booking status requires a durable paid order before showing fulfilment pro
   // or unavailable order snapshot must not be rendered as the normal queued
   // fulfilment state.
   assert.match(bookingPage, /const orderLookupFailed = !supabase \|\| Boolean\(orderResult\?\.error\)/);
-  assert.match(bookingPage, /select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address,fulfilment_status,/);
+  assert.match(bookingPage, /select\('stripe_session_id,payment_status,payment_confirmed_at,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address,fulfilment_status,/);
   assert.match(bookingPage, /const orderPersisted = durableOrderMatchesPaidSession\(storedOrder, session, productType\)/);
   assert.match(bookingPage, /const paymentFailed = storedOrder\?\.fulfilment_status === 'payment_failed' &&[\s\S]{0,100}durableOrderMatchesFailedSession\(storedOrder, session, productType\)/);
   assert.match(bookingPage, /paid && !orderLifecycleValid/);
@@ -3359,7 +3359,7 @@ test('success confirmation does not imply fulfilment is durable before the paid 
   assert.match(successPage, /getSupabaseAdmin/);
   assert.match(successPage, /let orderPersisted = false/);
   assert.match(successPage, /let orderLookupFailed = false/);
-  assert.match(successPage, /select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address,fulfilment_status'\)/);
+  assert.match(successPage, /select\('stripe_session_id,payment_status,payment_confirmed_at,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address,fulfilment_status'\)/);
   assert.match(successPage, /orderPersisted = durableOrderMatchesPaidSession\(orderResult\.data, session, productType\)/);
   assert.match(successPage, /orderPersisted \? 'Order confirmed' : 'Payment confirmed'/);
   assert.match(successPage, /Please do not place a second order/);
@@ -5709,7 +5709,7 @@ test('database lifecycle backstop prevents direct eSIM fulfilment inserts and pr
 test('terminal asynchronous payment failures rotate checkout only after durable webhook persistence', () => {
   for (const route of [esimCheckoutRoute, wifiCheckoutRoute]) {
     assert.match(route, /status\s*===?\s*'complete'\s*&&\s*[^\n]*payment_status\s*===?\s*'unpaid'/);
-    assert.match(route, /from\('orders'\)\s*\.select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,(?:shipping_address,)?fulfilment_status'\)\s*\.eq\('stripe_session_id',\s*[^)]+\)\s*\.maybeSingle\(\)/);
+    assert.match(route, /from\('orders'\)\s*\.select\('stripe_session_id,payment_status,(?:payment_confirmed_at,)?product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,(?:shipping_address,)?fulfilment_status'\)\s*\.eq\('stripe_session_id',\s*[^)]+\)\s*\.maybeSingle\(\)/);
     assert.match(route, /order\.data\?\.fulfilment_status\s*===?\s*'payment_failed'\s*&&\s*durableOrderMatchesFailedSession\(order\.data,/);
     assert.doesNotMatch(route, /order\.data\?\.payment_status\s*===?\s*'failed'/);
     assert.match(route, /paymentFailed:\s*true/);
@@ -5728,6 +5728,7 @@ test('terminal failed-payment authority requires the exact durable commercial sn
     stripe_session_id: session.id, payment_status: 'unpaid', product_type: 'esim', amount_sgd: '12.90',
     plan_id: 'jp-7d', plan_name: 'Japan · 7 days', data_allowance: '10 GB', country: 'Japan',
     travel_start: null, travel_end: null, measurement_consent: 'essential', shipping_address: null,
+    payment_confirmed_at: null,
     fulfilment_status: 'payment_failed',
   };
 
@@ -5749,12 +5750,13 @@ test('a superseded asynchronous failure acknowledges only the exact already-paid
     stripe_session_id: session.id, payment_status: 'paid', product_type: 'esim', amount_sgd: '12.90',
     plan_id: 'jp-7d', plan_name: 'Japan · 7 days', data_allowance: '10 GB', country: 'Japan',
     travel_start: null, travel_end: null, measurement_consent: 'essential', shipping_address: null,
+    payment_confirmed_at: '2026-10-20T01:02:03.000Z',
   };
 
   assert.equal(durableOrderMatchesFailedOrAlreadyPaidSession(paidOrder, session, 'esim'), true);
   assert.equal(durableOrderMatchesFailedOrAlreadyPaidSession({ ...paidOrder, amount_sgd: '12.91' }, session, 'esim'), false);
   assert.equal(durableOrderMatchesFailedOrAlreadyPaidSession({ ...paidOrder, plan_id: 'different-plan' }, session, 'esim'), false);
-  assert.equal(durableOrderMatchesFailedOrAlreadyPaidSession({ ...paidOrder, payment_status: 'unpaid' }, session, 'esim'), true);
+  assert.equal(durableOrderMatchesFailedOrAlreadyPaidSession({ ...paidOrder, payment_status: 'unpaid', payment_confirmed_at: null }, session, 'esim'), true);
   assert.equal(durableOrderMatchesFailedOrAlreadyPaidSession(paidOrder, { ...session, status: 'open' }, 'esim'), false);
 });
 
@@ -5772,7 +5774,7 @@ test('an asynchronous-payment commitment acknowledges only its exact durable sna
     stripe_session_id: session.id, payment_status: 'unpaid', product_type: 'pocket_wifi', amount_sgd: '4.81',
     plan_id: null, plan_name: 'Japan Pocket WiFi', data_allowance: null, country: 'Japan',
     travel_start: '2026-11-01', travel_end: '2026-11-02', measurement_consent: 'accepted',
-    shipping_address: session.shipping_details.address,
+    shipping_address: session.shipping_details.address, payment_confirmed_at: null,
   };
 
   assert.equal(durableOrderMatchesUnpaidOrAlreadyPaidSession(pendingOrder, session, 'pocket_wifi'), true);
@@ -5780,7 +5782,7 @@ test('an asynchronous-payment commitment acknowledges only its exact durable sna
   assert.equal(durableOrderMatchesUnpaidOrAlreadyPaidSession({ ...pendingOrder, travel_end: '2026-11-03' }, session, 'pocket_wifi'), false);
   assert.equal(durableOrderMatchesUnpaidOrAlreadyPaidSession({ ...pendingOrder, shipping_address: { ...pendingOrder.shipping_address, line1: '2 Wrong Street' } }, session, 'pocket_wifi'), false);
   assert.equal(durableOrderMatchesUnpaidOrAlreadyPaidSession({ ...pendingOrder, shipping_address: null }, session, 'pocket_wifi'), false);
-  assert.equal(durableOrderMatchesUnpaidOrAlreadyPaidSession({ ...pendingOrder, payment_status: 'paid' }, session, 'pocket_wifi'), true);
+  assert.equal(durableOrderMatchesUnpaidOrAlreadyPaidSession({ ...pendingOrder, payment_status: 'paid', payment_confirmed_at: '2026-10-20T01:02:03.000Z' }, session, 'pocket_wifi'), true);
   assert.equal(durableOrderMatchesUnpaidOrAlreadyPaidSession(pendingOrder, { ...session, status: 'open' }, 'pocket_wifi'), false);
 });
 
@@ -5794,7 +5796,7 @@ test('unpaid webhook acknowledgements prove the exact committed lifecycle transi
     stripe_session_id: session.id, payment_status: 'unpaid', product_type: 'esim', amount_sgd: '12.90',
     plan_id: 'jp-7d', plan_name: 'Japan · 7 days', data_allowance: '10 GB', country: 'Japan',
     travel_start: null, travel_end: null, measurement_consent: 'essential', shipping_address: null,
-    fulfilment_status: 'awaiting_payment',
+    fulfilment_status: 'awaiting_payment', payment_confirmed_at: null,
   };
 
   assert.equal(durableOrderMatchesUnpaidPaymentEvent(order, session, 'esim', false), true);
@@ -5803,7 +5805,7 @@ test('unpaid webhook acknowledgements prove the exact committed lifecycle transi
   assert.equal(durableOrderMatchesUnpaidPaymentEvent(order, session, 'esim', true), false);
   assert.equal(durableOrderMatchesUnpaidPaymentEvent({ ...order, fulfilment_status: 'fulfilled' }, session, 'esim', true), false);
 
-  const paidOrder = { ...order, payment_status: 'paid', fulfilment_status: 'fulfilled' };
+  const paidOrder = { ...order, payment_status: 'paid', fulfilment_status: 'fulfilled', payment_confirmed_at: '2026-10-20T01:02:03.000Z' };
   assert.equal(durableOrderMatchesUnpaidPaymentEvent(paidOrder, session, 'esim', false), true);
   assert.equal(durableOrderMatchesUnpaidPaymentEvent(paidOrder, session, 'esim', true), true);
 });
@@ -5821,7 +5823,7 @@ test('expired Checkout tombstones acknowledge the exact released order snapshot'
     stripe_session_id: session.id, payment_status: 'unpaid', product_type: 'pocket_wifi', amount_sgd: '4.81',
     plan_id: null, plan_name: 'Japan Pocket WiFi', data_allowance: null, country: 'Japan',
     travel_start: '2026-11-01', travel_end: '2026-11-02', measurement_consent: 'essential',
-    shipping_address: null,
+    shipping_address: null, payment_confirmed_at: null,
   };
 
   assert.equal(durableOrderMatchesUnpaidOrAlreadyPaidSession(expiredOrder, session, 'pocket_wifi'), true);
@@ -9662,6 +9664,7 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
     travel_end: null,
     measurement_consent: 'essential',
     shipping_address: null,
+    payment_confirmed_at: '2026-10-20T01:02:03.000Z',
   };
   assert.equal(durableOrderMatchesPaidSession(esimOrder, esimSession, 'esim'), true);
   // Supabase/PostgREST can return a PostgreSQL numeric as a JSON number.
@@ -9782,6 +9785,7 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
     travel_end: '2026-10-12',
     measurement_consent: 'accepted',
     shipping_address: wifiSession.shipping_details.address,
+    payment_confirmed_at: '2026-10-20T01:02:03.000Z',
   };
   assert.equal(durableOrderMatchesPaidSession(wifiOrder, wifiSession, 'pocket_wifi'), true);
   assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, plan_id: 'jp-7d' }, wifiSession, 'pocket_wifi'), false);
@@ -9797,10 +9801,13 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
     shipping_address: { ...wifiOrder.shipping_address, delivery_instructions: 'Leave unattended' },
   }, wifiSession, 'pocket_wifi'), false);
   assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, shipping_address: null }, wifiSession, 'pocket_wifi'), false);
+  for (const paymentConfirmedAt of [null, undefined, '', '2026-10-20', 'not-a-timestamp']) {
+    assert.equal(durableOrderMatchesPaidSession({ ...wifiOrder, payment_confirmed_at: paymentConfirmedAt }, wifiSession, 'pocket_wifi'), false);
+  }
 
   for (const page of [successPage, bookingPage]) {
     assert.match(page, /durableOrderMatchesPaidSession\(/);
-    assert.match(page, /stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent/);
+    assert.match(page, /stripe_session_id,payment_status,payment_confirmed_at,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent/);
   }
   assert.match(successPage, /<MetaPurchase sessionId=\{sessionId\} purchaseIdentity=\{purchaseIdentity\} orderPersisted=\{orderPersisted\}/);
   assert.match(bookingPage, /const order = orderLifecycleValid \? storedOrder : null/);
@@ -9813,7 +9820,7 @@ test('customer confirmation trusts only the durable order snapshot matching Stri
 test('paid checkout replays require the same exact durable commercial snapshot as confirmation', () => {
   for (const route of [esimCheckoutRoute, wifiCheckoutRoute]) {
     assert.match(route, /import \{ durableOrderMatchesFailedSession, durableOrderMatchesPaidSession \} from '@\/lib\/durableOrderSnapshot';/);
-    assert.match(route, /select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address'\)/);
+    assert.match(route, /select\('stripe_session_id,payment_status,payment_confirmed_at,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address'\)/);
   }
   assert.match(esimCheckoutRoute, /!durableOrderMatchesPaidSession\(order\.data, currentSession, 'esim'\)/);
   assert.match(wifiCheckoutRoute, /durableOrderMatchesPaidSession\(order\.data,currentSession,'pocket_wifi'\)/);
@@ -10450,7 +10457,7 @@ test('authenticated delayed payments reconcile automatically on the primary succ
 test('primary confirmation stops polling only after an exact durable asynchronous payment failure', () => {
   assert.match(successPage, /durableOrderMatchesFailedSession/);
   assert.match(successPage, /session\.status === 'complete' && session\.payment_status === 'unpaid'/);
-  assert.match(successPage, /\.select\('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address,fulfilment_status'\)/);
+  assert.match(successPage, /\.select\('stripe_session_id,payment_status,payment_confirmed_at,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address,fulfilment_status'\)/);
   assert.match(successPage, /orderResult\.data\?\.fulfilment_status === 'payment_failed' &&[\s\S]{0,150}durableOrderMatchesFailedSession\(orderResult\.data, session, productType\)/);
   assert.match(successPage, /paymentFailed \? 'This payment was unsuccessful\.'/);
   assert.match(successPage, /!checkoutExpired && !paymentFailed && <OrderConfirmationRefresh \/>/);
