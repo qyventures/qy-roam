@@ -6571,7 +6571,7 @@ test('admin operational pagination distinguishes an exact view limit from a genu
   assert.match(adminPage, /truncated: beyond\.data\.length > 0/);
   assert.match(crmPage, /const beyond=await fetchPage\(CRM_MAX_ROWS,CRM_MAX_ROWS\)/);
   assert.match(crmPage, /if\(beyond\.error\)return \{data:\[\],error:beyond\.error,truncated:false\}/);
-  assert.match(crmPage, /truncated:\(beyond\.data\|\|\[\]\)\.length>0/);
+  assert.match(crmPage, /truncated:beyond\.data\.length>0/);
 });
 
 test('admin operational pagination fails closed on malformed or duplicate provider pages', () => {
@@ -6586,6 +6586,22 @@ test('admin operational pagination fails closed on malformed or duplicate provid
   assert.match(adminPage, /Operational ledger returned an invalid page/);
   assert.match(adminPage, /Operational ledger returned an invalid pagination cursor/);
   assert.match(adminPage, /Operational ledger returned an invalid truncation probe/);
+});
+
+test('CRM and sales report pagination fail closed on malformed or duplicate provider pages', () => {
+  // Customer, pipeline and revenue totals are management authorities. Do not
+  // accept an oversized/null page, duplicate a row shifted between offset
+  // reads, or infer completeness from a malformed one-row overflow probe.
+  assert.match(crmPage, /const seenIds=new Set<number>\(\)/);
+  assert.match(crmPage, /!Array\.isArray\(result\.data\)\|\|result\.data\.length>CRM_PAGE_SIZE/);
+  assert.match(crmPage, /!Number\.isSafeInteger\(id\)\|\|id<=0\|\|seenIds\.has\(id\)/);
+  assert.match(crmPage, /!Array\.isArray\(beyond\.data\)\|\|beyond\.data\.length>1/);
+  assert.match(crmPage, /truncated:beyond\.data\.length>0/);
+  assert.match(reportsPage, /const seenRows = new Set<string>\(\)/);
+  assert.match(reportsPage, /!Array\.isArray\(result\.data\) \|\| result\.data\.length > REPORT_PAGE_SIZE/);
+  assert.match(reportsPage, /seenRows\.has\(identity\)/);
+  assert.match(reportsPage, /!Array\.isArray\(beyond\.data\) \|\| beyond\.data\.length > 1/);
+  assert.match(reportsPage, /truncated: beyond\.data\.length > 0/);
 });
 
 test('admin webhook recovery visibility pages every actionable Stripe exception within its declared bound', () => {

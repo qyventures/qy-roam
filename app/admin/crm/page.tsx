@@ -13,10 +13,22 @@ const CRM_MAX_ROWS=5_000;
 type PagedResult={data:any[];error:any;truncated:boolean};
 async function loadCrmPages(fetchPage:(from:number,to:number)=>PromiseLike<{data:any[]|null;error:any}>):Promise<PagedResult>{
  const data:any[]=[];
+ const seenIds=new Set<number>();
  for(let from=0;from<CRM_MAX_ROWS;from+=CRM_PAGE_SIZE){
   const result=await fetchPage(from,from+CRM_PAGE_SIZE-1);
   if(result.error)return {data:[],error:result.error,truncated:false};
-  const page=result.data||[];
+  // These rows drive customer follow-up and weighted-pipeline decisions.
+  // Treat a malformed PostgREST page, a response beyond the requested range,
+  // or an identity repeated across offset pages as unavailable data. Concurrent
+  // writes can otherwise shift an offset and quietly double-count a customer,
+  // opportunity or activity while making another record disappear.
+  if(!Array.isArray(result.data)||result.data.length>CRM_PAGE_SIZE)return {data:[],error:new Error('CRM ledger returned an invalid page'),truncated:false};
+  const page=result.data;
+  for(const row of page){
+   const id=row?.id;
+   if(!Number.isSafeInteger(id)||id<=0||seenIds.has(id))return {data:[],error:new Error('CRM ledger returned an invalid or duplicate identity'),truncated:false};
+   seenIds.add(id);
+  }
   data.push(...page);
   if(page.length<CRM_PAGE_SIZE)return {data,error:null,truncated:false};
  }
@@ -25,7 +37,8 @@ async function loadCrmPages(fetchPage:(from:number,to:number)=>PromiseLike<{data
  // completeness probe as unavailable data rather than safe partial totals.
  const beyond=await fetchPage(CRM_MAX_ROWS,CRM_MAX_ROWS);
  if(beyond.error)return {data:[],error:beyond.error,truncated:false};
- return {data,error:null,truncated:(beyond.data||[]).length>0};
+ if(!Array.isArray(beyond.data)||beyond.data.length>1)return {data:[],error:new Error('CRM ledger returned an invalid truncation probe'),truncated:false};
+ return {data,error:null,truncated:beyond.data.length>0};
 }
 export default async function CrmPage(){
  const db=getSupabaseAdmin();

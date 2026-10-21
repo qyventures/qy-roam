@@ -13,6 +13,7 @@ type ReportResult = { data: any[]; error: unknown; truncated: boolean };
 
 async function loadReportPages(db: NonNullable<ReturnType<typeof getSupabaseAdmin>>): Promise<ReportResult> {
   const data: any[] = [];
+  const seenRows = new Set<string>();
   const fetchPage = (from: number, to: number) => db
     .from('sales_daily_summary')
     .select('*')
@@ -23,7 +24,23 @@ async function loadReportPages(db: NonNullable<ReturnType<typeof getSupabaseAdmi
   for (let from = 0; from < REPORT_MAX_ROWS; from += REPORT_PAGE_SIZE) {
     const result = await fetchPage(from, from + REPORT_PAGE_SIZE - 1);
     if (result.error) return { data: [], error: result.error, truncated: false };
-    const page = result.data || [];
+    // The view's natural identity is one product bucket per sales date. A
+    // duplicate across offset pages is evidence that the snapshot shifted
+    // while it was being read (or that the view contract is corrupt), so its
+    // revenue must not be counted twice or presented as a complete report.
+    if (!Array.isArray(result.data) || result.data.length > REPORT_PAGE_SIZE) {
+      return { data: [], error: new Error('Sales report returned an invalid page'), truncated: false };
+    }
+    const page = result.data;
+    for (const row of page) {
+      const identity = typeof row?.sales_date === 'string' && typeof row?.product_type === 'string'
+        ? `${row.sales_date}\u0000${row.product_type}`
+        : null;
+      if (identity === null || seenRows.has(identity)) {
+        return { data: [], error: new Error('Sales report returned an invalid or duplicate identity'), truncated: false };
+      }
+      seenRows.add(identity);
+    }
     data.push(...page);
     if (page.length < REPORT_PAGE_SIZE) return { data, error: null, truncated: false };
   }
@@ -34,7 +51,10 @@ async function loadReportPages(db: NonNullable<ReturnType<typeof getSupabaseAdmi
   // the report closed rather than presenting partial figures as authoritative.
   const beyond = await fetchPage(REPORT_MAX_ROWS, REPORT_MAX_ROWS);
   if (beyond.error) return { data: [], error: beyond.error, truncated: false };
-  return { data, error: null, truncated: (beyond.data || []).length > 0 };
+  if (!Array.isArray(beyond.data) || beyond.data.length > 1) {
+    return { data: [], error: new Error('Sales report returned an invalid truncation probe'), truncated: false };
+  }
+  return { data, error: null, truncated: beyond.data.length > 0 };
 }
 
 export default async function ReportsPage() {
