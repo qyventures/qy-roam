@@ -22,6 +22,7 @@ type ReservationPageResult={data:any[];error:any;truncated:boolean};
 
 async function loadInventoryItemPages(db:NonNullable<ReturnType<typeof getSupabaseAdmin>>):Promise<InventoryItemPageResult>{
  const data:any[]=[];
+ const seenIds=new Set<number>();
  let afterId:number|null=null;
  const fetchPage=(limit:number)=>{
   let query=db.from('inventory_items').select('*').order('id').limit(limit);
@@ -31,7 +32,15 @@ async function loadInventoryItemPages(db:NonNullable<ReturnType<typeof getSupaba
  for(let loaded=0;loaded<INVENTORY_ITEM_MAX_ROWS;loaded+=INVENTORY_ITEM_PAGE_SIZE){
   const result=await fetchPage(INVENTORY_ITEM_PAGE_SIZE);
   if(result.error) return {data:[],error:result.error,truncated:false};
-  const page=result.data||[];
+  if(!Array.isArray(result.data)||result.data.length>INVENTORY_ITEM_PAGE_SIZE) return {data:[],error:new Error('Inventory register returned an invalid page'),truncated:false};
+  const page=result.data;
+  let previousId=afterId;
+  for(const row of page){
+   const id=row?.id;
+   if(!Number.isSafeInteger(id)||id<=0||seenIds.has(id)||(previousId!==null&&id<=previousId)) return {data:[],error:new Error('Inventory register returned an invalid or duplicate identity'),truncated:false};
+   seenIds.add(id);
+   previousId=id;
+  }
   data.push(...page);
   if(page.length<INVENTORY_ITEM_PAGE_SIZE) return {data,error:null,truncated:false};
   const nextId=page[page.length-1]?.id;
@@ -43,11 +52,17 @@ async function loadInventoryItemPages(db:NonNullable<ReturnType<typeof getSupaba
  // only the first response when the physical fleet grows beyond this view.
  const beyond=await fetchPage(1);
  if(beyond.error) return {data:[],error:beyond.error,truncated:false};
- return {data,error:null,truncated:(beyond.data||[]).length>0};
+ if(!Array.isArray(beyond.data)||beyond.data.length>1) return {data:[],error:new Error('Inventory register returned an invalid truncation probe'),truncated:false};
+ if(beyond.data.length>0){
+  const id=beyond.data[0]?.id;
+  if(!Number.isSafeInteger(id)||id<=0||seenIds.has(id)||(afterId!==null&&id<=afterId)) return {data:[],error:new Error('Inventory register returned an invalid truncation probe'),truncated:false};
+ }
+ return {data,error:null,truncated:beyond.data.length>0};
 }
 
 async function loadMovementPages(db:NonNullable<ReturnType<typeof getSupabaseAdmin>>):Promise<MovementPageResult>{
  const data:any[]=[];
+ const seenIds=new Set<number>();
  let beforeId:number|null=null;
  const fetchPage=(limit:number)=>{
   let query=db.from('inventory_movements').select('*').order('id',{ascending:false}).limit(limit);
@@ -57,7 +72,15 @@ async function loadMovementPages(db:NonNullable<ReturnType<typeof getSupabaseAdm
  for(let loaded=0;loaded<INVENTORY_MOVEMENT_MAX_ROWS;loaded+=INVENTORY_MOVEMENT_PAGE_SIZE){
   const result=await fetchPage(INVENTORY_MOVEMENT_PAGE_SIZE);
   if(result.error) return {data:[],error:result.error,truncated:false};
-  const page=result.data||[];
+  if(!Array.isArray(result.data)||result.data.length>INVENTORY_MOVEMENT_PAGE_SIZE) return {data:[],error:new Error('Inventory movement ledger returned an invalid page'),truncated:false};
+  const page=result.data;
+  let previousId=beforeId;
+  for(const row of page){
+   const id=row?.id;
+   if(!Number.isSafeInteger(id)||id<=0||seenIds.has(id)||(previousId!==null&&id>=previousId)) return {data:[],error:new Error('Inventory movement ledger returned an invalid or duplicate identity'),truncated:false};
+   seenIds.add(id);
+   previousId=id;
+  }
   data.push(...page);
   if(page.length<INVENTORY_MOVEMENT_PAGE_SIZE) return {data,error:null,truncated:false};
   const nextId=page[page.length-1]?.id;
@@ -69,11 +92,17 @@ async function loadMovementPages(db:NonNullable<ReturnType<typeof getSupabaseAdm
  // than appearing forever when the ledger happens to contain exactly 5,000.
  const beyond=await fetchPage(1);
  if(beyond.error) return {data:[],error:beyond.error,truncated:false};
- return {data,error:null,truncated:(beyond.data||[]).length>0};
+ if(!Array.isArray(beyond.data)||beyond.data.length>1) return {data:[],error:new Error('Inventory movement ledger returned an invalid truncation probe'),truncated:false};
+ if(beyond.data.length>0){
+  const id=beyond.data[0]?.id;
+  if(!Number.isSafeInteger(id)||id<=0||seenIds.has(id)||(beforeId!==null&&id>=beforeId)) return {data:[],error:new Error('Inventory movement ledger returned an invalid truncation probe'),truncated:false};
+ }
+ return {data,error:null,truncated:beyond.data.length>0};
 }
 
 async function loadReservationPages(db:NonNullable<ReturnType<typeof getSupabaseAdmin>>):Promise<ReservationPageResult>{
  const data:any[]=[];
+ const seenRequestIds=new Set<string>();
  // Only a Stripe-linked reservation receives the four-day terminal-webhook
  // grace period. Unlinked attempts expire with their customer-facing Checkout
  // window; showing them for days would falsely imply that stock is committed.
@@ -89,7 +118,15 @@ async function loadReservationPages(db:NonNullable<ReturnType<typeof getSupabase
  for(let loaded=0;loaded<RESERVATION_MAX_ROWS;loaded+=RESERVATION_PAGE_SIZE){
   const result=await fetchPage(RESERVATION_PAGE_SIZE);
   if(result.error) return {data:[],error:result.error,truncated:false};
-  const page=result.data||[];
+  if(!Array.isArray(result.data)||result.data.length>RESERVATION_PAGE_SIZE) return {data:[],error:new Error('Checkout reservation register returned an invalid page'),truncated:false};
+  const page=result.data;
+  let previousRequestId=afterRequestId;
+  for(const row of page){
+   const requestId=row?.checkout_request_id;
+   if(typeof requestId!=='string'||!requestId||seenRequestIds.has(requestId)||(previousRequestId!==null&&requestId<=previousRequestId)) return {data:[],error:new Error('Checkout reservation register returned an invalid or duplicate identity'),truncated:false};
+   seenRequestIds.add(requestId);
+   previousRequestId=requestId;
+  }
   data.push(...page);
   if(page.length<RESERVATION_PAGE_SIZE) return {data,error:null,truncated:false};
   const nextRequestId=page[page.length-1]?.checkout_request_id;
@@ -98,7 +135,12 @@ async function loadReservationPages(db:NonNullable<ReturnType<typeof getSupabase
  }
  const beyond=await fetchPage(1);
  if(beyond.error) return {data:[],error:beyond.error,truncated:false};
- return {data,error:null,truncated:(beyond.data||[]).length>0};
+ if(!Array.isArray(beyond.data)||beyond.data.length>1) return {data:[],error:new Error('Checkout reservation register returned an invalid truncation probe'),truncated:false};
+ if(beyond.data.length>0){
+  const requestId=beyond.data[0]?.checkout_request_id;
+  if(typeof requestId!=='string'||!requestId||seenRequestIds.has(requestId)||(afterRequestId!==null&&requestId<=afterRequestId)) return {data:[],error:new Error('Checkout reservation register returned an invalid truncation probe'),truncated:false};
+ }
+ return {data,error:null,truncated:beyond.data.length>0};
 }
 
 export default async function InventoryPage(){

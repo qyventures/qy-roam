@@ -6955,6 +6955,25 @@ test('admin inventory exposes every capacity-protecting Pocket WiFi checkout res
   assert.doesNotMatch(inventoryPage, /delete\(\).*checkout_reservations/);
 });
 
+test('admin inventory pagination fails closed on malformed, duplicate or out-of-order provider pages', () => {
+  // Stock totals, physical movement evidence and active capacity holds are
+  // operational authorities. A malformed provider page must not duplicate an
+  // asset/hold, skip a cursor range, or turn a corrupt overflow probe into a
+  // trusted complete or truncated register.
+  assert.match(inventoryPage, /const seenIds=new Set<number>\(\)/);
+  assert.match(inventoryPage, /!Array\.isArray\(result\.data\)\|\|result\.data\.length>INVENTORY_ITEM_PAGE_SIZE/);
+  assert.match(inventoryPage, /seenIds\.has\(id\)\|\|\(previousId!==null&&id<=previousId\)/);
+  assert.match(inventoryPage, /Inventory register returned an invalid truncation probe/);
+  assert.match(inventoryPage, /!Array\.isArray\(result\.data\)\|\|result\.data\.length>INVENTORY_MOVEMENT_PAGE_SIZE/);
+  assert.match(inventoryPage, /seenIds\.has\(id\)\|\|\(previousId!==null&&id>=previousId\)/);
+  assert.match(inventoryPage, /Inventory movement ledger returned an invalid truncation probe/);
+  assert.match(inventoryPage, /const seenRequestIds=new Set<string>\(\)/);
+  assert.match(inventoryPage, /!Array\.isArray\(result\.data\)\|\|result\.data\.length>RESERVATION_PAGE_SIZE/);
+  assert.match(inventoryPage, /seenRequestIds\.has\(requestId\)\|\|\(previousRequestId!==null&&requestId<=previousRequestId\)/);
+  assert.match(inventoryPage, /Checkout reservation register returned an invalid truncation probe/);
+  assert.doesNotMatch(inventoryPage, /\(beyond\.data\|\|\[\]\)\.length>0/);
+});
+
 test('admin order visibility identifies the specific Meta CAPI delivery needing recovery', () => {
   assert.match(adminPage, /const metaDeliveryBySession = new Map/);
   assert.match(adminPage, /const metaDeliveryExceptions = orders\.filter/);
