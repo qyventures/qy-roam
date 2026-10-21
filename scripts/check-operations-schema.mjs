@@ -1021,6 +1021,7 @@ const requiredContracts = [
   "tgenabled in ('O', 'A')",
   'create or replace function public.qy_order_integrity_schema_version',
   'grant execute on function public.qy_order_integrity_schema_version() to service_role',
+  'checkout_reservations_expiry_window_check',
   'create or replace function public.qy_claim_stripe_event',
   'grant execute on function public.qy_claim_stripe_event(text,text,text) to service_role',
   "to_regprocedure('public.qy_persist_stripe_esim_order(text,text,text,text,text,numeric,text,text,text,text,text,jsonb,timestamptz,boolean)') is not null",

@@ -1777,8 +1777,9 @@ as $$
     (select count(*) from pg_constraint where conrelid = to_regclass('public.checkout_reservations') and conname in (
       'checkout_reservations_request_id_check',
       'checkout_reservations_session_id_check',
-      'checkout_reservations_rental_duration_check'
-    )) = 3 and
+      'checkout_reservations_rental_duration_check',
+      'checkout_reservations_expiry_window_check'
+    )) = 4 and
     -- PostgreSQL's replica-only trigger mode (`R`) is not disabled, but it
     -- does not fire for the ordinary service-role writes used by Checkout and
     -- operations. Treat only origin (`O`) and always (`A`) triggers as active
@@ -1838,6 +1839,15 @@ alter table public.checkout_reservations add constraint checkout_reservations_se
 alter table public.checkout_reservations drop constraint if exists checkout_reservations_rental_duration_check;
 alter table public.checkout_reservations add constraint checkout_reservations_rental_duration_check check (
   travel_end - travel_start between 0 and 89
+) not valid;
+-- A reservation is a short checkout lease. Without this boundary, a direct
+-- service-role repair can write an expiry years into the future and suppress
+-- overlapping Pocket WiFi sales indefinitely. Keep historical exceptions
+-- inspectable while preventing every new or changed row from becoming a
+-- pre-expired or effectively permanent capacity hold.
+alter table public.checkout_reservations drop constraint if exists checkout_reservations_expiry_window_check;
+alter table public.checkout_reservations add constraint checkout_reservations_expiry_window_check check (
+  expires_at > created_at and expires_at <= created_at + interval '37 minutes'
 ) not valid;
 alter table public.checkout_reservations enable row level security;
 
@@ -3591,7 +3601,9 @@ as $$
   -- through the provider-attempt claim/failure state machine.
   -- Version 54 removes the default PUBLIC execution privilege from the
   -- owner-privileged paid-order CRM reconciliation trigger.
-  select 55;
+  -- Version 56 bounds every reservation expiry to its checkout lease, so a
+  -- malformed privileged write cannot suppress Pocket WiFi sales indefinitely.
+  select 56;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;

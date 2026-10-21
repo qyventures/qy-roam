@@ -66,6 +66,12 @@ export function validatedCheckoutReservation(value: unknown) {
   const sessionId = row.stripe_session_id === null ? null : validStripeCheckoutSessionId(row.stripe_session_id);
   const start = exactDate(row.travel_start), end = exactDate(row.travel_end), expiresAt = exactTimestamp(row.expires_at), createdAt = exactTimestamp(row.created_at);
   const rentalDays = start && end ? (Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86_400_000 + 1 : 0;
-  if (!requestId || (row.stripe_session_id !== null && !sessionId) || !start || !end || rentalDays < 1 || rentalDays > 90 || !expiresAt || !createdAt) return null;
+  // Checkout creates a reservation for the same bounded payment window as
+  // the Stripe Session. Reject a corrupt direct write that would make the
+  // operations screen present a pre-expired or effectively permanent hold as
+  // valid capacity evidence. The database enforces this for new writes; this
+  // check keeps older NOT VALID exceptions visibly unavailable as well.
+  const holdLifetimeMs = expiresAt && createdAt ? Date.parse(expiresAt) - Date.parse(createdAt) : 0;
+  if (!requestId || (row.stripe_session_id !== null && !sessionId) || !start || !end || rentalDays < 1 || rentalDays > 90 || !expiresAt || !createdAt || holdLifetimeMs <= 0 || holdLifetimeMs > 37 * 60_000) return null;
   return { ...row, checkout_request_id: requestId, stripe_session_id: sessionId, travel_start: start, travel_end: end, expires_at: expiresAt, created_at: createdAt };
 }
