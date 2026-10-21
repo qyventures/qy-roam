@@ -4996,13 +4996,13 @@ test('payment-readiness checks coalesce healthy probes and briefly back off fail
 test('operations readiness requires the reviewed privileged RPC implementation version', () => {
   assert.match(
     schema,
-    /create or replace function public\.qy_operations_schema_version\(\)[\s\S]*?as \$\$ select 5; \$\$/,
+    /create or replace function public\.qy_operations_schema_version\(\)[\s\S]*?as \$\$ select 6; \$\$/,
   );
   assert.match(
     schema,
     /grant execute on function public\.qy_operations_schema_version\(\) to service_role/,
   );
-  assert.match(productionReadiness, /const REQUIRED_OPERATIONS_SCHEMA_VERSION = 5/);
+  assert.match(productionReadiness, /const REQUIRED_OPERATIONS_SCHEMA_VERSION = 6/);
   assert.match(
     productionReadiness,
     /database\.rpc\('qy_operations_schema_version', \{\}\)\.abortSignal\(signal\)/,
@@ -7013,6 +7013,9 @@ test('admin inventory rejects malformed stock, custody, and capacity rows before
     { id: 1, name: 'Router', product_type: 'pocket_wifi', status: 'available', quantity_on_hand: '2.5', reorder_level: 1, unit_cost_sgd: '10.00' },
     { id: 1, name: 'Router', product_type: 'pocket_wifi', status: 'lost', quantity_on_hand: 2, reorder_level: 1, unit_cost_sgd: '10.00' },
     { id: 1, name: 'Router', product_type: 'pocket_wifi', status: 'available', quantity_on_hand: 2, reorder_level: 1, unit_cost_sgd: 'Infinity' },
+    { id: 1, name: 'Router', product_type: 'pocket_wifi', status: 'available', quantity_on_hand: 1000001, reorder_level: 1, unit_cost_sgd: '10.00' },
+    { id: 1, name: 'Router', product_type: 'pocket_wifi', status: 'available', quantity_on_hand: 2, reorder_level: 1000001, unit_cost_sgd: '10.00' },
+    { id: 1, name: 'Router', product_type: 'pocket_wifi', status: 'available', quantity_on_hand: 2, reorder_level: 1, unit_cost_sgd: '100000.01' },
   ]) assert.equal(validatedInventoryItem(row), null);
 
   assert.equal(validatedInventoryMovement({ id: 4, inventory_item_id: 7, movement_type: 'dispatch', quantity: -1, created_at: '2026-10-21T02:00:00Z' }).quantity, -1);
@@ -7033,6 +7036,8 @@ test('admin inventory rejects malformed stock, custody, and capacity rows before
   assert.match(inventoryPage, /\.map\(validatedCheckoutReservation\)/);
   assert.match(inventoryPage, /itemsResult\.error=new Error\('Inventory register contains malformed data'\)/);
   assert.match(inventoryPage, /sum\+x\.quantity_on_hand\*x\.unit_cost_cents/);
+  assert.match(inventoryPage, /Number\.isSafeInteger\(valueCents\)/);
+  assert.match(schema, /inventory_items_quantity_bounds_check check \([\s\S]*?quantity_on_hand between 0 and 1000000[\s\S]*?reorder_level between 0 and 1000000[\s\S]*?unit_cost_sgd between 0 and 100000/);
   assert.doesNotMatch(inventoryPage, /reduce\(\(s:number,x:any\)=>s\+Number\(x\.quantity_on_hand/);
 });
 

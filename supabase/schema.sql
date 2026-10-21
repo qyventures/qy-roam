@@ -788,6 +788,16 @@ create table if not exists public.inventory_items (
   check (product_type in ('pocket_wifi', 'esim'))
 );
 alter table public.inventory_items enable row level security;
+-- Keep direct service-role repairs inside the same numeric boundary as the
+-- protected inventory RPCs and admin validator. NOT VALID preserves an
+-- already-corrupt historical row for explicit reconciliation while every new
+-- or changed row is prevented from overflowing operational fleet/value math.
+alter table public.inventory_items drop constraint if exists inventory_items_quantity_bounds_check;
+alter table public.inventory_items add constraint inventory_items_quantity_bounds_check check (
+  quantity_on_hand between 0 and 1000000 and
+  reorder_level between 0 and 1000000 and
+  unit_cost_sgd between 0 and 100000
+) not valid;
 alter table public.inventory_items add column if not exists creation_operation_id text;
 alter table public.inventory_items drop constraint if exists inventory_items_creation_operation_id_check;
 alter table public.inventory_items add constraint inventory_items_creation_operation_id_check check (
@@ -3822,6 +3832,8 @@ set search_path = pg_catalog
 -- bodies, so it is not safe evidence for a current admin deployment.
 -- Version 5 binds manual-sale retries and API acknowledgements to the exact
 -- operator notes and rejects non-canonical Pocket WiFi manual identities.
-as $$ select 5; $$;
+-- Version 6 also certifies bounded inventory quantities and unit costs for
+-- direct privileged writes, matching the protected mutation RPCs.
+as $$ select 6; $$;
 revoke all on function public.qy_operations_schema_version() from public;
 grant execute on function public.qy_operations_schema_version() to service_role;

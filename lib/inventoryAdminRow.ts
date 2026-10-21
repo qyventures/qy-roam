@@ -4,14 +4,16 @@ import { validStripeCheckoutSessionId } from './stripeSessionId';
 const ITEM_STATUSES = new Set(['available', 'quarantined', 'damaged', 'maintenance']);
 const PRODUCT_TYPES = new Set(['pocket_wifi', 'esim']);
 const MOVEMENT_TYPES = new Set(['opening_stock', 'adjustment', 'purchase', 'write_off', 'dispatch', 'return', 'return_quarantined', 'return_damaged', 'status_change']);
+const MAX_INVENTORY_QUANTITY = 1_000_000;
+const MAX_INVENTORY_UNIT_COST_CENTS = 10_000_000;
 
 function positiveInteger(value: unknown) {
   const parsed = typeof value === 'number' ? value : typeof value === 'string' && /^[1-9]\d*$/.test(value) ? Number(value) : NaN;
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
-function nonNegativeInteger(value: unknown) {
+function nonNegativeInteger(value: unknown, maximum = Number.MAX_SAFE_INTEGER) {
   const parsed = typeof value === 'number' ? value : typeof value === 'string' && /^(?:0|[1-9]\d*)$/.test(value) ? Number(value) : NaN;
-  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+  return Number.isSafeInteger(parsed) && parsed >= 0 && parsed <= maximum ? parsed : null;
 }
 function exactMoneyCents(value: unknown) {
   if (typeof value !== 'string' && typeof value !== 'number') return null;
@@ -19,7 +21,7 @@ function exactMoneyCents(value: unknown) {
   if (!/^(?:0|[1-9]\d{0,5})(?:\.\d{1,2})?$/.test(text)) return null;
   const [dollars, fraction = ''] = text.split('.');
   const cents = Number(dollars) * 100 + Number(fraction.padEnd(2, '0'));
-  return Number.isSafeInteger(cents) ? cents : null;
+  return Number.isSafeInteger(cents) && cents <= MAX_INVENTORY_UNIT_COST_CENTS ? cents : null;
 }
 function exactTimestamp(value: unknown) {
   if (typeof value !== 'string' || value.length < 20 || value.length > 40 || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) return null;
@@ -36,7 +38,7 @@ function exactDate(value: unknown) {
 export function validatedInventoryItem(value: unknown) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const row = value as Record<string, unknown>;
-  const id = positiveInteger(row.id), quantity = nonNegativeInteger(row.quantity_on_hand), reorder = nonNegativeInteger(row.reorder_level), unitCostCents = exactMoneyCents(row.unit_cost_sgd);
+  const id = positiveInteger(row.id), quantity = nonNegativeInteger(row.quantity_on_hand, MAX_INVENTORY_QUANTITY), reorder = nonNegativeInteger(row.reorder_level, MAX_INVENTORY_QUANTITY), unitCostCents = exactMoneyCents(row.unit_cost_sgd);
   if (id === null || quantity === null || reorder === null || unitCostCents === null || typeof row.name !== 'string' || !row.name.trim() || typeof row.product_type !== 'string' || !PRODUCT_TYPES.has(row.product_type) || typeof row.status !== 'string' || !ITEM_STATUSES.has(row.status)) return null;
   const productType = row.product_type, status = row.status;
   const name = row.name;

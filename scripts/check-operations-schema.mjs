@@ -1054,6 +1054,7 @@ const requiredContracts = [
   'create or replace function public.qy_operations_schema_version',
   'grant execute on function public.qy_operations_schema_version() to service_role',
   'alter table public.inventory_items enable row level security',
+  'inventory_items_quantity_bounds_check',
   'alter table public.customers enable row level security',
   'grant execute on function public.qy_adjust_inventory(bigint,integer,text,text,text,text) to service_role',
   'return_disposition text',
@@ -1111,7 +1112,7 @@ assert.ok(
 );
 assert.match(
   schema.slice(operationsSchemaVersion),
-  /as \$\$ select 5; \$\$/,
+  /as \$\$ select 6; \$\$/,
   'operations schema marker must advertise the reviewed version required by the application',
 );
 
