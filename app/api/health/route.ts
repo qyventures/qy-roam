@@ -237,7 +237,15 @@ export async function GET(req: Request) {
     checkoutMissing,
     paidAcquisitionMissing,
     timestamp: new Date().toISOString()
-  }, { status: salesReady ? 200 : 503, headers });
+  }, {
+    status: salesReady ? 200 : 503,
+    // A failed authenticated probe is a recoverable release condition (for
+    // example, temporary provider unavailability or replenished router
+    // stock), not a permanent client error. Give status-only deployment and
+    // uptime clients the same bounded retry contract as the overload and
+    // unexpected-dependency branches above.
+    headers: salesReady ? headers : { ...headers, 'Retry-After': '5' },
+  });
   } finally {
     releaseHealth();
   }

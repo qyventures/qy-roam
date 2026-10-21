@@ -9948,6 +9948,13 @@ test('authenticated production readiness keeps unexpected dependency failures st
   assert.doesNotMatch(failureResponse, /error instanceof|String\(error\)|error\.message/);
 });
 
+test('every unavailable authenticated readiness result advertises a bounded retry', () => {
+  const finalResponse = healthRoute.slice(healthRoute.indexOf('ok: salesReady'));
+  assert.match(finalResponse, /status: salesReady \? 200 : 503/);
+  assert.match(finalResponse, /headers: salesReady \? headers : \{ \.\.\.headers, 'Retry-After': '5' \}/);
+  assert.doesNotMatch(finalResponse, /headers: salesReady \? \{ \.\.\.headers, 'Retry-After'/);
+});
+
 test('initial Pocket WiFi booking terms require one coherent cent-precise price snapshot', () => {
   assert.deepEqual(parsePocketWifiBookingTerms({ minDeliveryLeadDays: 3, courierFeeSgd: 1.15 }), {
     minDeliveryLeadDays: 3,
