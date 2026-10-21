@@ -6684,6 +6684,13 @@ test('admin delivery and webhook recovery ledgers reject malformed operational s
   assert.equal(validatedDeliveryLedgerRow({ ...delivery, attempts: -1 }), null);
   assert.equal(validatedDeliveryLedgerRow({ ...delivery, status: 'sent', sent_at: null, last_error: null }), null);
   assert.equal(validatedDeliveryLedgerRow({ ...delivery, last_error: 'x'.repeat(501) }), null);
+  assert.equal(validatedDeliveryLedgerRow({ ...delivery, attempts: 0, last_attempt_at: null, last_error: null })?.status, 'pending');
+  assert.equal(validatedDeliveryLedgerRow({ ...delivery, status: 'sending', attempts: 0, last_attempt_at: null, last_error: null }), null);
+  assert.equal(validatedDeliveryLedgerRow({ ...delivery, status: 'sent', attempts: 0, last_attempt_at: null, sent_at: '2026-10-21T02:01:00Z', last_error: null }), null);
+  assert.equal(validatedDeliveryLedgerRow({ ...delivery, attempts: 2, last_attempt_at: null }), null);
+  assert.equal(validatedDeliveryLedgerRow({ ...delivery, attempts: 2, last_error: null }), null);
+  assert.equal(validatedDeliveryLedgerRow({ ...delivery, status: 'sent', sent_at: '2026-10-21T01:59:59Z', last_error: null }), null);
+  assert.equal(validatedDeliveryLedgerRow({ ...delivery, last_attempt_at: 'October 21, 2026 02:00 UTC' }), null);
 
   const event = {
     event_id: 'stripe:evt_abcdefgh1234', event_type: 'checkout.session.completed',
@@ -6696,6 +6703,9 @@ test('admin delivery and webhook recovery ledgers reject malformed operational s
   assert.equal(validatedStripeEventRecoveryRow({ ...event, event_id: 'stripe:evt_bad\nlog' }), null);
   assert.equal(validatedStripeEventRecoveryRow({ ...event, last_failed_at: null }), null);
   assert.equal(validatedStripeEventRecoveryRow({ ...event, last_failed_at: null, last_error: null })?.attempts, 1);
+  assert.equal(validatedStripeEventRecoveryRow({ ...event, processing_started_at: '2026-10-21T01:59:59Z' }), null);
+  assert.equal(validatedStripeEventRecoveryRow({ ...event, last_failed_at: '2026-10-21T02:00:00Z' }), null);
+  assert.equal(validatedStripeEventRecoveryRow({ ...event, received_at: '2026-10-21' }), null);
 
   assert.match(adminPage, /\.map\(validatedDeliveryLedgerRow\)/);
   assert.match(adminPage, /\.map\(validatedStripeEventRecoveryRow\)/);
