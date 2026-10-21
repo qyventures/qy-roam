@@ -4,7 +4,9 @@ Use this checklist for the first public launch. It is deliberately ordered so DN
 
 ## 1. VPS production configuration
 
-Keep all secrets only in `/root/.config/qyroam/.env` with mode `600`.
+Keep all secrets only in `/root/.config/qyroam/.env`, owned by `root`, with
+mode `600`. The deploy rejects symlinked or non-root-owned environment files
+before loading any credentials.
 
 Required before launch:
 

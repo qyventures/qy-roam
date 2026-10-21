@@ -40,6 +40,19 @@ assert.doesNotMatch(deploy, /git diff --cached --quiet/);
 assert.doesNotMatch(deploy, /git checkout\s/);
 assert.match(deploy, /npm ci --no-audit --no-fund/);
 assert.doesNotMatch(deploy, /npm install --no-audit --no-fund/);
+// The root-run deploy sources this file as executable shell input. Reject a
+// link or content owned by another host account before chmod can follow or
+// disguise it.
+const envFileCheck = deploy.indexOf('echo "[3/11] Checking environment file"');
+const envFileOwnerCheck = deploy.indexOf("stat --format='%u' -- \"$ENV_FILE\"");
+const envFileChmod = deploy.indexOf('chmod 600 "$ENV_FILE"');
+assert.match(deploy, /\[\[ ! -f "\$ENV_FILE" \|\| -L "\$ENV_FILE" \]\]/);
+assert.match(deploy, /env_file_owner.*!= "0"/);
+assert.match(deploy, /environment file ownership:.*must be owned by root/);
+assert.ok(
+  envFileCheck > -1 && envFileOwnerCheck > envFileCheck && envFileChmod > envFileOwnerCheck,
+  'deployment must reject an unsafe env-file object and owner before chmod follows or repairs it',
+);
 // npm lifecycle scripts run with repository write access. A locked dependency
 // graph is reproducible, but it does not prove those scripts leave the
 // reviewed application source untouched. Require a second complete worktree
@@ -73,6 +86,11 @@ const artifactPathsReadonly = deploy.indexOf(
   'readonly RELEASE_DIST_DIR ROLLBACK_RESTORE_DIST_DIR DEPLOY_LOCK_PATH',
 );
 const envSource = deploy.indexOf('source "$ENV_FILE"');
+assert.match(deploy, /set -a\n[\s\S]*?set \+x\n[\s\S]*?source "\$ENV_FILE"\nset \+a/);
+assert.ok(
+  deploy.lastIndexOf('set +x', envSource) < envSource && deploy.lastIndexOf('set +x', envSource) > -1,
+  'deployment must disable inherited shell tracing before loading production secrets',
+);
 assert.ok(deploymentControlsReadonly > -1, 'deployment control variables must be immutable');
 assert.ok(deploymentPathsReadonly > -1, 'deployment target paths must be immutable');
 assert.ok(artifactPathsReadonly > -1, 'release artifact paths must be immutable');

@@ -83,8 +83,18 @@ git fetch --prune origin
 git pull --ff-only origin main
 
 echo "[3/11] Checking environment file"
-if [[ ! -f "$ENV_FILE" ]]; then
-  echo "Missing $ENV_FILE" >&2
+# This script runs as root and later sources this file as shell input. A
+# symlink or a file controlled by another account is therefore code execution,
+# not merely a configuration mistake. Check the object itself before chmod:
+# `-f` follows symlinks, and chmod would otherwise change the target while
+# making an unsafe deployment appear repaired.
+if [[ ! -f "$ENV_FILE" || -L "$ENV_FILE" ]]; then
+  echo "Missing or unsafe environment file: $ENV_FILE must be a regular, non-symlink file" >&2
+  exit 1
+fi
+env_file_owner="$(stat --format='%u' -- "$ENV_FILE")"
+if [[ "$env_file_owner" != "0" ]]; then
+  echo "Unsafe environment file ownership: $ENV_FILE must be owned by root" >&2
   exit 1
 fi
 chmod 600 "$ENV_FILE"
@@ -235,6 +245,11 @@ trap 'handle_release_exit "$?"' EXIT
 
 echo "[5/11] Building"
 set -a
+# Do not allow an operator's inherited `bash -x`/SHELLOPTS state to copy live
+# Stripe, Supabase, SMTP or admin credentials into the terminal or deployment
+# journal. Keep tracing disabled after the source as subsequent assignments and
+# readiness setup also handle values derived from this protected file.
+set +x
 # shellcheck disable=SC1090
 source "$ENV_FILE"
 set +a

@@ -18,7 +18,10 @@ configure only the canonical endpoint in Stripe to avoid duplicate deliveries.
 
 ## VPS deployment
 
-The repo is expected at `/root/qy-roam` and production secrets at `/root/.config/qyroam/.env` with mode `600`.
+The repo is expected at `/root/qy-roam` and production secrets at
+`/root/.config/qyroam/.env`, owned by `root`, with mode `600`. The deploy
+rejects symlinked or non-root-owned environment files and disables inherited
+shell tracing before loading credentials.
 The VPS must run Node.js 22.x; deployment fails before updating source or
 installing dependencies when a different runtime is active.
 
