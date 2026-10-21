@@ -65,7 +65,7 @@ const { paidFulfilmentDetailsIssue } = require('../lib/paidFulfilmentDetails.ts'
 const { normalizedCustomerPhone } = require('../lib/customerPhone.ts');
 const { exactNonnegativeCount } = require('../lib/exactCount.ts');
 const { custodyReferenceIssue, normalizeCustodyReference, MAX_CUSTODY_REFERENCE_LENGTH } = require('../lib/custodyReference.ts');
-const { durablePaidOrderMatchesPaymentEvent, durableOrderMatchesFailedOrAlreadyPaidSession, durableOrderMatchesFailedSession, durableOrderMatchesPaidSession, durableOrderMatchesUnpaidOrAlreadyPaidSession } = require('../lib/durableOrderSnapshot.ts');
+const { durablePaidOrderMatchesPaymentEvent, durableOrderMatchesFailedOrAlreadyPaidSession, durableOrderMatchesFailedSession, durableOrderMatchesPaidSession, durableOrderMatchesUnpaidOrAlreadyPaidSession, durableOrderMatchesUnpaidPaymentEvent } = require('../lib/durableOrderSnapshot.ts');
 const { databaseTimestampInstantEquals, exactDatabaseTimestampToken, exactStripeClaimToken } = require('../lib/stripeClaimToken.ts');
 const { exactRpcRow } = require('../lib/exactRpcRow.ts');
 const { stripeCheckoutListReadinessAcknowledged } = require('../lib/stripeReadinessResponse.ts');
@@ -5728,12 +5728,14 @@ test('terminal failed-payment authority requires the exact durable commercial sn
     stripe_session_id: session.id, payment_status: 'unpaid', product_type: 'esim', amount_sgd: '12.90',
     plan_id: 'jp-7d', plan_name: 'Japan · 7 days', data_allowance: '10 GB', country: 'Japan',
     travel_start: null, travel_end: null, measurement_consent: 'essential', shipping_address: null,
+    fulfilment_status: 'payment_failed',
   };
 
   assert.equal(durableOrderMatchesFailedSession(order, session, 'esim'), true);
   assert.equal(durableOrderMatchesFailedSession({ ...order, amount_sgd: '99.99' }, session, 'esim'), false);
   assert.equal(durableOrderMatchesFailedSession({ ...order, plan_id: 'different-plan' }, session, 'esim'), false);
   assert.equal(durableOrderMatchesFailedSession({ ...order, payment_status: 'paid' }, session, 'esim'), false);
+  assert.equal(durableOrderMatchesFailedSession({ ...order, fulfilment_status: 'awaiting_payment' }, session, 'esim'), false);
   assert.equal(durableOrderMatchesFailedSession(order, { ...session, payment_status: 'paid' }, 'esim'), false);
 });
 
@@ -5780,6 +5782,30 @@ test('an asynchronous-payment commitment acknowledges only its exact durable sna
   assert.equal(durableOrderMatchesUnpaidOrAlreadyPaidSession({ ...pendingOrder, shipping_address: null }, session, 'pocket_wifi'), false);
   assert.equal(durableOrderMatchesUnpaidOrAlreadyPaidSession({ ...pendingOrder, payment_status: 'paid' }, session, 'pocket_wifi'), true);
   assert.equal(durableOrderMatchesUnpaidOrAlreadyPaidSession(pendingOrder, { ...session, status: 'open' }, 'pocket_wifi'), false);
+});
+
+test('unpaid webhook acknowledgements prove the exact committed lifecycle transition', () => {
+  const session = {
+    id: 'cs_live_unpaidLifecycleAck123', livemode: true, mode: 'payment',
+    status: 'complete', payment_status: 'unpaid', currency: 'sgd', amount_total: 1290,
+    metadata: { product_type: 'esim', measurement_consent: 'essential', plan_id: 'jp-7d', plan_name: 'Japan · 7 days', data_allowance: '10 GB', country: 'Japan' },
+  };
+  const order = {
+    stripe_session_id: session.id, payment_status: 'unpaid', product_type: 'esim', amount_sgd: '12.90',
+    plan_id: 'jp-7d', plan_name: 'Japan · 7 days', data_allowance: '10 GB', country: 'Japan',
+    travel_start: null, travel_end: null, measurement_consent: 'essential', shipping_address: null,
+    fulfilment_status: 'awaiting_payment',
+  };
+
+  assert.equal(durableOrderMatchesUnpaidPaymentEvent(order, session, 'esim', false), true);
+  assert.equal(durableOrderMatchesUnpaidPaymentEvent({ ...order, fulfilment_status: 'payment_failed' }, session, 'esim', false), false);
+  assert.equal(durableOrderMatchesUnpaidPaymentEvent({ ...order, fulfilment_status: 'payment_failed' }, session, 'esim', true), true);
+  assert.equal(durableOrderMatchesUnpaidPaymentEvent(order, session, 'esim', true), false);
+  assert.equal(durableOrderMatchesUnpaidPaymentEvent({ ...order, fulfilment_status: 'fulfilled' }, session, 'esim', true), false);
+
+  const paidOrder = { ...order, payment_status: 'paid', fulfilment_status: 'fulfilled' };
+  assert.equal(durableOrderMatchesUnpaidPaymentEvent(paidOrder, session, 'esim', false), true);
+  assert.equal(durableOrderMatchesUnpaidPaymentEvent(paidOrder, session, 'esim', true), true);
 });
 
 test('expired Checkout tombstones acknowledge the exact released order snapshot', () => {
@@ -9801,11 +9827,11 @@ test('paid checkout replays require the same exact durable commercial snapshot a
 });
 
 test('Stripe webhook side effects require an exact durable persistence acknowledgement', () => {
-  assert.match(webhookRoute, /import \{ durableOrderMatchesPaidSession, durablePaidOrderMatchesPaymentEvent, durableOrderMatchesUnpaidOrAlreadyPaidSession \} from '@\/lib\/durableOrderSnapshot'/);
+  assert.match(webhookRoute, /import \{ durableOrderMatchesPaidSession, durablePaidOrderMatchesPaymentEvent, durableOrderMatchesUnpaidPaymentEvent \} from '@\/lib\/durableOrderSnapshot'/);
   assert.match(webhookRoute, /paid && !durablePaidOrderMatchesPaymentEvent\(persistedOrder,session,'pocket_wifi',eventCreated\)/);
-  assert.match(webhookRoute, /!paid && !durableOrderMatchesUnpaidOrAlreadyPaidSession\(persistedOrder,session,'pocket_wifi'\)/);
+  assert.match(webhookRoute, /!paid && !durableOrderMatchesUnpaidPaymentEvent\(persistedOrder,session,'pocket_wifi',failed\)/);
   assert.match(webhookRoute, /paid && !durablePaidOrderMatchesPaymentEvent\(persistedOrder,session,'esim',eventCreated\)/);
-  assert.match(webhookRoute, /!paid && !durableOrderMatchesUnpaidOrAlreadyPaidSession\(persistedOrder,session,'esim'\)/);
+  assert.match(webhookRoute, /!paid && !durableOrderMatchesUnpaidPaymentEvent\(persistedOrder,session,'esim',failed\)/);
 
   const persistenceBoundary = webhookRoute.indexOf("async function persistSession");
   const paidSideEffects = webhookRoute.indexOf('await deliverPaidOrderSideEffects', persistenceBoundary);

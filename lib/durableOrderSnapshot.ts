@@ -16,6 +16,7 @@ export type DurableOrderSnapshot = {
   measurement_consent?: unknown;
   payment_confirmed_at?: unknown;
   shipping_address?: unknown;
+  fulfilment_status?: unknown;
 };
 
 function sgdCents(value: unknown) {
@@ -213,7 +214,29 @@ export function durableOrderMatchesFailedSession(
   // from a completed Checkout. Expiry uses the broader persistence helper
   // below, but must not make a browser rotate its payment attempt as though
   // Stripe had emitted async_payment_failed.
-  return session.status === 'complete' &&
+  return order?.fulfilment_status === 'payment_failed' &&
+    session.status === 'complete' &&
+    durableUnpaidOrderMatchesSession(order, session, productType);
+}
+
+/**
+ * Prove that an unpaid Stripe event committed the lifecycle transition that
+ * event authorises, rather than merely returning the right commercial row.
+ * A paid row remains a valid idempotent no-op for a delayed unpaid event, but
+ * an unpaid acknowledgement must be awaiting payment after completion or be
+ * terminally failed after async failure/expiry.
+ */
+export function durableOrderMatchesUnpaidPaymentEvent(
+  order: DurableOrderSnapshot | null | undefined,
+  session: Stripe.Checkout.Session,
+  productType: QyRoamProductType,
+  paymentFailed: boolean,
+) {
+  if (session.status === 'complete' && session.payment_status === 'unpaid' &&
+    durableOrderMatchesPaidSession(order, { ...session, payment_status: 'paid' }, productType)) {
+    return true;
+  }
+  return order?.fulfilment_status === (paymentFailed ? 'payment_failed' : 'awaiting_payment') &&
     durableUnpaidOrderMatchesSession(order, session, productType);
 }
 

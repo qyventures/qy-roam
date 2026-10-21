@@ -31,7 +31,7 @@ import { hasIdentityRequestContentEncoding, isJsonRequestContentType } from '@/l
 import { databaseTimestampInstantEquals, exactDatabaseTimestampToken, exactStripeClaimToken } from '@/lib/stripeClaimToken';
 import { exactRpcRow } from '@/lib/exactRpcRow';
 import { acknowledgedPaidDeliveryClaim, acknowledgedPaidDeliveryFailure, acknowledgedPaidDeliverySettlement } from '@/lib/paidDeliveryAcknowledgement';
-import { durableOrderMatchesPaidSession, durablePaidOrderMatchesPaymentEvent, durableOrderMatchesUnpaidOrAlreadyPaidSession } from '@/lib/durableOrderSnapshot';
+import { durableOrderMatchesPaidSession, durablePaidOrderMatchesPaymentEvent, durableOrderMatchesUnpaidPaymentEvent } from '@/lib/durableOrderSnapshot';
 import { acknowledgedStripeEventFailure } from '@/lib/stripeEventFailureAcknowledgement';
 import {
   tryAcquireStripeWebhookProcessing,
@@ -554,7 +554,7 @@ async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.E
     // exact join before their inventory commitment is considered released.
     if(
       (paid && !durablePaidOrderMatchesPaymentEvent(persistedOrder,session,'pocket_wifi',eventCreated)) ||
-      (!paid && !durableOrderMatchesUnpaidOrAlreadyPaidSession(persistedOrder,session,'pocket_wifi'))
+      (!paid && !durableOrderMatchesUnpaidPaymentEvent(persistedOrder,session,'pocket_wifi',failed))
     ) throw new Error('Pocket WiFi order persistence returned a mismatched order');
     return;
   }
@@ -584,7 +584,7 @@ async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.E
   const persistedOrder=exactRpcRow(persisted.data);
   if(
     (paid && !durablePaidOrderMatchesPaymentEvent(persistedOrder,session,'esim',eventCreated)) ||
-    (!paid && !durableOrderMatchesUnpaidOrAlreadyPaidSession(persistedOrder,session,'esim'))
+    (!paid && !durableOrderMatchesUnpaidPaymentEvent(persistedOrder,session,'esim',failed))
   ) throw new Error('eSIM order persistence returned a mismatched order');
 }
 
