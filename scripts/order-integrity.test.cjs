@@ -6567,10 +6567,25 @@ test('admin operational pagination distinguishes an exact view limit from a genu
   // never receive either a false truncation warning or trusted partial data.
   assert.match(adminPage, /const beyond = await fetchPage\(after, 1\)/);
   assert.match(adminPage, /if \(beyond\.error\) return \{ data: \[\], error: beyond\.error, truncated: false \}/);
-  assert.match(adminPage, /truncated: \(beyond\.data \|\| \[\]\)\.length > 0/);
+  assert.match(adminPage, /if \(!Array\.isArray\(beyond\.data\) \|\| beyond\.data\.length > 1\)/);
+  assert.match(adminPage, /truncated: beyond\.data\.length > 0/);
   assert.match(crmPage, /const beyond=await fetchPage\(CRM_MAX_ROWS,CRM_MAX_ROWS\)/);
   assert.match(crmPage, /if\(beyond\.error\)return \{data:\[\],error:beyond\.error,truncated:false\}/);
   assert.match(crmPage, /truncated:\(beyond\.data\|\|\[\]\)\.length>0/);
+});
+
+test('admin operational pagination fails closed on malformed or duplicate provider pages', () => {
+  // These ledgers drive revenue, fulfilment, CAPI and webhook-exception
+  // totals. A provider response may not exceed the requested bound or reuse
+  // an identity from an earlier page and still be presented as authoritative.
+  assert.match(adminPage, /const seenCursors = new Set<PageCursor>\(\)/);
+  assert.match(adminPage, /if \(!Array\.isArray\(result\.data\) \|\| result\.data\.length > ADMIN_PAGE_SIZE\)/);
+  assert.match(adminPage, /for \(const row of page\)/);
+  assert.match(adminPage, /if \(cursor === null \|\| seenCursors\.has\(cursor\)\)/);
+  assert.match(adminPage, /seenCursors\.add\(cursor\)/);
+  assert.match(adminPage, /Operational ledger returned an invalid page/);
+  assert.match(adminPage, /Operational ledger returned an invalid pagination cursor/);
+  assert.match(adminPage, /Operational ledger returned an invalid truncation probe/);
 });
 
 test('admin webhook recovery visibility pages every actionable Stripe exception within its declared bound', () => {

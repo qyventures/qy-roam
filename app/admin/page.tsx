@@ -28,11 +28,27 @@ async function loadKeysetPages(
   cursorFor: (row: any) => PageCursor | null,
 ): Promise<PagedResult> {
   const data: any[] = [];
+  const seenCursors = new Set<PageCursor>();
   let after: PageCursor | null = null;
   for (let loaded = 0; loaded < ADMIN_MAX_ROWS; loaded += ADMIN_PAGE_SIZE) {
     const result = await fetchPage(after, ADMIN_PAGE_SIZE);
     if (result.error) return { data: [], error: result.error, truncated: false };
-    const page = result.data || [];
+    // PostgREST normally honours the requested limit and ordering, but this
+    // dashboard is an operational authority: a malformed gateway response or
+    // repeated keyset row must not inflate totals, duplicate fulfilment work,
+    // or hide an older exception behind a cursor that merely looks usable.
+    // Validate every row identity, not only the final continuation cursor.
+    if (!Array.isArray(result.data) || result.data.length > ADMIN_PAGE_SIZE) {
+      return { data: [], error: new Error('Operational ledger returned an invalid page'), truncated: false };
+    }
+    const page = result.data;
+    for (const row of page) {
+      const cursor = cursorFor(row);
+      if (cursor === null || seenCursors.has(cursor)) {
+        return { data: [], error: new Error('Operational ledger returned an invalid pagination cursor'), truncated: false };
+      }
+      seenCursors.add(cursor);
+    }
     data.push(...page);
     if (page.length < ADMIN_PAGE_SIZE) return { data, error: null, truncated: false };
     const next = cursorFor(page[page.length - 1]);
@@ -51,7 +67,10 @@ async function loadKeysetPages(
   // instead of presenting the first 5,000 rows as a trustworthy full view.
   const beyond = await fetchPage(after, 1);
   if (beyond.error) return { data: [], error: beyond.error, truncated: false };
-  return { data, error: null, truncated: (beyond.data || []).length > 0 };
+  if (!Array.isArray(beyond.data) || beyond.data.length > 1) {
+    return { data: [], error: new Error('Operational ledger returned an invalid truncation probe'), truncated: false };
+  }
+  return { data, error: null, truncated: beyond.data.length > 0 };
 }
 
 function daysFromToday(value: string | null | undefined) {
