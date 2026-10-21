@@ -25,6 +25,7 @@ import { scanActivePocketWifiStripeHolds } from '@/lib/pocketWifiStripeHolds';
 import { signedStripeMeasurementConsentDowngrade } from '@/lib/stripeMeasurementProvenance';
 import { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } from '@/lib/pocketWifiRentalPeriod';
 import { acknowledgedExpiredCheckoutReservationRelease, acknowledgedLinkedReservationRelease, acknowledgedUnlinkedReservationRelease } from '@/lib/checkoutReservationAcknowledgement';
+import { exactRpcRow } from '@/lib/exactRpcRow';
 
 export const runtime = 'nodejs';
 
@@ -427,7 +428,12 @@ export async function POST(req: Request) {
     p_stripe_hold_request_ids:holdState.requestIds
   });
   if(reservation.error) throw reservation.error;
-  const reserved=reservation.data?.[0]?.reserved===true;
+  // This SECURITY DEFINER RPC is the final atomic stock authority and is
+  // defined to return exactly one row. Never accept the first element of an
+  // ambiguous multi-row response: doing so could expose a payable Session
+  // without an authoritative reservation after schema/PostgREST drift.
+  const reservationRow=exactRpcRow(reservation.data);
+  const reserved=reservationRow?.reserved===true;
   if(!reserved) return NextResponse.json({error:'Pocket WiFi is sold out or currently reserved for these dates. Please try different dates or contact +65 8032 7183.'},{status:409,headers:{'Cache-Control':'no-store'}});
   const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[]=[{quantity:1,price_data:{currency:'sgd',unit_amount:rentalAmount,product_data:{name:`QY Roam Pocket WiFi — ${country}`,description:`${start} to ${end} · ${days} day${days===1?'':'s'}${promo.discountCents>0?` · ${normalisePromoCode(body.promoCode)} applied`:''}`}}}];
   if(courierFee>0) lineItems.push({quantity:1,price_data:{currency:'sgd',unit_amount:courierFee,product_data:{name:'Singapore courier delivery & return handling'}}});

@@ -5129,6 +5129,20 @@ test('Pocket WiFi availability requires one exact atomic inventory snapshot row'
   assert.doesNotMatch(productionReadiness, /Array\.isArray\(availabilityProbe\.data\)[\s\S]{0,100}availabilityProbe\.data\[0\]/);
 });
 
+test('Pocket WiFi checkout requires one exact atomic reservation decision row', () => {
+  // A function declared with RETURNS TABLE must produce one unambiguous stock
+  // decision before checkout can expose a payable Stripe capability.
+  assert.match(wifiCheckoutRoute, /const reservationRow=exactRpcRow\(reservation\.data\)/);
+  assert.match(wifiCheckoutRoute, /const reserved=reservationRow\?\.reserved===true/);
+  assert.doesNotMatch(wifiCheckoutRoute, /reservation\.data\?\.\[0\]\?\.reserved/);
+
+  // Readiness must certify the same runtime response shape, not merely a
+  // plausible first element that checkout will correctly reject.
+  assert.match(productionReadiness, /const reservationRow = exactRpcRow\(reservationProbe\.data\)/);
+  assert.match(productionReadiness, /reservationRow\?\.reserved !== false/);
+  assert.doesNotMatch(productionReadiness, /reservationProbe\.data\?\.\[0\]\?\.reserved/);
+});
+
 test('Pocket WiFi checkout retries bind the complete server-priced booking', () => {
   assert.match(wifiCheckoutRoute, /function matchesRequestedPocketWifi/);
   assert.match(wifiCheckoutRoute, /session\.metadata\?\.promo_code===requested\.promoCode/);

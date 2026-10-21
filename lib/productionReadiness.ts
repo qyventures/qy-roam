@@ -385,7 +385,11 @@ async function checkRequiredPaymentSchema() {
         p_stripe_hold_count: 0,
         p_stripe_hold_request_ids: [],
       }).abortSignal(signal);
-      if (reservationProbe.error || reservationProbe.data?.[0]?.reserved !== false) {
+      // Checkout requires the sole row from this atomic stock decision. Probe
+      // that exact response shape too, so readiness cannot promote a release
+      // that would later interpret an ambiguous reservation result.
+      const reservationRow = exactRpcRow(reservationProbe.data);
+      if (reservationProbe.error || reservationRow?.reserved !== false) {
         console.error('production_payment_reservation_rpc_check_failed');
         return false;
       }
