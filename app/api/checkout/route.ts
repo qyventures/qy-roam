@@ -204,11 +204,11 @@ export async function POST(req: Request) {
   // Match the readiness guard, which permits harmless deployment whitespace.
   // Passing the untrimmed secret to Stripe would otherwise make health look
   // ready while every checkout creation fails authentication.
-  const key=process.env.STRIPE_SECRET_KEY?.trim(); if(!hasRequiredStripeCheckoutConfig()||!key) return NextResponse.json({error:'Payment configuration incomplete.'},{status:503});
-  if(!hasOrderIntegritySigningConfig()) return NextResponse.json({error:'Order configuration incomplete.'},{status:503});
+  const key=process.env.STRIPE_SECRET_KEY?.trim(); if(!hasRequiredStripeCheckoutConfig()||!key) return NextResponse.json({error:'Payment configuration incomplete.'},{status:503,headers:{'Retry-After':'30'}});
+  if(!hasOrderIntegritySigningConfig()) return NextResponse.json({error:'Order configuration incomplete.'},{status:503,headers:{'Retry-After':'30'}});
   if(!hasRequiredStripeWebhookConfig()) return NextResponse.json({error:'Pocket WiFi ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
   if(!hasRequiredFulfilmentEmailConfig()) return NextResponse.json({error:'Pocket WiFi ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
-  const config=operationalConfig(); if(!config) return NextResponse.json({error:'Order configuration incomplete.'},{status:503});
+  const config=operationalConfig(); if(!config) return NextResponse.json({error:'Order configuration incomplete.'},{status:503,headers:{'Retry-After':'30'}});
   // Nginx streams this body so the absolute application deadline remains
   // effective. Cap simultaneous pre-validation uploads independently from
   // the smaller Stripe/Supabase work pool reached after parsing.

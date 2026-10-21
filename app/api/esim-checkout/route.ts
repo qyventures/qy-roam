@@ -106,8 +106,8 @@ export async function POST(req: Request) {
     // by readiness, so formatted environment values cannot make eSIM
     // checkout appear configured but fail at Stripe.
     const key = process.env.STRIPE_SECRET_KEY?.trim();
-    if (!hasRequiredStripeCheckoutConfig() || !key) return NextResponse.json({ error: 'Payment configuration incomplete.' }, { status: 503 });
-    if (!hasOrderIntegritySigningConfig()) return NextResponse.json({ error: 'Order configuration incomplete.' }, { status: 503 });
+    if (!hasRequiredStripeCheckoutConfig() || !key) return NextResponse.json({ error: 'Payment configuration incomplete.' }, { status: 503, headers: { 'Retry-After': '30' } });
+    if (!hasOrderIntegritySigningConfig()) return NextResponse.json({ error: 'Order configuration incomplete.' }, { status: 503, headers: { 'Retry-After': '30' } });
     if (!hasRequiredStripeWebhookConfig()) {
       return NextResponse.json({ error: 'eSIM ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.' }, {
         status: 503,

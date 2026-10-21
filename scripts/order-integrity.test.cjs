@@ -309,6 +309,27 @@ test('every checkout response is non-cacheable, including early validation and r
   }
 });
 
+test('checkout configuration outages advertise a bounded retry before reading request bodies', () => {
+  for (const [name, route] of [
+    ['Pocket WiFi', wifiCheckoutRoute],
+    ['eSIM', esimCheckoutRoute],
+  ]) {
+    const bodyAdmission = route.indexOf('tryAcquireCheckoutUpload()');
+    assert.ok(bodyAdmission > -1, `${name} checkout must retain bounded upload admission`);
+    const earlyBoundary = route.slice(route.indexOf('const key =') > -1 ? route.indexOf('const key =') : route.indexOf('const key='), bodyAdmission);
+    for (const message of ['Payment configuration incomplete.', 'Order configuration incomplete.']) {
+      const response = earlyBoundary.slice(earlyBoundary.indexOf(message), earlyBoundary.indexOf(message) + 220);
+      assert.match(response, /status:\s*503[\s\S]*?'Retry-After'\s*:\s*'30'/, `${name} ${message} response must back clients off`);
+    }
+  }
+
+  const wifiOperationalConfig = wifiCheckoutRoute.slice(
+    wifiCheckoutRoute.indexOf('const config=operationalConfig()'),
+    wifiCheckoutRoute.indexOf('tryAcquireCheckoutUpload()'),
+  );
+  assert.match(wifiOperationalConfig, /status:503[\s\S]*?'Retry-After':'30'/);
+});
+
 test('live availability has a bounded non-queueing dependency-work budget', () => {
   assert.equal(AVAILABILITY_MAX_CONCURRENT_REQUESTS, 8);
   const releases = Array.from({ length: AVAILABILITY_MAX_CONCURRENT_REQUESTS }, () => tryAcquireAvailabilityConcurrency());
