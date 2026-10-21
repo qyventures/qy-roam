@@ -95,7 +95,7 @@ const { ADMIN_DASHBOARD_MAX_CONCURRENT_REQUESTS, tryAcquireAdminDashboardConcurr
 const { STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS, STRIPE_WEBHOOK_MAX_CONCURRENT_UPLOADS, tryAcquireStripeWebhookProcessing, tryAcquireStripeWebhookUpload } = require('../lib/stripeWebhookConcurrency.ts');
 const { validatedSalesReportRow } = require('../lib/salesReportRow.ts');
 const { validatedForecastRow } = require('../lib/forecastRow.ts');
-const { validatedCrmCustomer, validatedCrmOpportunity } = require('../lib/crmRow.ts');
+const { validatedCrmActivity, validatedCrmCustomer, validatedCrmOpportunity } = require('../lib/crmRow.ts');
 const { META_ATTRIBUTION_METADATA_KEYS, stripeMeasurementConsentDowngrade } = require('../lib/stripeMeasurementConsent.ts');
 const { signedStripeMeasurementConsentDowngrade } = require('../lib/stripeMeasurementProvenance.ts');
 const { saleablePocketWifiInventory: scanSaleablePocketWifiInventory } = require('../lib/pocketWifiStock.ts');
@@ -6563,6 +6563,27 @@ test('CRM financial metrics reject malformed provider rows instead of coercing t
   ]) assert.equal(validatedCrmOpportunity(row), null);
   assert.match(crmPage, /Math\.round\(x\.expected_value_cents\*x\.probability_basis_points\/10_000\)/);
   assert.doesNotMatch(crmPage, /Number\(x\.expected_value_sgd/);
+});
+
+test('CRM follow-up visibility rejects malformed activity timestamps instead of miscounting them', () => {
+  assert.deepEqual(validatedCrmActivity({
+    id: '9', created_at: '2026-10-20T02:00:00.123456+00:00',
+    due_at: '2026-10-22T09:30:00Z', completed_at: null, subject: 'Call back',
+  }), {
+    id: 9, created_at: '2026-10-20T02:00:00.123456+00:00',
+    due_at: '2026-10-22T09:30:00Z', completed_at: null, subject: 'Call back',
+  });
+  for (const row of [
+    { id: 0, created_at: '2026-10-20T02:00:00Z', due_at: null, completed_at: null },
+    { id: 1, created_at: 'not-a-date', due_at: null, completed_at: null },
+    { id: 1, created_at: '2026-10-20', due_at: null, completed_at: null },
+    { id: 1, created_at: '2026-10-20T02:00:00Z', due_at: '9999-01-01T00:00:00Z', completed_at: null },
+    { id: 1, created_at: '2026-10-20T02:00:00Z', due_at: null, completed_at: '2026-10-19T02:00:00Z' },
+  ]) assert.equal(validatedCrmActivity(row), null);
+  assert.match(crmPage, /const validatedActivities=activityRows\.map\(validatedCrmActivity\)/);
+  assert.match(crmPage, /validatedActivities\.some\(row=>row===null\)&&'CRM activity'/);
+  assert.match(crmPage, /const acts=validatedActivities\.filter/);
+  assert.doesNotMatch(crmPage, /const acts:any\[\]=actsResult\?\.data/);
 });
 
 test('admin operational visibility pages beyond one Supabase response and warns before a bounded view can hide work', () => {

@@ -50,3 +50,28 @@ export function validatedCrmOpportunity(value: unknown) {
   if (id === null || expectedValueCents === null || probabilityBasisPoints === null) return null;
   return { ...row, id, expected_value_cents: expectedValueCents, probability_basis_points: probabilityBasisPoints };
 }
+
+function exactCrmTimestamp(value: unknown, nullable = false) {
+  if (nullable && value === null) return null;
+  if (typeof value !== 'string' || value.length < 20 || value.length > 40) return undefined;
+  // Require a complete Postgres timestamptz value so Date.parse cannot
+  // reinterpret a bare local date in the server timezone.
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) return undefined;
+  const instant = Date.parse(value);
+  const year = new Date(instant).getUTCFullYear();
+  return Number.isFinite(instant) && year >= 2000 && year <= 2200 ? value : undefined;
+}
+
+export function validatedCrmActivity(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const id = exactPositiveInteger(row.id);
+  const createdAt = exactCrmTimestamp(row.created_at);
+  const dueAt = exactCrmTimestamp(row.due_at, true);
+  const completedAt = exactCrmTimestamp(row.completed_at, true);
+  if (id === null || createdAt === undefined || dueAt === undefined || completedAt === undefined) return null;
+  // A completion before the activity existed is corrupt and must not
+  // suppress a genuine follow-up from the operator's due count.
+  if (completedAt !== null && Date.parse(completedAt) < Date.parse(createdAt!)) return null;
+  return { ...row, id, created_at: createdAt, due_at: dueAt, completed_at: completedAt };
+}
