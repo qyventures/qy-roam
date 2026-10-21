@@ -96,6 +96,7 @@ const { STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS, STRIPE_WEBHOOK_MAX_CONCURRENT_UP
 const { validatedSalesReportRow } = require('../lib/salesReportRow.ts');
 const { validatedForecastRow } = require('../lib/forecastRow.ts');
 const { validatedCrmActivity, validatedCrmCustomer, validatedCrmOpportunity } = require('../lib/crmRow.ts');
+const { validatedCheckoutReservation, validatedInventoryItem, validatedInventoryMovement } = require('../lib/inventoryAdminRow.ts');
 const { META_ATTRIBUTION_METADATA_KEYS, stripeMeasurementConsentDowngrade } = require('../lib/stripeMeasurementConsent.ts');
 const { signedStripeMeasurementConsentDowngrade } = require('../lib/stripeMeasurementProvenance.ts');
 const { saleablePocketWifiInventory: scanSaleablePocketWifiInventory } = require('../lib/pocketWifiStock.ts');
@@ -6971,6 +6972,41 @@ test('inventory visibility distinguishes unavailable data from zero stock and ex
   assert.match(inventoryPage, /Quarantined Pocket WiFi units/);
 });
 
+test('admin inventory rejects malformed stock, custody, and capacity rows before operational use', () => {
+  assert.deepEqual(validatedInventoryItem({
+    id: '7', product_type: 'pocket_wifi', status: 'available',
+    quantity_on_hand: '2', reorder_level: 1, unit_cost_sgd: '89.90', sku: 'PW-7', name: 'Router 7',
+  }), {
+    id: 7, product_type: 'pocket_wifi', status: 'available', quantity_on_hand: 2,
+    reorder_level: 1, unit_cost_sgd: '89.90', unit_cost_cents: 8990, sku: 'PW-7', name: 'Router 7',
+  });
+  for (const row of [
+    { id: 1, name: 'Router', product_type: 'pocket_wifi', status: 'available', quantity_on_hand: '2.5', reorder_level: 1, unit_cost_sgd: '10.00' },
+    { id: 1, name: 'Router', product_type: 'pocket_wifi', status: 'lost', quantity_on_hand: 2, reorder_level: 1, unit_cost_sgd: '10.00' },
+    { id: 1, name: 'Router', product_type: 'pocket_wifi', status: 'available', quantity_on_hand: 2, reorder_level: 1, unit_cost_sgd: 'Infinity' },
+  ]) assert.equal(validatedInventoryItem(row), null);
+
+  assert.equal(validatedInventoryMovement({ id: 4, inventory_item_id: 7, movement_type: 'dispatch', quantity: -1, created_at: '2026-10-21T02:00:00Z' }).quantity, -1);
+  assert.equal(validatedInventoryMovement({ id: 4, inventory_item_id: 7, movement_type: 'dispatch', quantity: 1, created_at: '2026-10-21T02:00:00Z' }), null);
+  assert.equal(validatedInventoryMovement({ id: 4, inventory_item_id: 7, movement_type: 'return', quantity: 1, created_at: 'not-a-date' }), null);
+
+  const reservation = {
+    checkout_request_id: 'checkout_attempt_123456', stripe_session_id: 'cs_live_abc123',
+    travel_start: '2026-11-01', travel_end: '2026-11-05',
+    expires_at: '2026-10-21T02:30:00Z', created_at: '2026-10-21T02:00:00Z',
+  };
+  assert.equal(validatedCheckoutReservation(reservation).stripe_session_id, 'cs_live_abc123');
+  assert.equal(validatedCheckoutReservation({ ...reservation, travel_end: '2027-03-01' }), null);
+  assert.equal(validatedCheckoutReservation({ ...reservation, stripe_session_id: 'not_stripe' }), null);
+
+  assert.match(inventoryPage, /\.map\(validatedInventoryItem\)/);
+  assert.match(inventoryPage, /\.map\(validatedInventoryMovement\)/);
+  assert.match(inventoryPage, /\.map\(validatedCheckoutReservation\)/);
+  assert.match(inventoryPage, /itemsResult\.error=new Error\('Inventory register contains malformed data'\)/);
+  assert.match(inventoryPage, /sum\+x\.quantity_on_hand\*x\.unit_cost_cents/);
+  assert.doesNotMatch(inventoryPage, /reduce\(\(s:number,x:any\)=>s\+Number\(x\.quantity_on_hand/);
+});
+
 test('inventory register and movement audit visibility page beyond one Supabase response and warn before a bounded view can hide operations data', () => {
   assert.match(inventoryPage, /const INVENTORY_ITEM_PAGE_SIZE=250/);
   assert.match(inventoryPage, /const INVENTORY_ITEM_MAX_ROWS=5_000/);
@@ -6988,7 +7024,7 @@ test('inventory register and movement audit visibility page beyond one Supabase 
   assert.match(inventoryPage, /Inventory movement ledger returned an invalid pagination cursor/);
   assert.doesNotMatch(inventoryPage, /\.range\(/);
   assert.match(inventoryPage, /String\(a\.name\|\|''\)\.localeCompare/);
-  assert.match(inventoryPage, /String\(b\.created_at\|\|''\)\.localeCompare/);
+  assert.match(inventoryPage, /b\.created_at\.localeCompare\(a\.created_at\)/);
   assert.match(inventoryPage, /movesResult\.truncated&&/);
   assert.match(inventoryPage, /Inventory movement history needs archiving or a dedicated audit view/);
 });
@@ -7000,7 +7036,7 @@ test('admin inventory exposes every capacity-protecting Pocket WiFi checkout res
   assert.match(inventoryPage, /\.order\('checkout_request_id'\)\.limit\(limit\)/);
   assert.match(inventoryPage, /query=query\.gt\('checkout_request_id',afterRequestId\)/);
   assert.match(inventoryPage, /Checkout reservation register returned an invalid pagination cursor/);
-  assert.match(inventoryPage, /String\(a\.expires_at\|\|''\)\.localeCompare/);
+  assert.match(inventoryPage, /a\.expires_at\.localeCompare\(b\.expires_at\)/);
   assert.match(inventoryPage, /Checkout capacity holds/);
   assert.match(inventoryPage, /Webhook handoff/);
   assert.match(inventoryPage, /Unconfirmed handoff/);
