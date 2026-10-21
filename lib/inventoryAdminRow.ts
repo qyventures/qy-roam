@@ -4,6 +4,7 @@ import { validStripeCheckoutSessionId } from './stripeSessionId';
 const ITEM_STATUSES = new Set(['available', 'quarantined', 'damaged', 'maintenance']);
 const PRODUCT_TYPES = new Set(['pocket_wifi', 'esim']);
 const MOVEMENT_TYPES = new Set(['opening_stock', 'adjustment', 'purchase', 'write_off', 'dispatch', 'return', 'return_quarantined', 'return_damaged', 'status_change']);
+const ACTIVE_CUSTODY_STATUSES = new Set(['dispatched', 'with_customer', 'return_due']);
 const MAX_INVENTORY_QUANTITY = 1_000_000;
 const MAX_INVENTORY_UNIT_COST_CENTS = 10_000_000;
 
@@ -39,10 +40,10 @@ export function validatedInventoryItem(value: unknown) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const row = value as Record<string, unknown>;
   const id = positiveInteger(row.id), quantity = nonNegativeInteger(row.quantity_on_hand, MAX_INVENTORY_QUANTITY), reorder = nonNegativeInteger(row.reorder_level, MAX_INVENTORY_QUANTITY), unitCostCents = exactMoneyCents(row.unit_cost_sgd);
-  if (id === null || quantity === null || reorder === null || unitCostCents === null || typeof row.name !== 'string' || !row.name.trim() || typeof row.product_type !== 'string' || !PRODUCT_TYPES.has(row.product_type) || typeof row.status !== 'string' || !ITEM_STATUSES.has(row.status)) return null;
+  if (id === null || quantity === null || reorder === null || unitCostCents === null || typeof row.sku !== 'string' || !row.sku.trim() || row.sku.length > 80 || typeof row.name !== 'string' || !row.name.trim() || typeof row.product_type !== 'string' || !PRODUCT_TYPES.has(row.product_type) || typeof row.status !== 'string' || !ITEM_STATUSES.has(row.status)) return null;
   const productType = row.product_type, status = row.status;
-  const name = row.name;
-  return { ...row, id, name, product_type: productType, status, quantity_on_hand: quantity, reorder_level: reorder, unit_cost_cents: unitCostCents };
+  const name = row.name, sku = row.sku;
+  return { ...row, id, sku, name, product_type: productType, status, quantity_on_hand: quantity, reorder_level: reorder, unit_cost_cents: unitCostCents };
 }
 
 export function validatedInventoryMovement(value: unknown) {
@@ -74,4 +75,34 @@ export function validatedCheckoutReservation(value: unknown) {
   const holdLifetimeMs = expiresAt && createdAt ? Date.parse(expiresAt) - Date.parse(createdAt) : 0;
   if (!requestId || (row.stripe_session_id !== null && !sessionId) || !start || !end || rentalDays < 1 || rentalDays > 90 || !expiresAt || !createdAt || holdLifetimeMs <= 0 || holdLifetimeMs > 37 * 60_000) return null;
   return { ...row, checkout_request_id: requestId, stripe_session_id: sessionId, travel_start: start, travel_end: end, expires_at: expiresAt, created_at: createdAt };
+}
+
+export function validatedInventoryCustodyOrder(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const id = positiveInteger(row.id);
+  const inventoryItemId = row.inventory_item_id === null ? null : positiveInteger(row.inventory_item_id);
+  const travelEnd = exactDate(row.travel_end);
+  const dispatchedAt = exactTimestamp(row.dispatched_at);
+  if (
+    id === null ||
+    (row.inventory_item_id !== null && inventoryItemId === null) ||
+    typeof row.fulfilment_status !== 'string' ||
+    !ACTIVE_CUSTODY_STATUSES.has(row.fulfilment_status) ||
+    typeof row.stripe_session_id !== 'string' ||
+    !row.stripe_session_id ||
+    row.stripe_session_id.length > 255 ||
+    (row.travel_end !== null && travelEnd === null) ||
+    (row.dispatched_at !== null && dispatchedAt === null) ||
+    (row.courier_tracking !== null && (typeof row.courier_tracking !== 'string' || !row.courier_tracking.trim() || row.courier_tracking.length > 200 || /[\u0000-\u001f\u007f]/.test(row.courier_tracking)))
+  ) return null;
+  return {
+    ...row,
+    id,
+    inventory_item_id: inventoryItemId,
+    fulfilment_status: row.fulfilment_status,
+    travel_end: travelEnd,
+    dispatched_at: dispatchedAt,
+    courier_tracking: row.courier_tracking as string | null,
+  };
 }

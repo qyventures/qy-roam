@@ -97,7 +97,7 @@ const { validatedSalesReportRow } = require('../lib/salesReportRow.ts');
 const { validatedForecastRow } = require('../lib/forecastRow.ts');
 const { validatedClosingPeriodRow } = require('../lib/closingPeriodRow.ts');
 const { validatedCrmActivity, validatedCrmCustomer, validatedCrmOpportunity } = require('../lib/crmRow.ts');
-const { validatedCheckoutReservation, validatedInventoryItem, validatedInventoryMovement } = require('../lib/inventoryAdminRow.ts');
+const { validatedCheckoutReservation, validatedInventoryCustodyOrder, validatedInventoryItem, validatedInventoryMovement } = require('../lib/inventoryAdminRow.ts');
 const { META_ATTRIBUTION_METADATA_KEYS, stripeMeasurementConsentDowngrade } = require('../lib/stripeMeasurementConsent.ts');
 const { signedStripeMeasurementConsentDowngrade } = require('../lib/stripeMeasurementProvenance.ts');
 const { saleablePocketWifiInventory: scanSaleablePocketWifiInventory } = require('../lib/pocketWifiStock.ts');
@@ -6993,7 +6993,7 @@ test('deployment stages a complete rollback artifact before replacing the servic
 
 test('inventory visibility distinguishes unavailable data from zero stock and exposes saleable router stock', () => {
   assert.match(inventoryPage, /await runAdminDashboardWork\(\(\)=>Promise\.all\(\[/);
-  assert.match(inventoryPage, /const failedPanels=\[itemsResult\.error&&'inventory register',movesResult\.error&&'movement audit trail',reservationsResult\.error&&'checkout reservation register'\]/);
+  assert.match(inventoryPage, /const failedPanels=\[itemsResult\.error&&'inventory register',movesResult\.error&&'movement audit trail',reservationsResult\.error&&'checkout reservation register',custodyResult\.error&&'active custody register'\]/);
   assert.match(inventoryPage, /Operational inventory data is currently unavailable/);
   assert.match(inventoryPage, /Do not treat empty lists or totals as current stock/);
   assert.match(inventoryPage, /x\.product_type==='pocket_wifi'&&x\.status==='available'/);
@@ -7022,6 +7022,16 @@ test('admin inventory rejects malformed stock, custody, and capacity rows before
   assert.equal(validatedInventoryMovement({ id: 4, inventory_item_id: 7, movement_type: 'dispatch', quantity: 1, created_at: '2026-10-21T02:00:00Z' }), null);
   assert.equal(validatedInventoryMovement({ id: 4, inventory_item_id: 7, movement_type: 'return', quantity: 1, created_at: 'not-a-date' }), null);
 
+  const custodyOrder = {
+    id: 9, stripe_session_id: 'cs_live_custody', inventory_item_id: 7,
+    fulfilment_status: 'with_customer', travel_end: '2026-11-05',
+    courier_tracking: 'Courier handoff 123', dispatched_at: '2026-10-21T02:00:00Z',
+  };
+  assert.equal(validatedInventoryCustodyOrder(custodyOrder)?.inventory_item_id, 7);
+  assert.equal(validatedInventoryCustodyOrder({ ...custodyOrder, inventory_item_id: null })?.inventory_item_id, null);
+  assert.equal(validatedInventoryCustodyOrder({ ...custodyOrder, fulfilment_status: 'returned' }), null);
+  assert.equal(validatedInventoryCustodyOrder({ ...custodyOrder, courier_tracking: 'bad\nreference' }), null);
+
   const reservation = {
     checkout_request_id: 'checkout_attempt_123456', stripe_session_id: 'cs_live_abc123',
     travel_start: '2026-11-01', travel_end: '2026-11-05',
@@ -7036,6 +7046,7 @@ test('admin inventory rejects malformed stock, custody, and capacity rows before
   assert.match(inventoryPage, /\.map\(validatedInventoryItem\)/);
   assert.match(inventoryPage, /\.map\(validatedInventoryMovement\)/);
   assert.match(inventoryPage, /\.map\(validatedCheckoutReservation\)/);
+  assert.match(inventoryPage, /\.map\(validatedInventoryCustodyOrder\)/);
   assert.match(inventoryPage, /itemsResult\.error=new Error\('Inventory register contains malformed data'\)/);
   assert.match(inventoryPage, /sum\+x\.quantity_on_hand\*x\.unit_cost_cents/);
   assert.match(inventoryPage, /Number\.isSafeInteger\(valueCents\)/);
@@ -7043,6 +7054,20 @@ test('admin inventory rejects malformed stock, custody, and capacity rows before
   assert.match(schema, /checkout_reservations_expiry_window_check check \(\s*expires_at > created_at and expires_at <= created_at \+ interval '37 minutes'\s*\) not valid/);
   assert.match(schema, /'checkout_reservations_expiry_window_check'[\s\S]*?\)\) = 4 and/);
   assert.doesNotMatch(inventoryPage, /reduce\(\(s:number,x:any\)=>s\+Number\(x\.quantity_on_hand/);
+});
+
+test('inventory mutations stop when an active router has incomplete custody evidence', () => {
+  assert.match(inventoryPage, /\.in\('fulfilment_status',\['dispatched','with_customer','return_due'\]\)/);
+  assert.match(inventoryPage, /const custodyExceptions=custodyOrders\.filter\(order=>!order\.inventory_item_id\|\|!order\.dispatched_at\|\|!order\.courier_tracking\|\|!itemById\.has\(order\.inventory_item_id\)\)/);
+  assert.match(inventoryPage, /const inventoryRegisterComplete=!itemsResult\.error&&!itemsResult\.truncated&&!itemRows\.some\(row=>row===null\)&&!custodyResult\.error&&!custodyResult\.truncated&&!custodyRows\.some\(row=>row===null\)/);
+  const guard = inventoryPage.slice(
+    inventoryPage.indexOf("if(!custodyResult.error&&!custodyResult.truncated&&custodyExceptions.length>0)"),
+    inventoryPage.indexOf("return <main", inventoryPage.indexOf("if(!custodyResult.error&&!custodyResult.truncated&&custodyExceptions.length>0)")) + 3000,
+  );
+  assert.match(guard, /Pocket WiFi custody reconciliation required/);
+  assert.match(guard, /Do not adjust stock or accept the register as physically reconciled/);
+  assert.match(guard, /\/admin#order-\$\{order\.id\}/);
+  assert.doesNotMatch(guard, /InventoryAdjustForm|InventoryStatusForm/);
 });
 
 test('inventory register and movement audit visibility page beyond one Supabase response and warn before a bounded view can hide operations data', () => {

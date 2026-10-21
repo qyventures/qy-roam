@@ -2,7 +2,7 @@ import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { runAdminDashboardWork } from '@/lib/adminDashboardConcurrency';
 import { InventoryAdjustForm, InventoryCreateForm, InventoryStatusForm } from '@/components/AdminOpsForms';
 import { formatSingaporeTimestamp } from '@/lib/singaporeTimestamp';
-import { validatedCheckoutReservation, validatedInventoryItem, validatedInventoryMovement } from '@/lib/inventoryAdminRow';
+import { validatedCheckoutReservation, validatedInventoryCustodyOrder, validatedInventoryItem, validatedInventoryMovement } from '@/lib/inventoryAdminRow';
 export const dynamic='force-dynamic';
 const card={border:'1px solid #e4e8ef',borderRadius:16,padding:18,background:'#fff'} as const;
 // Supabase limits a single response. The inventory ledger is audit evidence
@@ -16,10 +16,56 @@ const INVENTORY_ITEM_PAGE_SIZE=250;
 const INVENTORY_ITEM_MAX_ROWS=5_000;
 const RESERVATION_PAGE_SIZE=250;
 const RESERVATION_MAX_ROWS=5_000;
+const CUSTODY_PAGE_SIZE=250;
+const CUSTODY_MAX_ROWS=5_000;
 const RESERVATION_HANDOFF_GRACE_MS=4*24*60*60*1000;
 type MovementPageResult={data:any[];error:any;truncated:boolean};
 type InventoryItemPageResult={data:any[];error:any;truncated:boolean};
 type ReservationPageResult={data:any[];error:any;truncated:boolean};
+type CustodyPageResult={data:any[];error:any;truncated:boolean};
+
+async function loadCustodyPages(db:NonNullable<ReturnType<typeof getSupabaseAdmin>>):Promise<CustodyPageResult>{
+ const data:any[]=[];
+ const seenIds=new Set<number>();
+ let afterId:number|null=null;
+ const fetchPage=(limit:number)=>{
+  let query=db.from('orders')
+   .select('id,stripe_session_id,inventory_item_id,fulfilment_status,travel_end,courier_tracking,dispatched_at')
+   .eq('product_type','pocket_wifi')
+   .eq('payment_status','paid')
+   .in('fulfilment_status',['dispatched','with_customer','return_due'])
+   .order('id')
+   .limit(limit);
+  if(afterId!==null) query=query.gt('id',afterId);
+  return query;
+ };
+ for(let loaded=0;loaded<CUSTODY_MAX_ROWS;loaded+=CUSTODY_PAGE_SIZE){
+  const result=await fetchPage(CUSTODY_PAGE_SIZE);
+  if(result.error) return {data:[],error:result.error,truncated:false};
+  if(!Array.isArray(result.data)||result.data.length>CUSTODY_PAGE_SIZE) return {data:[],error:new Error('Active custody register returned an invalid page'),truncated:false};
+  const page=result.data;
+  let previousId=afterId;
+  for(const row of page){
+   const id=row?.id;
+   if(!Number.isSafeInteger(id)||id<=0||seenIds.has(id)||(previousId!==null&&id<=previousId)) return {data:[],error:new Error('Active custody register returned an invalid or duplicate identity'),truncated:false};
+   seenIds.add(id);
+   previousId=id;
+  }
+  data.push(...page);
+  if(page.length<CUSTODY_PAGE_SIZE) return {data,error:null,truncated:false};
+  const nextId=page[page.length-1]?.id;
+  if(!Number.isSafeInteger(nextId)||nextId<=0||nextId===afterId) return {data:[],error:new Error('Active custody register returned an invalid pagination cursor'),truncated:false};
+  afterId=nextId;
+ }
+ const beyond=await fetchPage(1);
+ if(beyond.error) return {data:[],error:beyond.error,truncated:false};
+ if(!Array.isArray(beyond.data)||beyond.data.length>1) return {data:[],error:new Error('Active custody register returned an invalid truncation probe'),truncated:false};
+ if(beyond.data.length>0){
+  const id=beyond.data[0]?.id;
+  if(!Number.isSafeInteger(id)||id<=0||seenIds.has(id)||(afterId!==null&&id<=afterId)) return {data:[],error:new Error('Active custody register returned an invalid truncation probe'),truncated:false};
+ }
+ return {data,error:null,truncated:beyond.data.length>0};
+}
 
 async function loadInventoryItemPages(db:NonNullable<ReturnType<typeof getSupabaseAdmin>>):Promise<InventoryItemPageResult>{
  const data:any[]=[];
@@ -150,40 +196,72 @@ export default async function InventoryPage(){
  // separate so staff never decide a router is available (or missing) from a
  // silently empty register during a database/schema incident.
  const unavailable={data:[] as any[],error:new Error('Inventory database is not configured'),truncated:false};
- const [itemsResult,movesResult,reservationsResult]=db
+ const [itemsResult,movesResult,reservationsResult,custodyResult]=db
    ?await runAdminDashboardWork(()=>Promise.all([
       loadInventoryItemPages(db),
       loadMovementPages(db),
       loadReservationPages(db),
-    ]),[unavailable,unavailable,unavailable])
-   :[unavailable,unavailable,unavailable];
+      loadCustodyPages(db),
+    ]),[unavailable,unavailable,unavailable,unavailable])
+   :[unavailable,unavailable,unavailable,unavailable];
  // Page on immutable identities for correctness, then restore the useful
  // operator-facing order after the complete bounded result is in memory.
  const itemRows=(itemsResult.data??[]).map(validatedInventoryItem);
  const movementRows=(movesResult.data??[]).map(validatedInventoryMovement);
  const reservationRows=(reservationsResult.data??[]).map(validatedCheckoutReservation);
+ const custodyRows=(custodyResult.data??[]).map(validatedInventoryCustodyOrder);
  const items=itemRows.filter((row):row is NonNullable<typeof row>=>row!==null).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''))||a.id-b.id);
  const moves=movementRows.filter((row):row is NonNullable<typeof row>=>row!==null).sort((a,b)=>b.created_at.localeCompare(a.created_at)||b.id-a.id);
  const reservations=reservationRows.filter((row):row is NonNullable<typeof row>=>row!==null).sort((a,b)=>a.expires_at.localeCompare(b.expires_at)||a.checkout_request_id.localeCompare(b.checkout_request_id));
+ const custodyOrders=custodyRows.filter((row):row is NonNullable<typeof row>=>row!==null).sort((a,b)=>a.id-b.id);
  // Reuse the existing unavailable-state rendering for malformed provider
  // data. Operators must not see a partial ledger as an empty or complete one.
  if(itemRows.some(row=>row===null)) itemsResult.error=new Error('Inventory register contains malformed data');
  if(movementRows.some(row=>row===null)) movesResult.error=new Error('Inventory movement ledger contains malformed data');
  if(reservationRows.some(row=>row===null)) reservationsResult.error=new Error('Checkout reservation register contains malformed data');
+ if(custodyRows.some(row=>row===null)) custodyResult.error=new Error('Active custody register contains malformed data');
  const valueCents=items.reduce((sum,x)=>sum+x.quantity_on_hand*x.unit_cost_cents,0);
  if(!Number.isSafeInteger(valueCents)) itemsResult.error=new Error('Inventory register value exceeds safe reporting bounds');
- const failedPanels=[itemsResult.error&&'inventory register',movesResult.error&&'movement audit trail',reservationsResult.error&&'checkout reservation register'].filter(Boolean) as string[];
+ const failedPanels=[itemsResult.error&&'inventory register',movesResult.error&&'movement audit trail',reservationsResult.error&&'checkout reservation register',custodyResult.error&&'active custody register'].filter(Boolean) as string[];
  // Stock totals and mutation selectors are operational authorities, not best-
  // effort summaries. A failed or bounded/truncated item read cannot prove
  // that a zero means no stock, nor that the rendered selector contains every
  // asset. Keep all item-derived decisions unavailable until the complete
  // register has been read successfully.
- const inventoryRegisterComplete=!itemsResult.error&&!itemsResult.truncated&&!itemRows.some(row=>row===null);
+ const inventoryRegisterComplete=!itemsResult.error&&!itemsResult.truncated&&!itemRows.some(row=>row===null)&&!custodyResult.error&&!custodyResult.truncated&&!custodyRows.some(row=>row===null);
  const available=items.reduce((sum,x)=>sum+x.quantity_on_hand,0);
  const saleablePocketWifi=items.filter(x=>x.product_type==='pocket_wifi'&&x.status==='available').reduce((sum,x)=>sum+x.quantity_on_hand,0);
  const quarantinedPocketWifi=items.filter(x=>x.product_type==='pocket_wifi'&&x.status!=='available').reduce((sum,x)=>sum+x.quantity_on_hand,0);
  const low=items.filter(x=>x.quantity_on_hand<=x.reorder_level);
  const value=valueCents/100;
  const now=Date.now();
+ const itemById=new Map(items.map(item=>[item.id,item]));
+ const custodyExceptions=custodyOrders.filter(order=>!order.inventory_item_id||!order.dispatched_at||!order.courier_tracking||!itemById.has(order.inventory_item_id));
+ // An active-custody mismatch means the saleable register and the physical
+ // fleet cannot be safely reconciled from this screen. Stop before rendering
+ // mutation controls: the database RPCs also reject edits to a correctly
+ // assigned in-custody item, but a missing item/timestamp/reference needs a
+ // deliberate order repair rather than an inventory adjustment.
+ if(!custodyResult.error&&!custodyResult.truncated&&custodyExceptions.length>0){
+  return <main className="wrap section legal" style={{maxWidth:1280}}>
+   <span className="eyebrow">Inventory</span>
+   <h1>Pocket WiFi custody reconciliation required</h1>
+   <div role="alert" style={{...card,borderColor:'#dc2626',background:'#fef2f2'}}>
+    <strong>{custodyExceptions.length} active Pocket WiFi order{custodyExceptions.length===1?' has':'s have'} incomplete inventory custody evidence.</strong>
+    <p>Do not adjust stock or accept the register as physically reconciled. Review each order against its dispatch record and assigned router, then repair the audited order/inventory boundary before continuing.</p>
+    <ul>{custodyExceptions.slice(0,50).map(order=>{
+     const item=order.inventory_item_id?itemById.get(order.inventory_item_id):null;
+     return <li key={order.id} style={{marginBottom:8}}>
+      <a href={`/admin#order-${order.id}`}><strong>Order #{order.id}</strong></a>
+      {' · '}status <code>{order.fulfilment_status}</code>
+      {' · '}{item?<><code>{item.sku}</code> · {item.name}</>:order.inventory_item_id?<strong>assigned inventory item #{order.inventory_item_id} is missing</strong>:<strong>no inventory item assigned</strong>}
+      {!order.dispatched_at&&<> · <strong>dispatch timestamp missing</strong></>}
+      {!order.courier_tracking&&<> · <strong>delivery reference missing</strong></>}
+     </li>;
+    })}</ul>
+    {custodyExceptions.length>50&&<p><strong>{custodyExceptions.length-50} more exceptions are not expanded here.</strong> Review the complete active-custody register before reopening inventory work.</p>}
+   </div>
+  </main>;
+ }
  return <main className="wrap section legal" style={{maxWidth:1280}}><span className="eyebrow">Inventory</span><h1>Pocket WiFi & stock control</h1>{!db&&<div style={card}><strong>Database connection required.</strong></div>}{db&&<>{failedPanels.length>0&&<div role="alert" style={{...card,borderColor:'#dc2626',background:'#fef2f2',marginBottom:20}}><strong>Operational inventory data is currently unavailable: {failedPanels.join(', ')}.</strong><div style={{marginTop:6}}>Do not treat empty lists or totals as current stock. Restore the database/schema connection and refresh before dispatching, receiving or accepting a booking.</div></div>}{itemsResult.truncated&&<div role="alert" style={{...card,borderColor:'#b45309',background:'#fffbeb',marginBottom:20}}><strong>Inventory register needs archiving or a dedicated asset view.</strong><div style={{marginTop:6}}>This screen loaded its first {INVENTORY_ITEM_MAX_ROWS.toLocaleString()} inventory records but stopped before the full register could be reviewed. Do not treat the stock totals, asset count, or device selector as complete until the older records are available.</div></div>}{movesResult.truncated&&<div role="alert" style={{...card,borderColor:'#b45309',background:'#fffbeb',marginBottom:20}}><strong>Inventory movement history needs archiving or a dedicated audit view.</strong><div style={{marginTop:6}}>This screen loaded its first {INVENTORY_MOVEMENT_MAX_ROWS.toLocaleString()} newest movements but stopped before the full ledger could be reviewed. Do not treat this list as complete when reconciling an older dispatch, return or adjustment.</div></div>}{reservationsResult.truncated&&<div role="alert" style={{...card,borderColor:'#b45309',background:'#fffbeb',marginBottom:20}}><strong>Checkout reservation view is incomplete.</strong><div style={{marginTop:6}}>More than {RESERVATION_MAX_ROWS.toLocaleString()} capacity holds are protected. Do not use this list to reconcile availability until the full register can be reviewed.</div></div>}<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:12}}><div style={card}><small>Saleable Pocket WiFi units</small><h2>{inventoryRegisterComplete?saleablePocketWifi:'—'}</h2><small>available status only</small></div><div style={card}><small>Protected checkout holds</small><h2>{reservationsResult.error||reservationsResult.truncated?'—':reservations.length}</h2><small>open checkout + webhook handoff</small></div><div style={card}><small>Quarantined Pocket WiFi units</small><h2>{inventoryRegisterComplete?quarantinedPocketWifi:'—'}</h2><small>not available for dispatch</small></div><div style={card}><small>Total units</small><h2>{inventoryRegisterComplete?available:'—'}</h2></div><div style={card}><small>SKUs / assets</small><h2>{inventoryRegisterComplete?items.length:'—'}</h2></div><div style={card}><small>Low-stock alerts</small><h2>{inventoryRegisterComplete?low.length:'—'}</h2></div><div style={card}><small>Stock value</small><h2>{inventoryRegisterComplete?`S$${value.toFixed(2)}`:'—'}</h2></div></div><h2 style={{marginTop:28}}>Checkout capacity holds</h2><p style={{color:'#64748b'}}>Open checkout attempts hold capacity until their payment window ends. Only Stripe-linked attempts remain protected during the four-day webhook handoff period; releasing one without reconciling Stripe could oversell a router.</p>{!reservationsResult.error&&!reservationsResult.truncated&&(reservations.length===0?<p>No protected checkout holds.</p>:<div style={{overflowX:'auto',...card}}><table style={{width:'100%',borderCollapse:'collapse',minWidth:920}}><thead><tr><th align="left">Travel</th><th align="left">State</th><th align="left">Checkout request</th><th align="left">Stripe session</th><th align="left">Checkout expiry</th><th align="left">Created</th></tr></thead><tbody>{reservations.map((r:any)=>{const open=new Date(r.expires_at).getTime()>now;return <tr key={r.checkout_request_id} style={{borderTop:'1px solid #e5e7eb'}}><td>{r.travel_start} → {r.travel_end}</td><td><strong>{open?'Checkout open':r.stripe_session_id?'Webhook handoff':'Unconfirmed handoff'}</strong></td><td><code>{r.checkout_request_id}</code></td><td>{r.stripe_session_id?<code>{r.stripe_session_id}</code>:'Not linked'}</td><td>{formatSingaporeTimestamp(r.expires_at)}</td><td>{formatSingaporeTimestamp(r.created_at)}</td></tr>})}</tbody></table></div>)}{inventoryRegisterComplete&&<><InventoryCreateForm/><InventoryAdjustForm items={items}/><InventoryStatusForm items={items}/></>}<h2 style={{marginTop:28}}>Inventory register</h2>{inventoryRegisterComplete&&(items.length===0?<p>No inventory items yet.</p>:<div style={{overflowX:'auto',...card}}><table style={{width:'100%',borderCollapse:'collapse',minWidth:820}}><thead><tr><th align="left">SKU</th><th align="left">Item</th><th align="left">Type</th><th align="left">Status</th><th align="right">Qty</th><th align="right">Reorder</th><th align="right">Unit cost</th><th align="left">Location</th></tr></thead><tbody>{items.map((x:any)=><tr key={x.id} style={{borderTop:'1px solid #e5e7eb'}}><td>{x.sku}</td><td>{x.name}</td><td>{x.product_type}</td><td>{x.status}</td><td align="right">{x.quantity_on_hand}</td><td align="right">{x.reorder_level}</td><td align="right">S${Number(x.unit_cost_sgd||0).toFixed(2)}</td><td>{x.location||'-'}</td></tr>)}</tbody></table></div>)}<h2 style={{marginTop:28}}>Movement audit trail</h2>{!movesResult.error&&!movesResult.truncated&&(moves.length===0?<p>No stock movements yet.</p>:<div style={{overflowX:'auto',...card}}><table style={{width:'100%',minWidth:760}}><thead><tr><th align="left">Date</th><th align="left">Item ID</th><th align="left">Type</th><th align="right">Qty</th><th align="left">Reference</th><th align="left">Notes</th></tr></thead><tbody>{moves.map((m:any)=><tr key={m.id}><td>{formatSingaporeTimestamp(m.created_at)}</td><td>{m.inventory_item_id}</td><td>{m.movement_type}</td><td align="right">{m.quantity}</td><td>{m.reference||'-'}</td><td>{m.notes||'-'}</td></tr>)}</tbody></table></div>)}</>}</main>;
 }
