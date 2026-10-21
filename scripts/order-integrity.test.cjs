@@ -67,6 +67,7 @@ const { custodyReferenceIssue, normalizeCustodyReference, MAX_CUSTODY_REFERENCE_
 const { durablePaidOrderMatchesPaymentEvent, durableOrderMatchesFailedOrAlreadyPaidSession, durableOrderMatchesFailedSession, durableOrderMatchesPaidSession, durableOrderMatchesUnpaidOrAlreadyPaidSession } = require('../lib/durableOrderSnapshot.ts');
 const { databaseTimestampInstantEquals, exactDatabaseTimestampToken, exactStripeClaimToken } = require('../lib/stripeClaimToken.ts');
 const { exactRpcRow } = require('../lib/exactRpcRow.ts');
+const { stripeCheckoutListReadinessAcknowledged } = require('../lib/stripeReadinessResponse.ts');
 const { acknowledgedInventoryMutation } = require('../lib/inventoryMutation.ts');
 const { inventoryMutationFailure } = require('../lib/inventoryMutationFailure.ts');
 const { validAdminOperationId } = require('../lib/adminOperationId.ts');
@@ -103,6 +104,43 @@ const { customerOrderReference } = require('../lib/customerOrderReference.ts');
 const { metaPurchaseIdentity: deriveMetaPurchaseIdentity } = require('../lib/metaPurchaseIdentity.ts');
 const { READINESS_PROBE_TIMEOUT_MS, ReadinessProbeTimeoutError, runReadinessProbe } = require('../lib/readinessProbe.ts');
 const { readinessFailureBackoffActive, readinessWindowActive } = require('../lib/readinessBackoff.ts');
+
+test('Stripe readiness requires one coherent mode-correct Checkout list', () => {
+  const empty = { object: 'list', url: '/v1/checkout/sessions', has_more: false, data: [] };
+  const testSession = {
+    object: 'list',
+    url: '/v1/checkout/sessions',
+    has_more: true,
+    data: [{ object: 'checkout.session', id: 'cs_test_readinessProbe' }],
+  };
+  const liveSession = {
+    ...testSession,
+    data: [{ object: 'checkout.session', id: 'cs_live_readinessProbe' }],
+  };
+
+  const testKey = `sk_test_${'a'.repeat(24)}`;
+  const liveKey = `sk_live_${'b'.repeat(24)}`;
+  assert.equal(stripeCheckoutListReadinessAcknowledged(empty, testKey), true);
+  assert.equal(stripeCheckoutListReadinessAcknowledged(testSession, testKey), true);
+  assert.equal(stripeCheckoutListReadinessAcknowledged(liveSession, liveKey), true);
+  assert.equal(stripeCheckoutListReadinessAcknowledged(testSession, liveKey), false);
+  assert.equal(stripeCheckoutListReadinessAcknowledged(liveSession, testKey), false);
+
+  for (const malformed of [
+    null,
+    { data: [] },
+    { ...empty, object: 'search_result' },
+    { ...empty, url: '/v1/payment_intents' },
+    { ...empty, has_more: 'false' },
+    { ...empty, data: [testSession.data[0], testSession.data[0]] },
+    { ...empty, data: [null] },
+    { ...empty, data: [{ object: 'payment_intent', id: 'cs_test_readinessProbe' }] },
+  ]) assert.equal(stripeCheckoutListReadinessAcknowledged(malformed, testKey), false);
+  assert.equal(stripeCheckoutListReadinessAcknowledged(empty, 'sk_test_short'), false);
+
+  assert.match(productionReadiness, /stripeCheckoutListReadinessAcknowledged\(sessions, key\)/);
+  assert.doesNotMatch(productionReadiness, /return Array\.isArray\(sessions\.data\)/);
+});
 
 test('production readiness has a real deadline even when a dependency ignores cancellation', async () => {
   let signal;

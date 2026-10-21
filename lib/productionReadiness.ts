@@ -8,6 +8,7 @@ import { hasRequiredStripeCheckoutConfig } from '@/lib/stripeCheckoutConfig';
 import { runReadinessProbe } from '@/lib/readinessProbe';
 import { readinessFailureBackoffActive, readinessWindowActive } from '@/lib/readinessBackoff';
 import { exactRpcRow } from '@/lib/exactRpcRow';
+import { stripeCheckoutListReadinessAcknowledged } from '@/lib/stripeReadinessResponse';
 export { hasRequiredStripeCheckoutConfig };
 
 // Checkout invokes these guards immediately before creating a payable Stripe
@@ -107,7 +108,7 @@ async function checkRequiredStripeApiAccess() {
       { limit: 1 },
       { timeout: STRIPE_READINESS_TIMEOUT_MS, maxNetworkRetries: 0 },
     );
-    return Array.isArray(sessions.data);
+    return stripeCheckoutListReadinessAcknowledged(sessions, key);
   } catch {
     console.error('production_stripe_api_check_unavailable');
     return false;
