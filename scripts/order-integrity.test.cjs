@@ -1424,6 +1424,28 @@ test('customer checkout requests release a stuck browser without rotating their 
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(callerCancelledBody, true);
 
+    // A request cancelled before the shared helper starts must never reach
+    // fetch at all. Native fetch normally rejects an already-aborted signal,
+    // but service workers and test/browser shims are still code at the
+    // payment-mutation boundary and must not be trusted to suppress it.
+    let preAbortedFetches = 0;
+    const preAbortedController = new AbortController();
+    preAbortedController.abort(new Error('checkout selection changed'));
+    global.fetch = async () => {
+      preAbortedFetches += 1;
+      return new Response(JSON.stringify({ url: 'must-not-be-reached' }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+    await assert.rejects(
+      () => fetchCustomerJson('/api/checkout', {
+        method: 'POST',
+        signal: preAbortedController.signal,
+      }, 100),
+      /checkout selection changed/,
+    );
+    assert.equal(preAbortedFetches, 0);
+
     global.fetch = async () => new Response(JSON.stringify({ url: 'safe' }), {
       status: 200,
       headers: { 'content-type': 'application/json' },

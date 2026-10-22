@@ -231,8 +231,18 @@ async function runCustomerRequest<T>(
     rejectDeadline?.(timeoutError);
   }, timeoutMs);
 
-  if (callerSignal?.aborted) abortFromCaller();
-  else callerSignal?.addEventListener('abort', abortFromCaller, { once: true });
+  // A storefront can unmount between preparing a checkout request and this
+  // helper being called. Do not rely on every browser, service worker, or
+  // fetch shim to suppress a mutation merely because it receives an already
+  // aborted signal: fail before invoking fetch so a cancelled UI cannot open
+  // a Stripe Session or inventory reservation in the background.
+  if (callerSignal?.aborted) {
+    clearTimeout(timeout);
+    throw callerSignal.reason instanceof Error
+      ? callerSignal.reason
+      : new Error('Customer request cancelled');
+  }
+  callerSignal?.addEventListener('abort', abortFromCaller, { once: true });
 
   try {
     // These helpers are an authority boundary for checkout URLs and completed
