@@ -2,7 +2,7 @@ import { NextResponse as FrameworkNextResponse } from 'next/server';
 import type Stripe from 'stripe';
 import { createStripeClient } from '../../../lib/stripeClient';
 import { applyPromoCents, normalisePromoCode, promoIsActive } from '../../../lib/promotions';
-import { getWifiPlan, WIFI_BENCHMARK } from '../../../lib/wifiPlans';
+import { getWifiPlan, WIFI_BENCHMARK, wifiBenchmarkIsFresh } from '../../../lib/wifiPlans';
 import { getSupabaseAdmin } from '../../../lib/supabaseAdmin';
 import { parseExactIsoDate, validCheckoutRequestId } from '../../../lib/checkoutValidation';
 import { hasOrderIntegritySigningConfig, QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance, validQyRoamProvenance } from '../../../lib/orderProvenance';
@@ -251,6 +251,11 @@ export async function POST(req: Request) {
   // it saleable. This mirrors the eSIM route's cheap-validation boundary.
   const inventory=config.pocketWifiInventory;
   if(inventory<1) return NextResponse.json({error:'Pocket WiFi is sold out for these dates. Please choose different dates or contact +65 8032 7183.'},{status:409,headers:{'Cache-Control':'no-store'}});
+  // A release can remain online beyond the deploy-time pricing review
+  // window. Fail closed before shared provider admission once that happens;
+  // accepting a payment would otherwise keep making a public comparison that
+  // operations has not recently verified.
+  if(!wifiBenchmarkIsFresh()) return NextResponse.json({error:'Pocket WiFi pricing is temporarily under review. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Retry-After':'30'}});
   const rentalBeforePromo=pocketWifiRentalCents(daily,days);
   const promo=applyPromoCents(rentalBeforePromo, body.promoCode);
   const rentalAmount=promo.amountCents;

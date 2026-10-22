@@ -1,3 +1,5 @@
+import { operationalDaysFromToday } from './operationalDate';
+
 export type WifiPlan = {
   country: string;
   code: string;
@@ -16,6 +18,20 @@ export const WIFI_BENCHMARK = {
   sourceUrl: 'https://order.yoowifi.com/how-it-works',
   minimumDiscountPercent: 3
 } as const;
+
+// The public comparison is a pricing authority, not permanent catalogue
+// data. Release verification catches an old review at deploy time, while this
+// runtime boundary also stops a healthy long-running process when the review
+// subsequently ages out. Keep this in the server catalogue so checkout,
+// availability, and authenticated readiness cannot drift apart.
+export const WIFI_BENCHMARK_MAX_AGE_DAYS = 30;
+
+export function wifiBenchmarkIsFresh(now = new Date()) {
+  const daysUntilVerifiedDate = operationalDaysFromToday(WIFI_BENCHMARK.verifiedOn, now);
+  if (daysUntilVerifiedDate === null) return false;
+  const ageDays = -daysUntilVerifiedDate;
+  return ageDays >= 0 && ageDays <= WIFI_BENCHMARK_MAX_AGE_DAYS;
+}
 
 function undercut(benchmark: number) {
   return Math.floor(benchmark * (1 - WIFI_BENCHMARK.minimumDiscountPercent / 100) * 100) / 100;

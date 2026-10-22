@@ -9,6 +9,7 @@ import { hasRequiredSupabaseAdminConfig } from '@/lib/supabaseAdmin';
 import { esimPromoIsActive } from '@/lib/esimPlans';
 import { hasSaleablePocketWifiInventory } from '@/lib/pocketWifiStock';
 import { tryAcquireHealthConcurrency } from '@/lib/healthConcurrency';
+import { wifiBenchmarkIsFresh } from '@/lib/wifiPlans';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -140,6 +141,7 @@ export async function GET(req: Request) {
     deliveryLeadDays: Boolean(config),
     courierFee: Boolean(config),
     fulfilmentEmail: hasRequiredFulfilmentEmailConfig(),
+    pocketWifiPricing: wifiBenchmarkIsFresh(),
   };
   const measurementChecks = {
     metaCapi: hasRequiredMetaCapiPurchaseConfig(),
@@ -179,7 +181,7 @@ export async function GET(req: Request) {
   const checkoutChecks = {
     esim: commonCheckoutReady && Boolean(esimOrderSchema) && esimOfferActive,
     pocketWifi: commonCheckoutReady && Boolean(paymentSchema) &&
-      Boolean(pocketWifiFulfilmentSchema) && checks.inventory && availabilityChecks.pocketWifiStock,
+      Boolean(pocketWifiFulfilmentSchema) && checks.inventory && checks.pocketWifiPricing && availabilityChecks.pocketWifiStock,
   };
   const checkoutReady = Object.values(checkoutChecks).every(Boolean);
   // A release can intentionally pause one product (for example, when an

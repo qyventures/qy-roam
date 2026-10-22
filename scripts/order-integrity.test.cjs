@@ -27,7 +27,7 @@ const { validateQyRoamSession, validateQyRoamTerminalUnpaidSession } = require('
 const { parseExactIsoDate, validCheckoutRequestId } = require('../lib/checkoutValidation.ts');
 const { operationalIsoDate, operationalIsoDateAfter, operationalDaysFromToday } = require('../lib/operationalDate.ts');
 const { POCKET_WIFI_RETURN_GRACE_DAYS, pocketWifiReturnTiming } = require('../lib/pocketWifiReturns.ts');
-const { WIFI_BENCHMARK, WIFI_PLANS } = require('../lib/wifiPlans.ts');
+const { WIFI_BENCHMARK, WIFI_BENCHMARK_MAX_AGE_DAYS, WIFI_PLANS, wifiBenchmarkIsFresh } = require('../lib/wifiPlans.ts');
 const { pocketWifiRentalCents, sgdFromCents } = require('../lib/pocketWifiPricing.ts');
 const { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } = require('../lib/pocketWifiRentalPeriod.ts');
 const { allowedFulfilmentStatuses, fulfilmentNotificationActionable, validFulfilmentTransition, STRIPE_EVENT_CLAIM_STALE_MS, STRIPE_EVENT_CLAIM_CLOCK_SKEW_MS, stripeEventClaimInProgress } = require('../lib/orderLifecycle.ts');
@@ -6929,7 +6929,7 @@ test('authenticated health readiness separates shared release controls from prod
   assert.match(healthRoute, /const commonCheckoutReady = Boolean\(/);
   assert.match(healthRoute, /esim: commonCheckoutReady && Boolean\(esimOrderSchema\) && esimOfferActive/);
   assert.match(healthRoute, /pocketWifi: commonCheckoutReady && Boolean\(paymentSchema\) &&/);
-  assert.match(healthRoute, /Boolean\(pocketWifiFulfilmentSchema\) && checks\.inventory && availabilityChecks\.pocketWifiStock/);
+  assert.match(healthRoute, /Boolean\(pocketWifiFulfilmentSchema\) && checks\.inventory && checks\.pocketWifiPricing && availabilityChecks\.pocketWifiStock/);
   assert.match(pocketWifiStock, /\.eq\('product_type', 'pocket_wifi'\)/);
   assert.match(pocketWifiStock, /\.eq\('status', 'available'\)/);
   assert.match(pocketWifiStock, /throw new Error\('Pocket WiFi inventory scan exceeded its safe page limit'\)/);
@@ -10599,6 +10599,26 @@ test('Pocket WiFi rejects unreviewed prices before spending shared checkout capa
     wifiCheckoutRoute.indexOf('const inventory=config.pocketWifiInventory') < globalAdmission,
     'known sold-out configuration must also fail before shared checkout admission',
   );
+});
+
+test('Pocket WiFi benchmark freshness remains a runtime sales boundary after deployment', () => {
+  assert.equal(WIFI_BENCHMARK_MAX_AGE_DAYS, 30);
+  assert.equal(WIFI_BENCHMARK.verifiedOn, '2026-09-28');
+  assert.equal(wifiBenchmarkIsFresh(new Date('2026-10-28T15:59:59Z')), true);
+  assert.equal(wifiBenchmarkIsFresh(new Date('2026-10-28T16:00:00Z')), false);
+  assert.equal(wifiBenchmarkIsFresh(new Date('2026-09-27T16:00:00Z')), true);
+  assert.equal(wifiBenchmarkIsFresh(new Date('2026-09-26T16:00:00Z')), false);
+
+  const checkoutFreshness = wifiCheckoutRoute.indexOf('if(!wifiBenchmarkIsFresh())');
+  const checkoutGlobalAdmission = wifiCheckoutRoute.indexOf('if(checkoutGloballyLimited())');
+  const availabilityFreshness = availabilityRoute.indexOf('if (!wifiBenchmarkIsFresh())');
+  const availabilityGlobalAdmission = availabilityRoute.indexOf('if (availabilityGloballyLimited())');
+  assert.ok(checkoutFreshness > -1 && checkoutFreshness < checkoutGlobalAdmission,
+    'stale pricing must stop checkout before shared provider admission');
+  assert.ok(availabilityFreshness > -1 && availabilityFreshness < availabilityGlobalAdmission,
+    'stale pricing must stop availability before shared provider admission');
+  assert.match(healthRoute, /pocketWifiPricing: wifiBenchmarkIsFresh\(\)/);
+  assert.match(healthRoute, /checks\.inventory && checks\.pocketWifiPricing && availabilityChecks\.pocketWifiStock/);
 });
 
 test('release health credentials survive HTTP header transport byte-for-byte', () => {

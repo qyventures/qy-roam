@@ -18,6 +18,7 @@ import { tryAcquireAvailabilityConcurrency } from '@/lib/availabilityConcurrency
 import { scanActivePocketWifiStripeHolds } from '@/lib/pocketWifiStripeHolds';
 import { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } from '@/lib/pocketWifiRentalPeriod';
 import { exactRpcRow } from '@/lib/exactRpcRow';
+import { wifiBenchmarkIsFresh } from '@/lib/wifiPlans';
 
 export const dynamic = 'force-dynamic';
 
@@ -128,6 +129,12 @@ export async function GET(req: NextRequest) {
   };
   if (start.toISOString().slice(0, 10) < earliest) return NextResponse.json({ available: false, ...bookingTerms, error: `Please book at least ${minLeadDays} day${minLeadDays === 1 ? '' : 's'} before departure.` }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
   if (rentalDays < 1 || rentalDays > MAX_POCKET_WIFI_RENTAL_DAYS) return NextResponse.json({ available: false, ...bookingTerms, error: `Bookings must be between 1 and ${MAX_POCKET_WIFI_RENTAL_DAYS} days.` }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
+
+  // Do not publish positive stock for a product checkout has paused because
+  // its public comparison has aged beyond the reviewed pricing window. This
+  // local check belongs before global/provider admission so an expired
+  // catalogue cannot consume Stripe or database capacity.
+  if (!wifiBenchmarkIsFresh()) return unavailableAvailability();
 
   // Only a currently bookable range can proceed to configuration, schema,
   // Stripe, or Supabase checks. Count that provider-capable request against
