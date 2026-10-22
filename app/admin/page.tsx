@@ -10,6 +10,7 @@ import { tryAcquireAdminDashboardConcurrency } from '@/lib/adminDashboardConcurr
 import { formatSingaporeDate, formatSingaporeTimestamp } from '@/lib/singaporeTimestamp';
 import { customerOrderReference } from '@/lib/customerOrderReference';
 import { validatedDeliveryLedgerRow, validatedStripeEventRecoveryRow } from '@/lib/adminDeliveryRow';
+import { validatedInventoryItem } from '@/lib/inventoryAdminRow';
 
 export const dynamic = 'force-dynamic';
 
@@ -194,7 +195,7 @@ async function renderAdminPage() {
         // truncation warning below makes an oversized fleet explicit.
         loadKeysetPages((after, limit) => {
           let query = supabase.from('inventory_items')
-          .select('id,sku,name,quantity_on_hand,status')
+          .select('id,sku,name,quantity_on_hand,status,product_type,reorder_level,unit_cost_sgd')
           .eq('product_type', 'pocket_wifi')
           .order('id')
           .limit(limit);
@@ -237,8 +238,19 @@ async function renderAdminPage() {
   const orders: any[] = (result.data ?? []).sort((a:any,b:any) =>
     String(b.created_at || '').localeCompare(String(a.created_at || '')) || Number(b.id || 0) - Number(a.id || 0));
   const orderByStripeSession = new Map(orders.map((order:any)=>[order.stripe_session_id,order]));
-  const inventoryItems: any[] = (inventoryResult.data ?? []).sort((a:any,b:any) =>
-    String(a.name || '').localeCompare(String(b.name || '')) || Number(a.id || 0) - Number(b.id || 0));
+  // This register is an authority for the physical device offered by every
+  // dispatch control below. Validate the complete bounded result just as the
+  // dedicated inventory screen does. A malformed quantity/status or schema-
+  // drifted row must not be coerced into a selectable router, and a partially
+  // valid fleet must not look complete to operations.
+  const inventoryItemRows = (inventoryResult.data ?? []).map(validatedInventoryItem);
+  if (inventoryItemRows.some(row => row === null)) {
+    inventoryResult.error = new Error('Pocket WiFi inventory register contains malformed data');
+  }
+  const inventoryItems: any[] = inventoryResult.error
+    ? []
+    : inventoryItemRows.filter((row): row is NonNullable<typeof row> => row !== null).sort((a,b) =>
+      a.name.localeCompare(b.name) || a.id - b.id);
   const notificationRows = (notificationResult.data ?? []).map(validatedDeliveryLedgerRow);
   const notifications = notificationRows.filter((row): row is NonNullable<typeof row> => row !== null);
   if (notificationRows.some(row => row === null)) notificationResult.error = new Error('Fulfilment notification ledger contains malformed data');

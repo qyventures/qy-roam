@@ -6783,6 +6783,11 @@ test('admin Pocket WiFi dispatch selector pages the fleet and warns when its bou
   assert.match(adminPage, /\.eq\('product_type', 'pocket_wifi'\)\s*\.order\('id'\)\s*\.limit\(limit\)/);
   assert.match(adminPage, /query = query\.gt\('id', after\)/);
   assert.match(adminPage, /inventoryResult\.truncated && 'Pocket WiFi inventory'/);
+  assert.match(adminPage, /\.select\('id,sku,name,quantity_on_hand,status,product_type,reorder_level,unit_cost_sgd'\)/);
+  assert.match(adminPage, /const inventoryItemRows = \(inventoryResult\.data \?\? \[\]\)\.map\(validatedInventoryItem\)/);
+  assert.match(adminPage, /inventoryItemRows\.some\(row => row === null\)/);
+  assert.match(adminPage, /inventoryResult\.error = new Error\('Pocket WiFi inventory register contains malformed data'\)/);
+  assert.match(adminPage, /const inventoryItems: any\[\] = inventoryResult\.error\s*\? \[\]/);
   assert.match(adminPage, /inventoryItems=\{inventoryItems\}/);
   assert.doesNotMatch(adminPage, /supabase\.from\('inventory_items'\)\.select\('id,sku,name,quantity_on_hand,status'\)\.eq\('product_type', 'pocket_wifi'\)\.order\('name'\),/);
 });
