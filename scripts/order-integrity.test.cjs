@@ -55,7 +55,7 @@ const { CUSTOMER_REQUEST_TIMEOUT_MS, CUSTOMER_JSON_RESPONSE_MAX_BYTES, CUSTOMER_
 const { safeHttpsDeliveryEndpoint } = require('../lib/deliveryEndpoint.ts');
 const { fulfilmentRelayAcknowledged } = require('../lib/deliveryAcknowledgement.ts');
 const { safeProviderDeliveryFailure, safeWebhookProcessingFailure } = require('../lib/deliveryFailure.ts');
-const { deliveryResponseContentEncoding, strictDeliveryResponseText } = require('../lib/deliveryResponse.ts');
+const { deliveryResponseContentEncoding, deliveryResponseHasJsonContentType, strictDeliveryResponseText } = require('../lib/deliveryResponse.ts');
 const { nextRetryAttempt } = require('../lib/retryAttempt.ts');
 const { completeSmtpResponseCode, isSafeSmtpHost, isSafeSmtpMailbox, MAX_SMTP_DATA_LINE_BYTES, smtpDataText, smtpSecureTransport, waitForResponse, waitForTlsHandshake } = require('../lib/smtp.ts');
 const { safeStripeCheckoutUrl } = require('../lib/stripeCheckoutUrl.ts');
@@ -8419,7 +8419,7 @@ test('paid-order delivery acknowledgements accept only runtime-supported respons
 
   // An arbitrary coding must never disable exact Content-Length checks on a
   // 2xx response that can settle an irreversible fulfilment/CAPI ledger.
-  assert.match(webhookRoute, /deliveryResponseContentEncoding, strictDeliveryResponseText/);
+  assert.match(webhookRoute, /deliveryResponseContentEncoding, deliveryResponseHasJsonContentType, strictDeliveryResponseText/);
 });
 
 test('failed third-party deliveries do not wait for an unused provider response body', () => {
@@ -8447,14 +8447,29 @@ test('paid-order delivery acknowledgements require an explicit JSON media type',
     webhookRoute.indexOf('const MAX_DELIVERY_RESPONSE_BODY_BYTES'),
     webhookRoute.indexOf('function metaPurchaseEligible'),
   );
-  assert.match(deliveryClient, /const MAX_DELIVERY_CONTENT_TYPE_HEADER_LENGTH=256/);
-  assert.match(deliveryClient, /value\.length<=MAX_DELIVERY_CONTENT_TYPE_HEADER_LENGTH/);
-  assert.match(deliveryClient, /value\.split\(';',1\)\[0\]\.trim\(\)\.toLowerCase\(\)==='application\/json'/);
+  for (const value of [
+    'application/json',
+    'Application/JSON',
+    ' application/json ',
+    'application/json; charset=utf-8',
+    'application/json;charset=UTF-8',
+  ]) assert.equal(deliveryResponseHasJsonContentType(value), true);
+  for (const value of [
+    null,
+    '',
+    'text/json',
+    'application/jsonp',
+    'application/json;',
+    'application/json;   ',
+    'application/json; charset=utf-8\u0000text/html',
+    `application/json; charset=utf-8; ${'x'.repeat(257)}`,
+  ]) assert.equal(deliveryResponseHasJsonContentType(value), false);
 
-  const successBoundary = deliveryClient.indexOf('if(!hasJsonDeliveryContentType(response.headers.get(\'content-type\')))');
+  const successBoundary = deliveryClient.indexOf("if(!deliveryResponseHasJsonContentType(response.headers.get('content-type')))");
   const bodyRead = deliveryClient.indexOf('await readDeliveryResponseBody(response,deadline)');
   assert.ok(successBoundary >= 0 && successBoundary < bodyRead);
   assert.match(deliveryClient, /controller\.abort\(error\);\s*void response\.body\?\.cancel\(error\)\.catch\(\(\)=>undefined\);\s*throw error/);
+  assert.match(deliveryClient, /headers:\{\.\.\.headers,'Content-Type':'application\/json'\}/);
 });
 
 test('paid-order delivery endpoints are fail-closed and never follow credential-bearing redirects', () => {

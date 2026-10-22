@@ -38,7 +38,7 @@ import {
   tryAcquireStripeWebhookUpload,
 } from '@/lib/stripeWebhookConcurrency';
 import { stripeWebhookVerificationFailure } from '@/lib/stripeWebhookVerification';
-import { deliveryResponseContentEncoding, strictDeliveryResponseText } from '@/lib/deliveryResponse';
+import { deliveryResponseContentEncoding, deliveryResponseHasJsonContentType, strictDeliveryResponseText } from '@/lib/deliveryResponse';
 
 export const runtime = 'nodejs';
 
@@ -248,12 +248,6 @@ function deliveryLeaseIsStale(updatedAt: string | null | undefined) {
 // need a short diagnostic snippet for the retry record.
 const MAX_DELIVERY_RESPONSE_BODY_BYTES=64 * 1024;
 const MAX_DELIVERY_RESPONSE_BODY_CHUNKS=1_024;
-const MAX_DELIVERY_CONTENT_TYPE_HEADER_LENGTH=256;
-
-function hasJsonDeliveryContentType(value:string|null) {
-  return Boolean(value&&value.length<=MAX_DELIVERY_CONTENT_TYPE_HEADER_LENGTH&&
-    value.split(';',1)[0].trim().toLowerCase()==='application/json');
-}
 
 async function readDeliveryResponseBody(response: Response, deadline: Promise<never>) {
   let contentLength:number|null;
@@ -354,7 +348,11 @@ async function postJsonWithTimeout(url:string,body:unknown,timeoutMs=DELIVERY_TI
     // and can turn a harmless relay typo into a paid-order data leak. Treat a
     // redirect as a failed retryable delivery instead.
     const response=await Promise.race([
-      fetch(url,{method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify(body),signal:controller.signal,redirect:'error'}),
+      // Keep this helper's wire contract authoritative. A future caller may
+      // add authentication or provider headers, but it must not be able to
+      // replace the JSON media type while the success path expects a JSON
+      // acknowledgement.
+      fetch(url,{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify(body),signal:controller.signal,redirect:'error'}),
       deadline,
     ]);
     // A non-2xx status is already sufficient to keep the durable delivery
@@ -378,7 +376,7 @@ async function postJsonWithTimeout(url:string,body:unknown,timeoutMs=DELIVERY_TI
     // must never be allowed to settle an irreversible paid-order delivery.
     // Reject before reading, and tear down both fetch and body stream so a
     // malformed success cannot retain the webhook worker until the deadline.
-    if(!hasJsonDeliveryContentType(response.headers.get('content-type'))) {
+    if(!deliveryResponseHasJsonContentType(response.headers.get('content-type'))) {
       const error=new Error('Delivery provider returned a non-JSON response');
       controller.abort(error);
       void response.body?.cancel(error).catch(()=>undefined);
