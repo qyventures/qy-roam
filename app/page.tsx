@@ -9,7 +9,7 @@ import { operationalIsoDateAfter } from '../lib/operationalDate';
 import { checkoutAttempt, clearCheckoutAttempt, type CheckoutAttempt } from '../lib/checkoutAttempt';
 import { fetchCustomerJson } from '../lib/clientRequest';
 import { fetchCustomerCheckout } from '../lib/customerCheckout';
-import { esimPromoIsActive } from '../lib/esimPlans';
+import { esimOfferIsSaleable } from '../lib/esimPlans';
 import { parsePocketWifiAvailability, parsePocketWifiBookingTerms, type PocketWifiAvailability } from '../lib/pocketWifiAvailability';
 import { pocketWifiCheckoutFingerprint } from '../lib/checkoutFingerprint';
 import { MAX_POCKET_WIFI_RENTAL_DAYS } from '../lib/pocketWifiRentalPeriod';
@@ -72,7 +72,7 @@ export default function Home() {
   // expires. Keep the primary sales choice on that same boundary so the
   // homepage never promises an immediately purchasable digital product while
   // the checkout correctly rejects it.
-  const esimOfferActive = esimPromoIsActive();
+  const esimOfferActive = esimOfferIsSaleable();
   // Keep the picker aligned with the server's Singapore delivery calendar.
   const [deliveryLeadDays, setDeliveryLeadDays] = useState(DEFAULT_DELIVERY_LEAD_DAYS);
   const [courierFeeSgd, setCourierFeeSgd] = useState(0);

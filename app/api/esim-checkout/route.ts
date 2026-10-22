@@ -1,7 +1,7 @@
 import { NextResponse as FrameworkNextResponse } from 'next/server';
 import type Stripe from 'stripe';
 import { createStripeClient } from '../../../lib/stripeClient';
-import { ESIM_PROMO, esimPromoIsActive, getEsimPlan } from '../../../lib/esimPlans';
+import { ESIM_PROMO, esimOfferIsSaleable, getEsimPlan } from '../../../lib/esimPlans';
 import { validCheckoutRequestId } from '../../../lib/checkoutValidation';
 import { hasOrderIntegritySigningConfig, QY_ROAM_PROVENANCE_METADATA_KEY, signedQyRoamProvenance, validQyRoamProvenance } from '../../../lib/orderProvenance';
 import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '../../../lib/productionReadiness';
@@ -123,8 +123,8 @@ export async function POST(req: Request) {
     // Build-time pricing checks prevent a new release with an expired offer,
     // but an already-running production process must also stop creating
     // discounted payment obligations at the approved campaign boundary.
-    if (!esimPromoIsActive()) {
-      return NextResponse.json({ error: 'This eSIM offer has ended. Please contact +65 8032 7183 for current availability.' }, {
+    if (!esimOfferIsSaleable()) {
+      return NextResponse.json({ error: 'This eSIM offer is currently unavailable while pricing is reviewed. Please contact +65 8032 7183 for current availability.', pricingExpired: true }, {
         status: 503,
         headers: { 'Cache-Control': 'no-store' },
       });
@@ -230,8 +230,8 @@ export async function POST(req: Request) {
     // the offer is still authorised immediately before asking Stripe to
     // create a payable Session, so a request crossing the Singapore campaign
     // cutoff cannot open a newly expired discounted checkout.
-    if (!esimPromoIsActive()) {
-      return NextResponse.json({ error: 'This eSIM offer has ended. Please contact +65 8032 7183 for current availability.', pricingExpired: true }, {
+    if (!esimOfferIsSaleable()) {
+      return NextResponse.json({ error: 'This eSIM offer is currently unavailable while pricing is reviewed. Please contact +65 8032 7183 for current availability.', pricingExpired: true }, {
         status: 409,
         headers: { 'Cache-Control': 'no-store' },
       });

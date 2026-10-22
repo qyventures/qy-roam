@@ -2,7 +2,7 @@ import { hasRequiredAdminCredentials, hasRequiredMetaCapiPurchaseConfig } from '
 import { hasRequiredEsimOrderSchema, hasRequiredFulfilmentEmailConfig, hasRequiredOperationsSchema, hasRequiredPaymentSchema, hasRequiredPocketWifiFulfilmentSchema, hasRequiredStripeApiAccess, hasRequiredStripeCheckoutConfig, hasRequiredStripeWebhookConfig } from '@/lib/productionReadiness';
 import { operationalConfig } from '@/lib/operationalConfig';
 import { hasOrderIntegritySigningConfig } from '@/lib/orderProvenance';
-import { ESIM_PROMO, esimPromoIsActive } from '@/lib/esimPlans';
+import { ESIM_PROMO, esimOfferIsSaleable } from '@/lib/esimPlans';
 import { LAUNCH_PROMO, promoIsActive } from '@/lib/promotions';
 import { isProductionQyRoamOrigin } from '@/lib/siteOrigin';
 import { hasSaleablePocketWifiInventory } from '@/lib/pocketWifiStock';
@@ -20,7 +20,7 @@ export default async function LaunchPage(){
  // overlapping operator refreshes cannot multiply Stripe/Supabase work during
  // an incident. A busy or unexpectedly rejected probe remains a usable,
  // explicitly unavailable control surface instead of a server-render failure.
- const esimOfferActive=esimPromoIsActive();
+ const esimOfferActive=esimOfferIsSaleable();
  const dependencyChecks=await runAdminDashboardWork(async()=>{
   try {
    return await Promise.all([hasRequiredStripeApiAccess(),esimOfferActive?hasRequiredEsimOrderSchema():Promise.resolve(false),hasRequiredPaymentSchema(),hasRequiredPocketWifiFulfilmentSchema(),hasRequiredOperationsSchema(),hasSaleablePocketWifiInventory(config?.pocketWifiInventory||0)]);

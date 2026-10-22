@@ -22,6 +22,24 @@ export function esimPromoIsActive(now = new Date()) {
   return Number.isFinite(now.getTime()) && Number.isFinite(end.getTime()) && now.getTime() <= end.getTime();
 }
 
+export const ESIM_BENCHMARK_MAX_AGE_DAYS = 30;
+
+function singaporeIsoDate(now: Date) {
+  if (!Number.isFinite(now.getTime())) return null;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Singapore', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(now);
+  const values = Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+  const value = `${values.year}-${values.month}-${values.day}`;
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
+}
+
+function exactIsoDay(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const timestamp = Date.parse(`${value}T00:00:00Z`);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === value ? timestamp : null;
+}
+
 function discounted(price: number) {
   return Math.floor(price * 0.85 * 100) / 100;
 }
@@ -85,6 +103,27 @@ export const ESIM_PLANS: EsimPlan[] = [
     note: 'Hotspot/tethering supported'
   }
 ];
+
+/**
+ * Runtime counterpart to the release pricing check. A process can remain
+ * online after a benchmark's reviewed window ends, so checkout and public
+ * offer surfaces must fail closed without waiting for another deployment.
+ */
+export function esimBenchmarksAreFresh(now = new Date()) {
+  const today = singaporeIsoDate(now);
+  const todayMs = today ? exactIsoDay(today) : null;
+  if (todayMs === null) return false;
+  return ESIM_PLANS.every((plan) => {
+    const verifiedMs = exactIsoDay(plan.benchmarkVerifiedOn);
+    if (verifiedMs === null) return false;
+    const ageDays = (todayMs - verifiedMs) / 86_400_000;
+    return ageDays >= 0 && ageDays <= ESIM_BENCHMARK_MAX_AGE_DAYS;
+  });
+}
+
+export function esimOfferIsSaleable(now = new Date()) {
+  return esimPromoIsActive(now) && esimBenchmarksAreFresh(now);
+}
 
 export function getEsimPlan(id: unknown) {
   return ESIM_PLANS.find((plan) => plan.id === String(id || ''));

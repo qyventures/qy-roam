@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { ESIM_PLANS, esimPromoIsActive } from '../../lib/esimPlans';
+import { ESIM_PLANS, esimOfferIsSaleable } from '../../lib/esimPlans';
 
 // Offer availability is time-bound. Render this subtree per request so search
 // metadata cannot remain frozen as in-stock after the approved sales window
@@ -24,7 +24,7 @@ export const metadata: Metadata = {
 };
 
 export default function EsimLayout({ children }: { children: React.ReactNode }) {
-  const offerActive = esimPromoIsActive();
+  const offerActive = esimOfferIsSaleable();
   const schema = {
     '@context': 'https://schema.org',
     '@type': 'ItemList',

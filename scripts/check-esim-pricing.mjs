@@ -51,7 +51,9 @@ if (promoActive) {
   // An expired campaign must remain deployable so unrelated products and
   // operational fixes can ship, but only while every public purchase path is
   // fail-closed and expired prices are not presented as a current offer.
-  if (!checkout.includes('if (!esimPromoIsActive())') || !checkout.includes("status: 503")) {
+  if (!source.includes('export function esimBenchmarksAreFresh') ||
+      !source.includes('return esimPromoIsActive(now) && esimBenchmarksAreFresh(now);') ||
+      !checkout.includes('if (!esimOfferIsSaleable())') || !checkout.includes("status: 503")) {
     throw new Error('Expired eSIM offer is not blocked by the checkout endpoint');
   }
   if (!storefront.includes('disabled={busy || !promoActive}') ||

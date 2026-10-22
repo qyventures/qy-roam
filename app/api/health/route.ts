@@ -6,7 +6,7 @@ import { isProductionQyRoamOrigin } from '@/lib/siteOrigin';
 import { hasOrderIntegritySigningConfig } from '@/lib/orderProvenance';
 import { healthCheckToken, MAX_HEALTH_CHECK_TOKEN_LENGTH } from '@/lib/healthCheckToken';
 import { hasRequiredSupabaseAdminConfig } from '@/lib/supabaseAdmin';
-import { esimPromoIsActive } from '@/lib/esimPlans';
+import { esimOfferIsSaleable } from '@/lib/esimPlans';
 import { hasSaleablePocketWifiInventory } from '@/lib/pocketWifiStock';
 import { tryAcquireHealthConcurrency } from '@/lib/healthConcurrency';
 import { wifiBenchmarkIsFresh } from '@/lib/wifiPlans';
@@ -85,7 +85,7 @@ export async function GET(req: Request) {
   // deployment wait for it) when the public eSIM checkout is guaranteed to
   // reject every purchase. Capture the offer state once so the dependency
   // plan and the resulting product gate describe the same instant.
-  const esimOfferActive = esimPromoIsActive();
+  const esimOfferActive = esimOfferIsSaleable();
   // Checkout has product-specific post-payment contracts. In particular, an
   // eSIM requires its non-secret digital-delivery audit field, which is not a
   // Pocket WiFi requirement. Keep the authenticated release signal aligned

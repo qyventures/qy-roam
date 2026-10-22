@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ESIM_PLANS, ESIM_PROMO, esimPromoIsActive } from '../../lib/esimPlans';
+import { ESIM_PLANS, ESIM_PROMO, esimOfferIsSaleable } from '../../lib/esimPlans';
 import { metaAttribution, metaMeasurementAllowed, trackMeta } from '../../lib/metaClient';
 import { checkoutAttempt, clearCheckoutAttempt, type CheckoutAttempt } from '../../lib/checkoutAttempt';
 import { fetchCustomerCheckout } from '../../lib/customerCheckout';
@@ -32,7 +32,7 @@ export default function EsimPage() {
   const checkoutAbortController = useRef<AbortController | null>(null);
   const plan = useMemo(() => ESIM_PLANS.find((item) => item.id === planId) || ESIM_PLANS[0], [planId]);
   const dailyPrice = plan.qyPriceSgd / plan.days;
-  const promoActive = esimPromoIsActive();
+  const promoActive = esimOfferIsSaleable();
 
   useEffect(() => {
     const url = new URL(window.location.href);

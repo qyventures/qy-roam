@@ -21,7 +21,7 @@ require.extensions['.ts'] = (module, filename) => {
   module._compile(output.outputText, filename);
 };
 
-const { ESIM_PLANS, ESIM_PROMO, esimPromoIsActive } = require('../lib/esimPlans.ts');
+const { ESIM_BENCHMARK_MAX_AGE_DAYS, ESIM_PLANS, ESIM_PROMO, esimBenchmarksAreFresh, esimOfferIsSaleable, esimPromoIsActive } = require('../lib/esimPlans.ts');
 const { LAUNCH_PROMO, applyPromoCents, promoIsActive } = require('../lib/promotions.ts');
 const { validateQyRoamSession, validateQyRoamTerminalUnpaidSession } = require('../lib/qyRoamSession.ts');
 const { parseExactIsoDate, validCheckoutRequestId } = require('../lib/checkoutValidation.ts');
@@ -741,7 +741,7 @@ test('eSIM launch pricing expires at the approved Singapore campaign boundary', 
   assert.equal(esimPromoIsActive(new Date('2026-09-30T15:59:59.000Z')), true);
   assert.equal(esimPromoIsActive(new Date('2026-09-30T16:00:00.000Z')), false);
   assert.equal(esimPromoIsActive(new Date(Number.NaN)), false);
-  assert.match(esimCheckoutRoute, /if \(!esimPromoIsActive\(\)\)/);
+  assert.match(esimCheckoutRoute, /if \(!esimOfferIsSaleable\(\)\)/);
   assert.match(esimCheckoutRoute, /status: 503/);
   assert.match(esimCheckoutRoute, /'Cache-Control': 'no-store'/);
   assert.match(esimPage, /disabled=\{busy \|\| !promoActive\}/);
@@ -756,12 +756,27 @@ test('eSIM launch pricing expires at the approved Singapore campaign boundary', 
   // Search metadata and the homepage must share the checkout's approved
   // offer boundary. In particular, do not keep advertising an in-stock price
   // or an immediately purchasable option after checkout has paused sales.
-  assert.match(homePage, /const esimOfferActive = esimPromoIsActive\(\)/);
+  assert.match(homePage, /const esimOfferActive = esimOfferIsSaleable\(\)/);
   assert.match(homePage, /esimOfferActive \? 'Digital travel option' : 'Online ordering paused'/);
   assert.match(esimLayout, /export const dynamic = 'force-dynamic'/);
   assert.match(esimLayout, /offers: offerActive \? \{/);
   assert.doesNotMatch(rootLayout, /with launch promotions/);
   assert.doesNotMatch(esimLayout, /launch pricing benchmarked 15% below/);
+});
+
+test('eSIM benchmark freshness remains a runtime sales boundary after deployment', () => {
+  assert.equal(ESIM_BENCHMARK_MAX_AGE_DAYS, 30);
+  assert.equal(esimBenchmarksAreFresh(new Date('2026-09-28T15:59:59.000Z')), true);
+  assert.equal(esimBenchmarksAreFresh(new Date('2026-09-28T16:00:00.000Z')), false);
+  assert.equal(esimBenchmarksAreFresh(new Date('2026-08-28T15:59:59.000Z')), false);
+  assert.equal(esimBenchmarksAreFresh(new Date(Number.NaN)), false);
+  assert.equal(esimOfferIsSaleable(new Date('2026-09-28T15:59:59.000Z')), true);
+  assert.equal(esimOfferIsSaleable(new Date('2026-09-28T16:00:00.000Z')), false);
+  assert.match(esimCheckoutRoute, /if \(!esimOfferIsSaleable\(\)\)/);
+  assert.match(esimPage, /const promoActive = esimOfferIsSaleable\(\)/);
+  assert.match(esimLayout, /const offerActive = esimOfferIsSaleable\(\)/);
+  assert.match(healthRoute, /const esimOfferActive = esimOfferIsSaleable\(\)/);
+  assert.match(launchPage, /const esimOfferActive=esimOfferIsSaleable\(\)/);
 });
 
 test('Pocket WiFi promotion expires consistently across pricing and storefront claims', () => {
@@ -780,7 +795,7 @@ test('Pocket WiFi promotion expires consistently across pricing and storefront c
 test('checkout re-authorises promotional prices immediately before Stripe Session creation', () => {
   const esimCreate = esimCheckoutRoute.indexOf('stripe.checkout.sessions.create({');
   const esimReadiness = esimCheckoutRoute.indexOf('if (!await hasRequiredEsimOrderSchema())');
-  const esimFinalPromoCheck = esimCheckoutRoute.lastIndexOf('if (!esimPromoIsActive())', esimCreate);
+  const esimFinalPromoCheck = esimCheckoutRoute.lastIndexOf('if (!esimOfferIsSaleable())', esimCreate);
   assert.ok(esimCreate > -1 && esimReadiness > -1 && esimFinalPromoCheck > esimReadiness && esimFinalPromoCheck < esimCreate);
   assert.match(esimCheckoutRoute.slice(esimFinalPromoCheck, esimCreate), /pricingExpired: true/);
 
@@ -6863,7 +6878,7 @@ test('launch control reports the same checkout prerequisites that protect real o
   assert.match(launchPage, /hasRequiredPocketWifiFulfilmentSchema\(\)/);
   assert.match(launchPage, /hasSaleablePocketWifiInventory\(config\?\.pocketWifiInventory\|\|0\)/);
   assert.match(launchPage, /const commonCheckoutReady=stripe&&stripeApi&&webhook&&site&&orderIntegrity&&smtp/);
-  assert.match(launchPage, /const esimOfferActive=esimPromoIsActive\(\)/);
+  assert.match(launchPage, /const esimOfferActive=esimOfferIsSaleable\(\)/);
   assert.match(launchPage, /const wifiPromoActive=promoIsActive\(\)/);
   assert.match(launchPage, /const esimReady=commonCheckoutReady&&esimOrderDbOk&&esimOfferActive/);
   assert.match(launchPage, /const wifiReady=commonCheckoutReady&&paymentDbOk&&pocketWifiFulfilmentDbOk&&wifiInventory&&pocketWifiStock/);
@@ -6908,7 +6923,7 @@ test('authenticated health readiness separates shared release controls from prod
   assert.match(healthRoute, /error: 'Readiness checks are busy\.'/);
   assert.match(healthRoute, /'Retry-After': '5'/);
   assert.match(healthRoute, /finally \{\s*releaseHealth\(\);\s*\}/);
-  assert.match(healthRoute, /const esimOfferActive = esimPromoIsActive\(\)/);
+  assert.match(healthRoute, /const esimOfferActive = esimOfferIsSaleable\(\)/);
   assert.match(healthRoute, /dependencyChecks = await Promise\.all\(\[/);
   assert.match(healthRoute, /esimOfferActive \? hasRequiredEsimOrderSchema\(\) : Promise\.resolve\(false\)/);
   assert.match(healthRoute, /const \[stripeApi, esimOrderSchema, paymentSchema, pocketWifiFulfilmentSchema, operationsSchema, pocketWifiStock\] = dependencyChecks/);
