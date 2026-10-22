@@ -2172,6 +2172,21 @@ begin
   if p_amount_sgd is null or p_amount_sgd <= 0 or p_amount_sgd > 99999999.99 or p_amount_sgd <> round(p_amount_sgd, 2) then
     raise exception 'manual order amount must be positive whole cents within the order ledger range';
   end if;
+  if p_customer_name is not null and (
+    length(p_customer_name) not between 1 and 120
+    or p_customer_name <> btrim(p_customer_name)
+    or p_customer_name ~ '[[:cntrl:]]'
+  ) then
+    raise exception 'manual order customer name is invalid';
+  end if;
+  if p_email is not null and (
+    length(p_email) not between 3 and 200
+    or p_email <> lower(btrim(p_email))
+    or p_email ~ '[[:cntrl:]]'
+    or p_email !~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$'
+  ) then
+    raise exception 'manual order customer email is invalid';
+  end if;
   if p_phone is not null and (
     length(p_phone) > 32
     or p_phone !~ '^\+?[0-9 ()-]+$'
@@ -2179,7 +2194,15 @@ begin
   ) then
     raise exception 'manual order customer phone is invalid';
   end if;
-  if coalesce(length(trim(p_country)), 0) = 0 then raise exception 'Pocket WiFi destination is required'; end if;
+  if coalesce(length(p_country), 0) not between 1 and 120 or p_country <> btrim(p_country) or p_country ~ '[[:cntrl:]]' then
+    raise exception 'Pocket WiFi destination is invalid';
+  end if;
+  if p_plan_name is not null and (length(p_plan_name) not between 1 and 160 or p_plan_name <> btrim(p_plan_name) or p_plan_name ~ '[[:cntrl:]]') then
+    raise exception 'Pocket WiFi plan name is invalid';
+  end if;
+  if coalesce(length(p_notes), 0) not between 1 and 1700 then
+    raise exception 'manual order notes are invalid';
+  end if;
   if p_travel_start is null or p_travel_end is null or p_travel_end < p_travel_start then raise exception 'invalid Pocket WiFi travel dates'; end if;
   -- This SECURITY DEFINER function is a second entry point into the same
   -- scarce fleet protected by qy_reserve_pocket_wifi. Keep its caller-supplied
@@ -2634,6 +2657,13 @@ begin
   if p_amount_sgd is null or p_amount_sgd <= 0 or p_amount_sgd > 99999999.99 or p_amount_sgd <> round(p_amount_sgd, 2) then
     raise exception 'manual order amount must be positive whole cents within the order ledger range';
   end if;
+  if p_customer_name is not null and (
+    length(p_customer_name) not between 1 and 120
+    or p_customer_name <> btrim(p_customer_name)
+    or p_customer_name ~ '[[:cntrl:]]'
+  ) then
+    raise exception 'manual order customer name is invalid';
+  end if;
   if coalesce(length(p_email), 0) not between 3 and 200
     or p_email <> lower(btrim(p_email))
     or p_email ~ '[[:cntrl:]]'
@@ -2654,6 +2684,9 @@ begin
   if (p_travel_start is null) <> (p_travel_end is null)
     or (p_travel_start is not null and p_travel_end < p_travel_start) then
     raise exception 'invalid eSIM travel dates';
+  end if;
+  if coalesce(length(p_notes), 0) not between 1 and 1700 then
+    raise exception 'manual order notes are invalid';
   end if;
 
   -- Serialise one offline payment reference so simultaneous browser retries
@@ -3603,7 +3636,9 @@ as $$
   -- owner-privileged paid-order CRM reconciliation trigger.
   -- Version 56 bounds every reservation expiry to its checkout lease, so a
   -- malformed privileged write cannot suppress Pocket WiFi sales indefinitely.
-  select 56;
+  -- Version 57 validates manual-sale customer identity and commercial text in
+  -- both atomic creation RPCs, including optional Pocket WiFi email addresses.
+  select 57;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;

@@ -34,6 +34,13 @@ const CLOSING_ORDER_PAGE_SIZE = 1_000;
 const MAX_CLOSING_ORDERS = 50_000;
 
 function text(v: unknown, max = 500) { return String(v ?? '').trim().slice(0, max); }
+function optionalSingleLineText(value: unknown, max: number) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string' || value !== value.trim() || value.length > max || /[\u0000-\u001f\u007f]/.test(value)) {
+    return undefined;
+  }
+  return value || null;
+}
 function money(value: unknown) {
   const raw = typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
   if (!/^\d+(?:\.\d{1,2})?$/.test(raw)) return null;
@@ -247,6 +254,8 @@ export async function POST(req: NextRequest) {
       if (!travel) return NextResponse.json({ error: 'Travel dates must be valid ISO dates with the end date on or after the start date' }, { status: 400 });
       const amountCents = money(body.amount_sgd);
       if (amountCents === null) return NextResponse.json({ error: 'Order amount must be a positive amount with no more than two decimal places' }, { status: 400 });
+      const customerName = optionalSingleLineText(body.customer_name, 120);
+      if (customerName === undefined) return NextResponse.json({ error: 'Customer name must be a single line of at most 120 characters' }, { status: 400 });
       // A manual digital sale creates the same entitlement as Checkout. Bind
       // it to the server catalogue instead of trusting free-text plan fields,
       // which can otherwise leave fulfilment guessing which data package was
@@ -273,7 +282,7 @@ export async function POST(req: NextRequest) {
       const recordedAt = new Date().toISOString();
       const row = {
         stripe_session_id: manualOrderSessionId(reference),
-        payment_status: paymentStatus, customer_name: text(body.customer_name, 120) || null,
+        payment_status: paymentStatus, customer_name: customerName,
         email: text(body.email, 200).toLowerCase() || null, phone: text(body.phone, 60) || null,
         amount_sgd: amountCents / 100, product_type: product,
         plan_id: esimPlan?.id || null,
