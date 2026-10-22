@@ -10712,17 +10712,21 @@ test('Pocket WiFi return prompts follow the rental date even before an admin sta
   assert.match(adminPage, /Pocket WiFi return schedules need reconciliation\./);
 });
 
-test('paid unresolved orders with invalid departures remain visible to operations', () => {
-  // Invalid dates cannot satisfy the ordinary "within two days" filters.
-  // Require a separate fail-loud queue for both product paths and a row-level
-  // warning so missing manual-sale dates never look like non-urgent work.
-  assert.equal((adminPage.match(/if \([^\n]*typeof untilDeparture !== 'number'\) return '⚠ Departure schedule unavailable — reconcile travel dates';/g) || []).length, 2);
+test('digital fulfilment is immediate while invalid WiFi departures remain visible to operations', () => {
+  // Stripe eSIM orders intentionally have no travel dates, and manual eSIM
+  // dates are optional. Every paid awaiting-fulfilment digital order must be
+  // visible without creating a false schedule-integrity incident. Invalid
+  // physical-rental dates still need a fail-loud queue and row warning.
+  assert.match(adminPage, /return order\.fulfilment_status === 'awaiting_fulfilment' \? '⚠ eSIM fulfilment pending' : '';/);
+  assert.equal((adminPage.match(/if \([^\n]*typeof untilDeparture !== 'number'\) return '⚠ Departure schedule unavailable — reconcile travel dates';/g) || []).length, 1);
+  assert.match(adminPage, /const esimExceptions = active\.filter\(\(o:any\) =>\s*isEsim\(o\) && o\.fulfilment_status === 'awaiting_fulfilment'/);
+  assert.match(adminPage, /eSIM fulfilment pending/);
+  assert.match(adminPage, /paid digital orders awaiting delivery/);
   assert.match(adminPage, /const departureScheduleExceptions = active\.filter/);
+  assert.match(adminPage, /if \(!isPocketWifiProduct\(o\.product_type\)\) return false;/);
   assert.match(adminPage, /if \(typeof daysFromToday\(o\.travel_start\) === 'number'\) return false;/);
-  assert.match(adminPage, /if \(isEsim\(o\)\) return !\['fulfilled','closed'\]\.includes\(o\.fulfilment_status\);/);
-  assert.match(adminPage, /if \(isPocketWifiProduct\(o\.product_type\)\)/);
-  assert.match(adminPage, /Departure schedule exceptions/);
-  assert.match(adminPage, /Paid-order departure schedules need reconciliation\./);
+  assert.match(adminPage, /WiFi departure schedule exceptions/);
+  assert.match(adminPage, /Pocket WiFi departure schedules need reconciliation\./);
   assert.match(adminPage, /travel start <code>\{order\.travel_start \|\| 'missing'\}<\/code>/);
 });
 
