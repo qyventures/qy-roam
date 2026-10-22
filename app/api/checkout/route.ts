@@ -19,7 +19,7 @@ import { pocketWifiRentalCents } from '@/lib/pocketWifiPricing';
 import { safeStripeCheckoutUrl } from '@/lib/stripeCheckoutUrl';
 import { durableOrderMatchesFailedSession, durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
-import { stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhookObject';
+import { stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhookObject';
 import { tryAcquireCheckoutConcurrency, tryAcquireCheckoutUpload } from '@/lib/checkoutConcurrency';
 import { scanActivePocketWifiStripeHolds } from '@/lib/pocketWifiStripeHolds';
 import { signedStripeMeasurementConsentDowngrade } from '@/lib/stripeMeasurementProvenance';
@@ -476,6 +476,15 @@ export async function POST(req: Request) {
     // and links this existing reservation before its URL is returned.
     throw error;
   }
+  // Treat Stripe SDK responses as external runtime data. Validate the object
+  // discriminator and immutable identity fields before this create result can
+  // be signed, linked to scarce inventory, or used as an outbound API path.
+  const createdSession=stripeWebhookCheckoutSession(session);
+  if(!createdSession){
+    console.error('checkout_session_object_invalid');
+    return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
+  }
+  session=createdSession;
   // The open-session lookup above intentionally sees only active Stripe
   // holds. An idempotency key can also replay a completed or expired Session,
   // so validate the response from the create call itself before linking the
@@ -500,13 +509,14 @@ export async function POST(req: Request) {
   const consentDowngrade=signedStripeMeasurementConsentDowngrade(createdSessionId,session.metadata,body.measurementConsent);
   if(consentDowngrade){
     const updated=await stripe.checkout.sessions.update(createdSessionId,{metadata:consentDowngrade});
-    if(!stripeWebhookCheckoutSessionMatchesSnapshot(session,updated)||
-      !stripeEventMatchesConfiguredMode(key,updated.livemode)||
-      !matchesRequestedPocketWifi(updated,requestId,requested,origin)){
+    const updatedSession=stripeWebhookCheckoutSession(updated);
+    if(!updatedSession||!stripeWebhookCheckoutSessionMatchesSnapshot(session,updatedSession)||
+      !stripeEventMatchesConfiguredMode(key,updatedSession.livemode)||
+      !matchesRequestedPocketWifi(updatedSession,requestId,requested,origin)){
       console.error('checkout_consent_downgrade_mismatch');
       return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
     }
-    session=updated;
+    session=updatedSession;
   }
   // The id-specific provenance is written before the checkout URL is exposed.
   // Retrying the same idempotency key also repairs a session if a process died
@@ -529,10 +539,11 @@ export async function POST(req: Request) {
   // decision from that fresh state. This also proves the id-bound provenance
   // update is visible before exposing a URL that can create a paid inventory
   // obligation.
-  const currentSession=await stripe.checkout.sessions.retrieve(createdSessionId);
+  const retrievedSession=await stripe.checkout.sessions.retrieve(createdSessionId);
+  const currentSession=stripeWebhookCheckoutSession(retrievedSession);
   // Keep the fresh response bound to the idempotent create result before it
   // can confirm payment, mutate this booking's reservation, or expose a URL.
-  if(!stripeWebhookCheckoutSessionMatchesSnapshot(session,currentSession)){
+  if(!currentSession||!stripeWebhookCheckoutSessionMatchesSnapshot(session,currentSession)){
     console.error('checkout_session_identity_mismatch');
     return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
   }

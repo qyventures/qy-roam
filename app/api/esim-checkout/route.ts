@@ -15,7 +15,7 @@ import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { safeStripeCheckoutUrl } from '@/lib/stripeCheckoutUrl';
 import { durableOrderMatchesFailedSession, durableOrderMatchesPaidSession } from '@/lib/durableOrderSnapshot';
 import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
-import { stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhookObject';
+import { stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhookObject';
 import { tryAcquireCheckoutConcurrency, tryAcquireCheckoutUpload } from '@/lib/checkoutConcurrency';
 import { signedStripeMeasurementConsentDowngrade } from '@/lib/stripeMeasurementProvenance';
 
@@ -238,7 +238,7 @@ export async function POST(req: Request) {
     }
 
     const stripe = createStripeClient(key);
-    let session = await stripe.checkout.sessions.create({
+    let session: Stripe.Checkout.Session = await stripe.checkout.sessions.create({
       mode: 'payment',
       expires_at: expiresAt,
       line_items: [{
@@ -276,6 +276,21 @@ export async function POST(req: Request) {
       },
       consent_collection: { terms_of_service: 'required' }
     }, { idempotencyKey: `qyroam_esim_${requestId}` });
+
+    // SDK return types are compile-time declarations, not a runtime provider
+    // boundary. Validate the create response as an actual Checkout Session
+    // before its id is used for a metadata mutation or provenance signature.
+    // A malformed response must not let a different Stripe object inherit a
+    // QY Roam fulfilment identity merely because it carries lookalike fields.
+    const createdSession = stripeWebhookCheckoutSession(session);
+    if (!createdSession) {
+      console.error('esim_checkout_session_object_invalid');
+      return NextResponse.json({ error: 'Secure checkout confirmation is temporarily unavailable. Please try again shortly.' }, {
+        status: 503,
+        headers: { 'Cache-Control': 'no-store', 'Retry-After': '10' },
+      });
+    }
+    session = createdSession;
 
     // The create response controls the identifier used by the metadata write
     // and subsequent recovery read. Stripe normally supplies a canonical
@@ -315,16 +330,17 @@ export async function POST(req: Request) {
     const consentDowngrade = signedStripeMeasurementConsentDowngrade(createdSessionId, session.metadata, body.measurementConsent);
     if (consentDowngrade) {
       const updated = await stripe.checkout.sessions.update(createdSessionId, { metadata: consentDowngrade });
-      if (!stripeWebhookCheckoutSessionMatchesSnapshot(session, updated) ||
-        !stripeEventMatchesConfiguredMode(key, updated.livemode) ||
-        !matchesRequestedEsim(updated, requestId, plan, expiresAt, origin)) {
+      const updatedSession = stripeWebhookCheckoutSession(updated);
+      if (!updatedSession || !stripeWebhookCheckoutSessionMatchesSnapshot(session, updatedSession) ||
+        !stripeEventMatchesConfiguredMode(key, updatedSession.livemode) ||
+        !matchesRequestedEsim(updatedSession, requestId, plan, expiresAt, origin)) {
         console.error('esim_checkout_consent_downgrade_mismatch');
         return NextResponse.json({ error: 'Secure checkout confirmation is temporarily unavailable. Please try again shortly.' }, {
           status: 503,
           headers: { 'Cache-Control': 'no-store', 'Retry-After': '10' },
         });
       }
-      session = updated;
+      session = updatedSession;
     }
 
     // Stripe assigns the session id during creation. Add a server-only HMAC
@@ -341,11 +357,12 @@ export async function POST(req: Request) {
     // has completed payment in another tab. Retrieve the Session again before
     // choosing a recovery response: a completed payment must lead to its
     // confirmation page, never back to an unusable Checkout URL.
-    const currentSession = await stripe.checkout.sessions.retrieve(createdSessionId);
+    const retrievedSession = await stripe.checkout.sessions.retrieve(createdSessionId);
+    const currentSession = stripeWebhookCheckoutSession(retrievedSession);
     // This fresh object can expose either a paid-order confirmation or a live
     // payment URL. Bind it to the idempotent create result before trusting any
     // metadata, status, provenance, or URL on it.
-    if (!stripeWebhookCheckoutSessionMatchesSnapshot(session, currentSession)) {
+    if (!currentSession || !stripeWebhookCheckoutSessionMatchesSnapshot(session, currentSession)) {
       console.error('esim_checkout_session_identity_mismatch');
       return NextResponse.json({ error: 'Secure checkout confirmation is temporarily unavailable. Please try again shortly.' }, {
         status: 503,

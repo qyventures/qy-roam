@@ -4419,18 +4419,24 @@ test('admin delivery recovery validates its stored Stripe Checkout Session id be
 });
 
 test('checkout provider responses are bounded before their Session ids become API targets or provenance inputs', () => {
-  const esimCreate = esimCheckoutRoute.indexOf('let session = await stripe.checkout.sessions.create');
+  const esimCreate = esimCheckoutRoute.indexOf('await stripe.checkout.sessions.create');
+  const esimObject = esimCheckoutRoute.indexOf('const createdSession = stripeWebhookCheckoutSession(session)', esimCreate);
   const esimId = esimCheckoutRoute.indexOf('const createdSessionId = validStripeCheckoutSessionIdForMode(session.id, session.livemode)', esimCreate);
   const esimUpdate = esimCheckoutRoute.indexOf('stripe.checkout.sessions.update(createdSessionId', esimCreate);
   const esimRetrieve = esimCheckoutRoute.indexOf('stripe.checkout.sessions.retrieve(createdSessionId)', esimCreate);
-  assert.ok(esimCreate >= 0 && esimId > esimCreate && esimUpdate > esimId && esimRetrieve > esimId);
+  assert.ok(esimCreate >= 0 && esimObject > esimCreate && esimId > esimObject && esimUpdate > esimId && esimRetrieve > esimId);
+  assert.match(esimCheckoutRoute, /const updatedSession = stripeWebhookCheckoutSession\(updated\)/);
+  assert.match(esimCheckoutRoute, /const currentSession = stripeWebhookCheckoutSession\(retrievedSession\)/);
   assert.doesNotMatch(esimCheckoutRoute.slice(esimCreate), /sessions\.(?:update|retrieve)\(session\.id/);
 
   const wifiCreate = wifiCheckoutRoute.indexOf('session=await stripe.checkout.sessions.create');
+  const wifiObject = wifiCheckoutRoute.indexOf('const createdSession=stripeWebhookCheckoutSession(session)', wifiCreate);
   const wifiId = wifiCheckoutRoute.indexOf('const createdSessionId=validStripeCheckoutSessionIdForMode(session.id,session.livemode)', wifiCreate);
   const wifiUpdate = wifiCheckoutRoute.indexOf('stripe.checkout.sessions.update(createdSessionId', wifiCreate);
   const wifiRetrieve = wifiCheckoutRoute.indexOf('stripe.checkout.sessions.retrieve(createdSessionId)', wifiCreate);
-  assert.ok(wifiCreate >= 0 && wifiId > wifiCreate && wifiUpdate > wifiId && wifiRetrieve > wifiId);
+  assert.ok(wifiCreate >= 0 && wifiObject > wifiCreate && wifiId > wifiObject && wifiUpdate > wifiId && wifiRetrieve > wifiId);
+  assert.match(wifiCheckoutRoute, /const updatedSession=stripeWebhookCheckoutSession\(updated\)/);
+  assert.match(wifiCheckoutRoute, /const currentSession=stripeWebhookCheckoutSession\(retrievedSession\)/);
   assert.doesNotMatch(wifiCheckoutRoute.slice(wifiCreate), /sessions\.(?:update|retrieve)\(session\.id/);
 
   assert.match(pocketWifiStripeHolds, /const sessionId = validStripeCheckoutSessionIdForMode\(session\.id, session\.livemode\)/);
@@ -4493,7 +4499,7 @@ test('checkout retries keep Stripe idempotency parameters stable', () => {
 test('eSIM idempotent recovery uses a fresh Stripe session state before returning a payment URL', () => {
   // Stripe caches idempotent POST responses. The route must not make a
   // recovery decision from a stale original `open` snapshot after payment.
-  assert.match(esimCheckoutRoute, /const currentSession = await stripe\.checkout\.sessions\.retrieve\(createdSessionId\)/);
+  assert.match(esimCheckoutRoute, /const retrievedSession = await stripe\.checkout\.sessions\.retrieve\(createdSessionId\);\s*const currentSession = stripeWebhookCheckoutSession\(retrievedSession\)/);
   assert.match(esimCheckoutRoute, /if \(!validQyRoamProvenance\(currentSession\.id, currentSession\.metadata\)\)/);
   assert.match(esimCheckoutRoute, /currentSession\.status === 'complete' && currentSession\.payment_status === 'paid'/);
   assert.match(esimCheckoutRoute, /url: checkoutUrl/);
@@ -4528,7 +4534,7 @@ test('checkout recovery binds every fresh Stripe response to its immutable Sessi
   const existingIdentity = wifiCheckoutRoute.indexOf('stripeWebhookCheckoutSessionMatchesSnapshot(holdState.existingSessionSnapshot,existing)', existingRead);
   const existingUrl = wifiCheckoutRoute.indexOf('{url:existingCheckoutUrl}', existingRead);
   assert.ok(existingRead >= 0 && existingIdentity > existingRead && existingIdentity < existingUrl);
-  const currentRead = wifiCheckoutRoute.indexOf('const currentSession=await stripe.checkout.sessions.retrieve(createdSessionId)');
+  const currentRead = wifiCheckoutRoute.indexOf('const retrievedSession=await stripe.checkout.sessions.retrieve(createdSessionId)');
   const currentIdentity = wifiCheckoutRoute.indexOf('stripeWebhookCheckoutSessionMatchesSnapshot(session,currentSession)', currentRead);
   const currentUrl = wifiCheckoutRoute.indexOf('{url:checkoutUrl}', currentRead);
   assert.ok(currentRead >= 0 && currentIdentity > currentRead && currentIdentity < currentUrl);
@@ -5257,7 +5263,7 @@ test('idempotent checkout replays recover paid orders without a second payment a
   assert.match(wifiCheckoutRoute, /\{completed:true,sessionId:currentSession\.id\}/);
   assert.match(wifiCheckoutRoute, /\.eq\('stripe_session_id',currentSession\.id\)\.maybeSingle\(\)/);
   assert.match(wifiCheckoutRoute, /paymentPending:true/);
-  assert.match(esimCheckoutRoute, /const currentSession = await stripe\.checkout\.sessions\.retrieve\(createdSessionId\)/);
+  assert.match(esimCheckoutRoute, /const retrievedSession = await stripe\.checkout\.sessions\.retrieve\(createdSessionId\);\s*const currentSession = stripeWebhookCheckoutSession\(retrievedSession\)/);
   assert.match(esimCheckoutRoute, /currentSession\.status === 'complete' && currentSession\.payment_status === 'paid'/);
   assert.match(esimCheckoutRoute, /\{ completed: true, sessionId: currentSession\.id \}/);
   assert.match(esimCheckoutRoute, /paymentPending: true/);
@@ -5267,7 +5273,7 @@ test('idempotent checkout replays recover paid orders without a second payment a
 
 test('Pocket WiFi create recovery uses fresh Stripe state and confirms provenance before exposing checkout', () => {
   const createCall = wifiCheckoutRoute.indexOf("session=await stripe.checkout.sessions.create");
-  const currentRead = wifiCheckoutRoute.indexOf("const currentSession=await stripe.checkout.sessions.retrieve(createdSessionId)", createCall);
+  const currentRead = wifiCheckoutRoute.indexOf("const retrievedSession=await stripe.checkout.sessions.retrieve(createdSessionId)", createCall);
   const paidBranch = wifiCheckoutRoute.indexOf("if(currentSession.status==='complete'&&currentSession.payment_status==='paid')", currentRead);
   const expiredBranch = wifiCheckoutRoute.indexOf("if(currentSession.status==='expired')", currentRead);
   const urlResponse = wifiCheckoutRoute.indexOf("{url:checkoutUrl}", currentRead);
