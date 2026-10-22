@@ -10865,3 +10865,22 @@ test('manual paid orders reject lossy customer and commercial text instead of tr
   assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 58/);
   assert.match(schema, /qy_order_integrity_schema_version\(\)[\s\S]*?select 58;/);
 });
+
+test('indexed legal pages are customer-ready and do not advertise an expired promotion', () => {
+  // Draft-review notes are internal launch work, not customer terms. Keeping
+  // them on indexed pages undermines the trust signals immediately beside a
+  // payment flow, while the operational launch checklist remains the source
+  // of truth for work that still requires an internal owner.
+  for (const page of [privacyPage, termsPage]) {
+    assert.doesNotMatch(page, /Draft (?:notice|terms):/i);
+    assert.doesNotMatch(page, /before full public launch|subject to final .*review/i);
+    assert.match(page, /Last updated: 23 October 2026/);
+  }
+
+  // Checkout and the storefront already stop applying QY10 after its
+  // approved boundary. The durable terms must describe that same state so a
+  // customer cannot reasonably expect a discount the server will reject.
+  assert.match(termsPage, /QY10 launch promotion ended on 30 September 2026/);
+  assert.match(termsPage, /is no longer applied at checkout/);
+  assert.doesNotMatch(termsPage, /QY10 provides 10% off/);
+});

@@ -15,7 +15,7 @@ export const metadata: Metadata = {
 export default function TermsPage() {
   return <main className="wrap section legal">
     <span className="eyebrow">Terms</span><h1>QY Roam Service Terms</h1>
-    <p>Last updated: 29 August 2026</p>
+    <p>Last updated: 23 October 2026</p>
     <p>These terms govern Pocket WiFi rentals and travel eSIMs supplied by QY Venture Pte. Ltd. under the QY Roam brand. By placing an order you agree to these terms.</p>
     <h2>Bookings and payment</h2>
     <p>Prices are quoted in Singapore dollars. Your booking is confirmed only after successful payment. Any courier or handling charge will be shown before payment. We may decline or cancel an order if inventory, payment, delivery or compliance requirements cannot be satisfied, in which case any applicable refund will be processed to the original payment method.</p>
@@ -33,7 +33,7 @@ export default function TermsPage() {
     <h2>Digital fulfilment and support</h2>
     <p>If eSIM fulfilment has not arrived within a reasonable period after confirmed payment, or before imminent departure, contact QY Roam promptly at +65 8032 7183 with the order details. QY Roam may use manual fulfilment processes and will use reasonable efforts to resolve fulfilment issues before travel.</p>
     <h2>Promotions</h2>
-    <p>The Pocket WiFi code QY10 provides 10% off the rental component of eligible Pocket WiFi bookings through 30 September 2026. Courier, return, loss, damage, late-return and other non-rental charges are excluded. QY Roam may reject misuse or duplicate promotional claims. Travel eSIM promotional pricing and eligibility are shown on the relevant plan and checkout page.</p>
+    <p>The Pocket WiFi QY10 launch promotion ended on 30 September 2026 and is no longer applied at checkout. Any current promotional pricing, eligibility period and exclusions will be shown on the relevant plan and checkout page before payment. Courier, return, loss, damage, late-return and other non-rental charges are excluded from a promotion unless expressly stated.</p>
     <h2>Cancellations and refunds</h2>
     <p>Cancellation eligibility and any administrative charge depend on how close the request is to dispatch, digital fulfilment or service commencement. Once a Pocket WiFi device has been dispatched, an eSIM has been issued or activated, or a service period has started, refunds may be limited to the extent permitted by law and any non-recoverable third-party costs. Nothing in these terms limits statutory rights that cannot lawfully be excluded.</p>
     <h2>Acceptable use</h2>
@@ -42,6 +42,5 @@ export default function TermsPage() {
     <p>To the extent permitted by law, QY Venture Pte. Ltd. is not liable for indirect or consequential losses caused by network outages, local operator restrictions, device incompatibility, travel disruption or circumstances beyond our reasonable control. Nothing in these terms excludes rights or liabilities that cannot lawfully be excluded.</p>
     <h2>Support</h2>
     <p>For booking, eSIM, delivery or return assistance, contact QY Roam at +65 8032 7183.</p>
-    <p><strong>Draft terms:</strong> These launch terms remain subject to final operational and legal review, including the final Pocket WiFi loss/damage fee schedule, courier charges and cancellation windows.</p>
   </main>;
 }
