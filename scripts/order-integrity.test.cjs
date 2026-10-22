@@ -55,6 +55,7 @@ const { CUSTOMER_REQUEST_TIMEOUT_MS, CUSTOMER_JSON_RESPONSE_MAX_BYTES, CUSTOMER_
 const { safeHttpsDeliveryEndpoint } = require('../lib/deliveryEndpoint.ts');
 const { fulfilmentRelayAcknowledged } = require('../lib/deliveryAcknowledgement.ts');
 const { safeProviderDeliveryFailure, safeWebhookProcessingFailure } = require('../lib/deliveryFailure.ts');
+const { strictDeliveryResponseText } = require('../lib/deliveryResponse.ts');
 const { nextRetryAttempt } = require('../lib/retryAttempt.ts');
 const { completeSmtpResponseCode, isSafeSmtpHost, isSafeSmtpMailbox, MAX_SMTP_DATA_LINE_BYTES, smtpDataText, smtpSecureTransport, waitForResponse, waitForTlsHandshake } = require('../lib/smtp.ts');
 const { safeStripeCheckoutUrl } = require('../lib/stripeCheckoutUrl.ts');
@@ -8378,10 +8379,24 @@ test('Stripe webhook bounds third-party delivery responses as well as request ti
   assert.match(webhookRoute, /const response=await Promise\.race\(\[[\s\S]{0,500}fetch\(url,[\s\S]{0,500}deadline,[\s\S]{0,100}\]\)/);
   assert.match(webhookRoute, /await readDeliveryResponseBody\(response,deadline\)/);
   assert.doesNotMatch(webhookRoute, /const responseBody=await response\.text\(\)/);
+  assert.match(webhookRoute, /strictDeliveryResponseText\(body\.subarray\(0,total\)\)/);
+  assert.match(webhookRoute, /Delivery response body is not valid UTF-8/);
   // Completion must leave the reader itself. An accidental enclosing loop
   // would restart after `done` and spin on the closed stream, hanging a paid
   // order after Meta or the SMTP relay had already replied successfully.
   assert.equal(responseReader.match(/for \(;;\)/g)?.length, 1);
+});
+
+test('paid-order delivery acknowledgements reject malformed UTF-8 instead of normalising it', () => {
+  assert.equal(
+    strictDeliveryResponseText(Buffer.from('{"events_received":1}', 'utf8')),
+    '{"events_received":1}',
+  );
+  assert.throws(
+    () => strictDeliveryResponseText(Uint8Array.from([0x7b, 0x22, 0xff, 0x22, 0x7d])),
+    /encoded data was not valid|valid UTF-8/i,
+  );
+  assert.doesNotMatch(webhookRoute, /body\.subarray\(0,total\)\.toString\('utf8'\)/);
 });
 
 test('failed third-party deliveries do not wait for an unused provider response body', () => {

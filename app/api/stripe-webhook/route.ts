@@ -38,6 +38,7 @@ import {
   tryAcquireStripeWebhookUpload,
 } from '@/lib/stripeWebhookConcurrency';
 import { stripeWebhookVerificationFailure } from '@/lib/stripeWebhookVerification';
+import { strictDeliveryResponseText } from '@/lib/deliveryResponse';
 
 export const runtime = 'nodejs';
 
@@ -330,7 +331,11 @@ async function readDeliveryResponseBody(response: Response, deadline: Promise<ne
   if(exactLengthExpected&&!contentLengthMatches(contentLength,total)) {
     throw new Error('Delivery response body is incomplete');
   }
-  return body.subarray(0,total).toString('utf8');
+  try {
+    return strictDeliveryResponseText(body.subarray(0,total));
+  } catch {
+    throw new Error('Delivery response body is not valid UTF-8');
+  }
 }
 
 async function postJsonWithTimeout(url:string,body:unknown,timeoutMs=DELIVERY_TIMEOUT_MS,headers:Record<string,string>={}){
