@@ -21,6 +21,12 @@ export const dynamic = 'force-dynamic';
 // data set visible to staff before it can hide operational work.
 const ADMIN_PAGE_SIZE = 250;
 const ADMIN_MAX_ROWS = 5_000;
+// Database and application clocks can differ slightly, but a payment recorded
+// materially in the future is not trustworthy sales/accounting evidence. Keep
+// this aligned with the modest operational skew allowance used by delivery
+// leases rather than allowing a corrupt timestamp to remain in rolling
+// revenue and CRM recency until wall time eventually catches up.
+const PAYMENT_TIMESTAMP_CLOCK_SKEW_MS = 5 * 60_000;
 
 type PagedResult = { data: any[]; error: any; truncated: boolean };
 type PageCursor = string | number;
@@ -119,7 +125,8 @@ function customerKey(order: any) {
 function withinDays(value: string | null | undefined, days: number) {
   if (!value) return false;
   const t = new Date(value).getTime();
-  return Number.isFinite(t) && t >= Date.now() - days * 86400000;
+  const now = Date.now();
+  return Number.isFinite(t) && t <= now + PAYMENT_TIMESTAMP_CLOCK_SKEW_MS && t >= now - days * 86400000;
 }
 
 function tripFlag(order: any) {
@@ -333,12 +340,12 @@ async function renderAdminPage() {
   const invalidPaidProducts = paid.filter((o:any)=>!isSupportedProduct(o.product_type));
   const invalidPaymentTimes = paid.filter((o:any) => {
     const timestamp = typeof o.payment_confirmed_at === 'string' ? Date.parse(o.payment_confirmed_at) : Number.NaN;
-    return !Number.isFinite(timestamp);
+    return !Number.isFinite(timestamp) || timestamp > Date.now() + PAYMENT_TIMESTAMP_CLOCK_SKEW_MS;
   });
   const reportingIntegrityIssues = [
     ...invalidPaidAmounts.map((o:any)=>`order #${o.id} has an invalid paid amount`),
     ...invalidPaidProducts.map((o:any)=>`order #${o.id} has an unknown product identity`),
-    ...invalidPaymentTimes.map((o:any)=>`order #${o.id} has an invalid payment confirmation time`),
+    ...invalidPaymentTimes.map((o:any)=>`order #${o.id} has an invalid or future payment confirmation time`),
   ];
   const reportingIncomplete = ordersIncomplete || reportingIntegrityIssues.length > 0;
   // "Active" on this operations dashboard means paid work that can safely be

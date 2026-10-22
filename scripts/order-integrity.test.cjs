@@ -4091,6 +4091,13 @@ test('sales dashboards and CRM recency use payment confirmation rather than chec
   assert.doesNotMatch(schema, /\(created_at at time zone 'Asia\/Singapore'\)::date as sales_date/);
 });
 
+test('admin financial reporting rejects future-dated payment confirmations', () => {
+  assert.match(adminPage, /const PAYMENT_TIMESTAMP_CLOCK_SKEW_MS = 5 \* 60_000/);
+  assert.match(adminPage, /t <= now \+ PAYMENT_TIMESTAMP_CLOCK_SKEW_MS/);
+  assert.match(adminPage, /timestamp > Date\.now\(\) \+ PAYMENT_TIMESTAMP_CLOCK_SKEW_MS/);
+  assert.match(adminPage, /invalid or future payment confirmation time/);
+});
+
 test('admin forecast replacement and financial inputs preserve approved operations data', () => {
   assert.match(adminOpsRoute, /function nonNegativeMoney\(value: unknown\)/);
   assert.match(adminOpsRoute, /function nonNegativeInteger\(value: unknown\)/);
