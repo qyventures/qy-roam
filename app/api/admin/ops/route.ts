@@ -422,14 +422,27 @@ export async function POST(req: NextRequest) {
       if (!['pocket_wifi', 'esim'].includes(productType) || !['available', 'quarantined', 'damaged', 'maintenance'].includes(status)) {
         return NextResponse.json({ error: 'Choose a valid inventory product type and status' }, { status: 400 });
       }
+      // Inventory identity and custody context are audit records. The older
+      // generic `text()` helper truncated these values, so an operator could
+      // submit one SKU, serial number, location, or note and receive success
+      // for a different stored value. Reject overlong/control-bearing input
+      // instead; an idempotent retry must describe the exact same item.
+      const sku = optionalSingleLineText(body.sku, 80);
+      const name = optionalSingleLineText(body.name, 120);
+      const serialNo = optionalSingleLineText(body.serial_no, 120);
+      const location = optionalSingleLineText(body.location, 120);
+      const inventoryNotes = optionalSingleLineText(body.notes, 1000);
+      if (!sku || !name) return NextResponse.json({ error: 'SKU and name are required and must be single-line values within their displayed limits' }, { status: 400 });
+      if (serialNo === undefined || location === undefined || inventoryNotes === undefined) {
+        return NextResponse.json({ error: 'Inventory details exceed their displayed limits or contain unsupported control characters' }, { status: 400 });
+      }
       const row = {
-        sku: text(body.sku, 80), name: text(body.name, 120), product_type: productType,
-        serial_no: text(body.serial_no, 120) || null, status,
+        sku, name, product_type: productType,
+        serial_no: serialNo, status,
         quantity_on_hand: quantityOnHand, reorder_level: reorderLevel,
-        unit_cost_sgd: unitCostCents / 100, location: text(body.location, 120) || null, notes: text(body.notes, 1000) || null,
+        unit_cost_sgd: unitCostCents / 100, location, notes: inventoryNotes,
         updated_at: new Date().toISOString()
       };
-      if (!row.sku || !row.name) return NextResponse.json({ error: 'SKU and name are required' }, { status: 400 });
       // Opening stock is a real physical-stock movement. Do not insert the
       // item directly: a later audit would otherwise show its adjustments,
       // dispatch and return records but not how its original saleable balance
@@ -480,7 +493,9 @@ export async function POST(req: NextRequest) {
       if (movementType === 'write_off' && delta > -1) return NextResponse.json({ error: 'A write-off must decrease stock' }, { status: 400 });
       if (!reference) return NextResponse.json({ error: 'An inventory adjustment reference is required' }, { status: 400 });
       if (!validInventoryReference(reference)) return NextResponse.json({ error: 'Inventory references must be a single line of 120 characters or fewer' }, { status: 400 });
-      const { data, error } = await db.rpc('qy_adjust_inventory', { p_item_id: itemId, p_delta: delta, p_type: movementType, p_reference: reference, p_notes: text(body.notes, 1000) || null, p_operation_id: operationId });
+      const adjustmentNotes = optionalSingleLineText(body.notes, 1000);
+      if (adjustmentNotes === undefined) return NextResponse.json({ error: 'Inventory notes must be a single line of 1,000 characters or fewer' }, { status: 400 });
+      const { data, error } = await db.rpc('qy_adjust_inventory', { p_item_id: itemId, p_delta: delta, p_type: movementType, p_reference: reference, p_notes: adjustmentNotes, p_operation_id: operationId });
       if (error) {
         const failure = inventoryMutationFailure(error);
         if (failure) return NextResponse.json({ error: failure.message }, { status: failure.status });
@@ -507,6 +522,8 @@ export async function POST(req: NextRequest) {
       const reference = typeof body.reference === 'string' ? body.reference.trim() : '';
       if (!reference) return NextResponse.json({ error: 'An inspection or repair reference is required before changing device status' }, { status: 400 });
       if (!validInventoryReference(reference)) return NextResponse.json({ error: 'Inventory references must be a single line of 120 characters or fewer' }, { status: 400 });
+      const inspectionNotes = optionalSingleLineText(body.notes, 1000);
+      if (inspectionNotes === undefined) return NextResponse.json({ error: 'Inspection notes must be a single line of 1,000 characters or fewer' }, { status: 400 });
       // Status changes control whether a router can be dispatched. Keep them
       // in the inventory movement ledger instead of making an unaudited table
       // update that could silently restore a quarantined unit to saleable use.
@@ -514,7 +531,7 @@ export async function POST(req: NextRequest) {
         p_item_id: itemId,
         p_status: status,
         p_reference: reference,
-        p_notes: text(body.notes, 1000) || null,
+        p_notes: inspectionNotes,
         p_operation_id: operationId,
       });
       if (error) {

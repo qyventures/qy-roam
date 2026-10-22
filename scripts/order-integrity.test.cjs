@@ -6394,7 +6394,7 @@ test('Pocket WiFi inspection status changes are durably audited before a unit ca
   assert.match(adminOpsRoute, /rpc\('qy_set_inventory_status'/);
   assert.doesNotMatch(adminOpsRoute, /from\('inventory_items'\)\s*\n\s*\.update\(\{ status/);
   assert.match(adminOpsRoute, /p_reference: reference/);
-  assert.match(adminOpsRoute, /p_notes: text\(body\.notes, 1000\) \|\| null/);
+  assert.match(adminOpsRoute, /p_notes: inspectionNotes/);
 });
 
 test('generic inventory adjustments cannot bypass the Pocket WiFi hand-off and inspection audit boundaries', () => {
@@ -6415,8 +6415,8 @@ test('generic inventory adjustments cannot bypass the Pocket WiFi hand-off and i
   assert.match(adminOpsRoute, /An inspection or repair reference is required before changing device status/);
   assert.doesNotMatch(adminOpsForms, /<option>dispatch<\/option>/);
   assert.doesNotMatch(adminOpsForms, /<option>return<\/option>/);
-  assert.match(adminOpsForms, /name="reference" placeholder="Count sheet \/ PO reference" required/);
-  assert.match(adminOpsForms, /name="reference" placeholder="Inspection \/ repair reference" required/);
+  assert.match(adminOpsForms, /name="reference" placeholder="Count sheet \/ PO reference" maxLength=\{120\} required/);
+  assert.match(adminOpsForms, /name="reference" placeholder="Inspection \/ repair reference" maxLength=\{120\} required/);
 });
 
 test('admin inventory quantities and costs fail closed instead of being silently coerced', () => {
@@ -6434,6 +6434,21 @@ test('admin inventory quantities and costs fail closed instead of being silently
   assert.match(schema, /p_unit_cost_sgd > 100000/);
   assert.match(schema, /abs\(p_delta::bigint\) > 1000000/);
   assert.match(schema, /v_item\.quantity_on_hand::bigint \+ p_delta::bigint > 1000000/);
+});
+
+test('admin inventory audit text is rejected rather than silently truncated', () => {
+  assert.match(adminOpsRoute, /const sku = optionalSingleLineText\(body\.sku, 80\)/);
+  assert.match(adminOpsRoute, /const name = optionalSingleLineText\(body\.name, 120\)/);
+  assert.match(adminOpsRoute, /const serialNo = optionalSingleLineText\(body\.serial_no, 120\)/);
+  assert.match(adminOpsRoute, /const location = optionalSingleLineText\(body\.location, 120\)/);
+  assert.match(adminOpsRoute, /const inventoryNotes = optionalSingleLineText\(body\.notes, 1000\)/);
+  assert.match(adminOpsRoute, /const adjustmentNotes = optionalSingleLineText\(body\.notes, 1000\)/);
+  assert.match(adminOpsRoute, /const inspectionNotes = optionalSingleLineText\(body\.notes, 1000\)/);
+  assert.doesNotMatch(adminOpsRoute, /sku: text\(body\.sku, 80\)/);
+  assert.doesNotMatch(adminOpsRoute, /p_notes: text\(body\.notes, 1000\)/);
+  assert.match(adminOpsForms, /name="sku" placeholder="SKU" maxLength=\{80\}/);
+  assert.match(adminOpsForms, /name="reference" placeholder="Count sheet \/ PO reference" maxLength=\{120\}/);
+  assert.match(adminOpsForms, /name="reference" placeholder="Inspection \/ repair reference" maxLength=\{120\}/);
 });
 
 test('admin CRM writes reject malformed commercial data and missing mutation targets', () => {
