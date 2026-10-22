@@ -51,7 +51,7 @@ const { metaMeasurementAllowed, metaPageViewAllowed, setMetaMeasurementConsent }
 const { digitalDeliveryReferenceIssue, isSafeDigitalDeliveryReference } = require('../lib/digitalDeliveryReference.ts');
 const { SUPABASE_REQUEST_TIMEOUT_MS, SUPABASE_REQUEST_TIMEOUT_MAX_MS, SUPABASE_RESPONSE_MAX_BYTES, SUPABASE_RESPONSE_MAX_CHUNKS, canonicalSupabaseProjectUrl, fetchSupabaseWithTimeout, hasRequiredSupabaseAdminConfig, supabaseServiceRoleKey } = require('../lib/supabaseAdmin.ts');
 const { checkoutAttempt, clearCheckoutAttempt, CHECKOUT_ATTEMPT_MAX_AGE_MS } = require('../lib/checkoutAttempt.ts');
-const { CUSTOMER_REQUEST_TIMEOUT_MS, CUSTOMER_JSON_RESPONSE_MAX_BYTES, CUSTOMER_JSON_RESPONSE_MAX_CHUNKS, CUSTOMER_JSON_CONTENT_TYPE_MAX_LENGTH, CUSTOMER_JSON_CONTENT_ENCODING_MAX_LENGTH, CustomerRequestTimeoutError, fetchCustomerJson, fetchCustomerRequest, isCustomerJsonResponseContentType } = require('../lib/clientRequest.ts');
+const { CUSTOMER_REQUEST_TIMEOUT_MS, CUSTOMER_JSON_RESPONSE_MAX_BYTES, CUSTOMER_JSON_RESPONSE_MAX_CHUNKS, CUSTOMER_JSON_CONTENT_TYPE_MAX_LENGTH, CUSTOMER_JSON_CONTENT_ENCODING_MAX_LENGTH, CustomerRequestTimeoutError, customerResponseContentEncoding, fetchCustomerJson, fetchCustomerRequest, isCustomerJsonResponseContentType } = require('../lib/clientRequest.ts');
 const { safeHttpsDeliveryEndpoint } = require('../lib/deliveryEndpoint.ts');
 const { fulfilmentRelayAcknowledged } = require('../lib/deliveryAcknowledgement.ts');
 const { safeProviderDeliveryFailure, safeWebhookProcessingFailure } = require('../lib/deliveryFailure.ts');
@@ -1503,6 +1503,32 @@ test('customer checkout requests release a stuck browser without rotating their 
     });
     const compressed = await fetchCustomerJson('/api/checkout', { method: 'POST' }, 100);
     assert.deepEqual(compressed.value, { url: 'safe-compressed' });
+
+    assert.equal(customerResponseContentEncoding(null), 'identity');
+    assert.equal(customerResponseContentEncoding('identity'), 'identity');
+    for (const encoding of ['gzip', 'GZIP', 'deflate', 'br']) {
+      assert.equal(customerResponseContentEncoding(encoding), 'encoded');
+    }
+    for (const encoding of ['', 'compress', 'zstd', 'gzip, br', 'gzip; q=1']) {
+      assert.throws(() => customerResponseContentEncoding(encoding), /customer response content encoding/);
+    }
+
+    let unsupportedEncodingCancelled = false;
+    global.fetch = async () => new Response(new ReadableStream({
+      cancel() { unsupportedEncodingCancelled = true; },
+    }), {
+      headers: {
+        'content-type': 'application/json',
+        'content-encoding': 'compress',
+        'content-length': '5',
+      },
+    });
+    await assert.rejects(
+      () => fetchCustomerJson('/api/checkout', { method: 'POST' }, 100),
+      /Unsupported customer response content encoding/,
+    );
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(unsupportedEncodingCancelled, true);
 
     assert.equal(CUSTOMER_JSON_RESPONSE_MAX_BYTES, 64 * 1024);
     assert.equal(CUSTOMER_JSON_RESPONSE_MAX_CHUNKS, 1_024);

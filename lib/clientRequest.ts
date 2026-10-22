@@ -75,8 +75,8 @@ export function isCustomerJsonResponseContentType(value: string | null) {
   return true;
 }
 
-function customerResponseContentEncoding(value: string | null) {
-  if (value === null) return null;
+export function customerResponseContentEncoding(value: string | null) {
+  if (value === null) return 'identity' as const;
   // Fetch normally exposes the decoded representation while retaining the
   // wire Content-Encoding header. Bound and validate that header before any
   // normalisation so a malformed proxy/service-worker response cannot make
@@ -87,7 +87,15 @@ function customerResponseContentEncoding(value: string | null) {
       !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(value)) {
     throw new Error('Invalid customer response content encoding');
   }
-  return value.toLowerCase();
+  const encoding = value.toLowerCase();
+  if (encoding === 'identity') return 'identity' as const;
+  // Browser fetch exposes decoded response bytes for these standard content
+  // codings while it may retain the encoded wire Content-Length. Only those
+  // runtime-supported values may waive the exact decoded-length comparison;
+  // an arbitrary token from a proxy or service worker must not weaken the
+  // authority boundary for checkout URLs and confirmation capabilities.
+  if (encoding === 'gzip' || encoding === 'deflate' || encoding === 'br') return 'encoded' as const;
+  throw new Error('Unsupported customer response content encoding');
 }
 
 async function readBoundedJson(response: Response, signal: AbortSignal) {
@@ -178,7 +186,7 @@ async function readBoundedJson(response: Response, signal: AbortSignal) {
   // Same-origin checkout APIs are uncompressed at the application boundary;
   // a short or overlong body there must not become an authoritative payment
   // capability merely because its available prefix is still valid JSON.
-  if (declaredBytes !== null && (!contentEncoding || contentEncoding === 'identity') && total !== declaredBytes) {
+  if (declaredBytes !== null && contentEncoding === 'identity' && total !== declaredBytes) {
     throw new Error('Customer response body length does not match Content-Length');
   }
   let decoded: string;
