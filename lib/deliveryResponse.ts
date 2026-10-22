@@ -22,10 +22,24 @@ export function deliveryResponseHasJsonContentType(value: string | null) {
   if (!value || value.length > 256 || !/^[\x20-\x7e]+$/.test(value)) return false;
   const [mediaType, ...parameters] = value.split(';');
   if (mediaType.trim().toLowerCase() !== 'application/json') return false;
-  // A trailing/empty parameter is malformed rather than a harmless charset
-  // annotation. Reject it so a generic proxy fallback cannot masquerade as
-  // the provider acknowledgement contract with only a matching prefix.
-  return parameters.every((parameter) => parameter.trim().length > 0);
+  if (parameters.length === 0) return true;
+  // The body reader below always performs strict UTF-8 decoding. Accept only
+  // the matching optional charset parameter rather than silently settling a
+  // paid-order delivery whose declared representation has different
+  // semantics. Unknown, repeated, or empty parameters are malformed at this
+  // authority boundary; Meta and the fulfilment relay need no content-type
+  // extensions beyond their ordinary UTF-8 declaration.
+  if (parameters.length !== 1) return false;
+  const parameter = parameters[0].trim();
+  const separator = parameter.indexOf('=');
+  if (separator < 1 || parameter.indexOf('=', separator + 1) !== -1) return false;
+  const name = parameter.slice(0, separator).trim().toLowerCase();
+  let charset = parameter.slice(separator + 1).trim().toLowerCase();
+  if (charset.startsWith('"') || charset.endsWith('"')) {
+    if (charset.length < 2 || !charset.startsWith('"') || !charset.endsWith('"')) return false;
+    charset = charset.slice(1, -1);
+  }
+  return name === 'charset' && charset === 'utf-8';
 }
 
 // Fetch exposes decoded response bytes while retaining the provider's encoded
