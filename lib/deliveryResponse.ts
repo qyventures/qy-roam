@@ -9,3 +9,17 @@
 export function strictDeliveryResponseText(bytes: Uint8Array) {
   return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
 }
+
+// Fetch exposes decoded response bytes while retaining the provider's encoded
+// Content-Length. Only the content codings supported by the Node fetch runtime
+// may opt out of an exact length comparison. Treat unknown, chained, or
+// control-character-bearing values as a malformed acknowledgement instead of
+// letting an arbitrary header weaken the paid-delivery settlement boundary.
+export function deliveryResponseContentEncoding(value: string | null) {
+  if (value === null || value === '') return 'identity' as const;
+  if (value.length > 128 || !/^[\x20-\x7e]+$/.test(value)) return null;
+  const encoding = value.trim().toLowerCase();
+  if (encoding === 'identity') return 'identity' as const;
+  if (encoding === 'gzip' || encoding === 'deflate' || encoding === 'br') return 'encoded' as const;
+  return null;
+}

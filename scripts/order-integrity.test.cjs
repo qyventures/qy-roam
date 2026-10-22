@@ -55,7 +55,7 @@ const { CUSTOMER_REQUEST_TIMEOUT_MS, CUSTOMER_JSON_RESPONSE_MAX_BYTES, CUSTOMER_
 const { safeHttpsDeliveryEndpoint } = require('../lib/deliveryEndpoint.ts');
 const { fulfilmentRelayAcknowledged } = require('../lib/deliveryAcknowledgement.ts');
 const { safeProviderDeliveryFailure, safeWebhookProcessingFailure } = require('../lib/deliveryFailure.ts');
-const { strictDeliveryResponseText } = require('../lib/deliveryResponse.ts');
+const { deliveryResponseContentEncoding, strictDeliveryResponseText } = require('../lib/deliveryResponse.ts');
 const { nextRetryAttempt } = require('../lib/retryAttempt.ts');
 const { completeSmtpResponseCode, isSafeSmtpHost, isSafeSmtpMailbox, MAX_SMTP_DATA_LINE_BYTES, smtpDataText, smtpSecureTransport, waitForResponse, waitForTlsHandshake } = require('../lib/smtp.ts');
 const { safeStripeCheckoutUrl } = require('../lib/stripeCheckoutUrl.ts');
@@ -8368,7 +8368,9 @@ test('Stripe webhook bounds third-party delivery responses as well as request ti
   assert.match(webhookRoute, /const MAX_DELIVERY_RESPONSE_BODY_BYTES=64 \* 1024/);
   assert.match(webhookRoute, /async function readDeliveryResponseBody\(response: Response, deadline: Promise<never>\)/);
   assert.match(webhookRoute, /declaredContentLength\(response\.headers\.get\('content-length'\),MAX_DELIVERY_RESPONSE_BODY_BYTES\)/);
-  assert.match(webhookRoute, /const exactLengthExpected=!contentEncoding\|\|contentEncoding==='identity'/);
+  assert.match(webhookRoute, /const contentEncoding=deliveryResponseContentEncoding\(response\.headers\.get\('content-encoding'\)\)/);
+  assert.match(webhookRoute, /if\(!contentEncoding\) throw new Error\('Delivery response content encoding is unsupported'\)/);
+  assert.match(webhookRoute, /const exactLengthExpected=contentEncoding==='identity'/);
   assert.match(webhookRoute, /const storageBytes=exactLengthExpected&&contentLength!==null[\s\S]{0,100}\? contentLength[\s\S]{0,100}: MAX_DELIVERY_RESPONSE_BODY_BYTES/);
   assert.match(webhookRoute, /if\(total>storageBytes\) \{[\s\S]{0,200}throw new Error\('Delivery response body is incomplete'\)/);
   assert.match(webhookRoute, /exactLengthExpected&&!contentLengthMatches\(contentLength,total\)/);
@@ -8397,6 +8399,27 @@ test('paid-order delivery acknowledgements reject malformed UTF-8 instead of nor
     /encoded data was not valid|valid UTF-8/i,
   );
   assert.doesNotMatch(webhookRoute, /body\.subarray\(0,total\)\.toString\('utf8'\)/);
+});
+
+test('paid-order delivery acknowledgements accept only runtime-supported response encodings', () => {
+  for (const value of [null, '', 'identity', ' IDENTITY ']) {
+    assert.equal(deliveryResponseContentEncoding(value), 'identity');
+  }
+  for (const value of ['gzip', 'GZip', ' deflate ', 'br']) {
+    assert.equal(deliveryResponseContentEncoding(value), 'encoded');
+  }
+  for (const value of [
+    'compress',
+    'gzip, br',
+    'x-gzip',
+    'identity, identity',
+    'gzip\nidentity',
+    ' '.repeat(129),
+  ]) assert.equal(deliveryResponseContentEncoding(value), null);
+
+  // An arbitrary coding must never disable exact Content-Length checks on a
+  // 2xx response that can settle an irreversible fulfilment/CAPI ledger.
+  assert.match(webhookRoute, /deliveryResponseContentEncoding, strictDeliveryResponseText/);
 });
 
 test('failed third-party deliveries do not wait for an unused provider response body', () => {

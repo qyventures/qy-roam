@@ -38,7 +38,7 @@ import {
   tryAcquireStripeWebhookUpload,
 } from '@/lib/stripeWebhookConcurrency';
 import { stripeWebhookVerificationFailure } from '@/lib/stripeWebhookVerification';
-import { strictDeliveryResponseText } from '@/lib/deliveryResponse';
+import { deliveryResponseContentEncoding, strictDeliveryResponseText } from '@/lib/deliveryResponse';
 
 export const runtime = 'nodejs';
 
@@ -266,8 +266,9 @@ async function readDeliveryResponseBody(response: Response, deadline: Promise<ne
   // retaining the Content-Length of the encoded representation. Only compare
   // the declared length with bytes read when no content coding is present;
   // the fixed buffer below still caps a decoded/compressed response.
-  const contentEncoding=response.headers.get('content-encoding')?.trim().toLowerCase();
-  const exactLengthExpected=!contentEncoding||contentEncoding==='identity';
+  const contentEncoding=deliveryResponseContentEncoding(response.headers.get('content-encoding'));
+  if(!contentEncoding) throw new Error('Delivery response content encoding is unsupported');
+  const exactLengthExpected=contentEncoding==='identity';
   if(!response.body) {
     if(exactLengthExpected&&!contentLengthMatches(contentLength,0)) throw new Error('Delivery response body is incomplete');
     return '';
