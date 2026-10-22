@@ -2200,7 +2200,7 @@ begin
   if p_plan_name is not null and (length(p_plan_name) not between 1 and 160 or p_plan_name <> btrim(p_plan_name) or p_plan_name ~ '[[:cntrl:]]') then
     raise exception 'Pocket WiFi plan name is invalid';
   end if;
-  if coalesce(length(p_notes), 0) not between 1 and 1700 then
+  if coalesce(length(p_notes), 0) not between 1 and 1700 or p_notes ~ '[[:cntrl:]]' then
     raise exception 'manual order notes are invalid';
   end if;
   if p_travel_start is null or p_travel_end is null or p_travel_end < p_travel_start then raise exception 'invalid Pocket WiFi travel dates'; end if;
@@ -2685,7 +2685,7 @@ begin
     or (p_travel_start is not null and p_travel_end < p_travel_start) then
     raise exception 'invalid eSIM travel dates';
   end if;
-  if coalesce(length(p_notes), 0) not between 1 and 1700 then
+  if coalesce(length(p_notes), 0) not between 1 and 1700 or p_notes ~ '[[:cntrl:]]' then
     raise exception 'manual order notes are invalid';
   end if;
 
@@ -3638,7 +3638,9 @@ as $$
   -- malformed privileged write cannot suppress Pocket WiFi sales indefinitely.
   -- Version 57 validates manual-sale customer identity and commercial text in
   -- both atomic creation RPCs, including optional Pocket WiFi email addresses.
-  select 57;
+  -- Version 58 rejects control characters in manual-sale notes so direct
+  -- service-role callers cannot bypass the protected API's audit-text rules.
+  select 58;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;

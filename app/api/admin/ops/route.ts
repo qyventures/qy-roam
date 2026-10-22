@@ -41,6 +41,14 @@ function optionalSingleLineText(value: unknown, max: number) {
   }
   return value || null;
 }
+function optionalTrimmedText(value: unknown, max: number) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  if (!normalized) return null;
+  if (normalized.length > max || /[\u0000-\u001f\u007f]/.test(normalized)) return undefined;
+  return normalized;
+}
 function money(value: unknown) {
   const raw = typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
   if (!/^\d+(?:\.\d{1,2})?$/.test(raw)) return null;
@@ -256,6 +264,12 @@ export async function POST(req: NextRequest) {
       if (amountCents === null) return NextResponse.json({ error: 'Order amount must be a positive amount with no more than two decimal places' }, { status: 400 });
       const customerName = optionalSingleLineText(body.customer_name, 120);
       if (customerName === undefined) return NextResponse.json({ error: 'Customer name must be a single line of at most 120 characters' }, { status: 400 });
+      const email = optionalTrimmedText(body.email, 200);
+      if (email === undefined) return NextResponse.json({ error: 'Customer email must be at most 200 characters and cannot contain control characters' }, { status: 400 });
+      const phone = optionalTrimmedText(body.phone, 32);
+      if (phone === undefined) return NextResponse.json({ error: 'Customer phone must be at most 32 characters and cannot contain control characters' }, { status: 400 });
+      const submittedNotes = optionalTrimmedText(body.notes, 1500);
+      if (submittedNotes === undefined) return NextResponse.json({ error: 'Order notes must be at most 1,500 characters and cannot contain control characters' }, { status: 400 });
       // A manual digital sale creates the same entitlement as Checkout. Bind
       // it to the server catalogue instead of trusting free-text plan fields,
       // which can otherwise leave fulfilment guessing which data package was
@@ -266,7 +280,11 @@ export async function POST(req: NextRequest) {
       if (product === 'esim' && !esimPlan) {
         return NextResponse.json({ error: 'Select a valid eSIM catalogue plan' }, { status: 400 });
       }
-      const country = esimPlan?.destination || text(body.country, 120) || null;
+      const submittedCountry = optionalTrimmedText(body.country, 120);
+      if (submittedCountry === undefined) return NextResponse.json({ error: 'Destination must be at most 120 characters and cannot contain control characters' }, { status: 400 });
+      const submittedPlanName = optionalTrimmedText(body.plan_name, 160);
+      if (submittedPlanName === undefined) return NextResponse.json({ error: 'Plan name must be at most 160 characters and cannot contain control characters' }, { status: 400 });
+      const country = esimPlan?.destination || submittedCountry;
       if (product === 'pocket_wifi' && (!country || !travel.start || !travel.end)) {
         return NextResponse.json({ error: 'Pocket WiFi orders require a destination and valid travel start and end dates' }, { status: 400 });
       }
@@ -283,10 +301,10 @@ export async function POST(req: NextRequest) {
       const row = {
         stripe_session_id: manualOrderSessionId(reference),
         payment_status: paymentStatus, customer_name: customerName,
-        email: text(body.email, 200).toLowerCase() || null, phone: text(body.phone, 60) || null,
+        email: email?.toLowerCase() || null, phone,
         amount_sgd: amountCents / 100, product_type: product,
         plan_id: esimPlan?.id || null,
-        plan_name: esimPlan ? `${esimPlan.destination} · ${esimPlan.days} days` : text(body.plan_name, 160) || null,
+        plan_name: esimPlan ? `${esimPlan.destination} · ${esimPlan.days} days` : submittedPlanName,
         data_allowance: esimPlan?.data || null,
         country, travel_start: travel.start, travel_end: travel.end,
         fulfilment_status: initialStatus,
@@ -298,7 +316,7 @@ export async function POST(req: NextRequest) {
         // explicitly instead of leaving a nullable value that a later report
         // or recovery job could misinterpret as permission to send CAPI.
         measurement_consent: 'essential',
-        notes: `Manual order · Reference: ${reference}${text(body.notes, 1500) ? ` · ${text(body.notes,1500)}` : ''}`,
+        notes: `Manual order · Reference: ${reference}${submittedNotes ? ` · ${submittedNotes}` : ''}`,
         updated_at: recordedAt
       };
       if (!row.email && !row.phone) return NextResponse.json({ error: 'Customer email or phone is required' }, { status: 400 });
