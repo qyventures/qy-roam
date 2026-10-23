@@ -309,11 +309,27 @@ async function renderAdminPage() {
   // totals. Treat it like an unavailable aggregate source rather than
   // presenting the first 5,000 rows as the whole business.
   const ordersIncomplete = ordersUnavailable || result.truncated;
+  // Order rows remain visible even when they need reconciliation, but a row
+  // that is unsafe for the mutation boundary is also unsafe as an input to
+  // derived operations queues. In addition, one Checkout Session must name
+  // exactly one durable order: duplicate session identities make delivery
+  // ledger joins ambiguous and can double-count a single customer payment.
+  const unsafeOperationalOrders = orders.filter((order:any) => !adminOrderMutationSafe(order));
+  const sessionIdentityCounts = new Map<string, number>();
+  for (const order of orders) {
+    if (typeof order.stripe_session_id !== 'string') continue;
+    sessionIdentityCounts.set(order.stripe_session_id, (sessionIdentityCounts.get(order.stripe_session_id) || 0) + 1);
+  }
+  const duplicateSessionOrders = orders.filter((order:any) =>
+    typeof order.stripe_session_id === 'string' &&
+    (sessionIdentityCounts.get(order.stripe_session_id) || 0) > 1
+  );
+  const operationalLedgerIntegrityIssues = unsafeOperationalOrders.length + duplicateSessionOrders.length;
   // Email and CAPI exception totals join orders to their independent delivery
   // ledgers. If either side failed or hit its safety ceiling, a numeric result
   // can be materially wrong (including treating an omitted `sent` row as a
   // failure), so the combined fulfilment summary must fail closed as well.
-  const fulfilmentSummaryIncomplete = ordersIncomplete ||
+  const fulfilmentSummaryIncomplete = ordersIncomplete || operationalLedgerIntegrityIssues > 0 ||
     Boolean(notificationResult.error) || notificationResult.truncated ||
     Boolean(metaDeliveryResult.error) || metaDeliveryResult.truncated;
   // An incomplete webhook ledger cannot support a trustworthy exception
@@ -342,6 +358,8 @@ async function renderAdminPage() {
     return !Number.isFinite(timestamp) || timestamp > Date.now() + PAYMENT_TIMESTAMP_CLOCK_SKEW_MS;
   });
   const reportingIntegrityIssues = [
+    ...unsafeOperationalOrders.filter((o:any)=>o.payment_status === 'paid').map((o:any)=>`order #${o.id} has malformed lifecycle or identity data`),
+    ...duplicateSessionOrders.filter((o:any)=>o.payment_status === 'paid').map((o:any)=>`order #${o.id} shares a payment identity with another order`),
     ...invalidPaidAmounts.map((o:any)=>`order #${o.id} has an invalid paid amount`),
     ...invalidPaidProducts.map((o:any)=>`order #${o.id} has an unknown product identity`),
     ...invalidPaymentTimes.map((o:any)=>`order #${o.id} has an invalid or future payment confirmation time`),
@@ -431,6 +449,10 @@ async function renderAdminPage() {
       {!ordersIncomplete && reportingIntegrityIssues.length > 0 && <div role="alert" style={{...cardStyle,borderColor:'#dc2626',background:'#fef2f2',marginBottom:20}}>
         <strong>Paid sales ledger needs reconciliation.</strong>
         <div style={{marginTop:6}}>Financial and customer aggregates are withheld because {reportingIntegrityIssues.slice(0,3).join('; ')}{reportingIntegrityIssues.length > 3 ? `; and ${reportingIntegrityIssues.length - 3} more issue${reportingIntegrityIssues.length === 4 ? '' : 's'}` : ''}. The order rows remain visible below; correct the durable ledger before using dashboard totals.</div>
+      </div>}
+      {!ordersIncomplete && operationalLedgerIntegrityIssues > 0 && <div role="alert" style={{...cardStyle,borderColor:'#dc2626',background:'#fef2f2',marginBottom:20}}>
+        <strong>Order operations ledger needs reconciliation.</strong>
+        <div style={{marginTop:6}}>Fulfilment totals and joined delivery status are withheld because {unsafeOperationalOrders.length} order row{unsafeOperationalOrders.length === 1 ? '' : 's'} {unsafeOperationalOrders.length === 1 ? 'has' : 'have'} malformed lifecycle or identity data and {duplicateSessionOrders.length} row{duplicateSessionOrders.length === 1 ? '' : 's'} {duplicateSessionOrders.length === 1 ? 'uses' : 'use'} a duplicated payment identity. The source rows remain visible below with mutation controls disabled where applicable.</div>
       </div>}
       {!metaCapiConfigured && <div role="alert" style={{...cardStyle,borderColor:'#b45309',background:'#fffbeb',marginBottom:20}}>
         <strong>Meta CAPI Purchase delivery is not configured.</strong>

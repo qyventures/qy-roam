@@ -142,6 +142,11 @@ test('admin order mutations require one coherent durable lifecycle row', () => {
 
   assert.match(adminPage, /const mutationSafe = adminOrderMutationSafe\(o\)/);
   assert.match(adminPage, /mutationSafe[\s\S]*?Order controls unavailable[\s\S]*?Reconcile the durable order/);
+  assert.match(adminPage, /const unsafeOperationalOrders = orders\.filter\(\(order:any\) => !adminOrderMutationSafe\(order\)\)/);
+  assert.match(adminPage, /const duplicateSessionOrders = orders\.filter/);
+  assert.match(adminPage, /fulfilmentSummaryIncomplete = ordersIncomplete \|\| operationalLedgerIntegrityIssues > 0/);
+  assert.match(adminPage, /Order operations ledger needs reconciliation/);
+  assert.match(adminPage, /shares a payment identity with another order/);
 });
 
 test('Stripe readiness requires one coherent mode-correct Checkout list', () => {
