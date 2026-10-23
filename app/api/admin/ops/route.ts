@@ -551,7 +551,22 @@ export async function POST(req: NextRequest) {
     } else if (action === 'customer_create') {
       const status = text(body.status, 40) || 'lead';
       if (!['lead', 'active', 'inactive'].includes(status)) return NextResponse.json({ error: 'Choose a valid customer status' }, { status: 400 });
-      const row = { email: text(body.email, 200).toLowerCase() || null, phone: text(body.phone, 60) || null, name: text(body.name, 120) || null, status, source: text(body.source, 80) || 'manual', notes: text(body.notes, 1500) || null, updated_at: new Date().toISOString() };
+      // CRM identity and follow-up context are durable operational records.
+      // The generic text helper is intentionally suitable only for bounded
+      // enums and dates: using it here would report success after silently
+      // slicing a mailbox, phone number, name, source, or note into a
+      // different value. Reject lossy input before issuing the insert so an
+      // operator can correct it and an ambiguous retry still describes the
+      // exact same customer.
+      const email = optionalTrimmedText(body.email, 200);
+      const phone = optionalTrimmedText(body.phone, 60);
+      const name = optionalTrimmedText(body.name, 120);
+      const source = optionalTrimmedText(body.source, 80);
+      const customerNotes = optionalTrimmedText(body.notes, 1500);
+      if (email === undefined || phone === undefined || name === undefined || source === undefined || customerNotes === undefined) {
+        return NextResponse.json({ error: 'Customer details exceed their displayed limits or contain unsupported control characters' }, { status: 400 });
+      }
+      const row = { email: email?.toLowerCase() || null, phone, name, status, source: source || 'manual', notes: customerNotes, updated_at: new Date().toISOString() };
       if (!row.email && !row.phone) return NextResponse.json({ error: 'Email or phone is required' }, { status: 400 });
       const { data, error } = await db.from('customers').insert(row).select('id,email,phone,name,status,source').abortSignal(adminOpsDeadline.signal).single();
       if (error) throw error;

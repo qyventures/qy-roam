@@ -6588,6 +6588,21 @@ test('admin inventory audit text is rejected rather than silently truncated', ()
   assert.match(adminOpsForms, /name="reference" placeholder="Inspection \/ repair reference" maxLength=\{120\}/);
 });
 
+test('admin customer records reject lossy identity and notes instead of silently truncating them', () => {
+  const customerStart = adminOpsRoute.indexOf("action === 'customer_create'");
+  const customerEnd = adminOpsRoute.indexOf("action === 'activity_create'", customerStart);
+  assert.ok(customerStart >= 0 && customerEnd > customerStart);
+  const customerBlock = adminOpsRoute.slice(customerStart, customerEnd);
+
+  assert.match(customerBlock, /optionalTrimmedText\(body\.email, 200\)/);
+  assert.match(customerBlock, /optionalTrimmedText\(body\.phone, 60\)/);
+  assert.match(customerBlock, /optionalTrimmedText\(body\.name, 120\)/);
+  assert.match(customerBlock, /optionalTrimmedText\(body\.source, 80\)/);
+  assert.match(customerBlock, /optionalTrimmedText\(body\.notes, 1500\)/);
+  assert.match(customerBlock, /email === undefined[\s\S]*customerNotes === undefined[\s\S]*status: 400/);
+  assert.doesNotMatch(customerBlock, /text\(body\.(?:email|phone|name|source|notes),/);
+});
+
 test('admin CRM writes reject malformed commercial data and missing mutation targets', () => {
   assert.match(adminOpsRoute, /function exactPercentage\(value: unknown\)/);
   assert.match(adminOpsRoute, /const expectedValueCents = body\.expected_value_sgd === ''[\s\S]*?nonNegativeMoney\(body\.expected_value_sgd\)/);
