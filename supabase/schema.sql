@@ -1729,6 +1729,7 @@ as $$
       'orders_measurement_consent_check',
       'orders_esim_plan_identity_required_check',
       'orders_esim_plan_identity_shape_check',
+      'orders_stripe_product_snapshot_separation_check',
       'orders_digital_delivery_reference_safe_check',
       'orders_esim_fulfilled_delivery_reference_required_check',
       'orders_product_fulfilment_status_check',
@@ -1745,7 +1746,7 @@ as $$
       'orders_pocket_wifi_return_evidence_check',
       'orders_pocket_wifi_rental_duration_check',
       'orders_session_id_format_check'
-    )) = 19 and
+    )) = 20 and
     (select count(*) from pg_constraint where conrelid = 'public.stripe_events'::regclass and conname in (
       'stripe_events_attempts_check',
       'stripe_events_event_id_check',
@@ -3646,7 +3647,10 @@ as $$
   -- both atomic creation RPCs, including optional Pocket WiFi email addresses.
   -- Version 58 rejects control characters in manual-sale notes so direct
   -- service-role callers cannot bypass the protected API's audit-text rules.
-  select 58;
+  -- Version 59 additionally makes the Stripe product-snapshot separation
+  -- constraint part of checkout readiness. A dropped or partial migration
+  -- must not expose payment while digital and physical order fields can mix.
+  select 59;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
