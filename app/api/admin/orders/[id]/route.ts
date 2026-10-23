@@ -543,8 +543,8 @@ async function retryOrderDeliveries(_req: Request, { params }: { params: { id: s
       return NextResponse.json({ error: 'The payment timestamp is invalid. Reconcile the order before retrying analytics delivery.' }, { status: 409 });
     }
     const deliveries = await Promise.allSettled([
-      ...(retryFulfilment ? [deliverFulfilmentNotification(supabase, session, adminDeliveryDeadline.signal)] : []),
-      ...(retryMeta ? [deliverMetaPurchase(supabase, session, metaEventTime!, adminDeliveryDeadline.signal)] : []),
+      ...(retryFulfilment ? [deliverFulfilmentNotification(supabase, session, adminDeliveryDeadline.signal, adminDeliveryDeadline.recoverySignal)] : []),
+      ...(retryMeta ? [deliverMetaPurchase(supabase, session, metaEventTime!, adminDeliveryDeadline.signal, adminDeliveryDeadline.recoverySignal)] : []),
     ]);
     const failures = deliveries.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
     if (failures.length) throw new AggregateError(failures.map((failure) => failure.reason), 'One or more order deliveries failed');

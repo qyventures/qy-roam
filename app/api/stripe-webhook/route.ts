@@ -694,7 +694,7 @@ async function settleStripeEvent(
   ) throw new Error('Stripe event settlement returned a mismatched event');
 }
 
-export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session, signal:AbortSignal){
+export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session, signal:AbortSignal,recoverySignal:AbortSignal=signal){
   // Stripe may retry a paid event after its original email attempt failed.
   // Operations can legitimately cancel, return, close, or digitally fulfil
   // the order before that retry arrives. Re-read the durable lifecycle at the
@@ -803,13 +803,16 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
     // its provider call was still in flight.
     const failureMessage=message.slice(0,500);
     const failedAt=new Date().toISOString();
-    const failed=await supabase.from('fulfilment_notifications').update({status:'pending',last_error:failureMessage,updated_at:failedAt}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',claimToken).select('stripe_session_id,status,last_error,updated_at').abortSignal(signal);
+    // Provider cancellation can be caused by the processing deadline itself.
+    // Use the deadline's reserved recovery window so this owned lease becomes
+    // immediately retryable instead of remaining `sending` for 15 minutes.
+    const failed=await supabase.from('fulfilment_notifications').update({status:'pending',last_error:failureMessage,updated_at:failedAt}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',claimToken).select('stripe_session_id,status,last_error,updated_at').abortSignal(recoverySignal);
     if(failed.error||!acknowledgedPaidDeliveryFailure(failed.data,session.id,failureMessage,failedAt)) console.error('fulfilment_notification_failure_record_error');
     throw error;
   }
 }
 
-export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session,eventTime:number,signal:AbortSignal){
+export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session,eventTime:number,signal:AbortSignal,recoverySignal:AbortSignal=signal){
   if(!metaPurchaseEligible(session)) return;
   // A Meta timeout can leave us unable to tell whether Meta accepted the
   // event. Keep Stripe's signed event time on the delivery record so every
@@ -873,21 +876,23 @@ export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof
     const message=safeProviderDeliveryFailure(error,'Meta CAPI delivery failed; retry or inspect provider configuration');
     const failureMessage=message.slice(0,500);
     const failedAt=new Date().toISOString();
-    const failed=await supabase.from('meta_purchase_deliveries').update({status:'pending',last_error:failureMessage,updated_at:failedAt}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',claimToken).select('stripe_session_id,status,last_error,updated_at').abortSignal(signal);
+    // As with fulfilment email, an aborted provider attempt needs a distinct
+    // recovery budget to release its exact compare-and-swap lease promptly.
+    const failed=await supabase.from('meta_purchase_deliveries').update({status:'pending',last_error:failureMessage,updated_at:failedAt}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',claimToken).select('stripe_session_id,status,last_error,updated_at').abortSignal(recoverySignal);
     if(failed.error||!acknowledgedPaidDeliveryFailure(failed.data,session.id,failureMessage,failedAt)) console.error('meta_purchase_failure_record_error');
     throw error;
   }
 }
 
-export async function deliverPaidOrderSideEffects(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session,eventTime:number,signal:AbortSignal){
+export async function deliverPaidOrderSideEffects(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session,eventTime:number,signal:AbortSignal,recoverySignal:AbortSignal=signal){
   // Human fulfilment and consented analytics have independent durable ledgers.
   // Attempt both even when one provider is unavailable: serial delivery would
   // let a persistent SMTP outage indefinitely suppress an otherwise valid CAPI
   // Purchase (and vice versa). Each delivery remains retry-safe on Stripe's
   // next attempt, while any failure still keeps the event itself unprocessed.
   const results=await Promise.allSettled([
-    deliverFulfilmentNotification(supabase,session,signal),
-    deliverMetaPurchase(supabase,session,eventTime,signal),
+    deliverFulfilmentNotification(supabase,session,signal,recoverySignal),
+    deliverMetaPurchase(supabase,session,eventTime,signal,recoverySignal),
   ]);
   const failures=results.filter((result):result is PromiseRejectedResult=>result.status==='rejected');
   if(failures.length) throw new AggregateError(failures.map((failure)=>failure.reason),'One or more paid-order deliveries failed');
@@ -1230,7 +1235,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
     if(event.type!=='checkout.session.async_payment_failed'&&sessionForEvent.payment_status==='paid'){
       // Use the signed Stripe event timestamp: the Checkout Session may have
       // been created well before an asynchronous payment actually succeeded.
-      await deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated,webhookDeadline.signal);
+      await deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated,webhookDeadline.signal,webhookDeadline.recoverySignal);
     }
     await settleStripeEvent(supabase,eventClaimId,claimStartedAt,webhookDeadline.signal);
   }catch(error){
