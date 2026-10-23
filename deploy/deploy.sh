@@ -265,9 +265,26 @@ restore_previous_artifact() {
 handle_release_exit() {
   local status="$1"
   # Disarm every release trap before cleanup/rollback. A second signal should
-  # use the operating system's default termination rather than recursively
-  # enter this handler and race artifact restoration.
+  # never recursively enter this handler and race artifact restoration. Keep
+  # a narrow interrupt handler active, however: rollback readiness writes the
+  # bearer credential to a protected temporary file, and an operator abort at
+  # that point must remove it before terminating. The recovery snapshot is
+  # deliberately retained because the artifact transition may be incomplete.
   trap - EXIT HUP INT TERM
+  handle_release_interrupt() {
+    local signal_status="$1"
+    trap - EXIT HUP INT TERM
+    if [[ -n "$rollback_health_header" ]]; then
+      rm -f -- "$rollback_health_header"
+      rollback_health_header=""
+    fi
+    release_snapshot_cleanup_enabled=0
+    echo "Release recovery interrupted; retained recovery artifacts for operator reconciliation." >&2
+    exit "$signal_status"
+  }
+  trap 'handle_release_interrupt 129' HUP
+  trap 'handle_release_interrupt 130' INT
+  trap 'handle_release_interrupt 143' TERM
   if [[ "$status" -ne 0 && "$release_verified" -ne 1 && "$artifact_promotion_started" -eq 1 && "$previous_artifact_available" -eq 1 ]]; then
     restore_previous_artifact || true
   fi

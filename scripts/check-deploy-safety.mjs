@@ -204,6 +204,19 @@ assert.match(deploy, /release_snapshot_cleanup_enabled=0/);
 assert.match(deploy, /retained recovery snapshot at \$rollback_dir\/previous-next/);
 assert.match(deploy, /handle_release_exit\(\)/);
 assert.match(deploy, /status.*-ne 0.*release_verified.*-ne 1.*artifact_promotion_started.*-eq 1.*previous_artifact_available.*-eq 1/);
+const releaseExitStart = deploy.indexOf('handle_release_exit()');
+const releaseExitEnd = deploy.indexOf('\n}\n\n# From this point onward', releaseExitStart);
+const releaseExit = deploy.slice(releaseExitStart, releaseExitEnd);
+assert.match(releaseExit, /handle_release_interrupt\(\)/);
+assert.match(releaseExit, /trap 'handle_release_interrupt 129' HUP/);
+assert.match(releaseExit, /trap 'handle_release_interrupt 130' INT/);
+assert.match(releaseExit, /trap 'handle_release_interrupt 143' TERM/);
+assert.match(releaseExit, /rm -f -- "\$rollback_health_header"/);
+assert.match(releaseExit, /release_snapshot_cleanup_enabled=0/);
+assert.ok(
+  releaseExit.indexOf('rm -f -- "$rollback_health_header"') < releaseExit.indexOf('exit "$signal_status"'),
+  'an interruption during rollback must remove its bearer-token file before terminating',
+);
 assert.ok(
   deploy.indexOf("trap 'handle_release_exit") < deploy.indexOf('npm run check:esim-pricing'),
   'isolated artifact cleanup must be armed before any build preflight can fail',
