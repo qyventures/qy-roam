@@ -855,7 +855,7 @@ test('Pocket WiFi promotion expires consistently across pricing and storefront c
 
 test('checkout re-authorises promotional prices immediately before Stripe Session creation', () => {
   const esimCreate = esimCheckoutRoute.indexOf('stripe.checkout.sessions.create({');
-  const esimReadiness = esimCheckoutRoute.indexOf('if (!await hasRequiredEsimOrderSchema())');
+  const esimReadiness = esimCheckoutRoute.indexOf('if (!await checkoutDeadline.waitFor(hasRequiredEsimOrderSchema()))');
   const esimFinalPromoCheck = esimCheckoutRoute.lastIndexOf('if (!esimOfferIsSaleable())', esimCreate);
   assert.ok(esimCreate > -1 && esimReadiness > -1 && esimFinalPromoCheck > esimReadiness && esimFinalPromoCheck < esimCreate);
   assert.match(esimCheckoutRoute.slice(esimFinalPromoCheck, esimCreate), /pricingExpired: true/);
@@ -4371,7 +4371,7 @@ test('malformed checkout traffic cannot exhaust the shared Stripe work budget', 
   const esimGlobalLimit = esimCheckoutRoute.indexOf('if (checkoutGloballyLimited())');
   assert.ok(esimGlobalLimit > esimCheckoutRoute.indexOf('const plan = getEsimPlan(body.planId)'));
   assert.ok(esimGlobalLimit > esimCheckoutRoute.indexOf("if (promoCode && promoCode !== ESIM_PROMO.code)"));
-  assert.ok(esimGlobalLimit < esimCheckoutRoute.indexOf('if (!await hasRequiredEsimOrderSchema())'));
+  assert.ok(esimGlobalLimit < esimCheckoutRoute.indexOf('if (!await checkoutDeadline.waitFor(hasRequiredEsimOrderSchema()))'));
 });
 
 test('rejected availability ranges cannot exhaust the shared provider-work budget', () => {
@@ -4796,7 +4796,7 @@ test('Pocket WiFi checkout inventory holds enforce the configured Stripe mode bo
 
 test('eSIM checkout fails closed when its durable post-payment order boundary is unavailable', () => {
   assert.match(esimCheckoutRoute, /hasRequiredEsimOrderSchema/);
-  assert.match(esimCheckoutRoute, /if \(!await hasRequiredEsimOrderSchema\(\)\)/);
+  assert.match(esimCheckoutRoute, /if \(!await checkoutDeadline\.waitFor\(hasRequiredEsimOrderSchema\(\)\)\)/);
   assert.match(esimCheckoutRoute, /status: 503/);
   // A paid eSIM must retain a non-secret provider/email-log audit reference
   // when it is fulfilled. That field is part of its pre-payment schema gate,
@@ -5267,9 +5267,9 @@ test('stock readiness coalesces deploy probes without caching failures or crossi
 
 test('Pocket WiFi checkout fails closed when its paid-order schema is unavailable', () => {
   assert.match(wifiCheckoutRoute, /hasRequiredPaymentSchema/);
-  assert.match(wifiCheckoutRoute, /if\(!await hasRequiredPaymentSchema\(\)\)/);
+  assert.match(wifiCheckoutRoute, /if\(!await checkoutDeadline\.waitFor\(hasRequiredPaymentSchema\(\)\)\)/);
   assert.match(wifiCheckoutRoute, /hasRequiredPocketWifiFulfilmentSchema/);
-  assert.match(wifiCheckoutRoute, /if\(!await hasRequiredPocketWifiFulfilmentSchema\(\)\)/);
+  assert.match(wifiCheckoutRoute, /if\(!await checkoutDeadline\.waitFor\(hasRequiredPocketWifiFulfilmentSchema\(\)\)\)/);
   assert.match(wifiCheckoutRoute, /Pocket WiFi ordering is temporarily unavailable/);
   assert.match(wifiCheckoutRoute, /'Retry-After':'30'/);
 });
@@ -9647,7 +9647,7 @@ test('Stripe Checkout redirects fail closed unless production uses a canonical Q
   );
   assert.ok(
     esimCheckoutRoute.indexOf('const origin = checkoutSiteOrigin(req.url)') <
-      esimCheckoutRoute.indexOf('await hasRequiredEsimOrderSchema()'),
+      esimCheckoutRoute.indexOf('await checkoutDeadline.waitFor(hasRequiredEsimOrderSchema())'),
   );
   assert.match(healthRoute, /isProductionQyRoamOrigin\(process\.env\.NEXT_PUBLIC_SITE_URL\)/);
   assert.match(launchPage, /isProductionQyRoamOrigin\(process\.env\.NEXT_PUBLIC_SITE_URL\)/);
@@ -10556,7 +10556,11 @@ test('product checkouts share one end-to-end dependency deadline', async () => {
   try {
     const first = deadline.stripeRequestOptions();
     assert.ok(first.timeout > 0 && first.timeout <= 30);
-    await new Promise((resolve) => deadline.signal.addEventListener('abort', resolve, { once: true }));
+    await assert.rejects(
+      deadline.waitFor(new Promise(() => {})),
+      /Checkout dependency work timed out/,
+      'a shared readiness promise that ignores cancellation must not retain the checkout slot',
+    );
     assert.equal(deadline.signal.aborted, true);
     assert.equal(deadline.recoverySignal.aborted, false, 'safe reservation cleanup must retain a reserved deadline window');
     assert.throws(() => deadline.stripeRequestOptions(), /Checkout dependency work timed out/);
@@ -10573,6 +10577,9 @@ test('product checkouts share one end-to-end dependency deadline', async () => {
   }
   assert.match(wifiCheckoutRoute, /qy_reserve_pocket_wifi'[\s\S]{0,500}\.abortSignal\(checkoutDeadline\.signal\)/);
   assert.match(esimCheckoutRoute, /from\('orders'\)[\s\S]{0,500}\.abortSignal\(checkoutDeadline\.signal\)/);
+  assert.match(wifiCheckoutRoute, /checkoutDeadline\.waitFor\(hasRequiredPaymentSchema\(\)\)/);
+  assert.match(wifiCheckoutRoute, /checkoutDeadline\.waitFor\(hasRequiredPocketWifiFulfilmentSchema\(\)\)/);
+  assert.match(esimCheckoutRoute, /checkoutDeadline\.waitFor\(hasRequiredEsimOrderSchema\(\)\)/);
 });
 
 test('paid-product rate limits are shared across routes and duplicate Next module graphs', () => {
@@ -11132,7 +11139,7 @@ test('Pocket WiFi rejects unreviewed prices before spending shared checkout capa
   const priceValidation = wifiCheckoutRoute.indexOf("const expectedTotalCents=body.expectedTotalCents");
   const globalAdmission = wifiCheckoutRoute.indexOf('if(checkoutGloballyLimited())');
   const workAdmission = wifiCheckoutRoute.indexOf('releaseCheckout=tryAcquireCheckoutConcurrency()');
-  const schemaReadiness = wifiCheckoutRoute.indexOf('if(!await hasRequiredPaymentSchema())');
+  const schemaReadiness = wifiCheckoutRoute.indexOf('if(!await checkoutDeadline.waitFor(hasRequiredPaymentSchema()))');
   const stripeClient = wifiCheckoutRoute.indexOf('const stripe=createStripeClient(key)');
 
   assert.ok(priceValidation > -1, 'Pocket WiFi checkout must validate the reviewed total');

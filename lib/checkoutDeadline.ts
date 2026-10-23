@@ -35,6 +35,23 @@ export function createCheckoutDeadline(timeoutMs = CHECKOUT_DEPENDENCY_TIMEOUT_M
   return {
     signal: controller.signal,
     recoverySignal: recoveryController.signal,
+    async waitFor<T>(work: Promise<T>) {
+      if (controller.signal.aborted) throw new Error('Checkout dependency work timed out');
+      let rejectOnAbort: (() => void) | undefined;
+      const deadline = new Promise<never>((_, reject) => {
+        rejectOnAbort = () => reject(new Error('Checkout dependency work timed out'));
+        controller.signal.addEventListener('abort', rejectOnAbort, { once: true });
+      });
+      try {
+        // Readiness checks are cached and shared across callers, so aborting
+        // their underlying provider request here would also cancel useful
+        // work for other requests. Race only this admitted checkout against
+        // its deadline; the shared probe retains its own transport timeout.
+        return await Promise.race([work, deadline]);
+      } finally {
+        if (rejectOnAbort) controller.signal.removeEventListener('abort', rejectOnAbort);
+      }
+    },
     stripeRequestOptions() {
       const remainingMs = processingDeadlineAtMs - Date.now();
       if (remainingMs < 1 || controller.signal.aborted) throw new Error('Checkout dependency work timed out');

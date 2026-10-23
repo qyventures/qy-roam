@@ -218,7 +218,7 @@ export async function POST(req: Request) {
     // post-payment persistence boundary before exposing a Stripe payment URL.
     // Otherwise a database outage or an incomplete migration could accept a
     // digital order that the webhook cannot record or fulfil.
-    if (!await hasRequiredEsimOrderSchema()) {
+    if (!await checkoutDeadline.waitFor(hasRequiredEsimOrderSchema())) {
       return NextResponse.json({ error: 'eSIM ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.' }, {
         status: 503,
         headers: { 'Cache-Control': 'no-store', 'Retry-After': '30' },

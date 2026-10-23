@@ -301,11 +301,11 @@ export async function POST(req: Request) {
   // needs the orders and delivery/idempotency ledgers as well. Do this before
   // creating a payable Stripe Session so an incomplete migration cannot leave
   // a paid router booking unrecorded or unfulfillable.
-  if(!await hasRequiredPaymentSchema()) return NextResponse.json({error:'Pocket WiFi ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
+  if(!await checkoutDeadline.waitFor(hasRequiredPaymentSchema())) return NextResponse.json({error:'Pocket WiFi ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
   // A router sale creates a physical-custody obligation. Do not expose a
   // payment page against a partial deployment that can reserve stock but
   // cannot safely dispatch or receive the assigned device afterwards.
-  if(!await hasRequiredPocketWifiFulfilmentSchema()) return NextResponse.json({error:'Pocket WiFi ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
+  if(!await checkoutDeadline.waitFor(hasRequiredPocketWifiFulfilmentSchema())) return NextResponse.json({error:'Pocket WiFi ordering is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
   const stripe=createStripeClient(key);
   const holdState=await activeStripeHolds(stripe,key,start,end,requestId,requested,origin);
   if(holdState.requestConflict) return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.',checkoutRequestConflict:true},{status:409,headers:{'Cache-Control':'no-store'}});
