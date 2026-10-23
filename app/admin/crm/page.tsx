@@ -12,17 +12,18 @@ const moneyFromCents=(cents:number)=>`S$${(cents/100).toFixed(2)}`;
 const CRM_PAGE_SIZE=250;
 const CRM_MAX_ROWS=5_000;
 type PagedResult={data:any[];error:any;truncated:boolean};
-async function loadCrmPages(fetchPage:(from:number,to:number)=>PromiseLike<{data:any[]|null;error:any}>):Promise<PagedResult>{
+async function loadCrmPages(fetchPage:(after:number|null,limit:number)=>PromiseLike<{data:any[]|null;error:any}>):Promise<PagedResult>{
  const data:any[]=[];
  const seenIds=new Set<number>();
- for(let from=0;from<CRM_MAX_ROWS;from+=CRM_PAGE_SIZE){
-  const result=await fetchPage(from,from+CRM_PAGE_SIZE-1);
+ let after:number|null=null;
+ for(let loaded=0;loaded<CRM_MAX_ROWS;loaded+=CRM_PAGE_SIZE){
+  const result=await fetchPage(after,CRM_PAGE_SIZE);
   if(result.error)return {data:[],error:result.error,truncated:false};
   // These rows drive customer follow-up and weighted-pipeline decisions.
   // Treat a malformed PostgREST page, a response beyond the requested range,
-  // or an identity repeated across offset pages as unavailable data. Concurrent
-  // writes can otherwise shift an offset and quietly double-count a customer,
-  // opportunity or activity while making another record disappear.
+  // or an identity repeated across keyset pages as unavailable data. The
+  // immutable id cursor prevents concurrent inserts, deletes, and ordinary CRM
+  // updates from shifting a later page and silently hiding operational work.
   if(!Array.isArray(result.data)||result.data.length>CRM_PAGE_SIZE)return {data:[],error:new Error('CRM ledger returned an invalid page'),truncated:false};
   const page=result.data;
   for(const row of page){
@@ -32,26 +33,38 @@ async function loadCrmPages(fetchPage:(from:number,to:number)=>PromiseLike<{data
   }
   data.push(...page);
   if(page.length<CRM_PAGE_SIZE)return {data,error:null,truncated:false};
+  const next=page[page.length-1]?.id;
+  if(!Number.isSafeInteger(next)||next<=0||next===after)return {data:[],error:new Error('CRM ledger returned an invalid pagination cursor'),truncated:false};
+  after=next;
  }
  // A full last page can be the complete data set. Check for one additional
  // row before declaring customer or follow-up work hidden, and treat a failed
  // completeness probe as unavailable data rather than safe partial totals.
- const beyond=await fetchPage(CRM_MAX_ROWS,CRM_MAX_ROWS);
+ const beyond=await fetchPage(after,1);
  if(beyond.error)return {data:[],error:beyond.error,truncated:false};
  if(!Array.isArray(beyond.data)||beyond.data.length>1)return {data:[],error:new Error('CRM ledger returned an invalid truncation probe'),truncated:false};
  return {data,error:null,truncated:beyond.data.length>0};
+}
+function newestFirst(a:any,b:any,field:string){
+ const aTime=typeof a?.[field]==='string'?Date.parse(a[field]):Number.NaN;
+ const bTime=typeof b?.[field]==='string'?Date.parse(b[field]):Number.NaN;
+ const safeATime=Number.isFinite(aTime)?aTime:Number.NEGATIVE_INFINITY;
+ const safeBTime=Number.isFinite(bTime)?bTime:Number.NEGATIVE_INFINITY;
+ return safeBTime-safeATime||Number(b?.id||0)-Number(a?.id||0);
 }
 export default async function CrmPage(){
  const db=getSupabaseAdmin();
  const busyResult={data:[],error:new Error('Admin dashboard is busy'),truncated:false};
  const [customersResult,oppsResult,actsResult]=db?await runAdminDashboardWork(()=>Promise.all([
-  loadCrmPages((from,to)=>db.from('customers').select('*').order('last_order_at',{ascending:false}).order('id',{ascending:false}).range(from,to)),
-  loadCrmPages((from,to)=>db.from('sales_opportunities').select('*').order('updated_at',{ascending:false}).order('id',{ascending:false}).range(from,to)),
-  loadCrmPages((from,to)=>db.from('crm_activities').select('*').order('created_at',{ascending:false}).order('id',{ascending:false}).range(from,to)),
+  loadCrmPages((after,limit)=>{let query=db.from('customers').select('*').order('id',{ascending:false}).limit(limit);if(after!==null)query=query.lt('id',after);return query;}),
+  loadCrmPages((after,limit)=>{let query=db.from('sales_opportunities').select('*').order('id',{ascending:false}).limit(limit);if(after!==null)query=query.lt('id',after);return query;}),
+  loadCrmPages((after,limit)=>{let query=db.from('crm_activities').select('*').order('id',{ascending:false}).limit(limit);if(after!==null)query=query.lt('id',after);return query;}),
  ]),[busyResult,busyResult,busyResult]):[null,null,null];
- const customerRows:any[]=customersResult?.data??[];
- const opportunityRows:any[]=oppsResult?.data??[];
- const activityRows:any[]=actsResult?.data??[];
+ // IDs provide a stable pagination boundary; restore the recency-oriented
+ // presentation only after each complete bounded ledger has been assembled.
+ const customerRows:any[]=(customersResult?.data??[]).sort((a:any,b:any)=>newestFirst(a,b,'last_order_at'));
+ const opportunityRows:any[]=(oppsResult?.data??[]).sort((a:any,b:any)=>newestFirst(a,b,'updated_at'));
+ const activityRows:any[]=(actsResult?.data??[]).sort((a:any,b:any)=>newestFirst(a,b,'created_at'));
  const unavailablePanels=[customersResult?.error&&'customers',oppsResult?.error&&'sales pipeline',actsResult?.error&&'CRM activity'].filter(Boolean) as string[];
  const truncatedPanels=[customersResult?.truncated&&'customers',oppsResult?.truncated&&'sales pipeline',actsResult?.truncated&&'CRM activity'].filter(Boolean) as string[];
  const validatedCustomers=customerRows.map(validatedCrmCustomer);

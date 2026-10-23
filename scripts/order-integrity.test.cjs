@@ -6720,10 +6720,8 @@ test('CRM headline metrics page through bounded data and warn when totals can be
   assert.match(crmPage, /const CRM_PAGE_SIZE=250/);
   assert.match(crmPage, /const CRM_MAX_ROWS=5_000/);
   assert.match(crmPage, /async function loadCrmPages/);
-  assert.match(crmPage, /from<CRM_MAX_ROWS;from\+=CRM_PAGE_SIZE/);
-  assert.match(crmPage, /\.order\('last_order_at',\{ascending:false\}\)\.order\('id',\{ascending:false\}\)\.range\(from,to\)/);
-  assert.match(crmPage, /\.order\('updated_at',\{ascending:false\}\)\.order\('id',\{ascending:false\}\)\.range\(from,to\)/);
-  assert.match(crmPage, /\.order\('created_at',\{ascending:false\}\)\.order\('id',\{ascending:false\}\)\.range\(from,to\)/);
+  assert.match(crmPage, /loaded<CRM_MAX_ROWS;loaded\+=CRM_PAGE_SIZE/);
+  assert.equal((crmPage.match(/\.order\('id',\{ascending:false\}\)\.limit\(limit\)/g) || []).length, 3);
   assert.match(crmPage, /const truncatedPanels=/);
   assert.match(crmPage, /CRM view limit reached/);
   assert.match(crmPage, /Headline totals are hidden and lists may be incomplete/);
@@ -6822,7 +6820,7 @@ test('admin operational pagination distinguishes an exact view limit from a genu
   assert.match(adminPage, /if \(beyond\.error\) return \{ data: \[\], error: beyond\.error, truncated: false \}/);
   assert.match(adminPage, /if \(!Array\.isArray\(beyond\.data\) \|\| beyond\.data\.length > 1\)/);
   assert.match(adminPage, /truncated: beyond\.data\.length > 0/);
-  assert.match(crmPage, /const beyond=await fetchPage\(CRM_MAX_ROWS,CRM_MAX_ROWS\)/);
+  assert.match(crmPage, /const beyond=await fetchPage\(after,1\)/);
   assert.match(crmPage, /if\(beyond\.error\)return \{data:\[\],error:beyond\.error,truncated:false\}/);
   assert.match(crmPage, /truncated:beyond\.data\.length>0/);
 });
@@ -6898,6 +6896,16 @@ test('CRM and sales report pagination fail closed on malformed or duplicate prov
   assert.match(reportsPage, /seenRows\.has\(identity\)/);
   assert.match(reportsPage, /!Array\.isArray\(beyond\.data\) \|\| beyond\.data\.length > 1/);
   assert.match(reportsPage, /truncated: beyond\.data\.length > 0/);
+});
+
+test('CRM pagination cannot skip operational rows when concurrent writes shift recency ordering', () => {
+  assert.match(crmPage, /let after:number\|null=null/);
+  assert.equal((crmPage.match(/\.order\('id',\{ascending:false\}\)\.limit\(limit\)/g) || []).length, 3);
+  assert.equal((crmPage.match(/if\(after!==null\)query=query\.lt\('id',after\)/g) || []).length, 3);
+  assert.doesNotMatch(crmPage, /loadCrmPages\(\(from,to\)=>/);
+  assert.match(crmPage, /newestFirst\(a,b,'last_order_at'\)/);
+  assert.match(crmPage, /newestFirst\(a,b,'updated_at'\)/);
+  assert.match(crmPage, /newestFirst\(a,b,'created_at'\)/);
 });
 
 test('admin webhook recovery visibility pages every actionable Stripe exception within its declared bound', () => {
