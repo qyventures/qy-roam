@@ -631,7 +631,7 @@ async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string
   throw new Error('Stripe event claim returned an invalid result');
 }
 
-async function recordEventFailure(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>,eventId:string,processingStartedAt:string,error:unknown){
+async function recordEventFailure(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>,eventId:string,processingStartedAt:string,error:unknown,signal:AbortSignal){
   // `last_error` is an operator-visible durable ledger, not a raw exception
   // sink. The webhook can catch Stripe SDK, PostgREST, proxy, and provider
   // errors here; any of them can contain echoed request/customer/configuration
@@ -649,7 +649,8 @@ async function recordEventFailure(supabase:NonNullable<ReturnType<typeof getSupa
       .eq('event_id',eventId)
       .eq('processing_started_at',processingStartedAt)
       .is('processed_at',null)
-      .select('event_id,processing_started_at,processed_at,last_failed_at,last_error');
+      .select('event_id,processing_started_at,processed_at,last_failed_at,last_error')
+      .abortSignal(signal);
     // This is a recovery-path write, so PostgREST can surface a proxy or
     // database error here. Do not turn the application log into a second raw
     // exception sink after deliberately sanitising the durable event ledger.
@@ -1097,7 +1098,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
     // acknowledging a paid order whose durable fulfilment record we cannot
     // safely reconstruct from a complete Checkout Session.
     console.error('stripe_webhook_session_retrieve_error',{eventId:stripeEventId});
-    if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error);
+    if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error,webhookDeadline.recoverySignal);
     return webhookRetryJson({error:'Unable to retrieve Checkout Session'});
   }
   // An authenticated Stripe API response is still deserialised runtime data.
@@ -1109,7 +1110,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
   const session=stripeWebhookCheckoutSession(refreshedSession);
   if(!session){
     console.error('stripe_webhook_invalid_retrieved_session',{eventId:stripeEventId});
-    if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,new Error('Stripe returned an invalid Checkout Session object'));
+    if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,new Error('Stripe returned an invalid Checkout Session object'),webhookDeadline.recoverySignal);
     return webhookRetryJson({error:'Invalid retrieved Checkout Session'});
   }
   // The signed event selects the Checkout Session to process; the refreshed
@@ -1120,7 +1121,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
   // fulfilment side effects.
   if(!stripeWebhookCheckoutSessionMatchesCommercialSnapshot(eventSession,session)){
     console.error('stripe_webhook_session_identity_mismatch',{eventId:stripeEventId});
-    if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,new Error('Retrieved Checkout Session does not match webhook event'));
+    if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,new Error('Retrieved Checkout Session does not match webhook event'),webhookDeadline.recoverySignal);
     return webhookRetryJson({error:'Retrieved Checkout Session does not match webhook event'});
   }
   // The retrieved Session is the freshest source for customer, shipping,
@@ -1142,7 +1143,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
     if(!validQyRoamProvenance(session.id,session.metadata)){
       console.error('stripe_webhook_expiry_integrity_error',{eventId:stripeEventId});
       const error=new Error('Refreshed expired Checkout Session failed provenance validation');
-      if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error);
+      if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error,webhookDeadline.recoverySignal);
       return webhookRetryJson({error:'Processing failed'});
     }
     try{
@@ -1178,7 +1179,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
       // claimed ledger row. Avoid logging raw dependency errors here: they
       // may include provider response text, configuration, or order data.
       console.error('stripe_webhook_expiry_processing_error');
-      if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error);
+      if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error,webhookDeadline.recoverySignal);
       return webhookRetryJson({error:'Processing failed'});
     }
     return webhookJson({received:true});
@@ -1236,7 +1237,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
     // Recovery uses the claimed Stripe event row, whose failure field is
     // intentionally application-authored. Keep logs on the same boundary.
     console.error('stripe_webhook_processing_error');
-    if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error);
+    if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error,webhookDeadline.recoverySignal);
     return webhookRetryJson({error:'Processing failed'});
   }
   return webhookJson({received:true});

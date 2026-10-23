@@ -2615,6 +2615,8 @@ test('Stripe webhook failure recording cannot replace the controlled retry respo
     'the recovery-ledger transport must be guarded');
   assert.match(failureRecorder[0], /catch\s*{[\s\S]*console\.error\('stripe_webhook_failure_record_error'\)/,
     'a secondary recovery-write outage must emit only a stable diagnostic');
+  assert.match(failureRecorder[0], /\.abortSignal\(signal\)/,
+    'the recovery-ledger write must remain inside the admitted webhook deadline');
 });
 
 test('unexpected Stripe webhook failures retain the provider retry contract', () => {
@@ -3452,7 +3454,7 @@ test('paid orders fail into the durable webhook recovery ledger when fulfilment 
   const persistence = processing.indexOf('await persistSession(sessionForEvent,event.type,eventCreated,webhookDeadline.signal)');
   assert.ok(claim >= 0 && detailsGuard > claim, 'fulfilment validation must run after the durable event claim');
   assert.ok(persistence > detailsGuard, 'an incomplete paid order must not enter the order ledger');
-  assert.match(processing, /if\(claimStartedAt\) await recordEventFailure\(supabase,eventClaimId,claimStartedAt,error\)/);
+  assert.match(processing, /if\(claimStartedAt\) await recordEventFailure\(supabase,eventClaimId,claimStartedAt,error,webhookDeadline\.recoverySignal\)/);
 });
 
 test('admin fulfilment recovery cannot bypass paid-order delivery-detail validation', () => {
@@ -8231,7 +8233,7 @@ test('Stripe payment event timestamps are bounded before order persistence or CA
 test('signed QY Roam integrity failures remain visible in the webhook recovery ledger', () => {
   const validation = webhookRoute.indexOf('const validation=validateQyRoamSession(sessionForEvent)');
   const paidClaim = webhookRoute.lastIndexOf("const eventClaimId=`stripe:${stripeEventId}`", validation);
-  const failureRecord = webhookRoute.indexOf('if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error)', validation);
+  const failureRecord = webhookRoute.indexOf('if(claimStartedAt) await recordEventFailure(supabase,eventClaimId,claimStartedAt,error,webhookDeadline.recoverySignal)', validation);
   assert.ok(paidClaim >= 0 && validation > paidClaim, 'claim before validating the persisted order boundary');
   assert.ok(failureRecord > validation, 'malformed signed events must be recorded for operator recovery');
   assert.match(webhookRoute, /Order integrity validation failed: \$\{validation\.reason\}/);
@@ -8263,9 +8265,9 @@ test('trusted Stripe terminal events are durably claimed before the outbound Ses
   const claimPosition = webhookRoute.indexOf("claimOnce(supabase,eventClaimId,event.type,eventSessionId,webhookDeadline.signal)");
   const retrievePosition = webhookRoute.indexOf('stripe.checkout.sessions.retrieve(eventSessionId,webhookDeadline.stripeRequestOptions())');
   assert.ok(claimPosition >= 0 && claimPosition < retrievePosition);
-  assert.match(webhookRoute, /stripe_webhook_session_retrieve_error[\s\S]*recordEventFailure\(supabase,eventClaimId,claimStartedAt,error\)/);
-  assert.match(webhookRoute, /stripe_webhook_invalid_retrieved_session[\s\S]*recordEventFailure\(supabase,eventClaimId,claimStartedAt,new Error\('Stripe returned an invalid Checkout Session object'\)\)/);
-  assert.match(webhookRoute, /stripe_webhook_session_identity_mismatch[\s\S]*recordEventFailure\(supabase,eventClaimId,claimStartedAt,new Error\('Retrieved Checkout Session does not match webhook event'\)\)/);
+  assert.match(webhookRoute, /stripe_webhook_session_retrieve_error[\s\S]*recordEventFailure\(supabase,eventClaimId,claimStartedAt,error,webhookDeadline\.recoverySignal\)/);
+  assert.match(webhookRoute, /stripe_webhook_invalid_retrieved_session[\s\S]*recordEventFailure\(supabase,eventClaimId,claimStartedAt,new Error\('Stripe returned an invalid Checkout Session object'\),webhookDeadline\.recoverySignal\)/);
+  assert.match(webhookRoute, /stripe_webhook_session_identity_mismatch[\s\S]*recordEventFailure\(supabase,eventClaimId,claimStartedAt,new Error\('Retrieved Checkout Session does not match webhook event'\),webhookDeadline\.recoverySignal\)/);
   const signedProvenance = webhookRoute.indexOf('if(!validQyRoamProvenance(eventSessionId,eventSession.metadata))');
   assert.ok(signedProvenance >= 0 && signedProvenance < claimPosition, 'shared-account lookalikes must be rejected before any terminal event is claimed');
   assert.doesNotMatch(webhookRoute, /event\.type!=='checkout\.session\.expired'/);
@@ -9376,7 +9378,7 @@ test('expired lookalike sessions are ignored before claiming while trusted refre
   assert.ok(signedProvenanceGuard < eventClaim);
   const expiryBranch = webhookRoute.slice(webhookRoute.indexOf("if(event.type==='checkout.session.expired')"));
   assert.match(expiryBranch, /stripe_webhook_expiry_integrity_error/);
-  assert.match(expiryBranch, /recordEventFailure\(supabase,eventClaimId,claimStartedAt,error\)/);
+  assert.match(expiryBranch, /recordEventFailure\(supabase,eventClaimId,claimStartedAt,error,webhookDeadline\.recoverySignal\)/);
   assert.match(expiryBranch, /return webhookRetryJson\(\{error:'Processing failed'\}\)/);
 });
 
@@ -11221,12 +11223,16 @@ test('indexed legal pages are customer-ready and do not advertise an expired pro
 
 test('Stripe webhook durable processing shares one end-to-end dependency deadline', async () => {
   const deadlineModule = require('../lib/stripeWebhookDeadline.ts');
-  const deadline = deadlineModule.createStripeWebhookDeadline(5);
+  const deadline = deadlineModule.createStripeWebhookDeadline(40);
   assert.equal(deadline.signal.aborted, false);
+  assert.equal(deadline.recoverySignal.aborted, false);
   await new Promise((resolve) => deadline.signal.addEventListener('abort', resolve, { once: true }));
   assert.equal(deadline.signal.aborted, true);
+  assert.equal(deadline.recoverySignal.aborted, false, 'failure recording must retain a reserved deadline window');
   assert.match(String(deadline.signal.reason), /Stripe webhook dependency work timed out/i);
   assert.throws(() => deadline.stripeRequestOptions(), /Stripe webhook dependency work timed out/);
+  await new Promise((resolve) => deadline.recoverySignal.addEventListener('abort', resolve, { once: true }));
+  assert.match(String(deadline.recoverySignal.reason), /Stripe webhook failure recovery timed out/i);
   deadline.dispose();
 
   const admission = webhookRoute.indexOf('const webhookDeadline=createStripeWebhookDeadline()');
@@ -11241,6 +11247,11 @@ test('Stripe webhook durable processing shares one end-to-end dependency deadlin
   assert.match(webhookRoute, /qy_claim_stripe_event'[\s\S]{0,300}\.abortSignal\(signal\)/);
   assert.match(webhookRoute, /qy_persist_stripe_pocket_wifi_order'[\s\S]{0,800}\.abortSignal\(signal\)/);
   assert.match(webhookRoute, /qy_persist_stripe_esim_order'[\s\S]{0,800}\.abortSignal\(signal\)/);
+  assert.equal(
+    (webhookRoute.match(/recordEventFailure\([^\n]+webhookDeadline\.recoverySignal\)/g) || []).length,
+    6,
+    'every post-claim failure path must use the reserved recovery deadline',
+  );
 });
 
 test('admin fulfilment transitions share one end-to-end database deadline', async () => {
