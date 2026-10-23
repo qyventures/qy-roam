@@ -274,6 +274,18 @@ npm run check:deploy-safety
 npm run test:order-integrity
 QY_ROAM_DIST_DIR="$RELEASE_DIST_DIR" npm run build
 
+# Release checks and the Next.js build execute repository-owned JavaScript
+# with the same write access as deployment. Re-establish source provenance
+# after all of that code has run, not only after npm lifecycle scripts: a
+# broken check/build hook must not be able to rewrite a route (or add an
+# untracked one), compile that mutation into the candidate, and still reach
+# the production cutover. Build output remains ignored by Git, so the isolated
+# `.next-release` artifact itself does not make a healthy checkout dirty.
+if [[ -n "$(git status --porcelain=v1 --untracked-files=normal)" ]]; then
+  echo "Refusing to deploy: release checks or build modified tracked or untracked repository files" >&2
+  exit 1
+fi
+
 # Response headers are part of the customer-order boundary, not merely static
 # configuration. Verify the exact built server and, after cutover, the public
 # TLS ingress both preserve them. In particular, /success and /booking carry a

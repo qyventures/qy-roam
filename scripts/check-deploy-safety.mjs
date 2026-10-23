@@ -65,12 +65,27 @@ const releaseChecksBoundary = deploy.indexOf('npm run check:esim-pricing');
 assert.notEqual(postInstallCleanBoundary, -1, 'deployment must reject dependency-modified source');
 assert.equal(
   (deploy.match(/git status --porcelain=v1 --untracked-files=normal/g) || []).length,
-  2,
-  'deployment must verify worktree provenance before and after dependency installation',
+  3,
+  'deployment must verify source provenance before install, after install, and after build',
 );
 assert.ok(
   installBoundary < postInstallCleanBoundary && postInstallCleanBoundary < releaseChecksBoundary,
   'post-install provenance must be verified before release checks and compilation',
+);
+// Repository checks and compilation are executable code too. A compromised
+// or accidentally stateful script can modify source after the npm-ci guard,
+// then leave that mutation embedded in the isolated artifact. Require a final
+// complete worktree check after the build and before any smoke test or
+// promotion can approve the candidate.
+const releaseBuildBoundary = deploy.indexOf('QY_ROAM_DIST_DIR="$RELEASE_DIST_DIR" npm run build');
+const postBuildCleanBoundary = deploy.indexOf(
+  'release checks or build modified tracked or untracked repository files',
+);
+const smokeTestBoundary = deploy.indexOf('Smoke-testing the production artifact');
+assert.notEqual(postBuildCleanBoundary, -1, 'deployment must reject source modified by release checks or build');
+assert.ok(
+  releaseBuildBoundary < postBuildCleanBoundary && postBuildCleanBoundary < smokeTestBoundary,
+  'post-build provenance must be verified before smoke testing or artifact promotion',
 );
 // Runtime secrets are loaded with shell `source`, so deployment-owned names
 // must be immutable first. Otherwise an innocently duplicated APP_DIR,
