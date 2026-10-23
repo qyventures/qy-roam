@@ -57,7 +57,7 @@ const { fulfilmentRelayAcknowledged } = require('../lib/deliveryAcknowledgement.
 const { safeProviderDeliveryFailure, safeWebhookProcessingFailure } = require('../lib/deliveryFailure.ts');
 const { deliveryResponseContentEncoding, deliveryResponseHasJsonContentType, strictDeliveryResponseText } = require('../lib/deliveryResponse.ts');
 const { nextRetryAttempt } = require('../lib/retryAttempt.ts');
-const { completeSmtpResponseCode, isSafeSmtpHost, isSafeSmtpMailbox, MAX_SMTP_DATA_LINE_BYTES, smtpDataText, smtpSecureTransport, waitForResponse, waitForTlsHandshake } = require('../lib/smtp.ts');
+const { completeSmtpResponseCode, isSafeSmtpHost, isSafeSmtpMailbox, MAX_SMTP_DATA_LINE_BYTES, sendSmtpMail, smtpDataText, smtpSecureTransport, waitForResponse, waitForTlsHandshake } = require('../lib/smtp.ts');
 const { safeStripeCheckoutUrl } = require('../lib/stripeCheckoutUrl.ts');
 const { metaCapiPurchaseAcknowledged } = require('../lib/metaCapiAcknowledgement.ts');
 const { stripeCheckoutEventStateIssue } = require('../lib/stripeCheckoutEventState.ts');
@@ -2286,6 +2286,43 @@ test('SMTP fulfilment fails promptly when a relay disconnects before its reply o
   await assert.rejects(handshake, /closed during TLS handshake/);
   assert.equal(tlsSocket.listenerCount('secureConnect'), 0);
   assert.equal(tlsSocket.listenerCount('end'), 0);
+});
+
+test('SMTP fulfilment cancellation closes a stalled relay and releases protocol listeners', async () => {
+  const socket = new EventEmitter();
+  const destroyCalls = [];
+  socket.setTimeout = () => socket;
+  socket.write = () => true;
+  socket.destroy = (error) => {
+    destroyCalls.push(error);
+    if (error) setImmediate(() => socket.emit('error', error));
+    return socket;
+  };
+  const controller = new AbortController();
+  const reason = new Error('shared webhook deadline expired');
+
+  const delivery = sendSmtpMail({
+    host: 'smtp.example.com',
+    port: 587,
+    secure: false,
+    user: 'user',
+    pass: 'secret',
+    from: 'orders@example.com',
+    to: 'ops@example.com',
+    subject: 'Paid order',
+    text: 'Order details',
+    timeoutMs: 1_000,
+    signal: controller.signal,
+  }, () => socket);
+  controller.abort(reason);
+  await assert.rejects(delivery, /shared webhook deadline expired/);
+
+  assert.equal(destroyCalls[0], reason);
+  assert.ok(destroyCalls.length >= 2, 'final cleanup must remain idempotent after cancellation');
+  assert.equal(socket.listenerCount('data'), 0);
+  assert.equal(socket.listenerCount('error'), 0);
+  assert.equal(socket.listenerCount('timeout'), 0);
+  assert.equal(controller.signal.onabort, null);
 });
 
 test('Meta CAPI success is bound to an exact single-Purchase acknowledgement', () => {

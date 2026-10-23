@@ -277,7 +277,13 @@ export function waitForTlsHandshake(socket: tls.TLSSocket) {
   });
 }
 
-export async function sendSmtpMail(options: SmtpOptions) {
+export async function sendSmtpMail(
+  options: SmtpOptions,
+  // The connector seam keeps the cancellation and protocol state machine
+  // executable under isolated release tests without opening a real socket.
+  // Production callers always use Node's network connector.
+  connect: (options: net.NetConnectOpts) => net.Socket = net.connect,
+) {
   const host = safeSmtpHost(options.host);
   const from = normalizedMailbox(options.from, 'from');
   const to = normalizedMailbox(options.to, 'to');
@@ -289,7 +295,7 @@ export async function sendSmtpMail(options: SmtpOptions) {
   const safeOptions = { ...options, host, from, to, subject };
   let activeSocket: net.Socket | tls.TLSSocket = options.secure
     ? tls.connect({ host, port: options.port, ...smtpTlsOptions(host) })
-    : net.connect({ host, port: options.port });
+    : connect({ host, port: options.port });
   activeSocket.setTimeout(timeoutMs);
   // Bound the whole SMTP conversation, not every command independently. Without
   // this guard a silent relay can consume one full socket timeout per protocol
