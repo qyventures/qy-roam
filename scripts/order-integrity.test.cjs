@@ -6956,8 +6956,11 @@ test('launch control reports the same checkout prerequisites that protect real o
   assert.match(launchPage, /const commonCheckoutReady=stripe&&stripeApi&&webhook&&site&&orderIntegrity&&smtp/);
   assert.match(launchPage, /const esimOfferActive=esimOfferIsSaleable\(\)/);
   assert.match(launchPage, /const wifiPromoActive=promoIsActive\(\)/);
+  assert.match(launchPage, /const wifiPricingFresh=wifiBenchmarkIsFresh\(\);/);
   assert.match(launchPage, /const esimReady=commonCheckoutReady&&esimOrderDbOk&&esimOfferActive/);
-  assert.match(launchPage, /const wifiReady=commonCheckoutReady&&paymentDbOk&&pocketWifiFulfilmentDbOk&&wifiInventory&&pocketWifiStock/);
+  assert.match(launchPage, /const wifiReady=commonCheckoutReady&&paymentDbOk&&pocketWifiFulfilmentDbOk&&wifiInventory&&wifiPricingFresh&&pocketWifiStock/);
+  assert.match(launchPage, /!wifiPricingFresh&&'current reviewed Pocket WiFi benchmark'/);
+  assert.match(launchPage, /label="Pocket WiFi pricing review" ok=\{wifiPricingFresh\}/);
   assert.match(launchPage, /wifiInventory&&!pocketWifiStock&&'available Pocket WiFi unit in the inventory register'/);
   assert.match(launchPage, /Pocket WiFi available stock/);
   assert.match(launchPage, /Pocket WiFi dispatch and return custody schema/);
