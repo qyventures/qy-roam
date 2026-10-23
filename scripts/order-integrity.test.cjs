@@ -1851,7 +1851,11 @@ test('all read-heavy admin views share the bounded dashboard budget and release 
   for (const release of releases) release();
 
   await assert.rejects(
-    () => runAdminDashboardWork(async () => { throw new Error('provider failure'); }, fallback),
+    () => runAdminDashboardWork(async (signal) => {
+      assert.ok(signal instanceof AbortSignal);
+      assert.equal(signal.aborted, false);
+      throw new Error('provider failure');
+    }, fallback),
     /provider failure/,
   );
   const recovered = tryAcquireAdminDashboardConcurrency();
@@ -1861,9 +1865,13 @@ test('all read-heavy admin views share the bounded dashboard budget and release 
   for (const source of [inventoryPage, reportsPage, crmPage, forecastingPage, closingPage, launchPage]) {
     assert.match(source, /runAdminDashboardWork\(/);
   }
-  assert.match(inventoryPage, /runAdminDashboardWork\(\(\)=>Promise\.all\(/);
-  assert.match(crmPage, /runAdminDashboardWork\(\(\)=>Promise\.all\(/);
-  assert.match(forecastingPage, /runAdminDashboardWork\(\(\)=>Promise\.all\(/);
+  assert.match(inventoryPage, /runAdminDashboardWork\(\(signal\)=>Promise\.all\(/);
+  assert.match(crmPage, /runAdminDashboardWork\(\(signal\)=>Promise\.all\(/);
+  assert.match(forecastingPage, /runAdminDashboardWork\(\(signal\)=>Promise\.all\(/);
+  for (const source of [inventoryPage, reportsPage, crmPage, forecastingPage, closingPage]) {
+    assert.match(source, /\.abortSignal\(signal\)/,
+      'every direct Supabase admin view must inherit the shared dashboard deadline');
+  }
   assert.match(launchPage, /const dependencyChecks=await runAdminDashboardWork\(/);
   assert.match(launchPage, /catch \{\s*console\.error\('admin_launch_dependency_check_failed'\);\s*return null;/);
   assert.match(launchPage, /const dependencyChecksAvailable=dependencyChecks!==null/);
@@ -7344,7 +7352,7 @@ test('deployment stages a complete rollback artifact before replacing the servic
 });
 
 test('inventory visibility distinguishes unavailable data from zero stock and exposes saleable router stock', () => {
-  assert.match(inventoryPage, /await runAdminDashboardWork\(\(\)=>Promise\.all\(\[/);
+  assert.match(inventoryPage, /await runAdminDashboardWork\(\(signal\)=>Promise\.all\(\[/);
   assert.match(inventoryPage, /const failedPanels=\[itemsResult\.error&&'inventory register',movesResult\.error&&'movement audit trail',reservationsResult\.error&&'checkout reservation register',custodyResult\.error&&'active custody register'\]/);
   assert.match(inventoryPage, /Operational inventory data is currently unavailable/);
   assert.match(inventoryPage, /Do not treat empty lists or totals as current stock/);

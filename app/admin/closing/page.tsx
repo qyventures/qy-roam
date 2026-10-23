@@ -9,7 +9,7 @@ const money=(cents:number)=>`S$${(cents/100).toFixed(2)}`;
 export default async function ClosingPage(){
  const db=getSupabaseAdmin();
  const periodsResult=db?await runAdminDashboardWork(
-  async()=>db.from('closing_periods').select('*').order('period_end',{ascending:false}).order('id',{ascending:false}).limit(CLOSING_PERIOD_DISPLAY_LIMIT+1),
+  async(signal)=>db.from('closing_periods').select('*').order('period_end',{ascending:false}).order('id',{ascending:false}).limit(CLOSING_PERIOD_DISPLAY_LIMIT+1).abortSignal(signal),
   {data:null,error:new Error('Admin dashboard is busy')},
  ):null;
  const rawPeriods=periodsResult?.data??[];

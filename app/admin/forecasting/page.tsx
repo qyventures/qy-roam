@@ -12,9 +12,9 @@ const money=(cents:number)=>`S$${(cents/100).toFixed(2)}`;
 export default async function ForecastingPage(){
  const db=getSupabaseAdmin();
  const busyResult={data:null,error:new Error('Admin dashboard is busy')};
- const [forecastResult,dailyResult]=db?await runAdminDashboardWork(()=>Promise.all([
-  db.from('forecasts').select('id,forecast_month,product_type,forecast_orders,forecast_revenue_sgd,forecast_units,method,notes').order('forecast_month').order('id').limit(FORECAST_MAX_ROWS+1),
-  db.from('sales_daily_summary').select('sales_date,product_type,paid_orders,revenue_sgd').gte('sales_date',operationalIsoDateAfter(-29)).order('sales_date',{ascending:false}).order('product_type').limit(DAILY_MAX_ROWS+1),
+ const [forecastResult,dailyResult]=db?await runAdminDashboardWork((signal)=>Promise.all([
+  db.from('forecasts').select('id,forecast_month,product_type,forecast_orders,forecast_revenue_sgd,forecast_units,method,notes').order('forecast_month').order('id').limit(FORECAST_MAX_ROWS+1).abortSignal(signal),
+  db.from('sales_daily_summary').select('sales_date,product_type,paid_orders,revenue_sgd').gte('sales_date',operationalIsoDateAfter(-29)).order('sales_date',{ascending:false}).order('product_type').limit(DAILY_MAX_ROWS+1).abortSignal(signal),
  ]),[busyResult,busyResult]):[null,null];
  const forecastRows=forecastResult?.data??[];
  const dailyRows=dailyResult?.data??[];

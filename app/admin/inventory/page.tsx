@@ -24,7 +24,7 @@ type InventoryItemPageResult={data:any[];error:any;truncated:boolean};
 type ReservationPageResult={data:any[];error:any;truncated:boolean};
 type CustodyPageResult={data:any[];error:any;truncated:boolean};
 
-async function loadCustodyPages(db:NonNullable<ReturnType<typeof getSupabaseAdmin>>):Promise<CustodyPageResult>{
+async function loadCustodyPages(db:NonNullable<ReturnType<typeof getSupabaseAdmin>>,signal:AbortSignal):Promise<CustodyPageResult>{
  const data:any[]=[];
  const seenIds=new Set<number>();
  let afterId:number|null=null;
@@ -37,7 +37,7 @@ async function loadCustodyPages(db:NonNullable<ReturnType<typeof getSupabaseAdmi
    .order('id')
    .limit(limit);
   if(afterId!==null) query=query.gt('id',afterId);
-  return query;
+  return query.abortSignal(signal);
  };
  for(let loaded=0;loaded<CUSTODY_MAX_ROWS;loaded+=CUSTODY_PAGE_SIZE){
   const result=await fetchPage(CUSTODY_PAGE_SIZE);
@@ -67,14 +67,14 @@ async function loadCustodyPages(db:NonNullable<ReturnType<typeof getSupabaseAdmi
  return {data,error:null,truncated:beyond.data.length>0};
 }
 
-async function loadInventoryItemPages(db:NonNullable<ReturnType<typeof getSupabaseAdmin>>):Promise<InventoryItemPageResult>{
+async function loadInventoryItemPages(db:NonNullable<ReturnType<typeof getSupabaseAdmin>>,signal:AbortSignal):Promise<InventoryItemPageResult>{
  const data:any[]=[];
  const seenIds=new Set<number>();
  let afterId:number|null=null;
  const fetchPage=(limit:number)=>{
   let query=db.from('inventory_items').select('*').order('id').limit(limit);
   if(afterId!==null) query=query.gt('id',afterId);
-  return query;
+  return query.abortSignal(signal);
  };
  for(let loaded=0;loaded<INVENTORY_ITEM_MAX_ROWS;loaded+=INVENTORY_ITEM_PAGE_SIZE){
   const result=await fetchPage(INVENTORY_ITEM_PAGE_SIZE);
@@ -107,14 +107,14 @@ async function loadInventoryItemPages(db:NonNullable<ReturnType<typeof getSupaba
  return {data,error:null,truncated:beyond.data.length>0};
 }
 
-async function loadMovementPages(db:NonNullable<ReturnType<typeof getSupabaseAdmin>>):Promise<MovementPageResult>{
+async function loadMovementPages(db:NonNullable<ReturnType<typeof getSupabaseAdmin>>,signal:AbortSignal):Promise<MovementPageResult>{
  const data:any[]=[];
  const seenIds=new Set<number>();
  let beforeId:number|null=null;
  const fetchPage=(limit:number)=>{
   let query=db.from('inventory_movements').select('*').order('id',{ascending:false}).limit(limit);
   if(beforeId!==null) query=query.lt('id',beforeId);
-  return query;
+  return query.abortSignal(signal);
  };
  for(let loaded=0;loaded<INVENTORY_MOVEMENT_MAX_ROWS;loaded+=INVENTORY_MOVEMENT_PAGE_SIZE){
   const result=await fetchPage(INVENTORY_MOVEMENT_PAGE_SIZE);
@@ -147,7 +147,7 @@ async function loadMovementPages(db:NonNullable<ReturnType<typeof getSupabaseAdm
  return {data,error:null,truncated:beyond.data.length>0};
 }
 
-async function loadReservationPages(db:NonNullable<ReturnType<typeof getSupabaseAdmin>>):Promise<ReservationPageResult>{
+async function loadReservationPages(db:NonNullable<ReturnType<typeof getSupabaseAdmin>>,signal:AbortSignal):Promise<ReservationPageResult>{
  const data:any[]=[];
  const seenRequestIds=new Set<string>();
  // Only a Stripe-linked reservation receives the four-day terminal-webhook
@@ -160,7 +160,7 @@ async function loadReservationPages(db:NonNullable<ReturnType<typeof getSupabase
  const fetchPage=(limit:number)=>{
   let query=db.from('checkout_reservations').select('checkout_request_id,stripe_session_id,travel_start,travel_end,expires_at,created_at').or(activeFilter).order('checkout_request_id').limit(limit);
   if(afterRequestId!==null) query=query.gt('checkout_request_id',afterRequestId);
-  return query;
+  return query.abortSignal(signal);
  };
  for(let loaded=0;loaded<RESERVATION_MAX_ROWS;loaded+=RESERVATION_PAGE_SIZE){
   const result=await fetchPage(RESERVATION_PAGE_SIZE);
@@ -197,11 +197,11 @@ export default async function InventoryPage(){
  // silently empty register during a database/schema incident.
  const unavailable={data:[] as any[],error:new Error('Inventory database is not configured'),truncated:false};
  const [itemsResult,movesResult,reservationsResult,custodyResult]=db
-   ?await runAdminDashboardWork(()=>Promise.all([
-      loadInventoryItemPages(db),
-      loadMovementPages(db),
-      loadReservationPages(db),
-      loadCustodyPages(db),
+   ?await runAdminDashboardWork((signal)=>Promise.all([
+      loadInventoryItemPages(db,signal),
+      loadMovementPages(db,signal),
+      loadReservationPages(db,signal),
+      loadCustodyPages(db,signal),
     ]),[unavailable,unavailable,unavailable,unavailable])
    :[unavailable,unavailable,unavailable,unavailable];
  // Page on immutable identities for correctness, then restore the useful

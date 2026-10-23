@@ -1,4 +1,5 @@
 import { createConcurrencyLimiter } from './concurrencyLimit';
+import { createAdminDashboardDeadline } from './adminDashboardDeadline';
 
 // The main operations dashboard can page across five independent ledgers.
 // Basic Auth proves the caller is staff, but does not prevent overlapping tab
@@ -27,12 +28,14 @@ export function tryAcquireAdminDashboardConcurrency() {
 // returns its slot after success or failure. Callers provide a typed fallback
 // that lets the page fail closed with its existing "data unavailable" UI
 // instead of throwing a render error when the operational read budget is full.
-export async function runAdminDashboardWork<T, B>(work: () => Promise<T>, busy: B): Promise<T | B> {
+export async function runAdminDashboardWork<T, B>(work: (signal: AbortSignal) => Promise<T>, busy: B): Promise<T | B> {
   const release = tryAcquireAdminDashboardConcurrency();
   if (!release) return busy;
+  const deadline = createAdminDashboardDeadline();
   try {
-    return await work();
+    return await work(deadline.signal);
   } finally {
+    deadline.dispose();
     release();
   }
 }

@@ -11,7 +11,7 @@ const moneyFromCents = (cents: number) => `S$${(cents / 100).toFixed(2)}`;
 
 type ReportResult = { data: any[]; error: unknown; truncated: boolean };
 
-async function loadReportPages(db: NonNullable<ReturnType<typeof getSupabaseAdmin>>): Promise<ReportResult> {
+async function loadReportPages(db: NonNullable<ReturnType<typeof getSupabaseAdmin>>, signal: AbortSignal): Promise<ReportResult> {
   const data: any[] = [];
   const seenRows = new Set<string>();
   let previousDate: string | null = null;
@@ -32,7 +32,7 @@ async function loadReportPages(db: NonNullable<ReturnType<typeof getSupabaseAdmi
       // older date, or a later product bucket on the same date.
       query = query.or(`sales_date.lt.${afterDate},and(sales_date.eq.${afterDate},product_type.gt.${afterProduct})`);
     }
-    return query;
+    return query.abortSignal(signal);
   };
 
   for (let loaded = 0; loaded < REPORT_MAX_ROWS; loaded += REPORT_PAGE_SIZE) {
@@ -92,7 +92,7 @@ export default async function ReportsPage() {
   const db = getSupabaseAdmin();
   const reportResult: ReportResult = db
     ? await runAdminDashboardWork(
-      () => loadReportPages(db),
+      (signal) => loadReportPages(db, signal),
       { data: [], error: new Error('Admin dashboard is busy'), truncated: false },
     )
     : { data: [], error: new Error('Sales database is not configured'), truncated: false };

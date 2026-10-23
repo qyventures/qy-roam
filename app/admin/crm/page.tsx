@@ -55,10 +55,10 @@ function newestFirst(a:any,b:any,field:string){
 export default async function CrmPage(){
  const db=getSupabaseAdmin();
  const busyResult={data:[],error:new Error('Admin dashboard is busy'),truncated:false};
- const [customersResult,oppsResult,actsResult]=db?await runAdminDashboardWork(()=>Promise.all([
-  loadCrmPages((after,limit)=>{let query=db.from('customers').select('*').order('id',{ascending:false}).limit(limit);if(after!==null)query=query.lt('id',after);return query;}),
-  loadCrmPages((after,limit)=>{let query=db.from('sales_opportunities').select('*').order('id',{ascending:false}).limit(limit);if(after!==null)query=query.lt('id',after);return query;}),
-  loadCrmPages((after,limit)=>{let query=db.from('crm_activities').select('*').order('id',{ascending:false}).limit(limit);if(after!==null)query=query.lt('id',after);return query;}),
+ const [customersResult,oppsResult,actsResult]=db?await runAdminDashboardWork((signal)=>Promise.all([
+  loadCrmPages((after,limit)=>{let query=db.from('customers').select('*').order('id',{ascending:false}).limit(limit);if(after!==null)query=query.lt('id',after);return query.abortSignal(signal);}),
+  loadCrmPages((after,limit)=>{let query=db.from('sales_opportunities').select('*').order('id',{ascending:false}).limit(limit);if(after!==null)query=query.lt('id',after);return query.abortSignal(signal);}),
+  loadCrmPages((after,limit)=>{let query=db.from('crm_activities').select('*').order('id',{ascending:false}).limit(limit);if(after!==null)query=query.lt('id',after);return query.abortSignal(signal);}),
  ]),[busyResult,busyResult,busyResult]):[null,null,null];
  // IDs provide a stable pagination boundary; restore the recency-oriented
  // presentation only after each complete bounded ledger has been assembled.
