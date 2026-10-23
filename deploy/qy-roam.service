@@ -1,6 +1,16 @@
 [Unit]
 Description=QY Roam Next.js production service
-After=network.target
+# Checkout readiness immediately calls Stripe and Supabase. On a host reboot,
+# wait for the network manager's online boundary instead of starting as soon as
+# the kernel has merely created a network target. This avoids presenting a
+# predictable provider outage during early boot as an application failure.
+Wants=network-online.target
+After=network-online.target
+# Keep a broken artifact or host configuration from cycling indefinitely and
+# consuming the machine. Ten starts still leave ample room for a transient
+# boot/network recovery before systemd requires operator reconciliation.
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Service]
 Type=simple

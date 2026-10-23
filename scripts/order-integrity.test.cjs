@@ -9814,6 +9814,22 @@ test('production service contains credential exposure through procfs and crash a
   assert.match(service, /^ProcSubset=pid$/m);
 });
 
+test('production service waits for usable networking and bounds crash-loop restarts', () => {
+  const service = fs.readFileSync(require.resolve('../deploy/qy-roam.service'), 'utf8');
+
+  // Stripe, Supabase, SMTP and Meta are network dependencies. Merely reaching
+  // network.target during a reboot does not mean the host has an address or
+  // route yet, so make the stronger boot ordering part of the release contract.
+  assert.match(service, /^Wants=network-online\.target$/m);
+  assert.match(service, /^After=network-online\.target$/m);
+  assert.doesNotMatch(service, /^After=network\.target$/m);
+  // Restart=always remains useful for isolated process failures, but it must
+  // not turn a bad artifact/configuration into an indefinite host-level loop.
+  assert.match(service, /^Restart=always$/m);
+  assert.match(service, /^StartLimitIntervalSec=300$/m);
+  assert.match(service, /^StartLimitBurst=10$/m);
+});
+
 test('public mutations reach bounded application readers without proxy buffering', () => {
   // `client_body_timeout` only limits inactivity between reads. Keep the
   // application's absolute body deadlines and concurrency admission effective

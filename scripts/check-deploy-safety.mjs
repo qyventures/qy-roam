@@ -358,6 +358,14 @@ assert.doesNotMatch(deploy, /header = "Authorization: Bearer/);
 // written by Nginx. The app must therefore never be reachable directly on a
 // public interface where a caller could provide its own X-Real-IP header.
 assert.match(service, /^Environment=HOSTNAME=127\.0\.0\.1$/m, 'standalone Next.js must bind only to loopback behind Nginx');
+// A production reboot must not start the checkout worker before the host has
+// declared external networking usable. Also retain a finite restart budget so
+// a broken artifact/configuration cannot become an unbounded crash loop.
+assert.match(service, /^Wants=network-online\.target$/m, 'production service must request the host network-online boundary');
+assert.match(service, /^After=network-online\.target$/m, 'production service must start after the host network-online boundary');
+assert.doesNotMatch(service, /^After=network\.target$/m, 'basic network.target ordering is not sufficient for provider-backed checkout');
+assert.match(service, /^StartLimitIntervalSec=300$/m, 'production restart accounting must use a bounded five-minute window');
+assert.match(service, /^StartLimitBurst=10$/m, 'production crash loops must stop after a bounded number of starts');
 // systemd must own the actual Next server process. Supervising `npm run start`
 // leaves a wrapper between systemd's SIGTERM and the HTTP worker, so a deploy
 // can wait for the hard stop while the child retains port 3100 instead of
