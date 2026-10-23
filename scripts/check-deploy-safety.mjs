@@ -156,7 +156,22 @@ assert.ok(
 // live readiness succeeds. Once the verified staging artifact is promoted,
 // every cutover failure must restore that restartable snapshot.
 assert.match(deploy, /mktemp -d \/tmp\/qyroam-release-rollback/);
-assert.match(deploy, /cp -a \.next "\$rollback_dir\/previous-next"/);
+const rollbackDirectoryCreation = deploy.indexOf('rollback_dir="$(mktemp -d /tmp/qyroam-release-rollback.XXXXXX)"');
+const earlySnapshotCleanup = deploy.indexOf('trap \'rm -rf -- "$rollback_dir"\' EXIT', rollbackDirectoryCreation);
+const stagedSnapshotCopy = deploy.indexOf('cp -a .next "$rollback_dir/previous-next.partial"');
+const stagedSnapshotValidation = deploy.indexOf('[[ ! -f "$rollback_dir/previous-next.partial/standalone/server.js" ]]');
+const stagedSnapshotPromotion = deploy.indexOf('mv "$rollback_dir/previous-next.partial" "$rollback_dir/previous-next"');
+const completeReleaseTrap = deploy.indexOf("trap 'handle_release_exit", stagedSnapshotPromotion);
+assert.ok(
+  rollbackDirectoryCreation > -1 &&
+    earlySnapshotCleanup > rollbackDirectoryCreation &&
+    stagedSnapshotCopy > earlySnapshotCleanup &&
+    stagedSnapshotValidation > stagedSnapshotCopy &&
+    stagedSnapshotPromotion > stagedSnapshotValidation &&
+    completeReleaseTrap > stagedSnapshotPromotion,
+  'the previous artifact snapshot must be cleanup-protected, staged, validated, and atomically named before release work',
+);
+assert.doesNotMatch(deploy, /cp -a \.next "\$rollback_dir\/previous-next"(?:\s|$)/);
 assert.match(deploy, /restore_previous_artifact\(\)/);
 assert.match(deploy, /^ROLLBACK_RESTORE_DIST_DIR=\.next-rollback-restore$/m);
 const restoreStart = deploy.indexOf('restore_previous_artifact()');

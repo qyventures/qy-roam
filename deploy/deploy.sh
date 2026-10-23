@@ -125,6 +125,12 @@ fi
 # than leave checkout offline. The snapshot lives outside the repository and
 # is removed after a successful release.
 rollback_dir="$(mktemp -d /tmp/qyroam-release-rollback.XXXXXX)"
+# Snapshot creation happens before the full release-exit handler is installed.
+# Arm a narrow cleanup immediately so an interrupted or disk-full copy cannot
+# strand a partial production artifact (and consume the space needed by the
+# still-serving release). The complete handler below replaces this trap after
+# all of its state and functions have been declared.
+trap 'rm -rf -- "$rollback_dir"' EXIT
 previous_artifact_available=0
 release_snapshot_cleanup_enabled=1
 release_verified=0
@@ -136,7 +142,16 @@ artifact_promotion_started=0
 # between creation and the normal success/failure cleanup below.
 rollback_health_header=""
 if [[ -f .next/standalone/server.js ]]; then
-  cp -a .next "$rollback_dir/previous-next"
+  # Never let a partial recursive copy acquire the authoritative rollback
+  # name. Stage it beside the final snapshot, validate the restart entrypoint,
+  # and promote it with a same-filesystem rename only after the copy is whole.
+  # The early EXIT trap above removes either name on every failure.
+  cp -a .next "$rollback_dir/previous-next.partial"
+  if [[ ! -f "$rollback_dir/previous-next.partial/standalone/server.js" ]]; then
+    echo "Previous production artifact snapshot is incomplete" >&2
+    exit 1
+  fi
+  mv "$rollback_dir/previous-next.partial" "$rollback_dir/previous-next"
   previous_artifact_available=1
 fi
 
