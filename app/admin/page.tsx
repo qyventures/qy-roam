@@ -11,6 +11,7 @@ import { formatSingaporeDate, formatSingaporeTimestamp } from '@/lib/singaporeTi
 import { customerOrderReference } from '@/lib/customerOrderReference';
 import { validatedDeliveryLedgerRow, validatedStripeEventRecoveryRow } from '@/lib/adminDeliveryRow';
 import { validatedInventoryItem } from '@/lib/inventoryAdminRow';
+import { adminOrderMutationSafe } from '@/lib/adminOrderRow';
 
 export const dynamic = 'force-dynamic';
 
@@ -557,6 +558,7 @@ async function renderAdminPage() {
             (metaCapiConfigured && o.measurement_consent === 'accepted' && metaDelivery?.status !== 'sent')
           );
           const supportReference = customerOrderReference(o.stripe_session_id);
+          const mutationSafe = adminOrderMutationSafe(o);
           return <tr id={`order-${o.id}`} key={o.id} style={{borderTop:'1px solid #e5e8ed',verticalAlign:'top'}}>
             <td style={{padding:'14px 10px',maxWidth:220}}>{supportReference && <><strong>{supportReference}</strong><br/></>}<code style={{overflowWrap:'anywhere'}}>{String(o.stripe_session_id || o.id)}</code><br/><small>{formatSingaporeTimestamp(o.created_at)} SGT</small></td>
             <td style={{padding:'14px 8px'}}>{o.customer_name || '-'}<br/><small>{o.phone || '-'}</small>{o.email && <><br/><small>{o.email}</small></>}</td>
@@ -565,7 +567,9 @@ async function renderAdminPage() {
             <td style={{padding:'14px 8px'}}><strong>{money(o.amount_sgd)}</strong></td>
             <td style={{padding:'14px 8px'}}>{notification?.status === 'sent' ? '✓ Sent' : notification ? `⚠ ${notification.status}` : o.payment_status === 'paid' && stripeCheckoutOrder ? '⚠ Not recorded' : o.payment_status === 'paid' ? 'Manual sale · operator recorded' : '-'}{notification?.last_error && <><br/><small>{String(notification.last_error).slice(0,120)}</small></>}</td>
             <td style={{padding:'14px 8px'}}>{metaDelivery?.status === 'sent' ? '✓ Sent' : !metaCapiConfigured && o.measurement_consent === 'accepted' ? 'CAPI unavailable' : metaDelivery ? `⚠ ${metaDelivery.status}` : o.payment_status === 'paid' && stripeCheckoutOrder ? 'Not requested / not recorded' : o.payment_status === 'paid' ? 'Manual sale · no measurement consent' : '-'}{metaDelivery?.last_error && <><br/><small>{String(metaDelivery.last_error).slice(0,120)}</small></>}</td>
-            <td style={{padding:'14px 8px'}}>{o.return_disposition && <small>Return: {String(o.return_disposition).replaceAll('_',' ')}</small>}{isEsim(o) && o.digital_delivery_reference && <small>{isSafeDigitalDeliveryReference(o.digital_delivery_reference) ? 'Delivery audit reference recorded' : '⚠ Unsafe legacy delivery value hidden — review support record'}</small>}<AdminOrderActions key={`${o.id}:${o.updated_at}`} id={o.id} initialStatus={o.fulfilment_status} initialUpdatedAt={o.updated_at} paymentStatus={o.payment_status} productType={o.product_type} courierTracking={o.courier_tracking} returnTracking={o.return_tracking} initialReturnDisposition={o.return_disposition} digitalDeliveryReference={isSafeDigitalDeliveryReference(o.digital_delivery_reference) ? o.digital_delivery_reference : ''} inventoryItemId={o.inventory_item_id} inventoryItems={inventoryItems} canRetryNotifications={canRetryNotifications}/></td>
+            <td style={{padding:'14px 8px'}}>{o.return_disposition && <small>Return: {String(o.return_disposition).replaceAll('_',' ')}</small>}{isEsim(o) && o.digital_delivery_reference && <small>{isSafeDigitalDeliveryReference(o.digital_delivery_reference) ? 'Delivery audit reference recorded' : '⚠ Unsafe legacy delivery value hidden — review support record'}</small>}{mutationSafe
+              ? <AdminOrderActions key={`${o.id}:${o.updated_at}`} id={o.id} initialStatus={o.fulfilment_status} initialUpdatedAt={o.updated_at} paymentStatus={o.payment_status} productType={o.product_type} courierTracking={o.courier_tracking} returnTracking={o.return_tracking} initialReturnDisposition={o.return_disposition} digitalDeliveryReference={isSafeDigitalDeliveryReference(o.digital_delivery_reference) ? o.digital_delivery_reference : ''} inventoryItemId={o.inventory_item_id} inventoryItems={inventoryItems} canRetryNotifications={canRetryNotifications}/>
+              : <div role="alert" style={{display:'grid',gap:6,minWidth:190}}><strong>Order controls unavailable</strong><small>This row has malformed lifecycle or audit data. Reconcile the durable order before changing fulfilment or retrying delivery.</small></div>}</td>
           </tr>;
         })}</tbody>
       </table></div>}

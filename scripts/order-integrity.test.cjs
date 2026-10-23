@@ -111,6 +111,38 @@ const { customerOrderReference } = require('../lib/customerOrderReference.ts');
 const { metaPurchaseIdentity: deriveMetaPurchaseIdentity } = require('../lib/metaPurchaseIdentity.ts');
 const { READINESS_PROBE_TIMEOUT_MS, ReadinessProbeTimeoutError, runReadinessProbe } = require('../lib/readinessProbe.ts');
 const { readinessFailureBackoffActive, readinessWindowActive } = require('../lib/readinessBackoff.ts');
+const { adminOrderMutationSafe } = require('../lib/adminOrderRow.ts');
+
+test('admin order mutations require one coherent durable lifecycle row', () => {
+  const row = {
+    id: 42,
+    stripe_session_id: 'cs_live_AdminOrder123',
+    payment_status: 'paid',
+    product_type: 'pocket_wifi',
+    fulfilment_status: 'packing',
+    updated_at: '2026-10-23T01:02:03.123456+00:00',
+    inventory_item_id: null,
+    courier_tracking: null,
+    return_tracking: null,
+    digital_delivery_reference: null,
+    return_disposition: null,
+  };
+  assert.equal(adminOrderMutationSafe(row), true);
+  assert.equal(adminOrderMutationSafe({ ...row, stripe_session_id: `manual_${'a'.repeat(48)}` }), true);
+  for (const malformed of [
+    { ...row, id: 0 },
+    { ...row, stripe_session_id: 'cs_live_bad-id' },
+    { ...row, payment_status: 'refunded' },
+    { ...row, product_type: 'esim', fulfilment_status: 'packing' },
+    { ...row, updated_at: '2026-10-23' },
+    { ...row, inventory_item_id: 1.5 },
+    { ...row, courier_tracking: 'unsafe\nreference' },
+    { ...row, return_disposition: 'available' },
+  ]) assert.equal(adminOrderMutationSafe(malformed), false);
+
+  assert.match(adminPage, /const mutationSafe = adminOrderMutationSafe\(o\)/);
+  assert.match(adminPage, /mutationSafe[\s\S]*?Order controls unavailable[\s\S]*?Reconcile the durable order/);
+});
 
 test('Stripe readiness requires one coherent mode-correct Checkout list', () => {
   const empty = { object: 'list', url: '/v1/checkout/sessions', has_more: false, data: [] };
