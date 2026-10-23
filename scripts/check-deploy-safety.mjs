@@ -353,6 +353,21 @@ assert.doesNotMatch(deploy, /\^\[\\\\x20-\\\\x7e\]\+\$/);
 assert.match(deploy, /token\.length<24\|\|token\.length>1024/);
 assert.match(deploy, /printf 'Authorization: Bearer %s\\n'/);
 assert.doesNotMatch(deploy, /header = "Authorization: Bearer/);
+// Rollback performs its own authenticated readiness check after a failed
+// cutover. Its bearer-token header file must be visible to the process-wide
+// EXIT cleanup: a function-local path can be orphaned if rollback is
+// interrupted before reaching its ordinary rm.
+assert.match(deploy, /^rollback_health_header=""$/m, 'rollback readiness header path must be tracked for exit cleanup');
+assert.match(
+  deploy,
+  /cleanup_release_snapshot\(\) \{[\s\S]*?rm -f -- "\$rollback_health_header"[\s\S]*?rollback_health_header=""/,
+  'release cleanup must remove and clear any rollback readiness credential file',
+);
+assert.doesNotMatch(
+  deploy,
+  /local rollback_health_header/,
+  'rollback readiness header path must not be hidden from process-wide cleanup',
+);
 
 // Checkout throttling and consented CAPI attribution use the single client IP
 // written by Nginx. The app must therefore never be reachable directly on a

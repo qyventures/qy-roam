@@ -130,12 +130,21 @@ release_snapshot_cleanup_enabled=1
 release_verified=0
 cutover_attempted=0
 artifact_promotion_started=0
+# Automatic rollback may need the authenticated readiness credential after a
+# failed cutover. Track its protected curl header file outside the function so
+# the process-wide EXIT cleanup can remove it if the rollback is interrupted
+# between creation and the normal success/failure cleanup below.
+rollback_health_header=""
 if [[ -f .next/standalone/server.js ]]; then
   cp -a .next "$rollback_dir/previous-next"
   previous_artifact_available=1
 fi
 
 cleanup_release_snapshot() {
+  if [[ -n "$rollback_health_header" ]]; then
+    rm -f -- "$rollback_health_header"
+    rollback_health_header=""
+  fi
   # This directory is never the live service target. Remove a failed or
   # already-promoted staging build without touching the active `.next` tree.
   rm -rf -- "$APP_DIR/$RELEASE_DIST_DIR"
@@ -200,7 +209,6 @@ restore_previous_artifact() {
   # recovery snapshot or report a successful rollback until the old artifact
   # is actually serving the same authenticated readiness contract used for
   # release verification.
-  local rollback_health_header
   rollback_health_header="$(mktemp /tmp/qyroam-rollback-health.XXXXXX.header)"
   chmod 600 "$rollback_health_header"
   printf 'Authorization: Bearer %s\n' "${health_check_token:-}" > "$rollback_health_header"
@@ -214,7 +222,8 @@ restore_previous_artifact() {
     fi
     sleep 2
   done
-  rm -f "$rollback_health_header"
+  rm -f -- "$rollback_health_header"
+  rollback_health_header=""
   if [[ "$rollback_ready" -eq 1 ]]; then
     echo "Previous QY Roam artifact restored, restarted, and sales-ready." >&2
     return 0
