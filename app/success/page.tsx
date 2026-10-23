@@ -54,7 +54,7 @@ export default async function SuccessPage({ searchParams }: Props) {
     try {
       if (!releaseConfirmation) throw new Error('Confirmation lookup is busy');
       const stripe = createStripeClient(key);
-      const session = await stripe.checkout.sessions.retrieve(sessionId);
+      const session = await stripe.checkout.sessions.retrieve(sessionId, confirmationDeadline!.stripeRequestOptions());
       // The URL reference selected this exact Checkout Session. Stripe
       // credentials normally scope retrieval correctly, but an unexpected SDK
       // or upstream response must never let a different customer's session be

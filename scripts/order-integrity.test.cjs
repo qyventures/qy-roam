@@ -10536,19 +10536,27 @@ test('customer confirmation Stripe and ledger reads share one end-to-end deadlin
   assert.throws(() => createConfirmationDeadline(0), RangeError);
   assert.throws(() => createConfirmationDeadline(CONFIRMATION_LOOKUP_TIMEOUT_MS + 1), RangeError);
 
+  const activeDeadline = createConfirmationDeadline(100);
+  const stripeOptions = activeDeadline.stripeRequestOptions();
+  assert.ok(stripeOptions.timeout > 0 && stripeOptions.timeout <= 100);
+  activeDeadline.dispose();
+
   const deadline = createConfirmationDeadline(5);
   assert.equal(deadline.signal.aborted, false);
   await new Promise((resolve) => deadline.signal.addEventListener('abort', resolve, { once: true }));
   assert.equal(deadline.signal.aborted, true);
   assert.match(String(deadline.signal.reason), /confirmation lookup timed out/i);
+  assert.throws(() => deadline.stripeRequestOptions(), /confirmation lookup timed out/i);
   deadline.dispose();
 
   for (const page of [successPage, bookingPage]) {
     const stripeLookup = page.indexOf('stripe.checkout.sessions.retrieve(');
+    const stripeDeadline = page.indexOf('confirmationDeadline', stripeLookup);
     const ledgerSignal = page.indexOf('.abortSignal(confirmationDeadline', stripeLookup);
     const disposal = page.indexOf('confirmationDeadline', ledgerSignal + 1);
-    assert.ok(stripeLookup >= 0 && ledgerSignal > stripeLookup && disposal > ledgerSignal,
-      'the ledger read must inherit and release the deadline created before Stripe');
+    assert.ok(stripeLookup >= 0 && stripeDeadline > stripeLookup && stripeDeadline < ledgerSignal && disposal > ledgerSignal,
+      'the Stripe and ledger reads must inherit and release one deadline');
+    assert.match(page.slice(stripeLookup, stripeDeadline + 100), /stripeRequestOptions\(\)/);
   }
 });
 
