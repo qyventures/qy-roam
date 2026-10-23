@@ -34,6 +34,22 @@ const ADMIN_OPS_BODY_TIMEOUT_MS = 15_000;
 const CLOSING_ORDER_PAGE_SIZE = 1_000;
 const MAX_CLOSING_ORDERS = 50_000;
 
+// A mutable dependency request can commit at Supabase even when its response
+// is lost or the shared deadline expires. Keep every unexpected failure after
+// admission on one explicit retry contract: operators must reconcile the
+// refreshed ledger first, then retry with the same durable operation identity.
+// A 500 without Retry-After incorrectly suggests an application defect and
+// gives automation no safe backoff signal for this ambiguous outcome.
+function adminOpsRetryJson(message: string) {
+  return NextResponse.json(
+    { error: message },
+    {
+      status: 503,
+      headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' },
+    },
+  );
+}
+
 function text(v: unknown, max = 500) { return String(v ?? '').trim().slice(0, max); }
 function optionalSingleLineText(value: unknown, max: number) {
   if (value === undefined || value === null || value === '') return null;
@@ -705,7 +721,7 @@ export async function POST(req: NextRequest) {
     // failures should neither become an operator-facing raw error nor a log
     // sink for customer and provider data.
     console.error('admin_ops_action_failed', { action });
-    return NextResponse.json({ error: 'Operation failed. Please try again or contact an administrator.' }, { status: 500 });
+    return adminOpsRetryJson('Operation status could not be confirmed. Review the refreshed records, then try again with the same operation reference.');
   } finally {
     adminOpsDeadline.dispose();
     releaseAdminOps();

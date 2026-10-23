@@ -1843,6 +1843,30 @@ test('admin operational mutations have a bounded non-queueing database-work budg
   for (const release of releases.slice(1)) release();
 });
 
+test('ambiguous admin mutation failures use one reconciliation-first retry contract', () => {
+  assert.match(
+    adminOpsRoute,
+    /function adminOpsRetryJson[\s\S]*?status: 503[\s\S]*?'Retry-After': '5'/,
+  );
+  assert.match(
+    adminOpsRoute,
+    /catch \{[\s\S]*?admin_ops_action_failed[\s\S]*?return adminOpsRetryJson\('Operation status could not be confirmed\./,
+  );
+  assert.doesNotMatch(adminOpsRoute, /admin_ops_action_failed[\s\S]{0,500}status: 500/);
+
+  assert.match(
+    adminOrderRoute,
+    /function adminOrderTransitionRetryJson[\s\S]*?status: 503[\s\S]*?'Retry-After': '5'/,
+  );
+  assert.match(adminOrderRoute, /if \(existing\.error\) return adminOrderTransitionRetryJson/);
+  assert.equal(
+    (adminOrderRoute.match(/return adminOrderTransitionRetryJson\(\);/g) || []).length,
+    3,
+    'both returned RPC errors and thrown transport failures must share the retry contract',
+  );
+  assert.doesNotMatch(adminOrderRoute, /Unable to update order[\s\S]{0,160}status: 500/);
+});
+
 test('main admin order visibility has a bounded shared ledger-read budget', () => {
   assert.equal(ADMIN_DASHBOARD_MAX_CONCURRENT_REQUESTS, 2);
   const releases = Array.from(
@@ -1949,12 +1973,12 @@ test('admin order transitions contain unexpected dependency failures inside a re
     adminOrderRoute.indexOf('export async function PATCH'),
     adminOrderRoute.indexOf('async function retryOrderDeliveries'),
   );
-  // Supabase result errors have specific reviewed responses above, while a
-  // thrown transport/runtime failure must not escape into Next's generic
+  // Returned Supabase errors and thrown transport/runtime failures must stay
+  // on the same retryable contract and never escape into Next's generic
   // error renderer or log provider/customer details.
   assert.match(transitionHandler, /catch \{[\s\S]*console\.error\('admin_order_transition_failed'\);/);
   assert.doesNotMatch(transitionHandler, /console\.error\('admin_order_transition_failed',/);
-  assert.match(transitionHandler, /Unable to update order\. Please try again shortly\./);
+  assert.match(transitionHandler, /return adminOrderTransitionRetryJson\(\);/);
   assert.match(transitionHandler, /status: 503/);
   assert.match(transitionHandler, /'Cache-Control': 'no-store'/);
   assert.match(transitionHandler, /'Retry-After': '5'/);
@@ -2709,7 +2733,7 @@ test('admin and readiness failure paths do not expose raw dependency errors', ()
   assert.doesNotMatch(adminOrderRoute, /console\.error\('admin_order_transition_failed',/);
   assert.match(adminOpsRoute, /console\.error\('admin_ops_action_failed', \{ action \}\);/);
   assert.doesNotMatch(adminOpsRoute, /console\.error\('admin ops action failed'/);
-  assert.match(adminOpsRoute, /Operation failed\. Please try again or contact an administrator\./);
+  assert.match(adminOpsRoute, /Operation status could not be confirmed\. Review the refreshed records, then try again with the same operation reference\./);
   for (const event of [
     'production_payment_schema_check_unexpected_error',
     'production_esim_order_schema_check_unexpected_error',
@@ -2726,7 +2750,7 @@ test('Pocket WiFi admin transitions expose only approved operational conflicts',
   // provider failure reduced to a stable recovery instruction.
   assert.match(adminOrderRoute, /function pocketWifiTransitionError\(message: string\)/);
   assert.match(adminOrderRoute, /console\.error\('admin_pocket_wifi_transition_error'\);/);
-  assert.match(adminOrderRoute, /Unable to update order\. Please try again or contact an administrator\./);
+  assert.match(adminOrderRoute, /Unable to confirm the order update\. Refresh the order before trying again\./);
   assert.doesNotMatch(adminOrderRoute, /error: conflict \? 'Order changed since it was loaded\. Refresh before updating it\.' : message/);
   assert.doesNotMatch(adminOrderRoute, /error: message \}, \{ status: transitionErrorStatus\(message\) \}/);
 });

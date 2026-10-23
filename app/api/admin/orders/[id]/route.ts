@@ -130,6 +130,20 @@ function esimTransitionError(message: string) {
   return null;
 }
 
+// Supabase can surface the same dependency failure either as a returned error
+// or a thrown transport exception. A fulfilment RPC may also have committed
+// before that failure became visible to this process, so both paths need the
+// same retryable, reconciliation-first response instead of an ambiguous 500.
+function adminOrderTransitionRetryJson(message = 'Unable to confirm the order update. Refresh the order before trying again.') {
+  return NextResponse.json(
+    { error: message },
+    {
+      status: 503,
+      headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' },
+    },
+  );
+}
+
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
   const supabase = getSupabaseAdmin();
   if (!supabase) return NextResponse.json({ error: 'Order database not configured' }, { status: 503 });
@@ -189,7 +203,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
   try {
   const existing = await supabase.from('orders').select('product_type,payment_status,fulfilment_status,dispatched_at,returned_at,courier_tracking,return_tracking,return_disposition,digital_delivery_reference,notes').eq('id', id).abortSignal(adminOrderDeadline.signal).maybeSingle();
-  if (existing.error) return NextResponse.json({ error: 'Unable to load order' }, { status: 500 });
+  if (existing.error) return adminOrderTransitionRetryJson('Unable to load the current order. Please try again shortly.');
   if (!existing.data) return NextResponse.json({ error: 'Order not found' }, { status: 404 });
   if (!validFulfilmentStatus(existing.data.product_type, status)) return NextResponse.json({ error: 'Invalid fulfilment status for this order' }, { status: 400 });
   if (existing.data.payment_status !== 'paid') {
@@ -375,7 +389,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       // errors can contain query details or values supplied by another admin
       // client, neither of which is an actionable browser response.
       console.error('admin_pocket_wifi_transition_error');
-      return NextResponse.json({ error: 'Unable to update order. Please try again or contact an administrator.' }, { status: 500 });
+      return adminOrderTransitionRetryJson();
     }
     const order = acknowledgedOrderTransition(exactRpcRow(data), { orderId: id, status });
     if (!order) return NextResponse.json({ error: 'Unable to verify the saved order. Refresh before making another change.' }, { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' } });
@@ -396,7 +410,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     const transitionError = esimTransitionError(error.message || '');
     if (transitionError) return NextResponse.json({ error: transitionError.error }, { status: transitionError.status });
     console.error('admin_esim_transition_error');
-    return NextResponse.json({ error: 'Unable to update order. Please try again or contact an administrator.' }, { status: 500 });
+    return adminOrderTransitionRetryJson();
   }
   // For the irreversible digital hand-off, status is not a complete commit
   // acknowledgement. Require the RPC to echo the exact audit reference that
@@ -416,13 +430,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     // receives a retryable response, no provider/customer detail reaches the
     // browser or logs, and the shared operations slot is released below.
     console.error('admin_order_transition_failed');
-    return NextResponse.json(
-      { error: 'Unable to update order. Please try again shortly.' },
-      {
-        status: 503,
-        headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' },
-      },
-    );
+    return adminOrderTransitionRetryJson();
   } finally {
     adminOrderDeadline.dispose();
     releaseAdminOps();
