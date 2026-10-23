@@ -683,7 +683,7 @@ async function settleStripeEvent(
   ) throw new Error('Stripe event settlement returned a mismatched event');
 }
 
-export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session){
+export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session, signal:AbortSignal){
   // Stripe may retry a paid event after its original email attempt failed.
   // Operations can legitimately cancel, return, close, or digitally fulfil
   // the order before that retry arrives. Re-read the durable lifecycle at the
@@ -699,6 +699,7 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
     // than resend the historical Checkout snapshot to fulfilment staff.
     .select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,fulfilment_status,customer_name,email,phone,shipping_address')
     .eq('stripe_session_id',session.id)
+    .abortSignal(signal)
     .maybeSingle();
   if(order.error) throw order.error;
   if(!order.data) throw new Error('Paid order is missing before fulfilment notification delivery');
@@ -735,13 +736,13 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
   const fulfilmentDetailsIssue=paidFulfilmentDetailsIssue(fulfilmentSession,productType);
   if(fulfilmentDetailsIssue) throw new Error(fulfilmentDetailsIssue);
 
-  let existing=await supabase.from('fulfilment_notifications').select('status,updated_at,attempts').eq('stripe_session_id',session.id).maybeSingle();
+  let existing=await supabase.from('fulfilment_notifications').select('status,updated_at,attempts').eq('stripe_session_id',session.id).abortSignal(signal).maybeSingle();
   if(existing.error) throw existing.error;
   if(existing.data?.status==='sent') return;
   if(!existing.data){
-    const created=await supabase.from('fulfilment_notifications').insert({stripe_session_id:session.id,status:'pending'});
+    const created=await supabase.from('fulfilment_notifications').insert({stripe_session_id:session.id,status:'pending'}).abortSignal(signal);
     if(created.error?.code!=='23505'&&created.error) throw created.error;
-    existing=await supabase.from('fulfilment_notifications').select('status,updated_at,attempts').eq('stripe_session_id',session.id).single();
+    existing=await supabase.from('fulfilment_notifications').select('status,updated_at,attempts').eq('stripe_session_id',session.id).abortSignal(signal).single();
     if(existing.error) throw existing.error;
     if(existing.data?.status==='sent') return;
   }
@@ -754,7 +755,7 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
   // row with no timestamp is deliberately considered stale above. Preserve
   // that recovery path by using the matching null predicate in the CAS itself;
   // otherwise such a paid-order delivery would remain permanently unclaimable.
-  const attempt=await supabase.from('fulfilment_notifications').update({status:'sending',attempts:nextRetryAttempt(notification.attempts,0),last_attempt_at:now,last_error:null,updated_at:now}).eq('stripe_session_id',session.id).eq('status',notification.status)[notification.updated_at?'eq':'is']('updated_at',notification.updated_at||null).select('stripe_session_id,status,updated_at');
+  const attempt=await supabase.from('fulfilment_notifications').update({status:'sending',attempts:nextRetryAttempt(notification.attempts,0),last_attempt_at:now,last_error:null,updated_at:now}).eq('stripe_session_id',session.id).eq('status',notification.status)[notification.updated_at?'eq':'is']('updated_at',notification.updated_at||null).select('stripe_session_id,status,updated_at').abortSignal(signal);
   if(attempt.error) throw attempt.error;
   // The database representation is the lease authority. Preserve all of its
   // fractional precision instead of settling with the application value sent
@@ -771,7 +772,7 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
     // owner may settle it: an older worker must never mark a newer delivery
     // sent (or later reset it to pending in the catch below).
     const sentAt=new Date().toISOString();
-    const sent=await supabase.from('fulfilment_notifications').update({status:'sent',sent_at:sentAt,updated_at:sentAt}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',claimToken).select('stripe_session_id,status,sent_at,updated_at');
+    const sent=await supabase.from('fulfilment_notifications').update({status:'sent',sent_at:sentAt,updated_at:sentAt}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',claimToken).select('stripe_session_id,status,sent_at,updated_at').abortSignal(signal);
     if(sent.error) throw sent.error;
     if(!acknowledgedPaidDeliverySettlement(sent.data,session.id,sentAt)) throw new Error('Fulfilment notification delivery lease was lost');
   }catch(error){
@@ -791,26 +792,26 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
     // its provider call was still in flight.
     const failureMessage=message.slice(0,500);
     const failedAt=new Date().toISOString();
-    const failed=await supabase.from('fulfilment_notifications').update({status:'pending',last_error:failureMessage,updated_at:failedAt}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',claimToken).select('stripe_session_id,status,last_error,updated_at');
+    const failed=await supabase.from('fulfilment_notifications').update({status:'pending',last_error:failureMessage,updated_at:failedAt}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',claimToken).select('stripe_session_id,status,last_error,updated_at').abortSignal(signal);
     if(failed.error||!acknowledgedPaidDeliveryFailure(failed.data,session.id,failureMessage,failedAt)) console.error('fulfilment_notification_failure_record_error');
     throw error;
   }
 }
 
-export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session,eventTime:number){
+export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session,eventTime:number,signal:AbortSignal){
   if(!metaPurchaseEligible(session)) return;
   // A Meta timeout can leave us unable to tell whether Meta accepted the
   // event. Keep Stripe's signed event time on the delivery record so every
   // retry presents exactly the same Purchase identity to Meta for dedupe.
   const requestedEventTime=Math.floor(eventTime);
   if(!Number.isSafeInteger(requestedEventTime)||requestedEventTime<=0) throw new Error('Invalid Meta Purchase event time');
-  let existing=await supabase.from('meta_purchase_deliveries').select('status,updated_at,attempts,event_time').eq('stripe_session_id',session.id).maybeSingle();
+  let existing=await supabase.from('meta_purchase_deliveries').select('status,updated_at,attempts,event_time').eq('stripe_session_id',session.id).abortSignal(signal).maybeSingle();
   if(existing.error) throw existing.error;
   if(existing.data?.status==='sent') return;
   if(!existing.data){
-    const created=await supabase.from('meta_purchase_deliveries').insert({stripe_session_id:session.id,status:'pending',event_time:requestedEventTime});
+    const created=await supabase.from('meta_purchase_deliveries').insert({stripe_session_id:session.id,status:'pending',event_time:requestedEventTime}).abortSignal(signal);
     if(created.error?.code!=='23505'&&created.error) throw created.error;
-    existing=await supabase.from('meta_purchase_deliveries').select('status,updated_at,attempts,event_time').eq('stripe_session_id',session.id).single();
+    existing=await supabase.from('meta_purchase_deliveries').select('status,updated_at,attempts,event_time').eq('stripe_session_id',session.id).abortSignal(signal).single();
     if(existing.error) throw existing.error;
     if(existing.data?.status==='sent') return;
   }
@@ -833,7 +834,7 @@ export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof
   // As with the fulfilment ledger, reclaiming a stale legacy NULL lease must
   // use `IS NULL`, not PostgREST equality with null. The predicate remains a
   // compare-and-swap, so this recovery does not allow concurrent senders.
-  const attempt=await supabase.from('meta_purchase_deliveries').update({status:'sending',event_time:metaEventTime,attempts:nextRetryAttempt(delivery.attempts,0),last_attempt_at:now,last_error:null,updated_at:now}).eq('stripe_session_id',session.id).eq('status',delivery.status)[delivery.updated_at?'eq':'is']('updated_at',delivery.updated_at||null).select('stripe_session_id,status,event_time,updated_at');
+  const attempt=await supabase.from('meta_purchase_deliveries').update({status:'sending',event_time:metaEventTime,attempts:nextRetryAttempt(delivery.attempts,0),last_attempt_at:now,last_error:null,updated_at:now}).eq('stripe_session_id',session.id).eq('status',delivery.status)[delivery.updated_at?'eq':'is']('updated_at',delivery.updated_at||null).select('stripe_session_id,status,event_time,updated_at').abortSignal(signal);
   if(attempt.error) throw attempt.error;
   const acknowledgedClaim=acknowledgedPaidDeliveryClaim(attempt.data,session.id,metaEventTime);
   if(!acknowledgedClaim) throw new Error('Meta purchase claim returned an invalid acknowledgement');
@@ -846,7 +847,7 @@ export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof
     // As with SMTP, do not let a stale CAPI worker settle a lease that a
     // newer retry has reclaimed. Meta's event_id deduplicates the provider
     // event, while this predicate preserves an accurate local delivery state.
-    const sent=await supabase.from('meta_purchase_deliveries').update({status:'sent',sent_at:sentAt,updated_at:sentAt}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',claimToken).select('stripe_session_id,status,sent_at,updated_at');
+    const sent=await supabase.from('meta_purchase_deliveries').update({status:'sent',sent_at:sentAt,updated_at:sentAt}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',claimToken).select('stripe_session_id,status,sent_at,updated_at').abortSignal(signal);
     if(sent.error) throw sent.error;
     if(!acknowledgedPaidDeliverySettlement(sent.data,session.id,sentAt)) throw new Error('Meta purchase delivery lease was lost');
   }catch(error){
@@ -861,21 +862,21 @@ export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof
     const message=safeProviderDeliveryFailure(error,'Meta CAPI delivery failed; retry or inspect provider configuration');
     const failureMessage=message.slice(0,500);
     const failedAt=new Date().toISOString();
-    const failed=await supabase.from('meta_purchase_deliveries').update({status:'pending',last_error:failureMessage,updated_at:failedAt}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',claimToken).select('stripe_session_id,status,last_error,updated_at');
+    const failed=await supabase.from('meta_purchase_deliveries').update({status:'pending',last_error:failureMessage,updated_at:failedAt}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',claimToken).select('stripe_session_id,status,last_error,updated_at').abortSignal(signal);
     if(failed.error||!acknowledgedPaidDeliveryFailure(failed.data,session.id,failureMessage,failedAt)) console.error('meta_purchase_failure_record_error');
     throw error;
   }
 }
 
-export async function deliverPaidOrderSideEffects(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session,eventTime:number){
+export async function deliverPaidOrderSideEffects(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session,eventTime:number,signal:AbortSignal){
   // Human fulfilment and consented analytics have independent durable ledgers.
   // Attempt both even when one provider is unavailable: serial delivery would
   // let a persistent SMTP outage indefinitely suppress an otherwise valid CAPI
   // Purchase (and vice versa). Each delivery remains retry-safe on Stripe's
   // next attempt, while any failure still keeps the event itself unprocessed.
   const results=await Promise.allSettled([
-    deliverFulfilmentNotification(supabase,session),
-    deliverMetaPurchase(supabase,session,eventTime),
+    deliverFulfilmentNotification(supabase,session,signal),
+    deliverMetaPurchase(supabase,session,eventTime,signal),
   ]);
   const failures=results.filter((result):result is PromiseRejectedResult=>result.status==='rejected');
   if(failures.length) throw new AggregateError(failures.map((failure)=>failure.reason),'One or more paid-order deliveries failed');
@@ -1218,7 +1219,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
     if(event.type!=='checkout.session.async_payment_failed'&&sessionForEvent.payment_status==='paid'){
       // Use the signed Stripe event timestamp: the Checkout Session may have
       // been created well before an asynchronous payment actually succeeded.
-      await deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated);
+      await deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated,webhookDeadline.signal);
     }
     await settleStripeEvent(supabase,eventClaimId,claimStartedAt,webhookDeadline.signal);
   }catch(error){

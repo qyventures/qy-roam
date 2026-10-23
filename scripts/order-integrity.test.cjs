@@ -7561,8 +7561,8 @@ test('admin recovery only resumes actionable fulfilment while preserving consent
   assert.match(adminOrderRoute, /const metaConfigured = hasRequiredMetaCapiPurchaseConfig\(\)/);
   assert.match(adminOrderRoute, /if \(!retryFulfilment && metaRequested && !metaConfigured\)/);
   assert.match(adminOrderRoute, /const retryMeta = metaRequested && metaConfigured/);
-  assert.match(adminOrderRoute, /deliverFulfilmentNotification\(supabase, session\)/);
-  assert.match(adminOrderRoute, /deliverMetaPurchase\(supabase, session, metaEventTime!\)/);
+  assert.match(adminOrderRoute, /deliverFulfilmentNotification\(supabase, session, adminDeliveryDeadline\.signal\)/);
+  assert.match(adminOrderRoute, /deliverMetaPurchase\(supabase, session, metaEventTime!, adminDeliveryDeadline\.signal\)/);
   assert.match(adminOrderActions, /Retry order deliveries/);
 });
 
@@ -7607,6 +7607,23 @@ test('admin delivery recovery shares one database and Stripe verification deadli
   );
   assert.match(recovery, /\.eq\('id', id\)\s*\.abortSignal\(adminDeliveryDeadline\.signal\)\s*\.maybeSingle\(\)/);
   assert.match(recovery, /stripe\.checkout\.sessions\.retrieve\(sessionId, adminDeliveryDeadline\.stripeRequestOptions\(\)\)/);
+  assert.match(recovery, /deliverFulfilmentNotification\(supabase, session, adminDeliveryDeadline\.signal\)/);
+  assert.match(recovery, /deliverMetaPurchase\(supabase, session, metaEventTime!, adminDeliveryDeadline\.signal\)/);
+
+  const fulfilmentDelivery = webhookRoute.slice(
+    webhookRoute.indexOf('export async function deliverFulfilmentNotification'),
+    webhookRoute.indexOf('export async function deliverMetaPurchase'),
+  );
+  const metaDelivery = webhookRoute.slice(
+    webhookRoute.indexOf('export async function deliverMetaPurchase'),
+    webhookRoute.indexOf('export async function deliverPaidOrderSideEffects'),
+  );
+  assert.match(fulfilmentDelivery, /signal:AbortSignal/);
+  assert.ok((fulfilmentDelivery.match(/\.abortSignal\(signal\)/g) || []).length >= 7,
+    'every fulfilment ledger read, claim, settlement, and recovery write must inherit the admitted deadline');
+  assert.match(metaDelivery, /signal:AbortSignal/);
+  assert.ok((metaDelivery.match(/\.abortSignal\(signal\)/g) || []).length >= 6,
+    'every Meta ledger read, claim, settlement, and recovery write must inherit the admitted deadline');
 });
 
 test('SMTP and Meta delivery settlement retain ownership of their sending leases', () => {
@@ -7829,7 +7846,7 @@ test('paid-order delivery ledgers cannot be orphaned from their Checkout order',
   assert.match(schema, /alter table public\.fulfilment_notifications add constraint fulfilment_notifications_order_fk\s+foreign key \(stripe_session_id\) references public\.orders\(stripe_session_id\)\s+on delete restrict not valid;/);
   assert.match(schema, /alter table public\.meta_purchase_deliveries add constraint meta_purchase_deliveries_order_fk\s+foreign key \(stripe_session_id\) references public\.orders\(stripe_session_id\)\s+on delete restrict not valid;/);
   const persisted = webhookRoute.indexOf('await persistSession(sessionForEvent,event.type,eventCreated,webhookDeadline.signal)');
-  const delivery = webhookRoute.indexOf('await deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated)');
+  const delivery = webhookRoute.indexOf('await deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated,webhookDeadline.signal)');
   assert.ok(persisted >= 0 && delivery > persisted, 'orders must remain durable before delivery ledgers are created');
 });
 
@@ -8161,7 +8178,7 @@ test('Stripe payment event timestamps are bounded before order persistence or CA
   const paidClaim = webhookRoute.lastIndexOf("const eventClaimId=`stripe:${stripeEventId}`");
   const timestampValidation = webhookRoute.indexOf('const eventCreated=validStripePaymentEventCreated(event.created,session.created)', paidClaim);
   const persistence = webhookRoute.indexOf('await persistSession(sessionForEvent,event.type,eventCreated,webhookDeadline.signal)', timestampValidation);
-  const capiDelivery = webhookRoute.indexOf('await deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated)', timestampValidation);
+  const capiDelivery = webhookRoute.indexOf('await deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated,webhookDeadline.signal)', timestampValidation);
   assert.ok(timestampValidation > paidClaim, 'invalid timestamp must be retained in the claimed webhook ledger');
   assert.ok(persistence > timestampValidation && capiDelivery > timestampValidation);
   assert.match(webhookRoute, /Invalid Stripe event timestamp/);
@@ -8218,7 +8235,7 @@ test('retried completion events cannot steal a later asynchronous payment timest
   assert.match(webhookRoute, /const eventStateIssue=stripeCheckoutEventStateIssue\(event\.type as QyRoamCheckoutEventType,eventSession\)/);
   assert.match(webhookRoute, /status:eventSession\.status,[\s\S]*payment_status:eventSession\.payment_status/);
   assert.match(webhookRoute, /persistSession\(sessionForEvent,event\.type,eventCreated,webhookDeadline\.signal\)/);
-  assert.match(webhookRoute, /deliverPaidOrderSideEffects\(supabase,sessionForEvent,eventCreated\)/);
+  assert.match(webhookRoute, /deliverPaidOrderSideEffects\(supabase,sessionForEvent,eventCreated,webhookDeadline\.signal\)/);
   assert.doesNotMatch(webhookRoute, /persistSession\(session,event\.type,event\.created\)/);
 });
 
@@ -8243,7 +8260,7 @@ test('Meta Purchase retries preserve one durable event timestamp for deduplicati
   assert.match(webhookRoute, /await sendMetaPurchase\(session,claimedEventTime!\)/);
   assert.match(adminOrderRoute, /select\('stripe_session_id,payment_status,payment_confirmed_at,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,shipping_address,fulfilment_status,measurement_consent'\)/);
   assert.match(adminOrderRoute, /const metaEventTime=hasPaymentConfirmedAt\s*\? validStripePaymentEventCreated\(confirmedAtSeconds,session\.created\)\s*:\s*validStripePaymentEventCreated\(session\.created,session\.created\)/);
-  assert.match(adminOrderRoute, /deliverMetaPurchase\(supabase, session, metaEventTime!\)/);
+  assert.match(adminOrderRoute, /deliverMetaPurchase\(supabase, session, metaEventTime!, adminDeliveryDeadline\.signal\)/);
   assert.doesNotMatch(adminOrderRoute, /Math\.floor\(Date\.now\(\) \/ 1000\)/);
 });
 
@@ -8269,12 +8286,12 @@ test('paid-order email and Meta deliveries are attempted independently', () => {
   // A persistent failure in either external provider must not starve the
   // other's durable delivery attempt. Promise.allSettled guarantees both are
   // invoked while the rejected result still causes Stripe to retry the event.
-  assert.match(webhookRoute, /Promise\.allSettled\(\[\s*deliverFulfilmentNotification\(supabase,session\),\s*deliverMetaPurchase\(supabase,session,eventTime\),\s*\]\)/);
+  assert.match(webhookRoute, /Promise\.allSettled\(\[\s*deliverFulfilmentNotification\(supabase,session,signal\),\s*deliverMetaPurchase\(supabase,session,eventTime,signal\),\s*\]\)/);
   assert.match(webhookRoute, /if\(failures\.length\) throw new AggregateError/);
-  assert.match(webhookRoute, /await deliverPaidOrderSideEffects\(supabase,sessionForEvent,eventCreated\)/);
+  assert.match(webhookRoute, /await deliverPaidOrderSideEffects\(supabase,sessionForEvent,eventCreated,webhookDeadline\.signal\)/);
   assert.match(adminOrderRoute, /Promise\.allSettled\(\[/);
-  assert.match(adminOrderRoute, /retryFulfilment \? \[deliverFulfilmentNotification\(supabase, session\)\]/);
-  assert.match(adminOrderRoute, /retryMeta \? \[deliverMetaPurchase\(supabase, session, metaEventTime!\)\]/);
+  assert.match(adminOrderRoute, /retryFulfilment \? \[deliverFulfilmentNotification\(supabase, session, adminDeliveryDeadline\.signal\)\]/);
+  assert.match(adminOrderRoute, /retryMeta \? \[deliverMetaPurchase\(supabase, session, metaEventTime!, adminDeliveryDeadline\.signal\)\]/);
 });
 
 test('admin fulfilment recovery is not blocked by optional Meta configuration', () => {
@@ -8426,7 +8443,7 @@ test('browser Purchase waits for the same durable paid-order boundary as CAPI', 
   assert.match(metaPurchase, /if \(!orderPersisted \|\| !metaMeasurementAllowed\(\)/);
   assert.match(metaPurchase, /\[consentRevision, contentId, orderPersisted, productType, purchaseIdentity, sessionId, value\]/);
   const persisted = webhookRoute.indexOf('await persistSession(sessionForEvent,event.type,eventCreated,webhookDeadline.signal)');
-  const capi = webhookRoute.indexOf('await deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated)');
+  const capi = webhookRoute.indexOf('await deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated,webhookDeadline.signal)');
   assert.ok(persisted >= 0 && capi > persisted, 'CAPI must remain after durable order persistence');
 });
 
@@ -11172,10 +11189,11 @@ test('Stripe webhook durable processing shares one end-to-end dependency deadlin
   const claim = webhookRoute.indexOf('claimOnce(supabase,eventClaimId,event.type,eventSessionId,webhookDeadline.signal)', admission);
   const refresh = webhookRoute.indexOf('stripe.checkout.sessions.retrieve(eventSessionId,webhookDeadline.stripeRequestOptions())', claim);
   const persistence = webhookRoute.indexOf('persistSession(sessionForEvent,event.type,eventCreated,webhookDeadline.signal)', refresh);
-  const settlement = webhookRoute.indexOf('settleStripeEvent(supabase,eventClaimId,claimStartedAt,webhookDeadline.signal)', persistence);
+  const delivery = webhookRoute.indexOf('deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated,webhookDeadline.signal)', persistence);
+  const settlement = webhookRoute.indexOf('settleStripeEvent(supabase,eventClaimId,claimStartedAt,webhookDeadline.signal)', delivery);
   const disposal = webhookRoute.indexOf('webhookDeadline.dispose()', settlement);
-  assert.ok(admission >= 0 && claim > admission && refresh > claim && persistence > refresh && settlement > persistence && disposal > settlement,
-    'claim, Stripe refresh, persistence, and settlement must share and release one admitted deadline');
+  assert.ok(admission >= 0 && claim > admission && refresh > claim && persistence > refresh && delivery > persistence && settlement > delivery && disposal > settlement,
+    'claim, Stripe refresh, persistence, paid delivery, and settlement must share and release one admitted deadline');
   assert.match(webhookRoute, /qy_claim_stripe_event'[\s\S]{0,300}\.abortSignal\(signal\)/);
   assert.match(webhookRoute, /qy_persist_stripe_pocket_wifi_order'[\s\S]{0,800}\.abortSignal\(signal\)/);
   assert.match(webhookRoute, /qy_persist_stripe_esim_order'[\s\S]{0,800}\.abortSignal\(signal\)/);
