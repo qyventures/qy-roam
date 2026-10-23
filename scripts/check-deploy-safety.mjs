@@ -158,6 +158,7 @@ assert.ok(
 assert.match(deploy, /mktemp -d \/tmp\/qyroam-release-rollback/);
 const rollbackDirectoryCreation = deploy.indexOf('rollback_dir="$(mktemp -d /tmp/qyroam-release-rollback.XXXXXX)"');
 const earlySnapshotCleanup = deploy.indexOf('trap \'rm -rf -- "$rollback_dir"\' EXIT', rollbackDirectoryCreation);
+const interruptedSnapshotCleanup = deploy.indexOf("trap 'exit 143' TERM", earlySnapshotCleanup);
 const stagedSnapshotCopy = deploy.indexOf('cp -a .next "$rollback_dir/previous-next.partial"');
 const stagedSnapshotValidation = deploy.indexOf('[[ ! -f "$rollback_dir/previous-next.partial/standalone/server.js" ]]');
 const stagedSnapshotPromotion = deploy.indexOf('mv "$rollback_dir/previous-next.partial" "$rollback_dir/previous-next"');
@@ -165,11 +166,22 @@ const completeReleaseTrap = deploy.indexOf("trap 'handle_release_exit", stagedSn
 assert.ok(
   rollbackDirectoryCreation > -1 &&
     earlySnapshotCleanup > rollbackDirectoryCreation &&
-    stagedSnapshotCopy > earlySnapshotCleanup &&
+    interruptedSnapshotCleanup > earlySnapshotCleanup &&
+    stagedSnapshotCopy > interruptedSnapshotCleanup &&
     stagedSnapshotValidation > stagedSnapshotCopy &&
     stagedSnapshotPromotion > stagedSnapshotValidation &&
     completeReleaseTrap > stagedSnapshotPromotion,
   'the previous artifact snapshot must be cleanup-protected, staged, validated, and atomically named before release work',
+);
+assert.match(deploy, /trap 'exit 129' HUP/);
+assert.match(deploy, /trap 'exit 130' INT/);
+assert.match(deploy, /trap 'exit 143' TERM/);
+assert.match(deploy, /trap - EXIT HUP INT TERM/);
+assert.ok(
+  deploy.indexOf("trap 'exit 129' HUP") < stagedSnapshotCopy &&
+    deploy.indexOf("trap 'exit 130' INT") < stagedSnapshotCopy &&
+    deploy.indexOf("trap 'exit 143' TERM") < stagedSnapshotCopy,
+  'ordinary terminating signals must enter EXIT cleanup before the rollback snapshot copy begins',
 );
 assert.doesNotMatch(deploy, /cp -a \.next "\$rollback_dir\/previous-next"(?:\s|$)/);
 assert.match(deploy, /restore_previous_artifact\(\)/);

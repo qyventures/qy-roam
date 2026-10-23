@@ -131,6 +131,16 @@ rollback_dir="$(mktemp -d /tmp/qyroam-release-rollback.XXXXXX)"
 # still-serving release). The complete handler below replaces this trap after
 # all of its state and functions have been declared.
 trap 'rm -rf -- "$rollback_dir"' EXIT
+# Bash does not run an EXIT trap for an unhandled terminating signal. Convert
+# ordinary operator/service-manager interruptions into explicit shell exits so
+# the snapshot cleanup above runs even while `cp` is still in progress. The
+# full release handler installed below inherits these signal traps, which also
+# means an interruption after artifact promotion follows the same automatic
+# rollback path as any other failed cutover. SIGKILL remains intentionally
+# outside the script's control.
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 previous_artifact_available=0
 release_snapshot_cleanup_enabled=1
 release_verified=0
@@ -254,7 +264,10 @@ restore_previous_artifact() {
 
 handle_release_exit() {
   local status="$1"
-  trap - EXIT
+  # Disarm every release trap before cleanup/rollback. A second signal should
+  # use the operating system's default termination rather than recursively
+  # enter this handler and race artifact restoration.
+  trap - EXIT HUP INT TERM
   if [[ "$status" -ne 0 && "$release_verified" -ne 1 && "$artifact_promotion_started" -eq 1 && "$previous_artifact_available" -eq 1 ]]; then
     restore_previous_artifact || true
   fi
