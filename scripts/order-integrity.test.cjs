@@ -7028,6 +7028,7 @@ test('authenticated health readiness separates shared release controls from prod
   assert.match(healthRoute, /esimOfferActive \? hasRequiredEsimOrderSchema\(\) : Promise\.resolve\(false\)/);
   assert.match(healthRoute, /const \[stripeApi, esimOrderSchema, paymentSchema, pocketWifiFulfilmentSchema, operationsSchema, pocketWifiStock\] = dependencyChecks/);
   assert.match(healthRoute, /stripeApi,/);
+  assert.match(healthRoute, /esimPricing: esimOfferActive/);
   assert.match(healthRoute, /esimOrderSchema,/);
   assert.match(healthRoute, /pocketWifiFulfilmentSchema,/);
   assert.match(healthRoute, /hasSaleablePocketWifiInventory\(config\?\.pocketWifiInventory \|\| 0\)/);
@@ -7042,7 +7043,7 @@ test('authenticated health readiness separates shared release controls from prod
   assert.doesNotMatch(healthRoute, /const launchChecks = \{[\s\S]*?pocketWifiFulfilmentSchema:/);
   assert.doesNotMatch(healthRoute, /const launchChecks = \{[\s\S]*?inventory:/);
   assert.match(healthRoute, /const commonCheckoutReady = Boolean\(/);
-  assert.match(healthRoute, /esim: commonCheckoutReady && Boolean\(esimOrderSchema\) && esimOfferActive/);
+  assert.match(healthRoute, /esim: commonCheckoutReady && Boolean\(esimOrderSchema\) && checks\.esimPricing/);
   assert.match(healthRoute, /pocketWifi: commonCheckoutReady && Boolean\(paymentSchema\) &&/);
   assert.match(healthRoute, /Boolean\(pocketWifiFulfilmentSchema\) && checks\.inventory && checks\.pocketWifiPricing && availabilityChecks\.pocketWifiStock/);
   assert.match(pocketWifiStock, /\.eq\('product_type', 'pocket_wifi'\)/);
@@ -7112,6 +7113,7 @@ test('deployment readiness validator proves detailed evidence for every saleable
     operationsSchema: true,
     admin: true,
     fulfilmentEmail: true,
+    esimPricing: true,
     esimOrderSchema: true,
     paymentSchema: true,
     pocketWifiFulfilmentSchema: true,
@@ -7133,6 +7135,8 @@ test('deployment readiness validator proves detailed evidence for every saleable
   };
   assert.equal(validate(response, now), true);
   assert.equal(validate({ ...response, checks: { ...checks, webhook: false } }, now), false);
+  assert.equal(validate({ ...response, checks: { ...checks, esimPricing: false } }, now), false);
+  assert.equal(validate({ ...response, checks: { ...checks, esimPricing: undefined } }, now), false);
   assert.equal(validate({ ...response, checks: { ...checks, esimOrderSchema: false } }, now), false);
   assert.equal(validate({ ...response, checks: { ...checks, inventory: false } }, now), false);
   assert.equal(validate({ ...response, checks: { ...checks, deliveryLeadDays: false } }, now), false);
@@ -7146,7 +7150,7 @@ test('deployment readiness validator proves detailed evidence for every saleable
   const wifiOnly = {
     ...response,
     checkoutReady: false,
-    checks: { ...checks, esimOrderSchema: false },
+    checks: { ...checks, esimPricing: false, esimOrderSchema: false },
     checkoutChecks: { esim: false, pocketWifi: true },
   };
   assert.equal(validate(wifiOnly, now), true);

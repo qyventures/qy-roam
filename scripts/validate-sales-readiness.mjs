@@ -89,7 +89,7 @@ export function salesReadinessResponseIsValid(result, nowMs = Date.now()) {
     'supabase', 'operationsSchema', 'admin', 'fulfilmentEmail',
   ];
   const productEvidence = [
-    'esimOrderSchema', 'paymentSchema', 'pocketWifiFulfilmentSchema',
+    'esimPricing', 'esimOrderSchema', 'paymentSchema', 'pocketWifiFulfilmentSchema',
     'inventory', 'deliveryLeadDays', 'courierFee', 'pocketWifiPricing',
   ];
   const pocketWifiEvidence = [
@@ -109,7 +109,7 @@ export function salesReadinessResponseIsValid(result, nowMs = Date.now()) {
     allTrue(result.checks, launchEvidence) &&
     allBoolean(result.checks, productEvidence) &&
     typeof result.availabilityChecks.pocketWifiStock === 'boolean' &&
-    (!esim || result.checks.esimOrderSchema === true) &&
+    (!esim || allTrue(result.checks, ['esimPricing', 'esimOrderSchema'])) &&
     (!pocketWifi || allTrue(result.checks, pocketWifiEvidence)) &&
     (!pocketWifi || result.availabilityChecks.pocketWifiStock === true);
 }

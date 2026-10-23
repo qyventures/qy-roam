@@ -132,6 +132,11 @@ export async function GET(req: Request) {
     webhook: hasRequiredStripeWebhookConfig(),
     orderIntegrity: hasOrderIntegritySigningConfig(),
     supabase: hasRequiredSupabaseAdminConfig(),
+    // Keep pricing authority visible independently from the database probe.
+    // When an approved offer expires we intentionally skip the privileged
+    // eSIM schema check above, but operators and release automation still
+    // need to distinguish that commercial pause from a broken migration.
+    esimPricing: esimOfferActive,
     esimOrderSchema,
     paymentSchema,
     pocketWifiFulfilmentSchema,
@@ -179,7 +184,7 @@ export async function GET(req: Request) {
     checks.orderIntegrity && checks.supabase && checks.fulfilmentEmail
   );
   const checkoutChecks = {
-    esim: commonCheckoutReady && Boolean(esimOrderSchema) && esimOfferActive,
+    esim: commonCheckoutReady && Boolean(esimOrderSchema) && checks.esimPricing,
     pocketWifi: commonCheckoutReady && Boolean(paymentSchema) &&
       Boolean(pocketWifiFulfilmentSchema) && checks.inventory && checks.pocketWifiPricing && availabilityChecks.pocketWifiStock,
   };
