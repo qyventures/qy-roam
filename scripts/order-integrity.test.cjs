@@ -96,6 +96,7 @@ const { CONFIRMATION_LOOKUP_TIMEOUT_MS, createConfirmationDeadline } = require('
 const { HEALTH_MAX_CONCURRENT_REQUESTS, tryAcquireHealthConcurrency } = require('../lib/healthConcurrency.ts');
 const { ADMIN_OPS_MAX_CONCURRENT_REQUESTS, tryAcquireAdminOpsConcurrency } = require('../lib/adminOpsConcurrency.ts');
 const { ADMIN_DELIVERY_MAX_CONCURRENT_REQUESTS, tryAcquireAdminDeliveryConcurrency } = require('../lib/adminDeliveryConcurrency.ts');
+const { ADMIN_DELIVERY_LOOKUP_TIMEOUT_MS, createAdminDeliveryDeadline } = require('../lib/adminDeliveryDeadline.ts');
 const { ADMIN_DASHBOARD_MAX_CONCURRENT_REQUESTS, tryAcquireAdminDashboardConcurrency, runAdminDashboardWork } = require('../lib/adminDashboardConcurrency.ts');
 const { STRIPE_WEBHOOK_MAX_CONCURRENT_REQUESTS, STRIPE_WEBHOOK_MAX_CONCURRENT_UPLOADS, tryAcquireStripeWebhookProcessing, tryAcquireStripeWebhookUpload } = require('../lib/stripeWebhookConcurrency.ts');
 const { validatedSalesReportRow } = require('../lib/salesReportRow.ts');
@@ -4548,7 +4549,7 @@ test('Pocket WiFi custody movements retain the complete bounded Stripe order ide
 
 test('admin delivery recovery validates its stored Stripe Checkout Session id before retrieval', () => {
   assert.match(adminOrderRoute, /const sessionId = validStripeCheckoutSessionId\(order\.stripe_session_id\)/);
-  assert.match(adminOrderRoute, /stripe\.checkout\.sessions\.retrieve\(sessionId\)/);
+  assert.match(adminOrderRoute, /stripe\.checkout\.sessions\.retrieve\(sessionId, adminDeliveryDeadline\.stripeRequestOptions\(\)\)/);
   assert.doesNotMatch(adminOrderRoute, /stripe\.checkout\.sessions\.retrieve\(order\.stripe_session_id\)/);
 });
 
@@ -7553,7 +7554,32 @@ test('admin delivery recovery is bounded without queueing or leaking admission s
   assert.doesNotMatch(adminOrderRoute, /createConcurrencyLimiter/);
   assert.match(adminOrderRoute, /Order delivery recovery is busy\. Please try again shortly\./);
   assert.match(adminOrderRoute, /'Retry-After': '5'/);
-  assert.match(adminOrderRoute, /try \{\s*return await retryOrderDeliveries\(req, context\);\s*\} finally \{\s*release\(\);\s*\}/);
+  assert.match(adminOrderRoute, /const adminDeliveryDeadline = createAdminDeliveryDeadline\(\)/);
+  assert.match(adminOrderRoute, /try \{\s*return await retryOrderDeliveries\(req, context, adminDeliveryDeadline\);\s*\} finally \{\s*adminDeliveryDeadline\.dispose\(\);\s*release\(\);\s*\}/);
+});
+
+test('admin delivery recovery shares one database and Stripe verification deadline', async () => {
+  assert.equal(ADMIN_DELIVERY_LOOKUP_TIMEOUT_MS, 20_000);
+  assert.throws(() => createAdminDeliveryDeadline(0), /Invalid admin delivery lookup timeout/);
+  assert.throws(
+    () => createAdminDeliveryDeadline(ADMIN_DELIVERY_LOOKUP_TIMEOUT_MS + 1),
+    /Invalid admin delivery lookup timeout/,
+  );
+
+  const deadline = createAdminDeliveryDeadline(30);
+  assert.equal(deadline.signal.aborted, false);
+  assert.ok(deadline.stripeRequestOptions().timeout > 0);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(deadline.signal.aborted, true);
+  assert.throws(() => deadline.stripeRequestOptions(), /Admin delivery lookup timed out/);
+  deadline.dispose();
+
+  const recovery = adminOrderRoute.slice(
+    adminOrderRoute.indexOf('async function retryOrderDeliveries'),
+    adminOrderRoute.indexOf('export async function POST'),
+  );
+  assert.match(recovery, /\.eq\('id', id\)\s*\.abortSignal\(adminDeliveryDeadline\.signal\)\s*\.maybeSingle\(\)/);
+  assert.match(recovery, /stripe\.checkout\.sessions\.retrieve\(sessionId, adminDeliveryDeadline\.stripeRequestOptions\(\)\)/);
 });
 
 test('SMTP and Meta delivery settlement retain ownership of their sending leases', () => {

@@ -19,6 +19,7 @@ import { exactDatabaseTimestampToken } from '@/lib/stripeClaimToken';
 import { exactRpcRow } from '@/lib/exactRpcRow';
 import { acknowledgedOrderTransition } from '@/lib/adminOrderTransitionAcknowledgement';
 import { createAdminOrderDeadline } from '@/lib/adminOrderDeadline';
+import { createAdminDeliveryDeadline } from '@/lib/adminDeliveryDeadline';
 
 export const runtime = 'nodejs';
 
@@ -432,7 +433,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 // action lets an operator safely resume a failed paid-order notification after
 // that window: the same per-session ledgers used by the webhook prevent a
 // duplicate email or Meta Purchase once either delivery is already marked sent.
-async function retryOrderDeliveries(_req: Request, { params }: { params: { id: string } }) {
+async function retryOrderDeliveries(_req: Request, { params }: { params: { id: string } }, adminDeliveryDeadline: ReturnType<typeof createAdminDeliveryDeadline>) {
   const supabase = getSupabaseAdmin();
   if (!supabase) return NextResponse.json({ error: 'Order database not configured' }, { status: 503 });
   // Recovery must use the same canonical credential that checkout readiness
@@ -449,6 +450,7 @@ async function retryOrderDeliveries(_req: Request, { params }: { params: { id: s
       .from('orders')
       .select('stripe_session_id,payment_status,payment_confirmed_at,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,shipping_address,fulfilment_status,measurement_consent')
       .eq('id', id)
+      .abortSignal(adminDeliveryDeadline.signal)
       .maybeSingle();
     if (error) throw error;
     if (!order) return NextResponse.json({ error: 'Order not found' }, { status: 404 });
@@ -464,7 +466,7 @@ async function retryOrderDeliveries(_req: Request, { params }: { params: { id: s
     }
 
     const stripe = createStripeClient(stripeKey);
-    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    const session = await stripe.checkout.sessions.retrieve(sessionId, adminDeliveryDeadline.stripeRequestOptions());
     // Stripe should return the requested object, but this is an external
     // recovery boundary with fulfilment and analytics side effects. Keep the
     // durable order reference authoritative if an SDK edge case, test double,
@@ -605,9 +607,11 @@ export async function POST(req: Request, context: { params: { id: string } }) {
       },
     );
   }
+  const adminDeliveryDeadline = createAdminDeliveryDeadline();
   try {
-    return await retryOrderDeliveries(req, context);
+    return await retryOrderDeliveries(req, context, adminDeliveryDeadline);
   } finally {
+    adminDeliveryDeadline.dispose();
     release();
   }
 }
