@@ -3006,7 +3006,10 @@ begin
     select 1 from public.orders
     where inventory_item_id = p_item_id
       and product_type = 'pocket_wifi'
-      and fulfilment_status in ('dispatched', 'with_customer', 'return_due')
+      and (
+        fulfilment_status in ('dispatched', 'with_customer', 'return_due')
+        or (dispatched_at is not null and returned_at is null)
+      )
   ) then
     raise exception 'inventory item is assigned to an active Pocket WiFi custody order';
   end if;
@@ -3090,7 +3093,10 @@ begin
     select 1 from public.orders
     where inventory_item_id = p_item_id
       and product_type = 'pocket_wifi'
-      and fulfilment_status in ('dispatched', 'with_customer', 'return_due')
+      and (
+        fulfilment_status in ('dispatched', 'with_customer', 'return_due')
+        or (dispatched_at is not null and returned_at is null)
+      )
   ) then
     raise exception 'inventory item is assigned to an active Pocket WiFi custody order';
   end if;
@@ -3883,6 +3889,8 @@ set search_path = pg_catalog
 -- operator notes and rejects non-canonical Pocket WiFi manual identities.
 -- Version 6 also certifies bounded inventory quantities and unit costs for
 -- direct privileged writes, matching the protected mutation RPCs.
-as $$ select 6; $$;
+-- Version 7 keeps inventory mutations locked for every physically dispatched,
+-- unreturned router even when a legacy or repaired lifecycle status drifted.
+as $$ select 7; $$;
 revoke all on function public.qy_operations_schema_version() from public;
 grant execute on function public.qy_operations_schema_version() to service_role;

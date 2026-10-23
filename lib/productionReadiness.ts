@@ -43,7 +43,7 @@ const REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 11;
 // optimistic fulfilment transitions, custody-ledger idempotency, and
 // database-authoritative period closing. Version 1 predates several of those
 // contracts and must not keep a rolling deployment's operations UI enabled.
-const REQUIRED_OPERATIONS_SCHEMA_VERSION = 6;
+const REQUIRED_OPERATIONS_SCHEMA_VERSION = 7;
 
 type ProductionReadinessState = {
   stripeApiReadyUntil: number;

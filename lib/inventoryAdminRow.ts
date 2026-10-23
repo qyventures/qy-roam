@@ -5,6 +5,7 @@ const ITEM_STATUSES = new Set(['available', 'quarantined', 'damaged', 'maintenan
 const PRODUCT_TYPES = new Set(['pocket_wifi', 'esim']);
 const MOVEMENT_TYPES = new Set(['opening_stock', 'adjustment', 'purchase', 'write_off', 'dispatch', 'return', 'return_quarantined', 'return_damaged', 'status_change']);
 const ACTIVE_CUSTODY_STATUSES = new Set(['dispatched', 'with_customer', 'return_due']);
+const WIFI_FULFILMENT_STATUSES = new Set(['awaiting_payment', 'payment_failed', 'paid', 'packing', 'dispatched', 'with_customer', 'return_due', 'returned', 'closed', 'cancelled']);
 const MAX_INVENTORY_QUANTITY = 1_000_000;
 const MAX_INVENTORY_UNIT_COST_CENTS = 10_000_000;
 
@@ -84,25 +85,39 @@ export function validatedInventoryCustodyOrder(value: unknown) {
   const inventoryItemId = row.inventory_item_id === null ? null : positiveInteger(row.inventory_item_id);
   const travelEnd = exactDate(row.travel_end);
   const dispatchedAt = exactTimestamp(row.dispatched_at);
+  const returnedAt = exactTimestamp(row.returned_at);
+  const status = typeof row.fulfilment_status === 'string' && WIFI_FULFILMENT_STATUSES.has(row.fulfilment_status)
+    ? row.fulfilment_status
+    : null;
+  // Normal custody is identified by lifecycle state. Also admit a terminal or
+  // otherwise drifted row when its immutable physical evidence says a router
+  // left operations and has not returned; the admin page must surface that
+  // anomaly instead of filtering the stranded asset out of reconciliation.
+  const requiresCustodyReconciliation = status !== null && (
+    ACTIVE_CUSTODY_STATUSES.has(status) || (
+      dispatchedAt !== null && (row.returned_at === null || row.returned_at === undefined)
+    )
+  );
   if (
     id === null ||
     (row.inventory_item_id !== null && inventoryItemId === null) ||
-    typeof row.fulfilment_status !== 'string' ||
-    !ACTIVE_CUSTODY_STATUSES.has(row.fulfilment_status) ||
+    !requiresCustodyReconciliation ||
     typeof row.stripe_session_id !== 'string' ||
     !row.stripe_session_id ||
     row.stripe_session_id.length > 255 ||
     (row.travel_end !== null && travelEnd === null) ||
     (row.dispatched_at !== null && dispatchedAt === null) ||
+    (row.returned_at !== null && row.returned_at !== undefined && returnedAt === null) ||
     (row.courier_tracking !== null && (typeof row.courier_tracking !== 'string' || !row.courier_tracking.trim() || row.courier_tracking.length > 200 || /[\u0000-\u001f\u007f]/.test(row.courier_tracking)))
   ) return null;
   return {
     ...row,
     id,
     inventory_item_id: inventoryItemId,
-    fulfilment_status: row.fulfilment_status,
+    fulfilment_status: status,
     travel_end: travelEnd,
     dispatched_at: dispatchedAt,
+    returned_at: returnedAt,
     courier_tracking: row.courier_tracking as string | null,
   };
 }

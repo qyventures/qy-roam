@@ -5253,13 +5253,13 @@ test('payment-readiness checks coalesce healthy probes and briefly back off fail
 test('operations readiness requires the reviewed privileged RPC implementation version', () => {
   assert.match(
     schema,
-    /create or replace function public\.qy_operations_schema_version\(\)[\s\S]*?as \$\$ select 6; \$\$/,
+    /create or replace function public\.qy_operations_schema_version\(\)[\s\S]*?as \$\$ select 7; \$\$/,
   );
   assert.match(
     schema,
     /grant execute on function public\.qy_operations_schema_version\(\) to service_role/,
   );
-  assert.match(productionReadiness, /const REQUIRED_OPERATIONS_SCHEMA_VERSION = 6/);
+  assert.match(productionReadiness, /const REQUIRED_OPERATIONS_SCHEMA_VERSION = 7/);
   assert.match(
     productionReadiness,
     /database\.rpc\('qy_operations_schema_version', \{\}\)\.abortSignal\(signal\)/,
@@ -7507,7 +7507,10 @@ test('admin inventory rejects malformed stock, custody, and capacity rows before
   };
   assert.equal(validatedInventoryCustodyOrder(custodyOrder)?.inventory_item_id, 7);
   assert.equal(validatedInventoryCustodyOrder({ ...custodyOrder, inventory_item_id: null })?.inventory_item_id, null);
-  assert.equal(validatedInventoryCustodyOrder({ ...custodyOrder, fulfilment_status: 'returned' }), null);
+  assert.equal(validatedInventoryCustodyOrder({ ...custodyOrder, fulfilment_status: 'returned' })?.fulfilment_status, 'returned');
+  assert.equal(validatedInventoryCustodyOrder({ ...custodyOrder, fulfilment_status: 'returned', returned_at: '2026-10-22T02:00:00Z' }), null);
+  assert.equal(validatedInventoryCustodyOrder({ ...custodyOrder, fulfilment_status: 'cancelled' })?.fulfilment_status, 'cancelled');
+  assert.equal(validatedInventoryCustodyOrder({ ...custodyOrder, fulfilment_status: 'cancelled', returned_at: '2026-10-22T02:00:00Z' }), null);
   assert.equal(validatedInventoryCustodyOrder({ ...custodyOrder, courier_tracking: 'bad\nreference' }), null);
 
   const reservation = {
@@ -7534,9 +7537,10 @@ test('admin inventory rejects malformed stock, custody, and capacity rows before
   assert.doesNotMatch(inventoryPage, /reduce\(\(s:number,x:any\)=>s\+Number\(x\.quantity_on_hand/);
 });
 
-test('inventory mutations stop when an active router has incomplete custody evidence', () => {
-  assert.match(inventoryPage, /\.in\('fulfilment_status',\['dispatched','with_customer','return_due'\]\)/);
-  assert.match(inventoryPage, /const custodyExceptions=custodyOrders\.filter\(order=>!order\.inventory_item_id\|\|!order\.dispatched_at\|\|!order\.courier_tracking\|\|!itemById\.has\(order\.inventory_item_id\)\)/);
+test('inventory mutations stop when an active or stranded router has incomplete custody evidence', () => {
+  assert.match(inventoryPage, /fulfilment_status\.in\.\(dispatched,with_customer,return_due\),and\(dispatched_at\.not\.is\.null,returned_at\.is\.null\)/);
+  assert.match(inventoryPage, /const custodyExceptions=custodyOrders\.filter\(order=>!\['dispatched','with_customer','return_due'\]\.includes\(order\.fulfilment_status\)\|\|!order\.inventory_item_id\|\|!order\.dispatched_at\|\|order\.returned_at\|\|!order\.courier_tracking\|\|!itemById\.has\(order\.inventory_item_id\)\)/);
+  assert.equal((schema.match(/or \(dispatched_at is not null and returned_at is null\)/g) || []).length >= 2, true);
   assert.match(inventoryPage, /const inventoryRegisterComplete=!itemsResult\.error&&!itemsResult\.truncated&&!itemRows\.some\(row=>row===null\)&&!custodyResult\.error&&!custodyResult\.truncated&&!custodyRows\.some\(row=>row===null\)/);
   const guard = inventoryPage.slice(
     inventoryPage.indexOf("if(!custodyResult.error&&!custodyResult.truncated&&custodyExceptions.length>0)"),

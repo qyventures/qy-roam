@@ -30,10 +30,14 @@ async function loadCustodyPages(db:NonNullable<ReturnType<typeof getSupabaseAdmi
  let afterId:number|null=null;
  const fetchPage=(limit:number)=>{
   let query=db.from('orders')
-   .select('id,stripe_session_id,inventory_item_id,fulfilment_status,travel_end,courier_tracking,dispatched_at')
+   .select('id,stripe_session_id,inventory_item_id,fulfilment_status,travel_end,courier_tracking,dispatched_at,returned_at')
    .eq('product_type','pocket_wifi')
    .eq('payment_status','paid')
-   .in('fulfilment_status',['dispatched','with_customer','return_due'])
+   // Lifecycle state is the normal authority, while immutable dispatch/return
+   // evidence catches legacy or repaired rows whose status drifted after a
+   // router physically left operations. Such a row must remain visible until
+   // its return is reconciled.
+   .or('fulfilment_status.in.(dispatched,with_customer,return_due),and(dispatched_at.not.is.null,returned_at.is.null)')
    .order('id')
    .limit(limit);
   if(afterId!==null) query=query.gt('id',afterId);
@@ -236,7 +240,7 @@ export default async function InventoryPage(){
  const value=valueCents/100;
  const now=Date.now();
  const itemById=new Map(items.map(item=>[item.id,item]));
- const custodyExceptions=custodyOrders.filter(order=>!order.inventory_item_id||!order.dispatched_at||!order.courier_tracking||!itemById.has(order.inventory_item_id));
+ const custodyExceptions=custodyOrders.filter(order=>!['dispatched','with_customer','return_due'].includes(order.fulfilment_status)||!order.inventory_item_id||!order.dispatched_at||order.returned_at||!order.courier_tracking||!itemById.has(order.inventory_item_id));
  // An active-custody mismatch means the saleable register and the physical
  // fleet cannot be safely reconciled from this screen. Stop before rendering
  // mutation controls: the database RPCs also reject edits to a correctly

@@ -1113,7 +1113,7 @@ assert.ok(
 );
 assert.match(
   schema.slice(operationsSchemaVersion),
-  /as \$\$ select 6; \$\$/,
+  /as \$\$ select 7; \$\$/,
   'operations schema marker must advertise the reviewed version required by the application',
 );
 
