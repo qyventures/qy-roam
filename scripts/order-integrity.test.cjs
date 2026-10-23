@@ -118,6 +118,7 @@ const { READINESS_PROBE_TIMEOUT_MS, ReadinessProbeTimeoutError, runReadinessProb
 const { readinessFailureBackoffActive, readinessWindowActive } = require('../lib/readinessBackoff.ts');
 const { adminOrderMutationSafe } = require('../lib/adminOrderRow.ts');
 const { ADMIN_DASHBOARD_LOOKUP_TIMEOUT_MS, createAdminDashboardDeadline } = require('../lib/adminDashboardDeadline.ts');
+const { adminCustomerIdentity, compareCustomerPurchaseRecency } = require('../lib/adminCustomerIdentity.ts');
 
 test('admin order mutations require one coherent durable lifecycle row', () => {
   const row = {
@@ -153,6 +154,26 @@ test('admin order mutations require one coherent durable lifecycle row', () => {
   assert.match(adminPage, /fulfilmentSummaryIncomplete = ordersIncomplete \|\| operationalLedgerIntegrityIssues > 0/);
   assert.match(adminPage, /Order operations ledger needs reconciliation/);
   assert.match(adminPage, /shares a payment identity with another order/);
+});
+
+test('admin customer summaries never merge unrelated name-only buyers', () => {
+  assert.equal(adminCustomerIdentity({ id: 1, email: ' Buyer@Example.com ' }), 'email:buyer@example.com');
+  assert.equal(adminCustomerIdentity({ id: 2, phone: '+65 8123 4567' }), 'phone:6581234567');
+  assert.equal(adminCustomerIdentity({ id: 3, customer_name: 'Alex Tan' }), 'order:3');
+  assert.equal(adminCustomerIdentity({ id: 4, customer_name: 'Alex Tan' }), 'order:4');
+  assert.equal(adminCustomerIdentity({ stripe_session_id: 'cs_live_Fallback123' }), 'session:cs_live_Fallback123');
+  assert.equal(adminCustomerIdentity({ customer_name: 'Alex Tan' }), null);
+
+  const summaries = [
+    { identity: 'older', last: '2026-10-24T10:30:00+08:00' },
+    { identity: 'newer', last: '2026-10-24T03:00:00Z' },
+  ].sort(compareCustomerPurchaseRecency);
+  assert.equal(summaries[0].identity, 'newer');
+
+  assert.match(adminPage, /const key = adminCustomerIdentity\(o\)/);
+  assert.match(adminPage, /sort\(compareCustomerPurchaseRecency\)/);
+  assert.doesNotMatch(adminPage, /order\.email \|\| order\.phone \|\| order\.customer_name/);
+  assert.match(adminPage, /name-only orders stay separate to avoid inventing repeat customers/);
 });
 
 test('primary operations dashboard releases stalled ledger scans on one shared deadline', async () => {

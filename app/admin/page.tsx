@@ -13,6 +13,7 @@ import { validatedDeliveryLedgerRow, validatedStripeEventRecoveryRow } from '@/l
 import { validatedInventoryItem } from '@/lib/inventoryAdminRow';
 import { adminOrderMutationSafe } from '@/lib/adminOrderRow';
 import { createAdminDashboardDeadline } from '@/lib/adminDashboardDeadline';
+import { adminCustomerIdentity, compareCustomerPurchaseRecency } from '@/lib/adminCustomerIdentity';
 
 export const dynamic = 'force-dynamic';
 
@@ -125,9 +126,6 @@ function stripeEventDashboardUrl(eventId: unknown) {
   const stripeMode = stripeSecretKeyMode(process.env.STRIPE_SECRET_KEY);
   if (!stripeMode) return null;
   return `https://dashboard.stripe.com/${stripeMode === 'test' ? 'test/' : ''}events/${match[1]}`;
-}
-function customerKey(order: any) {
-  return String(order.email || order.phone || order.customer_name || order.stripe_session_id || '').trim().toLowerCase();
 }
 function withinDays(value: string | null | undefined, days: number) {
   if (!value) return false;
@@ -392,16 +390,16 @@ async function renderAdminPage(signal: AbortSignal) {
 
   const customerMap = new Map<string, any>();
   for (const o of paid) {
-    const key = customerKey(o);
+    const key = adminCustomerIdentity(o);
     if (!key) continue;
-    const current = customerMap.get(key) || {name:o.customer_name,email:o.email,phone:o.phone,orders:0,revenue:0,last:o.payment_confirmed_at,products:new Set<string>()};
+    const current = customerMap.get(key) || {identity:key,name:o.customer_name,email:o.email,phone:o.phone,orders:0,revenue:0,last:o.payment_confirmed_at,products:new Set<string>()};
     current.orders += 1;
     current.revenue += paidAmountCents(o.amount_sgd) || 0;
     current.products.add(isEsim(o) ? 'eSIM' : 'Pocket WiFi');
-    if (String(o.payment_confirmed_at || '') > String(current.last || '')) current.last = o.payment_confirmed_at;
+    if (new Date(o.payment_confirmed_at).getTime() > new Date(current.last).getTime()) current.last = o.payment_confirmed_at;
     customerMap.set(key,current);
   }
-  const customers = Array.from(customerMap.values()).sort((a,b)=>String(b.last).localeCompare(String(a.last)));
+  const customers = Array.from(customerMap.values()).sort(compareCustomerPurchaseRecency);
   const repeatCustomers = customers.filter(c=>c.orders > 1);
 
   const wifiDispatchExceptions = active.filter((o:any) => {
@@ -610,7 +608,7 @@ async function renderAdminPage(signal: AbortSignal) {
 
     <section id="customers" style={{marginTop:34}}>
       <h2>Customer CRM</h2>
-      <p style={{color:'#64748b'}}>Customer history is aggregated from paid orders. This is the first CRM layer; lead stages, notes, tasks and WhatsApp history can be added next.</p>
+      <p style={{color:'#64748b'}}>Customer history is aggregated conservatively from paid orders. Email or normalized phone can link purchases; name-only orders stay separate to avoid inventing repeat customers. Use the dedicated CRM workspace for lead stages, notes and tasks.</p>
       {reportingIncomplete && <p><strong>Customer order history is unavailable until the complete paid ledger is loaded and valid.</strong></p>}
       {!reportingIncomplete && customers.length > ADMIN_CUSTOMER_PREVIEW_ROWS && <p role="status"><strong>Showing the {ADMIN_CUSTOMER_PREVIEW_ROWS} most recent customers of {customers.length.toLocaleString()}.</strong> {customers.length - ADMIN_CUSTOMER_PREVIEW_ROWS} older customer summar{customers.length - ADMIN_CUSTOMER_PREVIEW_ROWS === 1 ? 'y is' : 'ies are'} omitted from this dashboard preview; the customer metric above still includes the complete validated ledger.</p>}
       {!reportingIncomplete && customers.length > 0 && <div style={{overflowX:'auto',...cardStyle,padding:0}}><table style={{width:'100%',borderCollapse:'collapse',minWidth:760}}>
