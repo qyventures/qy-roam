@@ -18,6 +18,24 @@ export function createAvailabilityDeadline(timeoutMs = AVAILABILITY_LOOKUP_TIMEO
 
   return {
     signal: controller.signal,
+    async waitFor<T>(work: Promise<T>) {
+      if (controller.signal.aborted) throw new Error('Live availability lookup timed out');
+      let rejectOnAbort: (() => void) | undefined;
+      const deadline = new Promise<never>((_, reject) => {
+        rejectOnAbort = () => reject(new Error('Live availability lookup timed out'));
+        controller.signal.addEventListener('abort', rejectOnAbort, { once: true });
+      });
+      try {
+        // Schema-readiness work is cached across requests and cannot inherit
+        // this caller's AbortSignal without cancelling the shared probe for
+        // every shopper. Race this admitted availability request instead so
+        // a stuck shared promise cannot retain one of the small live-work
+        // slots indefinitely.
+        return await Promise.race([work, deadline]);
+      } finally {
+        if (rejectOnAbort) controller.signal.removeEventListener('abort', rejectOnAbort);
+      }
+    },
     dispose() {
       clearTimeout(timeout);
     },

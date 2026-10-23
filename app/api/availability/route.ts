@@ -161,6 +161,12 @@ export async function GET(req: NextRequest) {
     });
   }
 
+  // Start the end-to-end dependency budget as soon as this request owns a
+  // scarce live-work slot. Cached schema probes are shared across callers and
+  // can ignore this request's cancellation, so each await below must still be
+  // raced against the admitted request's deadline.
+  availabilityDeadline = createAvailabilityDeadline();
+
   // Availability is a promise that a customer can proceed to payment. Match
   // every non-request-specific checkout prerequisite before calculating stock:
   // missing webhook, fulfilment, or signing configuration used to leave the
@@ -177,13 +183,13 @@ export async function GET(req: NextRequest) {
   // The same cached, fail-closed post-payment schema check prevents an
   // incomplete migration from showing a purchasable router only for checkout
   // to reject it moments later.
-  if (!await hasRequiredPaymentSchema()) {
+  if (!await availabilityDeadline.waitFor(hasRequiredPaymentSchema())) {
     return unavailableAvailability();
   }
   // Availability is a purchase promise. Match checkout's physical-custody
   // gate so a partial deployment cannot advertise a router that it refuses
   // before payment because the dispatch/return transaction is unavailable.
-  if (!await hasRequiredPocketWifiFulfilmentSchema()) {
+  if (!await availabilityDeadline.waitFor(hasRequiredPocketWifiFulfilmentSchema())) {
     return unavailableAvailability();
   }
 
@@ -192,12 +198,13 @@ export async function GET(req: NextRequest) {
   const from = start.toISOString().slice(0, 10);
   const to = end.toISOString().slice(0, 10);
   try {
-    // The Stripe scan has its own shorter pagination deadline. Start one
-    // wider end-to-end budget immediately before the live inventory work so
-    // the following atomic database snapshot receives only the time left,
-    // rather than stacking a fresh transport timeout after a slow scan.
-    availabilityDeadline = createAvailabilityDeadline();
-    const stripeHolds = await activeStripeHolds(createStripeClient(stripeKey), stripeKey, from, to);
+    // The Stripe scan has its own shorter pagination deadline. The wider
+    // request deadline already includes readiness work, so the following
+    // atomic database snapshot receives only the time left rather than a
+    // fresh budget after every dependency phase.
+    const stripeHolds = await availabilityDeadline.waitFor(
+      activeStripeHolds(createStripeClient(stripeKey), stripeKey, from, to),
+    );
     const inventoryState = await committedInventory(from, to, stripeHolds.requestIds, inventory, availabilityDeadline.signal);
     const committed = inventoryState.committed + stripeHolds.holds;
     // This must mirror qy_reserve_pocket_wifi: the lower of the configured

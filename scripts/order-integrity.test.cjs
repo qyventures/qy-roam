@@ -3681,7 +3681,7 @@ test('Pocket WiFi availability rejects ambiguous repeated date parameters before
   const route = fs.readFileSync(require.resolve('../app/api/availability/route.ts'), 'utf8');
   const repeatedDateBoundary = route.indexOf("const startValues = req.nextUrl.searchParams.getAll('start')");
   const globalLimit = route.indexOf('if (availabilityGloballyLimited())');
-  const stripeScan = route.indexOf('const stripeHolds = await activeStripeHolds');
+  const stripeScan = route.indexOf('activeStripeHolds(createStripeClient');
 
   assert.ok(repeatedDateBoundary > -1, 'availability must inspect every supplied date value');
   assert.match(route, /const endValues = req\.nextUrl\.searchParams\.getAll\('end'\)/);
@@ -5390,9 +5390,9 @@ test('Pocket WiFi capacity does not double-count dispatched routers', () => {
 
 test('Pocket WiFi availability does not promise stock when checkout cannot safely accept payment', () => {
   assert.match(availabilityRoute, /hasRequiredPaymentSchema/);
-  assert.match(availabilityRoute, /if \(!await hasRequiredPaymentSchema\(\)\)/);
+  assert.match(availabilityRoute, /if \(!await availabilityDeadline\.waitFor\(hasRequiredPaymentSchema\(\)\)\)/);
   assert.match(availabilityRoute, /hasRequiredPocketWifiFulfilmentSchema/);
-  assert.match(availabilityRoute, /if \(!await hasRequiredPocketWifiFulfilmentSchema\(\)\)/);
+  assert.match(availabilityRoute, /if \(!await availabilityDeadline\.waitFor\(hasRequiredPocketWifiFulfilmentSchema\(\)\)\)/);
   assert.match(availabilityRoute, /hasRequiredStripeWebhookConfig/);
   assert.match(availabilityRoute, /hasRequiredFulfilmentEmailConfig/);
   assert.match(availabilityRoute, /hasOrderIntegritySigningConfig/);
@@ -10713,18 +10713,26 @@ test('live availability Stripe and inventory reads share one end-to-end deadline
 
   const deadline = createAvailabilityDeadline(5);
   assert.equal(deadline.signal.aborted, false);
-  await new Promise((resolve) => deadline.signal.addEventListener('abort', resolve, { once: true }));
+  await assert.rejects(
+    deadline.waitFor(new Promise(() => {})),
+    /Live availability lookup timed out/,
+    'a shared readiness promise that ignores cancellation must not retain the availability slot',
+  );
   assert.equal(deadline.signal.aborted, true);
   assert.match(String(deadline.signal.reason), /availability lookup timed out/i);
   deadline.dispose();
 
   const deadlineCreation = availabilityRoute.indexOf('availabilityDeadline = createAvailabilityDeadline()');
+  const paymentReadiness = availabilityRoute.indexOf('availabilityDeadline.waitFor(hasRequiredPaymentSchema())');
+  const fulfilmentReadiness = availabilityRoute.indexOf('availabilityDeadline.waitFor(hasRequiredPocketWifiFulfilmentSchema())');
   const stripeLookup = availabilityRoute.indexOf('activeStripeHolds(', deadlineCreation);
   const inventorySignal = availabilityRoute.indexOf('availabilityDeadline.signal', stripeLookup);
   const disposal = availabilityRoute.indexOf('availabilityDeadline?.dispose()', inventorySignal);
-  assert.ok(deadlineCreation >= 0 && stripeLookup > deadlineCreation &&
+  assert.ok(deadlineCreation >= 0 && paymentReadiness > deadlineCreation &&
+    fulfilmentReadiness > paymentReadiness && stripeLookup > fulfilmentReadiness &&
     inventorySignal > stripeLookup && disposal > inventorySignal,
-  'the atomic inventory read must inherit and release the deadline created before Stripe');
+  'readiness, Stripe, and the atomic inventory read must share and release one admitted deadline');
+  assert.match(availabilityRoute, /availabilityDeadline\.waitFor\(\s*activeStripeHolds\(/);
   assert.match(availabilityRoute, /qy_pocket_wifi_availability_snapshot[\s\S]{0,500}\.abortSignal\(signal\)/);
 });
 
