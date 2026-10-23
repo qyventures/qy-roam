@@ -26,6 +26,7 @@ import { signedStripeMeasurementConsentDowngrade } from '@/lib/stripeMeasurement
 import { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } from '@/lib/pocketWifiRentalPeriod';
 import { acknowledgedExpiredCheckoutReservationRelease, acknowledgedLinkedReservationRelease, acknowledgedUnlinkedReservationRelease } from '@/lib/checkoutReservationAcknowledgement';
 import { exactRpcRow } from '@/lib/exactRpcRow';
+import { createCheckoutDeadline } from '@/lib/checkoutDeadline';
 
 export const runtime = 'nodejs';
 
@@ -162,7 +163,7 @@ async function activeStripeHolds(stripe:Stripe,stripeKey:string,start:string,end
 // A Stripe Checkout URL is only safe to expose once its durable inventory hold
 // is tied to that exact session.  This also repairs the small interruption
 // window between session creation and the original link on a client retry.
-async function linkReservationToSession(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>,requestId:string,sessionId:string,requested:RequestedPocketWifi) {
+async function linkReservationToSession(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>,requestId:string,sessionId:string,requested:RequestedPocketWifi,signal:AbortSignal) {
   // Make the final payment-capability hand-off a database authority. In
   // particular, the RPC checks expiry using the database clock in the same
   // statement that writes the link; a slow Stripe request cannot attach and
@@ -173,7 +174,7 @@ async function linkReservationToSession(supabase:NonNullable<ReturnType<typeof g
     p_travel_start:requested.start,
     p_travel_end:requested.end,
     p_expires_at:new Date(requested.expiresAtSeconds*1000).toISOString(),
-  });
+  }).abortSignal(signal);
   if(linked.error) throw linked.error;
   return linked.data===true;
 }
@@ -192,6 +193,7 @@ async function releaseUnlinkedReservation(supabase:NonNullable<ReturnType<typeof
 
 export async function POST(req: Request) {
  let releaseCheckout: (()=>void)|null=null;
+ let checkoutDeadline: ReturnType<typeof createCheckoutDeadline>|null=null;
  try {
   // Keep malformed or repeatedly abusive traffic on the per-client ingress
   // boundary, but do not let it consume the instance-wide Stripe work budget.
@@ -293,6 +295,7 @@ export async function POST(req: Request) {
   // promptly while this request's durable idempotency identity stays intact.
   releaseCheckout=tryAcquireCheckoutConcurrency();
   if(!releaseCheckout) return NextResponse.json({error:'Checkout is busy. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'5'}});
+  checkoutDeadline=createCheckoutDeadline();
   // A reservation alone is not enough: once payment succeeds, the webhook
   // needs the orders and delivery/idempotency ledgers as well. Do this before
   // creating a payable Stripe Session so an incomplete migration cannot leave
@@ -312,7 +315,7 @@ export async function POST(req: Request) {
     // Retrieve it again because payment or expiry can race the preceding list
     // call. The fresh state, not the URL snapshot from that list, determines
     // whether the browser may return to Checkout.
-    let existing=await stripe.checkout.sessions.retrieve(holdState.existingSessionId);
+    let existing=await stripe.checkout.sessions.retrieve(holdState.existingSessionId,checkoutDeadline.stripeRequestOptions());
     // This object can release a reservation, confirm a paid order, or expose a
     // payment URL. Require it to remain bound to the exact hold selected above.
     if(!stripeWebhookCheckoutSessionMatchesSnapshot(holdState.existingSessionSnapshot,existing)){
@@ -331,7 +334,7 @@ export async function POST(req: Request) {
     }
     const consentDowngrade=signedStripeMeasurementConsentDowngrade(existing.id,existing.metadata,body.measurementConsent);
     if(consentDowngrade){
-      const updated=await stripe.checkout.sessions.update(existing.id,{metadata:consentDowngrade});
+      const updated=await stripe.checkout.sessions.update(existing.id,{metadata:consentDowngrade},checkoutDeadline.stripeRequestOptions());
       if(!stripeWebhookCheckoutSessionMatchesSnapshot(existing,updated)||
         !stripeEventMatchesConfiguredMode(key,updated.livemode)||
         !matchesRequestedPocketWifi(updated,requestId,requested,origin)){
@@ -348,7 +351,7 @@ export async function POST(req: Request) {
       // authority instead of continuing with the unsigned object retrieved
       // above: that stale object must never release stock, confirm payment,
       // or expose a payable URL.
-      const updated=await stripe.checkout.sessions.update(existing.id,{metadata:{[QY_ROAM_PROVENANCE_METADATA_KEY]:provenance}});
+      const updated=await stripe.checkout.sessions.update(existing.id,{metadata:{[QY_ROAM_PROVENANCE_METADATA_KEY]:provenance}},checkoutDeadline.stripeRequestOptions());
       if(!stripeWebhookCheckoutSessionMatchesSnapshot(existing,updated)||
         !stripeEventMatchesConfiguredMode(key,updated.livemode)||
         !matchesRequestedPocketWifi(updated,requestId,requested,origin)){
@@ -368,7 +371,7 @@ export async function POST(req: Request) {
       // The signed terminal webhook normally removes this hold. Keep it linked
       // if order persistence is still catching up, or remove only this exact
       // session's hold once the paid order is durable.
-      const order=await supabase.from('orders').select('stripe_session_id,payment_status,payment_confirmed_at,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address').eq('stripe_session_id',existing.id).maybeSingle();
+      const order=await supabase.from('orders').select('stripe_session_id,payment_status,payment_confirmed_at,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address').eq('stripe_session_id',existing.id).abortSignal(checkoutDeadline.signal).maybeSingle();
       if(order.error) throw order.error;
       if(durableOrderMatchesPaidSession(order.data,existing,'pocket_wifi')){
         const released=await supabase.from('checkout_reservations').delete()
@@ -378,7 +381,7 @@ export async function POST(req: Request) {
         if(released.error) throw released.error;
         if(!acknowledgedLinkedReservationRelease(released.data,requestId,existing.id)) throw new Error('Paid checkout reservation release returned an invalid acknowledgement');
       }else{
-        if(!await linkReservationToSession(supabase,requestId,existing.id,requested)){
+        if(!await linkReservationToSession(supabase,requestId,existing.id,requested,checkoutDeadline.signal)){
           return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
         }
         // Stripe has accepted payment, but customer confirmation is only safe
@@ -391,7 +394,7 @@ export async function POST(req: Request) {
       return NextResponse.json({completed:true,sessionId:existing.id},{headers:{'Cache-Control':'no-store'}});
     }
     if(existing.status==='complete'&&existing.payment_status==='unpaid'){
-      const order=await supabase.from('orders').select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address,fulfilment_status').eq('stripe_session_id',existing.id).maybeSingle();
+      const order=await supabase.from('orders').select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address,fulfilment_status').eq('stripe_session_id',existing.id).abortSignal(checkoutDeadline.signal).maybeSingle();
       if(order.error) throw order.error;
       // Stripe's terminal failure state remains `unpaid`; the webhook records
       // the durable outcome in our fulfilment lifecycle as `payment_failed`.
@@ -413,7 +416,7 @@ export async function POST(req: Request) {
       if(!acknowledgedExpiredCheckoutReservationRelease(released.data,requestId,existing.id)) throw new Error('Expired checkout reservation release returned an invalid acknowledgement');
       return NextResponse.json({error:'This secure checkout session has expired. Please try again to start a new one.',checkoutExpired:true},{status:409,headers:{'Cache-Control':'no-store'}});
     }
-    if(!await linkReservationToSession(supabase,requestId,existing.id,requested)){
+    if(!await linkReservationToSession(supabase,requestId,existing.id,requested,checkoutDeadline.signal)){
       // Do not redirect a retry to payment when its durable reservation was
       // lost or points to a different Stripe session. Keeping the open Stripe
       // Session unexposed preserves capacity until an operator can investigate.
@@ -438,7 +441,7 @@ export async function POST(req: Request) {
     p_expires_at:expiresAt,
     p_stripe_hold_count:holdState.holds,
     p_stripe_hold_request_ids:holdState.requestIds
-  });
+  }).abortSignal(checkoutDeadline.signal);
   if(reservation.error) throw reservation.error;
   // This SECURITY DEFINER RPC is the final atomic stock authority and is
   // defined to return exactly one row. Never accept the first element of an
@@ -478,7 +481,7 @@ export async function POST(req: Request) {
   }
   let session:Stripe.Checkout.Session;
   try{
-    session=await stripe.checkout.sessions.create({mode:'payment',line_items:lineItems,expires_at:expiresAtSeconds,billing_address_collection:'required',shipping_address_collection:{allowed_countries:['SG']},phone_number_collection:{enabled:true},customer_creation:'always',success_url:`${origin}/success?session_id={CHECKOUT_SESSION_ID}`,cancel_url:`${origin}/?checkout=cancelled`,metadata:{product_type:'pocket_wifi',plan_name:`${country} Pocket WiFi`,country,start,end,days:String(days),daily_rate_sgd:daily.toFixed(2),benchmark_provider:WIFI_BENCHMARK.provider,benchmark_rate_sgd:wifiPlan.benchmarkRateSgd.toFixed(2),benchmark_verified_on:WIFI_BENCHMARK.verifiedOn,rental_before_promo_sgd:(rentalBeforePromo/100).toFixed(2),promo_code:promo.promoCode,promo_discount_sgd:(promo.discountCents/100).toFixed(2),courier_fee_sgd:(courierFee/100).toFixed(2),checkout_amount_cents:String(rentalAmount+courierFee),checkout_request_id:requestId,source:'qyroam.com',measurement_consent:body.measurementConsent===true?'accepted':'essential',...(body.measurementConsent===true?metaAttributionFromRequest(body.attribution,req.headers.get('user-agent'),req.headers.get('x-real-ip')):{})},consent_collection:{terms_of_service:'required'}},{idempotencyKey:`qyroam_wifi_${requestId}`});
+    session=await stripe.checkout.sessions.create({mode:'payment',line_items:lineItems,expires_at:expiresAtSeconds,billing_address_collection:'required',shipping_address_collection:{allowed_countries:['SG']},phone_number_collection:{enabled:true},customer_creation:'always',success_url:`${origin}/success?session_id={CHECKOUT_SESSION_ID}`,cancel_url:`${origin}/?checkout=cancelled`,metadata:{product_type:'pocket_wifi',plan_name:`${country} Pocket WiFi`,country,start,end,days:String(days),daily_rate_sgd:daily.toFixed(2),benchmark_provider:WIFI_BENCHMARK.provider,benchmark_rate_sgd:wifiPlan.benchmarkRateSgd.toFixed(2),benchmark_verified_on:WIFI_BENCHMARK.verifiedOn,rental_before_promo_sgd:(rentalBeforePromo/100).toFixed(2),promo_code:promo.promoCode,promo_discount_sgd:(promo.discountCents/100).toFixed(2),courier_fee_sgd:(courierFee/100).toFixed(2),checkout_amount_cents:String(rentalAmount+courierFee),checkout_request_id:requestId,source:'qyroam.com',measurement_consent:body.measurementConsent===true?'accepted':'essential',...(body.measurementConsent===true?metaAttributionFromRequest(body.attribution,req.headers.get('user-agent'),req.headers.get('x-real-ip')):{})},consent_collection:{terms_of_service:'required'}},{idempotencyKey:`qyroam_wifi_${requestId}`,...checkoutDeadline.stripeRequestOptions()});
   }catch(error){
     // A network failure is ambiguous: Stripe may have created a payable
     // session before its response was lost. Releasing the reservation here
@@ -520,7 +523,7 @@ export async function POST(req: Request) {
   }
   const consentDowngrade=signedStripeMeasurementConsentDowngrade(createdSessionId,session.metadata,body.measurementConsent);
   if(consentDowngrade){
-    const updated=await stripe.checkout.sessions.update(createdSessionId,{metadata:consentDowngrade});
+    const updated=await stripe.checkout.sessions.update(createdSessionId,{metadata:consentDowngrade},checkoutDeadline.stripeRequestOptions());
     const updatedSession=stripeWebhookCheckoutSession(updated);
     if(!updatedSession||!stripeWebhookCheckoutSessionMatchesSnapshot(session,updatedSession)||
       !stripeEventMatchesConfiguredMode(key,updatedSession.livemode)||
@@ -536,7 +539,7 @@ export async function POST(req: Request) {
   const metadata={...session.metadata} as Record<string,string>;
   const provenance=signedQyRoamProvenance(createdSessionId,metadata);
   if(metadata[QY_ROAM_PROVENANCE_METADATA_KEY]!==provenance){
-    try { await stripe.checkout.sessions.update(createdSessionId,{metadata:{[QY_ROAM_PROVENANCE_METADATA_KEY]:provenance}}); }
+    try { await stripe.checkout.sessions.update(createdSessionId,{metadata:{[QY_ROAM_PROVENANCE_METADATA_KEY]:provenance}},checkoutDeadline.stripeRequestOptions()); }
     catch(error){
       // This update can fail after Stripe created a usable Checkout Session.
       // As above, retain capacity rather than creating an uncounted payable
@@ -551,7 +554,7 @@ export async function POST(req: Request) {
   // decision from that fresh state. This also proves the id-bound provenance
   // update is visible before exposing a URL that can create a paid inventory
   // obligation.
-  const retrievedSession=await stripe.checkout.sessions.retrieve(createdSessionId);
+  const retrievedSession=await stripe.checkout.sessions.retrieve(createdSessionId,checkoutDeadline.stripeRequestOptions());
   const currentSession=stripeWebhookCheckoutSession(retrievedSession);
   // Keep the fresh response bound to the idempotent create result before it
   // can confirm payment, mutate this booking's reservation, or expose a URL.
@@ -580,7 +583,7 @@ export async function POST(req: Request) {
   // order. If persistence is still catching up, link the reservation first so
   // the terminal webhook can release it once it records the paid booking.
   if(currentSession.status==='complete'&&currentSession.payment_status==='paid'){
-    const order=await supabase.from('orders').select('stripe_session_id,payment_status,payment_confirmed_at,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address').eq('stripe_session_id',currentSession.id).maybeSingle();
+    const order=await supabase.from('orders').select('stripe_session_id,payment_status,payment_confirmed_at,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address').eq('stripe_session_id',currentSession.id).abortSignal(checkoutDeadline.signal).maybeSingle();
     if(order.error) throw order.error;
     // Only an exact durable commercial snapshot can turn an idempotent
     // checkout replay into a completed-order response. A mismatched imported
@@ -599,7 +602,7 @@ export async function POST(req: Request) {
       if(released.error) throw released.error;
       if(!acknowledgedLinkedReservationRelease(released.data,requestId,currentSession.id)) throw new Error('Paid checkout reservation release returned an invalid acknowledgement');
     }else{
-      if(!await linkReservationToSession(supabase,requestId,currentSession.id,requested)){
+      if(!await linkReservationToSession(supabase,requestId,currentSession.id,requested,checkoutDeadline.signal)){
         return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
       }
       // Do not let an idempotent Stripe replay outrun webhook persistence.
@@ -615,7 +618,7 @@ export async function POST(req: Request) {
   // recorded that failure; before then, preserving the attempt protects an
   // in-flight payment and its linked inventory reservation.
   if(currentSession.status==='complete'&&currentSession.payment_status==='unpaid'){
-    const order=await supabase.from('orders').select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address,fulfilment_status').eq('stripe_session_id',currentSession.id).maybeSingle();
+    const order=await supabase.from('orders').select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address,fulfilment_status').eq('stripe_session_id',currentSession.id).abortSignal(checkoutDeadline.signal).maybeSingle();
     if(order.error) throw order.error;
     // The Session id and lifecycle label alone are not enough to abandon this
     // durable attempt. A service-role import or repair can leave a row under
@@ -642,14 +645,14 @@ export async function POST(req: Request) {
   // uncounted router booking.
   const checkoutUrl=safeStripeCheckoutUrl(currentSession.url);
   if(currentSession.status!=='open'||!checkoutUrl){
-    if(!await linkReservationToSession(supabase,requestId,currentSession.id,requested)) return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
+    if(!await linkReservationToSession(supabase,requestId,currentSession.id,requested,checkoutDeadline.signal)) return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
     if(currentSession.status==='open'&&currentSession.url){
       console.error('checkout_url_invalid');
       return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
     }
     return NextResponse.json({error:'Your payment is still being confirmed. Please wait for confirmation before trying again.',paymentPending:true},{status:409,headers:{'Cache-Control':'no-store','Retry-After':'3'}});
   }
-  if(!await linkReservationToSession(supabase,requestId,currentSession.id,requested)){
+  if(!await linkReservationToSession(supabase,requestId,currentSession.id,requested,checkoutDeadline.signal)){
     // Fail closed: a payment URL without a durable session-to-reservation
     // relationship cannot safely be reconciled by fulfilment or inventory.
     return NextResponse.json({error:'Live reservation confirmation is temporarily unavailable. Please try again shortly or contact +65 8032 7183.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
@@ -666,6 +669,7 @@ export async function POST(req: Request) {
     {status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}},
   );
  } finally {
+  checkoutDeadline?.dispose();
   releaseCheckout?.();
  }
 }

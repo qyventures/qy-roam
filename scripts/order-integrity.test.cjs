@@ -88,6 +88,7 @@ const { esimCheckoutFingerprint, pocketWifiCheckoutFingerprint } = require('../l
 const { MANUAL_ORDER_REFERENCE_MAX_LENGTH, manualOrderReference, manualOrderSessionId } = require('../lib/manualOrderReference.ts');
 const { createConcurrencyLimiter } = require('../lib/concurrencyLimit.ts');
 const { CHECKOUT_MAX_CONCURRENT_REQUESTS, CHECKOUT_MAX_CONCURRENT_UPLOADS, tryAcquireCheckoutConcurrency, tryAcquireCheckoutUpload } = require('../lib/checkoutConcurrency.ts');
+const { CHECKOUT_DEPENDENCY_TIMEOUT_MS, createCheckoutDeadline } = require('../lib/checkoutDeadline.ts');
 const { AVAILABILITY_MAX_CONCURRENT_REQUESTS, tryAcquireAvailabilityConcurrency } = require('../lib/availabilityConcurrency.ts');
 const { AVAILABILITY_LOOKUP_TIMEOUT_MS, createAvailabilityDeadline } = require('../lib/availabilityDeadline.ts');
 const { CONFIRMATION_MAX_CONCURRENT_REQUESTS, tryAcquireConfirmationConcurrency } = require('../lib/confirmationConcurrency.ts');
@@ -4556,7 +4557,7 @@ test('checkout provider responses are bounded before their Session ids become AP
   const esimObject = esimCheckoutRoute.indexOf('const createdSession = stripeWebhookCheckoutSession(session)', esimCreate);
   const esimId = esimCheckoutRoute.indexOf('const createdSessionId = validStripeCheckoutSessionIdForMode(session.id, session.livemode)', esimCreate);
   const esimUpdate = esimCheckoutRoute.indexOf('stripe.checkout.sessions.update(createdSessionId', esimCreate);
-  const esimRetrieve = esimCheckoutRoute.indexOf('stripe.checkout.sessions.retrieve(createdSessionId)', esimCreate);
+  const esimRetrieve = esimCheckoutRoute.indexOf('stripe.checkout.sessions.retrieve(createdSessionId,', esimCreate);
   assert.ok(esimCreate >= 0 && esimObject > esimCreate && esimId > esimObject && esimUpdate > esimId && esimRetrieve > esimId);
   assert.match(esimCheckoutRoute, /const updatedSession = stripeWebhookCheckoutSession\(updated\)/);
   assert.match(esimCheckoutRoute, /const currentSession = stripeWebhookCheckoutSession\(retrievedSession\)/);
@@ -4566,7 +4567,7 @@ test('checkout provider responses are bounded before their Session ids become AP
   const wifiObject = wifiCheckoutRoute.indexOf('const createdSession=stripeWebhookCheckoutSession(session)', wifiCreate);
   const wifiId = wifiCheckoutRoute.indexOf('const createdSessionId=validStripeCheckoutSessionIdForMode(session.id,session.livemode)', wifiCreate);
   const wifiUpdate = wifiCheckoutRoute.indexOf('stripe.checkout.sessions.update(createdSessionId', wifiCreate);
-  const wifiRetrieve = wifiCheckoutRoute.indexOf('stripe.checkout.sessions.retrieve(createdSessionId)', wifiCreate);
+  const wifiRetrieve = wifiCheckoutRoute.indexOf('stripe.checkout.sessions.retrieve(createdSessionId,', wifiCreate);
   assert.ok(wifiCreate >= 0 && wifiObject > wifiCreate && wifiId > wifiObject && wifiUpdate > wifiId && wifiRetrieve > wifiId);
   assert.match(wifiCheckoutRoute, /const updatedSession=stripeWebhookCheckoutSession\(updated\)/);
   assert.match(wifiCheckoutRoute, /const currentSession=stripeWebhookCheckoutSession\(retrievedSession\)/);
@@ -4632,7 +4633,7 @@ test('checkout retries keep Stripe idempotency parameters stable', () => {
 test('eSIM idempotent recovery uses a fresh Stripe session state before returning a payment URL', () => {
   // Stripe caches idempotent POST responses. The route must not make a
   // recovery decision from a stale original `open` snapshot after payment.
-  assert.match(esimCheckoutRoute, /const retrievedSession = await stripe\.checkout\.sessions\.retrieve\(createdSessionId\);\s*const currentSession = stripeWebhookCheckoutSession\(retrievedSession\)/);
+  assert.match(esimCheckoutRoute, /const retrievedSession = await stripe\.checkout\.sessions\.retrieve\(createdSessionId, checkoutDeadline\.stripeRequestOptions\(\)\);\s*const currentSession = stripeWebhookCheckoutSession\(retrievedSession\)/);
   assert.match(esimCheckoutRoute, /if \(!validQyRoamProvenance\(currentSession\.id, currentSession\.metadata\)\)/);
   assert.match(esimCheckoutRoute, /currentSession\.status === 'complete' && currentSession\.payment_status === 'paid'/);
   assert.match(esimCheckoutRoute, /url: checkoutUrl/);
@@ -4663,11 +4664,11 @@ test('checkout recovery binds every fresh Stripe response to its immutable Sessi
 
   assert.match(wifiCheckoutRoute, /stripeWebhookCheckoutSessionMatchesSnapshot\(holdState\.existingSessionSnapshot,existing\)/);
   assert.match(wifiCheckoutRoute, /stripeWebhookCheckoutSessionMatchesSnapshot\(session,currentSession\)/);
-  const existingRead = wifiCheckoutRoute.indexOf('let existing=await stripe.checkout.sessions.retrieve(holdState.existingSessionId)');
+  const existingRead = wifiCheckoutRoute.indexOf('let existing=await stripe.checkout.sessions.retrieve(holdState.existingSessionId,');
   const existingIdentity = wifiCheckoutRoute.indexOf('stripeWebhookCheckoutSessionMatchesSnapshot(holdState.existingSessionSnapshot,existing)', existingRead);
   const existingUrl = wifiCheckoutRoute.indexOf('{url:existingCheckoutUrl}', existingRead);
   assert.ok(existingRead >= 0 && existingIdentity > existingRead && existingIdentity < existingUrl);
-  const currentRead = wifiCheckoutRoute.indexOf('const retrievedSession=await stripe.checkout.sessions.retrieve(createdSessionId)');
+  const currentRead = wifiCheckoutRoute.indexOf('const retrievedSession=await stripe.checkout.sessions.retrieve(createdSessionId,');
   const currentIdentity = wifiCheckoutRoute.indexOf('stripeWebhookCheckoutSessionMatchesSnapshot(session,currentSession)', currentRead);
   const currentUrl = wifiCheckoutRoute.indexOf('{url:checkoutUrl}', currentRead);
   assert.ok(currentRead >= 0 && currentIdentity > currentRead && currentIdentity < currentUrl);
@@ -5394,9 +5395,9 @@ test('idempotent checkout replays recover paid orders without a second payment a
   assert.match(wifiCheckoutRoute, /if\(!matchesRequestedPocketWifi\(session,requestId,requested,origin\)\)/);
   assert.match(wifiCheckoutRoute, /currentSession\.status==='complete'&&currentSession\.payment_status==='paid'/);
   assert.match(wifiCheckoutRoute, /\{completed:true,sessionId:currentSession\.id\}/);
-  assert.match(wifiCheckoutRoute, /\.eq\('stripe_session_id',currentSession\.id\)\.maybeSingle\(\)/);
+  assert.match(wifiCheckoutRoute, /\.eq\('stripe_session_id',currentSession\.id\)\.abortSignal\(checkoutDeadline\.signal\)\.maybeSingle\(\)/);
   assert.match(wifiCheckoutRoute, /paymentPending:true/);
-  assert.match(esimCheckoutRoute, /const retrievedSession = await stripe\.checkout\.sessions\.retrieve\(createdSessionId\);\s*const currentSession = stripeWebhookCheckoutSession\(retrievedSession\)/);
+  assert.match(esimCheckoutRoute, /const retrievedSession = await stripe\.checkout\.sessions\.retrieve\(createdSessionId, checkoutDeadline\.stripeRequestOptions\(\)\);\s*const currentSession = stripeWebhookCheckoutSession\(retrievedSession\)/);
   assert.match(esimCheckoutRoute, /currentSession\.status === 'complete' && currentSession\.payment_status === 'paid'/);
   assert.match(esimCheckoutRoute, /\{ completed: true, sessionId: currentSession\.id \}/);
   assert.match(esimCheckoutRoute, /paymentPending: true/);
@@ -5406,7 +5407,7 @@ test('idempotent checkout replays recover paid orders without a second payment a
 
 test('Pocket WiFi create recovery uses fresh Stripe state and confirms provenance before exposing checkout', () => {
   const createCall = wifiCheckoutRoute.indexOf("session=await stripe.checkout.sessions.create");
-  const currentRead = wifiCheckoutRoute.indexOf("const retrievedSession=await stripe.checkout.sessions.retrieve(createdSessionId)", createCall);
+  const currentRead = wifiCheckoutRoute.indexOf("const retrievedSession=await stripe.checkout.sessions.retrieve(createdSessionId,", createCall);
   const paidBranch = wifiCheckoutRoute.indexOf("if(currentSession.status==='complete'&&currentSession.payment_status==='paid')", currentRead);
   const expiredBranch = wifiCheckoutRoute.indexOf("if(currentSession.status==='expired')", currentRead);
   const urlResponse = wifiCheckoutRoute.indexOf("{url:checkoutUrl}", currentRead);
@@ -5435,7 +5436,7 @@ test('Pocket WiFi paid checkout recovery waits for the durable paid order ledger
     assert.ok(orderLookup > -1 && durableGuard > orderLookup && pendingResponse > durableGuard && completedResponse > pendingResponse,
       `${name} must report completion only after the durable paid order exists`);
     assert.match(branch, /'Retry-After':'3'/);
-    assert.match(branch, new RegExp(`linkReservationToSession\\(supabase,requestId,${sessionId.replace('.', '\\.')},requested\\)`));
+    assert.match(branch, new RegExp(`linkReservationToSession\\(supabase,requestId,${sessionId.replace('.', '\\.')},requested,checkoutDeadline\\.signal\\)`));
   }
 });
 
@@ -5465,7 +5466,7 @@ test('Pocket WiFi open-session retries honor the freshly retrieved Stripe state'
   // Listing and retrieving are separate Stripe calls. A traveller can pay or
   // the session can expire between them, so the stale listed URL must never be
   // returned without checking the retrieved session status.
-  assert.match(wifiCheckoutRoute, /let existing=await stripe\.checkout\.sessions\.retrieve\(holdState\.existingSessionId\)/);
+  assert.match(wifiCheckoutRoute, /let existing=await stripe\.checkout\.sessions\.retrieve\(holdState\.existingSessionId,checkoutDeadline\.stripeRequestOptions\(\)\)/);
   const replayBranch = wifiCheckoutRoute.slice(
     wifiCheckoutRoute.indexOf('if(holdState.existingUrl&&holdState.existingSessionId&&holdState.existingSessionSnapshot)'),
     wifiCheckoutRoute.indexOf('const expiresAt=', wifiCheckoutRoute.indexOf('if(holdState.existingUrl&&holdState.existingSessionId&&holdState.existingSessionSnapshot)')),
@@ -5499,8 +5500,8 @@ test('Pocket WiFi payment URLs require a durable matching reservation link', () 
   assert.match(wifiCheckoutRoute, /async function linkReservationToSession/);
   assert.match(wifiCheckoutRoute, /supabase\.rpc\('qy_link_pocket_wifi_reservation'/);
   assert.match(wifiCheckoutRoute, /p_expires_at:new Date\(requested\.expiresAtSeconds\*1000\)\.toISOString\(\)/);
-  assert.match(wifiCheckoutRoute, /if\(!await linkReservationToSession\(supabase,requestId,existing\.id,requested\)\)/);
-  assert.match(wifiCheckoutRoute, /if\(!await linkReservationToSession\(supabase,requestId,currentSession\.id,requested\)\)/);
+  assert.match(wifiCheckoutRoute, /if\(!await linkReservationToSession\(supabase,requestId,existing\.id,requested,checkoutDeadline\.signal\)\)/);
+  assert.match(wifiCheckoutRoute, /if\(!await linkReservationToSession\(supabase,requestId,currentSession\.id,requested,checkoutDeadline\.signal\)\)/);
   assert.match(schema, /create or replace function public\.qy_link_pocket_wifi_reservation/);
   assert.match(schema, /and expires_at > clock_timestamp\(\)/);
   assert.match(schema, /and \(stripe_session_id is null or stripe_session_id = p_stripe_session_id\)/);
@@ -5879,7 +5880,7 @@ test('database lifecycle backstop prevents direct eSIM fulfilment inserts and pr
 test('terminal asynchronous payment failures rotate checkout only after durable webhook persistence', () => {
   for (const route of [esimCheckoutRoute, wifiCheckoutRoute]) {
     assert.match(route, /status\s*===?\s*'complete'\s*&&\s*[^\n]*payment_status\s*===?\s*'unpaid'/);
-    assert.match(route, /from\('orders'\)\s*\.select\('stripe_session_id,payment_status,(?:payment_confirmed_at,)?product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,(?:shipping_address,)?fulfilment_status'\)\s*\.eq\('stripe_session_id',\s*[^)]+\)\s*\.maybeSingle\(\)/);
+    assert.match(route, /from\('orders'\)\s*\.select\('stripe_session_id,payment_status,(?:payment_confirmed_at,)?product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,(?:shipping_address,)?fulfilment_status'\)\s*\.eq\('stripe_session_id',\s*[^)]+\)\s*\.abortSignal\(checkoutDeadline\.signal\)\s*\.maybeSingle\(\)/);
     assert.match(route, /order\.data\?\.fulfilment_status\s*===?\s*'payment_failed'\s*&&\s*durableOrderMatchesFailedSession\(order\.data,/);
     assert.doesNotMatch(route, /order\.data\?\.payment_status\s*===?\s*'failed'/);
     assert.match(route, /paymentFailed:\s*true/);
@@ -10353,7 +10354,7 @@ test('product checkouts share one bounded live-work budget and always release ad
     assert.match(route, /releaseCheckout\s*=\s*tryAcquireCheckoutConcurrency\(\)/);
     assert.match(route, /Checkout is busy[\s\S]{0,180}status:\s*503/);
     assert.match(route, /['"]Retry-After['"]\s*:\s*['"]5['"]/);
-    assert.match(route, /finally\s*\{\s*releaseCheckout\?\.\(\);/);
+    assert.match(route, /finally\s*\{[\s\S]{0,100}releaseCheckout\?\.\(\);/);
   }
   assert.ok(
     wifiCheckoutRoute.indexOf('releaseCheckout=tryAcquireCheckoutConcurrency()') > wifiCheckoutRoute.indexOf('if(checkoutGloballyLimited())'),
@@ -10363,6 +10364,31 @@ test('product checkouts share one bounded live-work budget and always release ad
     esimCheckoutRoute.indexOf('releaseCheckout = tryAcquireCheckoutConcurrency()') > esimCheckoutRoute.indexOf('if (checkoutGloballyLimited())'),
     'eSIM admission must follow cheap validation and rate limiting',
   );
+});
+
+test('product checkouts share one end-to-end dependency deadline', async () => {
+  assert.equal(CHECKOUT_DEPENDENCY_TIMEOUT_MS, 30_000);
+  assert.throws(() => createCheckoutDeadline(0), /Invalid checkout dependency timeout/);
+  assert.throws(() => createCheckoutDeadline(CHECKOUT_DEPENDENCY_TIMEOUT_MS + 1), /Invalid checkout dependency timeout/);
+
+  const deadline = createCheckoutDeadline(25);
+  try {
+    const first = deadline.stripeRequestOptions();
+    assert.ok(first.timeout > 0 && first.timeout <= 25);
+    await new Promise((resolve) => setTimeout(resolve, 35));
+    assert.equal(deadline.signal.aborted, true);
+    assert.throws(() => deadline.stripeRequestOptions(), /Checkout dependency work timed out/);
+  } finally {
+    deadline.dispose();
+  }
+
+  for (const route of [wifiCheckoutRoute, esimCheckoutRoute]) {
+    assert.match(route, /checkoutDeadline=createCheckoutDeadline\(\)|checkoutDeadline = createCheckoutDeadline\(\)/);
+    assert.match(route, /checkoutDeadline\.stripeRequestOptions\(\)/);
+    assert.match(route, /checkoutDeadline\?\.dispose\(\)/);
+  }
+  assert.match(wifiCheckoutRoute, /qy_reserve_pocket_wifi'[\s\S]{0,500}\.abortSignal\(checkoutDeadline\.signal\)/);
+  assert.match(esimCheckoutRoute, /from\('orders'\)[\s\S]{0,500}\.abortSignal\(checkoutDeadline\.signal\)/);
 });
 
 test('paid-product rate limits are shared across routes and duplicate Next module graphs', () => {

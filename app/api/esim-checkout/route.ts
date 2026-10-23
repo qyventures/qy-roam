@@ -18,6 +18,7 @@ import { validStripeCheckoutSessionIdForMode } from '@/lib/stripeSessionId';
 import { stripeWebhookCheckoutSession, stripeWebhookCheckoutSessionMatchesSnapshot } from '@/lib/stripeWebhookObject';
 import { tryAcquireCheckoutConcurrency, tryAcquireCheckoutUpload } from '@/lib/checkoutConcurrency';
 import { signedStripeMeasurementConsentDowngrade } from '@/lib/stripeMeasurementProvenance';
+import { createCheckoutDeadline } from '@/lib/checkoutDeadline';
 
 export const runtime = 'nodejs';
 
@@ -90,6 +91,7 @@ function matchesRequestedEsim(session: Stripe.Checkout.Session, requestId: strin
 
 export async function POST(req: Request) {
   let releaseCheckout: (() => void) | null = null;
+  let checkoutDeadline: ReturnType<typeof createCheckoutDeadline> | null = null;
   try {
     // Invalid traffic still consumes a bounded per-client ingress allowance,
     // but it must not spend the process-wide Stripe work budget before it has
@@ -210,6 +212,7 @@ export async function POST(req: Request) {
       status: 503,
       headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' },
     });
+    checkoutDeadline = createCheckoutDeadline();
 
     // eSIM has no inventory reservation, so it must explicitly verify its
     // post-payment persistence boundary before exposing a Stripe payment URL.
@@ -283,7 +286,7 @@ export async function POST(req: Request) {
         ...(body.measurementConsent === true ? metaAttributionFromRequest(body.attribution, req.headers.get('user-agent'), req.headers.get('x-real-ip')) : {})
       },
       consent_collection: { terms_of_service: 'required' }
-    }, { idempotencyKey: `qyroam_esim_${requestId}` });
+    }, { idempotencyKey: `qyroam_esim_${requestId}`, ...checkoutDeadline.stripeRequestOptions() });
 
     // SDK return types are compile-time declarations, not a runtime provider
     // boundary. Validate the create response as an actual Checkout Session
@@ -337,7 +340,7 @@ export async function POST(req: Request) {
 
     const consentDowngrade = signedStripeMeasurementConsentDowngrade(createdSessionId, session.metadata, body.measurementConsent);
     if (consentDowngrade) {
-      const updated = await stripe.checkout.sessions.update(createdSessionId, { metadata: consentDowngrade });
+      const updated = await stripe.checkout.sessions.update(createdSessionId, { metadata: consentDowngrade }, checkoutDeadline.stripeRequestOptions());
       const updatedSession = stripeWebhookCheckoutSession(updated);
       if (!updatedSession || !stripeWebhookCheckoutSessionMatchesSnapshot(session, updatedSession) ||
         !stripeEventMatchesConfiguredMode(key, updatedSession.livemode) ||
@@ -357,7 +360,7 @@ export async function POST(req: Request) {
     const metadata = { ...session.metadata } as Record<string, string>;
     const provenance = signedQyRoamProvenance(createdSessionId, metadata);
     if (metadata[QY_ROAM_PROVENANCE_METADATA_KEY] !== provenance) {
-      await stripe.checkout.sessions.update(createdSessionId, { metadata: { [QY_ROAM_PROVENANCE_METADATA_KEY]: provenance } });
+      await stripe.checkout.sessions.update(createdSessionId, { metadata: { [QY_ROAM_PROVENANCE_METADATA_KEY]: provenance } }, checkoutDeadline.stripeRequestOptions());
     }
 
     // Stripe caches the response for an idempotency key. A browser retry can
@@ -365,7 +368,7 @@ export async function POST(req: Request) {
     // has completed payment in another tab. Retrieve the Session again before
     // choosing a recovery response: a completed payment must lead to its
     // confirmation page, never back to an unusable Checkout URL.
-    const retrievedSession = await stripe.checkout.sessions.retrieve(createdSessionId);
+    const retrievedSession = await stripe.checkout.sessions.retrieve(createdSessionId, checkoutDeadline.stripeRequestOptions());
     const currentSession = stripeWebhookCheckoutSession(retrievedSession);
     // This fresh object can expose either a paid-order confirmation or a live
     // payment URL. Bind it to the idempotent create result before trusting any
@@ -417,6 +420,7 @@ export async function POST(req: Request) {
         .from('orders')
         .select('stripe_session_id,payment_status,payment_confirmed_at,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address')
         .eq('stripe_session_id', currentSession.id)
+        .abortSignal(checkoutDeadline.signal)
         .maybeSingle();
       if (order.error) throw order.error;
       // A row keyed by this Session is not enough to prove that the paid
@@ -444,6 +448,7 @@ export async function POST(req: Request) {
         .from('orders')
         .select('stripe_session_id,payment_status,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address,fulfilment_status')
         .eq('stripe_session_id', currentSession.id)
+        .abortSignal(checkoutDeadline.signal)
         .maybeSingle();
       if (order.error) throw order.error;
       // Stripe represents an asynchronously failed Checkout Session as
@@ -495,6 +500,7 @@ export async function POST(req: Request) {
       headers: { 'Cache-Control': 'no-store', 'Retry-After': '10' },
     });
   } finally {
+    checkoutDeadline?.dispose();
     releaseCheckout?.();
   }
 }
