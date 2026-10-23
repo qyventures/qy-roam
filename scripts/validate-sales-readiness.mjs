@@ -53,6 +53,10 @@ function allTrue(record, names) {
   return names.every((name) => record[name] === true);
 }
 
+function allBoolean(record, names) {
+  return names.every((name) => typeof record[name] === 'boolean');
+}
+
 // Release checks run on the same host as the application, so a two-minute
 // window is generous for provider probes and retry loops while still refusing
 // a readiness document retained by a broken intermediary or replayed from an
@@ -84,18 +88,29 @@ export function salesReadinessResponseIsValid(result, nowMs = Date.now()) {
     'stripe', 'stripeApi', 'siteUrl', 'webhook', 'orderIntegrity',
     'supabase', 'operationsSchema', 'admin', 'fulfilmentEmail',
   ];
+  const productEvidence = [
+    'esimOrderSchema', 'paymentSchema', 'pocketWifiFulfilmentSchema',
+    'inventory', 'deliveryLeadDays', 'courierFee', 'pocketWifiPricing',
+  ];
+  const pocketWifiEvidence = [
+    'paymentSchema', 'pocketWifiFulfilmentSchema', 'inventory',
+    'deliveryLeadDays', 'courierFee', 'pocketWifiPricing',
+  ];
   // Require the complete named product contract, not an arbitrary truthy
   // field. This makes deployment/recovery prove the same at-least-one-path
   // invariant as the health route while retaining visibility of which
-  // checkout is actually saleable.
+  // checkout is actually saleable. Require every current evidence field to
+  // be a boolean even when its product is paused: this rejects a stale health
+  // document from an older application graph instead of interpreting a
+  // missing field as harmless product-specific evidence.
   return typeof esim === 'boolean' && typeof pocketWifi === 'boolean' &&
     (esim === true || pocketWifi === true) &&
     result.checkoutReady === (esim && pocketWifi) &&
     allTrue(result.checks, launchEvidence) &&
+    allBoolean(result.checks, productEvidence) &&
+    typeof result.availabilityChecks.pocketWifiStock === 'boolean' &&
     (!esim || result.checks.esimOrderSchema === true) &&
-    (!pocketWifi || allTrue(result.checks, [
-      'paymentSchema', 'pocketWifiFulfilmentSchema', 'inventory',
-    ])) &&
+    (!pocketWifi || allTrue(result.checks, pocketWifiEvidence)) &&
     (!pocketWifi || result.availabilityChecks.pocketWifiStock === true);
 }
 

@@ -7080,6 +7080,8 @@ test('authenticated health readiness separates shared release controls from prod
   assert.match(readinessValidator, /esim === true \|\| pocketWifi === true/);
   assert.match(readinessValidator, /result\.checkoutReady === \(esim && pocketWifi\)/);
   assert.match(readinessValidator, /allTrue\(result\.checks, launchEvidence\)/);
+  assert.match(readinessValidator, /allBoolean\(result\.checks, productEvidence\)/);
+  assert.match(readinessValidator, /allTrue\(result\.checks, pocketWifiEvidence\)/);
   assert.match(readinessValidator, /result\.availabilityChecks\.pocketWifiStock === true/);
   assert.doesNotMatch(healthRoute, /const coreReady/);
   // Checkout redirects customers to the server-created Stripe-hosted Session
@@ -7114,6 +7116,9 @@ test('deployment readiness validator proves detailed evidence for every saleable
     paymentSchema: true,
     pocketWifiFulfilmentSchema: true,
     inventory: true,
+    deliveryLeadDays: true,
+    courierFee: true,
+    pocketWifiPricing: true,
   };
   const response = {
     service: 'qy-roam',
@@ -7130,7 +7135,11 @@ test('deployment readiness validator proves detailed evidence for every saleable
   assert.equal(validate({ ...response, checks: { ...checks, webhook: false } }, now), false);
   assert.equal(validate({ ...response, checks: { ...checks, esimOrderSchema: false } }, now), false);
   assert.equal(validate({ ...response, checks: { ...checks, inventory: false } }, now), false);
+  assert.equal(validate({ ...response, checks: { ...checks, deliveryLeadDays: false } }, now), false);
+  assert.equal(validate({ ...response, checks: { ...checks, courierFee: false } }, now), false);
+  assert.equal(validate({ ...response, checks: { ...checks, pocketWifiPricing: false } }, now), false);
   assert.equal(validate({ ...response, availabilityChecks: { pocketWifiStock: false } }, now), false);
+  assert.equal(validate({ ...response, checks: { ...checks, pocketWifiPricing: undefined } }, now), false);
 
   // A deliberately paused product need not have its product-only evidence,
   // but the remaining saleable path must still be proven in full.
@@ -7144,6 +7153,25 @@ test('deployment readiness validator proves detailed evidence for every saleable
   assert.equal(validate({
     ...wifiOnly,
     checks: { ...wifiOnly.checks, pocketWifiFulfilmentSchema: false },
+  }, now), false);
+
+  const esimOnly = {
+    ...response,
+    checkoutReady: false,
+    checks: {
+      ...checks,
+      paymentSchema: false,
+      pocketWifiFulfilmentSchema: false,
+      inventory: false,
+      pocketWifiPricing: false,
+    },
+    checkoutChecks: { esim: true, pocketWifi: false },
+    availabilityChecks: { pocketWifiStock: false },
+  };
+  assert.equal(validate(esimOnly, now), true);
+  assert.equal(validate({
+    ...esimOnly,
+    checks: { ...esimOnly.checks, courierFee: undefined },
   }, now), false);
 
   // Cutover and rollback must be authorized by the process answering now,
