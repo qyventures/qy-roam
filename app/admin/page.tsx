@@ -12,6 +12,7 @@ import { customerOrderReference } from '@/lib/customerOrderReference';
 import { validatedDeliveryLedgerRow, validatedStripeEventRecoveryRow } from '@/lib/adminDeliveryRow';
 import { validatedInventoryItem } from '@/lib/inventoryAdminRow';
 import { adminOrderMutationSafe } from '@/lib/adminOrderRow';
+import { createAdminDashboardDeadline } from '@/lib/adminDashboardDeadline';
 
 export const dynamic = 'force-dynamic';
 
@@ -171,14 +172,16 @@ export default async function AdminPage() {
     </main>;
   }
 
+  const dashboardDeadline = createAdminDashboardDeadline();
   try {
-    return await renderAdminPage();
+    return await renderAdminPage(dashboardDeadline.signal);
   } finally {
+    dashboardDeadline.dispose();
     releaseDashboard();
   }
 }
 
-async function renderAdminPage() {
+async function renderAdminPage(signal: AbortSignal) {
   const supabase = getSupabaseAdmin();
   // An admin dashboard that quietly turns a failed query into an empty table
   // is dangerous: staff can conclude there are no orders to fulfil. Fetch the
@@ -190,7 +193,7 @@ async function renderAdminPage() {
         loadKeysetPages((after, limit) => {
           let query = supabase.from('orders').select('*').order('id', { ascending: false }).limit(limit);
           if (typeof after === 'number') query = query.lt('id', after);
-          return query;
+          return query.abortSignal(signal);
         }, row => Number.isSafeInteger(row?.id) && row.id > 0 ? row.id : null),
         // This list feeds the per-order dispatch selector, so a single
         // PostgREST response is not a safe fleet boundary. Page on the
@@ -206,17 +209,17 @@ async function renderAdminPage() {
           .order('id')
           .limit(limit);
           if (typeof after === 'number') query = query.gt('id', after);
-          return query;
+          return query.abortSignal(signal);
         }, row => Number.isSafeInteger(row?.id) && row.id > 0 ? row.id : null),
         loadKeysetPages((after, limit) => {
           let query = supabase.from('fulfilment_notifications').select('stripe_session_id,status,attempts,last_error,last_attempt_at,sent_at').order('stripe_session_id').limit(limit);
           if (typeof after === 'string') query = query.gt('stripe_session_id', after);
-          return query;
+          return query.abortSignal(signal);
         }, row => typeof row?.stripe_session_id === 'string' && row.stripe_session_id ? row.stripe_session_id : null),
         loadKeysetPages((after, limit) => {
           let query = supabase.from('meta_purchase_deliveries').select('stripe_session_id,status,attempts,last_error,last_attempt_at,sent_at').order('stripe_session_id').limit(limit);
           if (typeof after === 'string') query = query.gt('stripe_session_id', after);
-          return query;
+          return query.abortSignal(signal);
         }, row => typeof row?.stripe_session_id === 'string' && row.stripe_session_id ? row.stripe_session_id : null),
         // Load every unfinished claim, then classify it with the exact same
         // lease rule as the webhook worker. Filtering only in PostgREST by an
@@ -234,9 +237,12 @@ async function renderAdminPage() {
           .order('event_id')
           .limit(limit);
           if (typeof after === 'string') query = query.gt('event_id', after);
-          return query;
+          return query.abortSignal(signal);
         }, row => typeof row?.event_id === 'string' && row.event_id ? row.event_id : null),
-      ])
+      ]).catch(() => {
+        console.error('admin_dashboard_lookup_failed');
+        return [unavailable, unavailable, unavailable, unavailable, unavailable] as const;
+      })
     : [unavailable, unavailable, unavailable, unavailable, unavailable];
   // Keyset reads use immutable identities so concurrent inserts/updates cannot
   // shift rows between pages. Restore the operator-friendly presentation

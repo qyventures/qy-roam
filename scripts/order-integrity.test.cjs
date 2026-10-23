@@ -116,6 +116,7 @@ const { metaPurchaseIdentity: deriveMetaPurchaseIdentity } = require('../lib/met
 const { READINESS_PROBE_TIMEOUT_MS, ReadinessProbeTimeoutError, runReadinessProbe } = require('../lib/readinessProbe.ts');
 const { readinessFailureBackoffActive, readinessWindowActive } = require('../lib/readinessBackoff.ts');
 const { adminOrderMutationSafe } = require('../lib/adminOrderRow.ts');
+const { ADMIN_DASHBOARD_LOOKUP_TIMEOUT_MS, createAdminDashboardDeadline } = require('../lib/adminDashboardDeadline.ts');
 
 test('admin order mutations require one coherent durable lifecycle row', () => {
   const row = {
@@ -151,6 +152,24 @@ test('admin order mutations require one coherent durable lifecycle row', () => {
   assert.match(adminPage, /fulfilmentSummaryIncomplete = ordersIncomplete \|\| operationalLedgerIntegrityIssues > 0/);
   assert.match(adminPage, /Order operations ledger needs reconciliation/);
   assert.match(adminPage, /shares a payment identity with another order/);
+});
+
+test('primary operations dashboard releases stalled ledger scans on one shared deadline', async () => {
+  assert.equal(ADMIN_DASHBOARD_LOOKUP_TIMEOUT_MS, 15_000);
+  assert.throws(() => createAdminDashboardDeadline(0), RangeError);
+  assert.throws(() => createAdminDashboardDeadline(ADMIN_DASHBOARD_LOOKUP_TIMEOUT_MS + 1), RangeError);
+
+  const deadline = createAdminDashboardDeadline(20);
+  assert.equal(deadline.signal.aborted, false);
+  await new Promise(resolve => deadline.signal.addEventListener('abort', resolve, { once: true }));
+  assert.equal(deadline.signal.aborted, true);
+  deadline.dispose();
+
+  assert.match(adminPage, /createAdminDashboardDeadline\(\)/);
+  assert.match(adminPage, /renderAdminPage\(dashboardDeadline\.signal\)/);
+  assert.match(adminPage, /dashboardDeadline\.dispose\(\);\s*releaseDashboard\(\)/);
+  assert.equal((adminPage.match(/return query\.abortSignal\(signal\)/g) || []).length, 5);
+  assert.match(adminPage, /admin_dashboard_lookup_failed/);
 });
 
 test('Stripe readiness requires one coherent mode-correct Checkout list', () => {
@@ -1814,7 +1833,7 @@ test('main admin order visibility has a bounded shared ledger-read budget', () =
   const firstLedgerRead = adminPage.indexOf("supabase.from('orders')");
   assert.ok(admission > -1 && firstLedgerRead > admission);
   assert.match(adminPage, /if \(!releaseDashboard\)[\s\S]*Operations dashboard is busy/);
-  assert.match(adminPage, /try \{\s*return await renderAdminPage\(\);\s*\} finally \{\s*releaseDashboard\(\);\s*\}/);
+  assert.match(adminPage, /const dashboardDeadline = createAdminDashboardDeadline\(\);[\s\S]*?try \{\s*return await renderAdminPage\(dashboardDeadline\.signal\);\s*\} finally \{\s*dashboardDeadline\.dispose\(\);\s*releaseDashboard\(\);\s*\}/);
 });
 
 test('all read-heavy admin views share the bounded dashboard budget and release it after failures', async () => {
