@@ -8172,7 +8172,7 @@ test('retried completion events cannot steal a later asynchronous payment timest
 test('failed Stripe webhook records identify the affected Checkout Session for recovery', () => {
   assert.match(schema, /stripe_session_id text/);
   assert.match(productionReadiness, /event_id,event_type,stripe_session_id,received_at,processing_started_at/);
-  assert.match(webhookRoute, /claimOnce\(supabase:ReturnType<[^>]+>, id:string, type:string, sessionId:string,signal\?:AbortSignal\)/);
+  assert.match(webhookRoute, /claimOnce\(supabase:ReturnType<[^>]+>, id:string, type:string, sessionId:string,signal:AbortSignal\)/);
   assert.match(webhookRoute, /p_stripe_session_id:sessionId/);
   assert.match(webhookRoute, /claimOnce\(supabase,eventClaimId,event\.type,eventSessionId,webhookDeadline\.signal\)/);
   assert.match(adminPage, /event_id,event_type,stripe_session_id,received_at,attempts/);
@@ -8184,7 +8184,7 @@ test('Meta Purchase retries preserve one durable event timestamp for deduplicati
   assert.match(schema, /event_time bigint check \(event_time is null or event_time > 0\)/);
   assert.match(schema, /payment_confirmed_at timestamptz/);
   assert.match(webhookRoute, /insert\(\{stripe_session_id:session\.id,status:'pending',event_time:requestedEventTime\}\)/);
-  assert.match(webhookRoute, /async function persistSession\(session:Stripe\.Checkout\.Session,eventType:Stripe\.Event\.Type,eventCreated:number,signal\?:AbortSignal\)/);
+  assert.match(webhookRoute, /async function persistSession\(session:Stripe\.Checkout\.Session,eventType:Stripe\.Event\.Type,eventCreated:number,signal:AbortSignal\)/);
   assert.match(schema, /payment_confirmed_at = case when v_paid then coalesce\(orders\.payment_confirmed_at, p_payment_confirmed_at\)/);
   assert.match(webhookRoute, /acknowledgedPaidDeliveryClaim\(attempt\.data,session\.id,metaEventTime\)/);
   assert.match(webhookRoute, /await sendMetaPurchase\(session,claimedEventTime!\)/);
