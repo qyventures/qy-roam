@@ -6603,6 +6603,47 @@ test('admin customer records reject lossy identity and notes instead of silently
   assert.doesNotMatch(customerBlock, /text\(body\.(?:email|phone|name|source|notes),/);
 });
 
+test('admin sales and accounting records reject lossy operator text instead of silently truncating it', () => {
+  const activityStart = adminOpsRoute.indexOf("action === 'activity_create'");
+  const opportunityStart = adminOpsRoute.indexOf("action === 'opportunity_create'", activityStart);
+  const forecastStart = adminOpsRoute.indexOf("action === 'forecast_upsert'", opportunityStart);
+  const closingStart = adminOpsRoute.indexOf("action === 'close_period'", forecastStart);
+  assert.ok(activityStart >= 0 && opportunityStart > activityStart && forecastStart > opportunityStart && closingStart > forecastStart);
+
+  const activityBlock = adminOpsRoute.slice(activityStart, opportunityStart);
+  assert.match(activityBlock, /optionalTrimmedText\(body\.subject, 160\)/);
+  assert.match(activityBlock, /optionalTrimmedText\(body\.detail, 2000\)/);
+  assert.match(activityBlock, /optionalTrimmedText\(body\.owner, 100\)/);
+  assert.doesNotMatch(activityBlock, /text\(body\.(?:subject|detail|owner),/);
+
+  const opportunityBlock = adminOpsRoute.slice(opportunityStart, forecastStart);
+  assert.match(opportunityBlock, /optionalTrimmedText\(body\.title, 180\)/);
+  assert.match(opportunityBlock, /optionalTrimmedText\(body\.source, 80\)/);
+  assert.match(opportunityBlock, /optionalTrimmedText\(body\.owner, 100\)/);
+  assert.match(opportunityBlock, /optionalTrimmedText\(body\.notes, 1500\)/);
+  assert.doesNotMatch(opportunityBlock, /text\(body\.(?:title|source|owner|notes),/);
+
+  const forecastBlock = adminOpsRoute.slice(forecastStart, closingStart);
+  assert.match(forecastBlock, /optionalTrimmedText\(body\.method, 80\)/);
+  assert.match(forecastBlock, /optionalTrimmedText\(body\.notes, 1200\)/);
+  assert.doesNotMatch(forecastBlock, /text\(body\.(?:method|notes),/);
+
+  const closingBlock = adminOpsRoute.slice(closingStart);
+  assert.match(closingBlock, /optionalTrimmedText\(body\.closed_by, 100\)/);
+  assert.match(closingBlock, /optionalTrimmedText\(body\.notes, 1500\)/);
+  assert.doesNotMatch(closingBlock, /text\(body\.(?:closed_by|notes),/);
+
+  for (const expected of [
+    /name="subject" placeholder="Subject" maxLength=\{160\}/,
+    /name="detail" placeholder="Detail" maxLength=\{2000\}/,
+    /name="title" placeholder="Opportunity" maxLength=\{180\}/,
+    /name="owner" placeholder="Owner" maxLength=\{100\}/,
+    /name="notes" placeholder="Assumptions" maxLength=\{1200\}/,
+    /name="closed_by" placeholder="Closed by" defaultValue="qyadmin" maxLength=\{100\}/,
+    /name="notes" placeholder="Reconciliation notes" maxLength=\{1500\}/,
+  ]) assert.match(adminOpsForms, expected);
+});
+
 test('admin CRM writes reject malformed commercial data and missing mutation targets', () => {
   assert.match(adminOpsRoute, /function exactPercentage\(value: unknown\)/);
   assert.match(adminOpsRoute, /const expectedValueCents = body\.expected_value_sgd === ''[\s\S]*?nonNegativeMoney\(body\.expected_value_sgd\)/);

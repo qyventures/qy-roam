@@ -577,10 +577,14 @@ export async function POST(req: NextRequest) {
       const customerId = optionalPositiveSafeInteger(body.customer_id);
       const activityType = text(body.activity_type, 40) || 'note';
       const dueAt = optionalOperationalDateTime(body.due_at);
+      const subject = optionalTrimmedText(body.subject, 160);
+      const detail = optionalTrimmedText(body.detail, 2000);
+      const owner = optionalTrimmedText(body.owner, 100);
       if (body.customer_id !== undefined && body.customer_id !== null && body.customer_id !== '' && customerId === null) return NextResponse.json({ error: 'Choose a valid customer' }, { status: 400 });
       if (!['note', 'call', 'whatsapp', 'email', 'task'].includes(activityType)) return NextResponse.json({ error: 'Choose a valid activity type' }, { status: 400 });
       if (dueAt === undefined) return NextResponse.json({ error: 'Choose a valid follow-up date and time' }, { status: 400 });
-      const row = { customer_id: customerId, activity_type: activityType, subject: text(body.subject, 160) || null, detail: text(body.detail, 2000) || null, due_at: dueAt, owner: text(body.owner, 100) || null };
+      if (subject === undefined || detail === undefined || owner === undefined) return NextResponse.json({ error: 'Activity details exceed their displayed limits or contain unsupported control characters' }, { status: 400 });
+      const row = { customer_id: customerId, activity_type: activityType, subject, detail, due_at: dueAt, owner };
       const { data, error } = await db.from('crm_activities').insert(row).select('id,customer_id,activity_type,subject,detail,due_at,owner').abortSignal(adminOpsDeadline.signal).single();
       if (error) throw error;
       if (!acknowledgedAdminRecord(data, row)) throw new Error('CRM activity acknowledgement mismatch');
@@ -605,13 +609,18 @@ export async function POST(req: NextRequest) {
         ? 0
         : nonNegativeMoney(body.expected_value_sgd);
       const expectedCloseDate = text(body.expected_close_date, 10) || null;
+      const title = optionalTrimmedText(body.title, 180);
+      const source = optionalTrimmedText(body.source, 80);
+      const owner = optionalTrimmedText(body.owner, 100);
+      const opportunityNotes = optionalTrimmedText(body.notes, 1500);
       if (body.customer_id !== undefined && body.customer_id !== null && body.customer_id !== '' && customerId === null) return NextResponse.json({ error: 'Choose a valid customer' }, { status: 400 });
       if (productType !== null && !['pocket_wifi', 'esim'].includes(productType)) return NextResponse.json({ error: 'Choose a valid opportunity product type' }, { status: 400 });
       if (!['lead', 'qualified', 'proposal', 'negotiation', 'won', 'lost'].includes(stage)) return NextResponse.json({ error: 'Choose a valid opportunity stage' }, { status: 400 });
       if (probability === null || expectedValueCents === null) return NextResponse.json({ error: 'Probability must be a whole percentage from 0 to 100 and expected value must be a non-negative amount with at most two decimal places' }, { status: 400 });
       if (expectedCloseDate !== null && !parseExactIsoDate(expectedCloseDate)) return NextResponse.json({ error: 'Choose a valid expected close date' }, { status: 400 });
-      const row = { customer_id: customerId, title: text(body.title, 180), product_type: productType, stage, probability, expected_value_sgd: expectedValueCents / 100, expected_close_date: expectedCloseDate, source: text(body.source, 80) || null, owner: text(body.owner, 100) || null, notes: text(body.notes, 1500) || null, updated_at: new Date().toISOString() };
-      if (!row.title) return NextResponse.json({ error: 'Opportunity title is required' }, { status: 400 });
+      if (title === undefined || source === undefined || owner === undefined || opportunityNotes === undefined) return NextResponse.json({ error: 'Opportunity details exceed their displayed limits or contain unsupported control characters' }, { status: 400 });
+      if (!title) return NextResponse.json({ error: 'Opportunity title is required' }, { status: 400 });
+      const row = { customer_id: customerId, title, product_type: productType, stage, probability, expected_value_sgd: expectedValueCents / 100, expected_close_date: expectedCloseDate, source, owner, notes: opportunityNotes, updated_at: new Date().toISOString() };
       const { data, error } = await db.from('sales_opportunities').insert(row).select('id,customer_id,title,product_type,stage,probability,expected_value_sgd,expected_close_date,source,owner').abortSignal(adminOpsDeadline.signal).single();
       if (error) throw error;
       if (!acknowledgedAdminRecord(data, {
@@ -635,12 +644,15 @@ export async function POST(req: NextRequest) {
       const forecastOrders = nonNegativeInteger(body.forecast_orders);
       const forecastRevenueCents = nonNegativeMoney(body.forecast_revenue_sgd);
       const forecastUnits = nonNegativeInteger(body.forecast_units);
+      const method = optionalTrimmedText(body.method, 80);
+      const forecastNotes = optionalTrimmedText(body.notes, 1200);
       if (!parseExactIsoDate(month) || !['pocket_wifi', 'esim'].includes(product)) return NextResponse.json({ error: 'Choose a valid forecast date and product type' }, { status: 400 });
       if (forecastOrders === null || forecastRevenueCents === null || forecastUnits === null) return NextResponse.json({ error: 'Forecast orders and units must be whole non-negative numbers; revenue must be a non-negative amount with at most two decimal places' }, { status: 400 });
+      if (method === undefined || forecastNotes === undefined) return NextResponse.json({ error: 'Forecast details exceed their displayed limits or contain unsupported control characters' }, { status: 400 });
       // The schema owns this natural key. Use its atomic conflict boundary
       // rather than deleting the previous forecast before inserting a new
       // one: an interrupted request must retain the last approved forecast.
-      const row = { forecast_month: month, product_type: product, forecast_orders: forecastOrders, forecast_revenue_sgd: forecastRevenueCents / 100, forecast_units: forecastUnits, method: text(body.method, 80) || 'management', notes: text(body.notes, 1200) || null, updated_at: new Date().toISOString() };
+      const row = { forecast_month: month, product_type: product, forecast_orders: forecastOrders, forecast_revenue_sgd: forecastRevenueCents / 100, forecast_units: forecastUnits, method: method || 'management', notes: forecastNotes, updated_at: new Date().toISOString() };
       const { data, error } = await db.from('forecasts').upsert(row, { onConflict: 'forecast_month,product_type' }).select('id,forecast_month,product_type,forecast_orders,forecast_revenue_sgd,forecast_units,method,notes').abortSignal(adminOpsDeadline.signal).single();
       if (error) throw error;
       if (!acknowledgedAdminRecord(data, {
@@ -659,10 +671,11 @@ export async function POST(req: NextRequest) {
       // same explicit contract rather than an accidental irreversible close.
       if (body.lock !== undefined && typeof body.lock !== 'boolean') return NextResponse.json({ error: 'Accounting period lock must be a boolean choice' }, { status: 400 });
       const lock = body.lock === true;
-      const closedBy = text(body.closed_by, 100);
+      const closedBy = optionalTrimmedText(body.closed_by, 100);
+      const notes = optionalTrimmedText(body.notes, 1500);
+      if (closedBy === undefined || notes === undefined) return NextResponse.json({ error: 'Closing details exceed their displayed limits or contain unsupported control characters' }, { status: 400 });
       if (lock && !closedBy) return NextResponse.json({ error: 'Closed accounting periods require an accountable operator name' }, { status: 400 });
       const gross = await paidOrderGrossForPeriod(db, dates.start!, dates.end!, adminOpsDeadline.signal); const refunds = refundsCents / 100, fees = feesCents / 100, cogs = cogsCents / 100, net = gross - refunds, gp = net - fees - cogs;
-      const notes = text(body.notes, 1500) || null;
       const { data, error } = await db.rpc('qy_record_closing_period', {
         p_period_start: start, p_period_end: end, p_lock: lock,
         p_gross_sales_sgd: gross, p_refunds_sgd: refunds, p_net_sales_sgd: net,
