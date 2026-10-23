@@ -179,12 +179,13 @@ async function linkReservationToSession(supabase:NonNullable<ReturnType<typeof g
   return linked.data===true;
 }
 
-async function releaseUnlinkedReservation(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>,requestId:string) {
+async function releaseUnlinkedReservation(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>,requestId:string,signal:AbortSignal) {
   const released=await supabase.from('checkout_reservations')
     .delete()
     .eq('checkout_request_id',requestId)
     .is('stripe_session_id',null)
-    .select('checkout_request_id,stripe_session_id');
+    .select('checkout_request_id,stripe_session_id')
+    .abortSignal(signal);
   if(released.error) throw released.error;
   if(!acknowledgedUnlinkedReservationRelease(released.data,requestId)){
     throw new Error('Unlinked checkout reservation release was not acknowledged');
@@ -377,7 +378,8 @@ export async function POST(req: Request) {
         const released=await supabase.from('checkout_reservations').delete()
           .eq('checkout_request_id',requestId)
           .eq('stripe_session_id',existing.id)
-          .select('checkout_request_id,stripe_session_id');
+          .select('checkout_request_id,stripe_session_id')
+          .abortSignal(checkoutDeadline.signal);
         if(released.error) throw released.error;
         if(!acknowledgedLinkedReservationRelease(released.data,requestId,existing.id)) throw new Error('Paid checkout reservation release returned an invalid acknowledgement');
       }else{
@@ -411,7 +413,8 @@ export async function POST(req: Request) {
       const released=await supabase.from('checkout_reservations').delete()
         .eq('checkout_request_id',requestId)
         .or(`stripe_session_id.is.null,stripe_session_id.eq.${existing.id}`)
-        .select('checkout_request_id,stripe_session_id');
+        .select('checkout_request_id,stripe_session_id')
+        .abortSignal(checkoutDeadline.signal);
       if(released.error) throw released.error;
       if(!acknowledgedExpiredCheckoutReservationRelease(released.data,requestId,existing.id)) throw new Error('Expired checkout reservation release returned an invalid acknowledgement');
       return NextResponse.json({error:'This secure checkout session has expired. Please try again to start a new one.',checkoutExpired:true},{status:409,headers:{'Cache-Control':'no-store'}});
@@ -459,7 +462,7 @@ export async function POST(req: Request) {
   // date advances. This reservation is still unlinked, so it is safe to
   // release without touching an earlier Stripe-backed attempt.
   if(start<operationalIsoDateAfter(minLeadDays)){
-    await releaseUnlinkedReservation(supabase,requestId);
+    await releaseUnlinkedReservation(supabase,requestId,checkoutDeadline.signal);
     return NextResponse.json({error:`Please book at least ${minLeadDays} day${minLeadDays===1?'':'s'} before departure so we can arrange delivery. Contact +65 8032 7183 for urgent trips.`,bookingWindowChanged:true},{status:409,headers:{'Cache-Control':'no-store'}});
   }
   // Readiness, hold scans and the reservation RPC can take time after the
@@ -467,7 +470,7 @@ export async function POST(req: Request) {
   // Stripe idempotency, fail this attempt cleanly rather than submitting an
   // expiry that has become too close for Stripe to accept.
   if(checkoutAttemptExpiresAt(body.checkoutAttemptCreatedAt)!==expiresAtSeconds){
-    await releaseUnlinkedReservation(supabase,requestId);
+    await releaseUnlinkedReservation(supabase,requestId,checkoutDeadline.signal);
     return NextResponse.json({error:'This checkout attempt has expired. Please try again to start a new one.',checkoutExpired:true},{status:409,headers:{'Cache-Control':'no-store'}});
   }
   // Promotion eligibility was calculated before provider-backed hold scans
@@ -476,7 +479,7 @@ export async function POST(req: Request) {
   // cutoff cannot create a new, already-expired promotional payment link.
   // Only this still-unlinked reservation belongs to the aborted creation.
   if(promo.discountCents>0&&!promoIsActive()){
-    await releaseUnlinkedReservation(supabase,requestId);
+    await releaseUnlinkedReservation(supabase,requestId,checkoutDeadline.signal);
     return NextResponse.json({error:'This promotion has ended. Please refresh to see the current price.',pricingExpired:true},{status:409,headers:{'Cache-Control':'no-store'}});
   }
   let session:Stripe.Checkout.Session;
@@ -518,7 +521,7 @@ export async function POST(req: Request) {
     return NextResponse.json({error:'Secure checkout confirmation is temporarily unavailable. Please try again shortly.'},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'10'}});
   }
   if(!matchesRequestedPocketWifi(session,requestId,requested,origin)){
-    await releaseUnlinkedReservation(supabase,requestId);
+    await releaseUnlinkedReservation(supabase,requestId,checkoutDeadline.signal);
     return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.',checkoutRequestConflict:true},{status:409,headers:{'Cache-Control':'no-store'}});
   }
   const consentDowngrade=signedStripeMeasurementConsentDowngrade(createdSessionId,session.metadata,body.measurementConsent);
@@ -570,7 +573,7 @@ export async function POST(req: Request) {
     // The reservation has not been linked yet, so only this unlinked attempt
     // is safe to release. A mismatched Stripe response must never inherit the
     // requested booking's stock hold.
-    await releaseUnlinkedReservation(supabase,requestId);
+    await releaseUnlinkedReservation(supabase,requestId,checkoutDeadline.signal);
     return NextResponse.json({error:'This checkout attempt belongs to different booking details. Please refresh and try again.',checkoutRequestConflict:true},{status:409,headers:{'Cache-Control':'no-store'}});
   }
   if(!validQyRoamProvenance(currentSession.id,currentSession.metadata)){
@@ -598,7 +601,8 @@ export async function POST(req: Request) {
       const released=await supabase.from('checkout_reservations').delete()
         .eq('checkout_request_id',requestId)
         .eq('stripe_session_id',currentSession.id)
-        .select('checkout_request_id,stripe_session_id');
+        .select('checkout_request_id,stripe_session_id')
+        .abortSignal(checkoutDeadline.signal);
       if(released.error) throw released.error;
       if(!acknowledgedLinkedReservationRelease(released.data,requestId,currentSession.id)) throw new Error('Paid checkout reservation release returned an invalid acknowledgement');
     }else{
@@ -636,7 +640,7 @@ export async function POST(req: Request) {
   // The browser receives an explicit recoverable signal and creates a fresh
   // checkout request id for the next attempt.
   if(currentSession.status==='expired'){
-    await releaseUnlinkedReservation(supabase,requestId);
+    await releaseUnlinkedReservation(supabase,requestId,checkoutDeadline.signal);
     return NextResponse.json({error:'This secure checkout session has expired. Please try again to start a new one.',checkoutExpired:true},{status:409,headers:{'Cache-Control':'no-store'}});
   }
   // A completed asynchronous payment may not yet be paid. Preserve its
