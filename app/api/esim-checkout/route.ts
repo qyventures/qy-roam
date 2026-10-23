@@ -52,6 +52,14 @@ function matchesRequestedEsim(session: Stripe.Checkout.Session, requestId: strin
     // never expose an open payment capability that did not require Stripe to
     // collect it. Failing here keeps the mismatch on the safe side of charge.
     session.consent_collection?.terms_of_service === 'required' &&
+    // Digital delivery has no shipping address, so the collected billing
+    // identity, phone number and durable Stripe customer are the complete
+    // support/reconciliation contact contract. Stripe can replay an older
+    // Session for this idempotency key; require the same collection settings
+    // as a newly created eSIM checkout before re-signing or exposing its URL.
+    session.billing_address_collection === 'required' &&
+    session.phone_number_collection?.enabled === true &&
+    session.customer_creation === 'always' &&
     // Keep an idempotently replayed payment capability bound to QY Roam's
     // durable confirmation and product-specific cancellation destinations.
     // A Session edited in Stripe must not be re-signed and exposed when its

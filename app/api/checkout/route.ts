@@ -62,6 +62,13 @@ function matchesRequestedPocketWifi(session:Stripe.Checkout.Session,requestId:st
     // before re-signing or returning its URL. Otherwise a legacy open Session
     // could accept payment and then be rejected by the webhook after charge.
     session.consent_collection?.terms_of_service==='required' &&
+    // Preserve the complete customer-record contract across Stripe's durable
+    // idempotency replay, not only the physical delivery fields below. A
+    // legacy or dashboard-edited Session must not be re-signed when it no
+    // longer collects the billing identity or durable Stripe customer that
+    // the current checkout and support workflow expect.
+    session.billing_address_collection==='required' &&
+    session.customer_creation==='always' &&
     // The paid-order boundary also requires a routable Singapore address and
     // customer phone number before operations can dispatch a router. A
     // durable Stripe idempotency key can replay a Session created by an older

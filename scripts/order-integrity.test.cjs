@@ -3025,6 +3025,27 @@ test('Pocket WiFi payment capabilities must collect the fulfilment details requi
   assert.match(paidFulfilmentDetailsIssue.toString(), /shipping\?\.country !== 'SG'/);
 });
 
+test('idempotent Checkout recovery preserves the complete customer collection contract', () => {
+  // Stripe idempotency can return a capability created by an older release or
+  // subsequently changed outside the app. Both matchers gate fresh creation
+  // and every recovery read, so they must prove the customer fields expected
+  // by support and reconciliation before re-signing or returning a pay URL.
+  const wifiMatcher = wifiCheckoutRoute.match(/function matchesRequestedPocketWifi[\s\S]*?\n}/)?.[0] || '';
+  const esimMatcher = esimCheckoutRoute.match(/function matchesRequestedEsim[\s\S]*?\n}/)?.[0] || '';
+
+  for (const matcher of [wifiMatcher, esimMatcher]) {
+    assert.match(matcher, /session\.billing_address_collection\s*===\s*'required'/);
+    assert.match(matcher, /session\.phone_number_collection\?\.enabled\s*===\s*true/);
+    assert.match(matcher, /session\.customer_creation\s*===\s*'always'/);
+  }
+
+  for (const route of [wifiCheckoutRoute, esimCheckoutRoute]) {
+    assert.match(route, /billing_address_collection:\s*'required'/);
+    assert.match(route, /phone_number_collection:\s*\{\s*enabled:\s*true\s*\}/);
+    assert.match(route, /customer_creation:\s*'always'/);
+  }
+});
+
 test('idempotent Checkout Sessions retain QY Roam confirmation and cancellation destinations', () => {
   // A replayed Session is re-signed before its URL is returned. Bind that
   // trust decision to the customer navigation contract as well as the price
