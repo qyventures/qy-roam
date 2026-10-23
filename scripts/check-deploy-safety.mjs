@@ -221,6 +221,17 @@ assert.match(deploy, /for checkout_path in \/api\/checkout \/api\/esim-checkout/
 assert.match(deploy, /--request POST[\s\S]*?Content-Type: text\/plain[\s\S]*?\$\{base_url\}\$\{checkout_path\}/);
 assert.match(deploy, /value\?\.error!==['"]Expected JSON request\./);
 assert.match(deploy, /verify_webhook_ingress\(\)/);
+assert.match(deploy, /verify_server_action_rejection\(\)/);
+assert.match(deploy, /Next-Action: qyroam-release-probe/);
+assert.equal(
+  (deploy.match(/verify_server_action_rejection "/g) || []).length,
+  2,
+  'unsupported Server Actions must be rejected by both isolated and public release probes',
+);
+assert.ok(
+  deploy.lastIndexOf('verify_server_action_rejection "$PUBLIC_ORIGIN"') < deploy.indexOf('release_verified=1'),
+  'the public Server Action rejection must pass before rollback protection is discarded',
+);
 assert.match(deploy, /for webhook_path in \/api\/stripe\/webhook \/api\/stripe-webhook/);
 assert.match(deploy, /--request POST[\s\S]*?Content-Type: application\/json[\s\S]*?--data '\{\}'[\s\S]*?\$\{base_url\}\$\{webhook_path\}/);
 assert.match(deploy, /value\?\.error!==['"]Invalid signature['"]/);
@@ -410,6 +421,9 @@ assert.equal(qyRoamAccessLogs.length, 3, 'every QY Roam HTTP/TLS virtual host mu
 // again at their own request boundaries.
 assert.match(nginx, /client_max_body_size 1m;/);
 assert.match(nginx, /client_body_timeout 15s;/);
+// This application has no Server Actions. Keep unsupported action requests
+// out of the end-of-life Next 14 App Router parser at the public TLS edge.
+assert.match(nginx, /if \(\$http_next_action != ""\) \{\s*return 403;\s*\}/);
 // A successful webhook can include bounded Stripe retrieval, persistence,
 // and independent paid-order delivery work. Do not let the proxy abandon a
 // healthy worker before it can settle the idempotency lease and acknowledge

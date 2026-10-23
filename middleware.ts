@@ -108,6 +108,21 @@ function isTrustedAdminMutation(req: NextRequest) {
 }
 
 export function middleware(req: NextRequest) {
+  // QY Roam does not use React/Next Server Actions. Treat their capability
+  // header as unsupported at the application boundary instead of allowing an
+  // unneeded framework parser to consume attacker-controlled action payloads.
+  // Production Nginx rejects the same traffic before Node, while this guard
+  // protects direct loopback access and future non-Nginx deployments.
+  if (req.headers.has('next-action')) {
+    return new NextResponse('Server Actions are not supported.', {
+      status: 403,
+      headers: {
+        'Cache-Control': 'no-store',
+        'X-Robots-Tag': 'noindex, nofollow, nosnippet',
+      },
+    });
+  }
+
   if (isConfirmationLookup(req.nextUrl.pathname)) {
     const providerBackedLookup = isProviderBackedConfirmationLookup(req);
     // Do not spend the instance-wide budget after this client has crossed its
@@ -190,4 +205,8 @@ export function middleware(req: NextRequest) {
   });
 }
 
-export const config = { matcher: ['/admin/:path*', '/api/admin/:path*', '/success', '/booking'] };
+export const config = {
+  // The Server Action rejection is a whole-application boundary. Exclude only
+  // immutable framework assets; every customer and API route remains covered.
+  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
+};

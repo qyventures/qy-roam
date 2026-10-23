@@ -438,6 +438,23 @@ verify_admin_ingress() {
   rm -f "$response_headers" "$response_body"
 }
 
+# QY Roam has no Server Actions. Exercise the capability header against both
+# the standalone artifact and public TLS ingress so an application matcher or
+# installed Nginx drift cannot silently expose the unused action parser.
+verify_server_action_rejection() {
+  local base_url="$1"
+  shift
+  local status
+  status="$("$@" --request POST \
+    --header 'Content-Type: text/plain' \
+    --header 'Next-Action: qyroam-release-probe' \
+    --data 'unsupported' \
+    --output /dev/null \
+    --write-out '%{http_code}' \
+    "$base_url/")" || return 1
+  [[ "$status" == "403" ]]
+}
+
 echo "[6/11] Smoke-testing the production artifact"
 # A successful compilation does not prove that the standalone server can boot
 # or accept an order with the deployed runtime configuration. Test the exact
@@ -522,6 +539,10 @@ if ! verify_webhook_ingress "http://127.0.0.1:${smoke_port}" curl --silent --sho
 fi
 if ! verify_admin_ingress "http://127.0.0.1:${smoke_port}" curl --silent --show-error --max-time 10; then
   echo "Built QY Roam artifact does not preserve the protected admin ingress contract" >&2
+  exit 1
+fi
+if ! verify_server_action_rejection "http://127.0.0.1:${smoke_port}" curl --silent --show-error --max-time 10; then
+  echo "Built QY Roam artifact accepts unsupported Server Action traffic" >&2
   exit 1
 fi
 cleanup_smoke
@@ -693,6 +714,10 @@ if ! verify_webhook_ingress "$PUBLIC_ORIGIN" "${public_mutation_curl[@]}"; then
 fi
 if ! verify_admin_ingress "$PUBLIC_ORIGIN" "${public_mutation_curl[@]}"; then
   echo "QY Roam public TLS ingress does not preserve the protected admin ingress contract" >&2
+  exit 1
+fi
+if ! verify_server_action_rejection "$PUBLIC_ORIGIN" "${public_mutation_curl[@]}"; then
+  echo "QY Roam public TLS ingress accepts unsupported Server Action traffic" >&2
   exit 1
 fi
 

@@ -4308,7 +4308,9 @@ test('customer confirmation lookups are throttled before provider-backed server 
   assert.match(middleware, /providerBackedLookup && \(confirmationClientLimited\(req\) \|\| confirmationGloballyLimited\(\)\)[\s\S]*?status: 429/);
   assert.match(middleware, /'Cache-Control': 'no-store, max-age=0, private'/);
   assert.match(middleware, /'Referrer-Policy': 'no-referrer'/);
-  assert.match(middleware, /matcher: \['\/admin\/:path\*', '\/api\/admin\/:path\*', '\/success', '\/booking'\]/);
+  // Middleware now covers every dynamic route so its unused-Server-Action
+  // rejection also protects confirmation and admin rendering before Next.
+  assert.match(middleware, /matcher: \['\/\(\(\?!_next\/static\|_next\/image\|favicon\.ico\)\.\*\)'\]/);
 });
 
 test('customer confirmation rate limits survive duplicate Next module graphs', () => {
@@ -9613,6 +9615,19 @@ test('production ingress bounds slow clients and avoids false protocol upgrades'
   // Paid-order processing has a deliberately longer reviewed response budget
   // than ordinary request upload and client-response inactivity deadlines.
   assert.equal((nginxConfig.match(/proxy_read_timeout 120s;/g) || []).length, 2);
+});
+
+test('unused Server Actions are rejected before framework action parsing', () => {
+  // The public edge is the primary production boundary; middleware preserves
+  // the same invariant for loopback access and a future alternate proxy.
+  assert.match(nginxConfig, /if \(\$http_next_action != ""\) \{\s*return 403;\s*\}/);
+  assert.match(middleware, /if \(req\.headers\.has\('next-action'\)\)/);
+  assert.match(middleware, /Server Actions are not supported\./);
+  assert.match(middleware, /matcher: \['\/\(\(\?!_next\/static\|_next\/image\|favicon\.ico\)\.\*\)'\]/);
+  assert.doesNotMatch(
+    `${wifiCheckoutRoute}\n${esimCheckoutRoute}\n${adminOpsRoute}\n${adminOrderRoute}`,
+    /['"]use server['"]/,
+  );
 });
 
 test('Stripe webhook bounds event identities before logs or durable idempotency writes', () => {
