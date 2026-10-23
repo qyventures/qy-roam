@@ -11,6 +11,7 @@ import { tryAcquireConfirmationConcurrency } from '@/lib/confirmationConcurrency
 import { retryableStripeConfirmationFailure } from '@/lib/confirmationLookupFailure';
 import { customerOrderReference } from '@/lib/customerOrderReference';
 import { metaPurchaseIdentity } from '@/lib/metaPurchaseIdentity';
+import { createConfirmationDeadline } from '@/lib/confirmationDeadline';
 
 export const dynamic = 'force-dynamic';
 export const metadata = {
@@ -48,6 +49,7 @@ export default async function SuccessPage({ searchParams }: Props) {
   // payment confirmation while the real order pipeline is unavailable.
   if (sessionId && key && hasRequiredStripeCheckoutConfig()) {
     const releaseConfirmation = tryAcquireConfirmationConcurrency();
+    const confirmationDeadline = releaseConfirmation ? createConfirmationDeadline() : null;
     if (!releaseConfirmation) confirmationBusy = true;
     try {
       if (!releaseConfirmation) throw new Error('Confirmation lookup is busy');
@@ -99,6 +101,7 @@ export default async function SuccessPage({ searchParams }: Props) {
             .from('orders')
             .select('stripe_session_id,payment_status,payment_confirmed_at,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address,fulfilment_status')
             .eq('stripe_session_id', session.id)
+            .abortSignal(confirmationDeadline!.signal)
             .maybeSingle();
           // A previously received asynchronous-completion event can have
           // created an awaiting-payment row. The success page must wait for
@@ -125,6 +128,7 @@ export default async function SuccessPage({ searchParams }: Props) {
       confirmationLookupRetryable = authenticatedSession || retryableStripeConfirmationFailure(error);
       if (!confirmationBusy) console.error('success_session_lookup_error');
     } finally {
+      confirmationDeadline?.dispose();
       releaseConfirmation?.();
     }
   }

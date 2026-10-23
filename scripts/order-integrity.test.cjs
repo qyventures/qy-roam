@@ -90,6 +90,7 @@ const { createConcurrencyLimiter } = require('../lib/concurrencyLimit.ts');
 const { CHECKOUT_MAX_CONCURRENT_REQUESTS, CHECKOUT_MAX_CONCURRENT_UPLOADS, tryAcquireCheckoutConcurrency, tryAcquireCheckoutUpload } = require('../lib/checkoutConcurrency.ts');
 const { AVAILABILITY_MAX_CONCURRENT_REQUESTS, tryAcquireAvailabilityConcurrency } = require('../lib/availabilityConcurrency.ts');
 const { CONFIRMATION_MAX_CONCURRENT_REQUESTS, tryAcquireConfirmationConcurrency } = require('../lib/confirmationConcurrency.ts');
+const { CONFIRMATION_LOOKUP_TIMEOUT_MS, createConfirmationDeadline } = require('../lib/confirmationDeadline.ts');
 const { HEALTH_MAX_CONCURRENT_REQUESTS, tryAcquireHealthConcurrency } = require('../lib/healthConcurrency.ts');
 const { ADMIN_OPS_MAX_CONCURRENT_REQUESTS, tryAcquireAdminOpsConcurrency } = require('../lib/adminOpsConcurrency.ts');
 const { ADMIN_DELIVERY_MAX_CONCURRENT_REQUESTS, tryAcquireAdminDeliveryConcurrency } = require('../lib/adminDeliveryConcurrency.ts');
@@ -10451,11 +10452,32 @@ test('customer confirmation views share one bounded provider-work budget', () =>
   releases.forEach((release) => release());
 
   assert.match(successPage, /const releaseConfirmation = tryAcquireConfirmationConcurrency\(\)/);
-  assert.match(successPage, /finally \{\s*releaseConfirmation\?\.\(\);\s*\}/);
+  assert.match(successPage, /finally \{\s*confirmationDeadline\?\.dispose\(\);\s*releaseConfirmation\?\.\(\);\s*\}/);
   assert.match(successPage, /Do not place a second order/);
   assert.match(bookingPage, /const releaseConfirmation = tryAcquireConfirmationConcurrency\(\)/);
   assert.match(bookingPage, /if \(!releaseConfirmation\)[\s\S]*?Order status is busy/);
-  assert.match(bookingPage, /finally \{\s*releaseConfirmation\(\);\s*\}/);
+  assert.match(bookingPage, /finally \{\s*confirmationDeadline\.dispose\(\);\s*releaseConfirmation\(\);\s*\}/);
+});
+
+test('customer confirmation Stripe and ledger reads share one end-to-end deadline', async () => {
+  assert.equal(CONFIRMATION_LOOKUP_TIMEOUT_MS, 20_000);
+  assert.throws(() => createConfirmationDeadline(0), RangeError);
+  assert.throws(() => createConfirmationDeadline(CONFIRMATION_LOOKUP_TIMEOUT_MS + 1), RangeError);
+
+  const deadline = createConfirmationDeadline(5);
+  assert.equal(deadline.signal.aborted, false);
+  await new Promise((resolve) => deadline.signal.addEventListener('abort', resolve, { once: true }));
+  assert.equal(deadline.signal.aborted, true);
+  assert.match(String(deadline.signal.reason), /confirmation lookup timed out/i);
+  deadline.dispose();
+
+  for (const page of [successPage, bookingPage]) {
+    const stripeLookup = page.indexOf('stripe.checkout.sessions.retrieve(');
+    const ledgerSignal = page.indexOf('.abortSignal(confirmationDeadline', stripeLookup);
+    const disposal = page.indexOf('confirmationDeadline', ledgerSignal + 1);
+    assert.ok(stripeLookup >= 0 && ledgerSignal > stripeLookup && disposal > ledgerSignal,
+      'the ledger read must inherit and release the deadline created before Stripe');
+  }
 });
 
 test('dependency-work concurrency budgets survive duplicate Next server module graphs', () => {

@@ -13,6 +13,7 @@ import { tryAcquireConfirmationConcurrency } from '@/lib/confirmationConcurrency
 import OrderConfirmationRefresh from '@/components/OrderConfirmationRefresh';
 import { retryableStripeConfirmationFailure } from '@/lib/confirmationLookupFailure';
 import { customerOrderReference } from '@/lib/customerOrderReference';
+import { createConfirmationDeadline } from '@/lib/confirmationDeadline';
 
 export const dynamic = 'force-dynamic';
 
@@ -79,6 +80,7 @@ export default async function BookingPage({ searchParams }: Props) {
     );
   }
 
+  const confirmationDeadline = createConfirmationDeadline();
   let authenticatedSession = false;
   try {
     const stripe = createStripeClient(key);
@@ -108,6 +110,7 @@ export default async function BookingPage({ searchParams }: Props) {
           .from('orders')
           .select('stripe_session_id,payment_status,payment_confirmed_at,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,measurement_consent,shipping_address,fulfilment_status,courier_tracking,return_tracking,dispatched_at,returned_at')
           .eq('stripe_session_id', sessionId)
+          .abortSignal(confirmationDeadline.signal)
           .maybeSingle()
       : null;
     // Stripe is the payment authority, but an unavailable order ledger is not
@@ -253,6 +256,7 @@ export default async function BookingPage({ searchParams }: Props) {
       </main>
     );
   } finally {
+    confirmationDeadline.dispose();
     releaseConfirmation();
   }
 }
