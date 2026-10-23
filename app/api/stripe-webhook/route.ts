@@ -334,11 +334,20 @@ async function readDeliveryResponseBody(response: Response, deadline: Promise<ne
   }
 }
 
-async function postJsonWithTimeout(url:string,body:unknown,timeoutMs=DELIVERY_TIMEOUT_MS,headers:Record<string,string>={}){
+async function postJsonWithTimeout(url:string,body:unknown,timeoutMs=DELIVERY_TIMEOUT_MS,headers:Record<string,string>={},signal?:AbortSignal){
+  if(signal?.aborted) throw signal.reason ?? new Error('Delivery request aborted');
   const controller=new AbortController();
   const timeoutError=new Error('Delivery request timed out');
   let rejectDeadline:((reason?:unknown)=>void)|undefined;
   const deadline=new Promise<never>((_,reject)=>{rejectDeadline=reject;});
+  const abortDelivery=()=>{
+    const reason=signal?.reason ?? new Error('Delivery request aborted');
+    controller.abort(reason);
+    rejectDeadline?.(reason);
+  };
+  signal?.addEventListener('abort',abortDelivery,{once:true});
+  // Close the race between the initial check and listener registration.
+  if(signal?.aborted) abortDelivery();
   const timeout=setTimeout(()=>{
     controller.abort(timeoutError);
     rejectDeadline?.(timeoutError);
@@ -401,6 +410,7 @@ async function postJsonWithTimeout(url:string,body:unknown,timeoutMs=DELIVERY_TI
     return {ok:true,status:response.status,responseBody};
   }finally{
     clearTimeout(timeout);
+    signal?.removeEventListener('abort',abortDelivery);
     rejectDeadline=undefined;
   }
 }
@@ -410,7 +420,7 @@ function metaPurchaseEligible(session: Stripe.Checkout.Session) {
     session.metadata?.measurement_consent === 'accepted';
 }
 
-async function sendMetaPurchase(session: Stripe.Checkout.Session, eventTime: number) {
+async function sendMetaPurchase(session: Stripe.Checkout.Session, eventTime: number, signal: AbortSignal) {
   // Readiness deliberately tolerates surrounding deployment whitespace while
   // rejecting control characters. Use the same canonical values at the
   // outbound boundary: otherwise health can report CAPI configured while a
@@ -432,7 +442,7 @@ async function sendMetaPurchase(session: Stripe.Checkout.Session, eventTime: num
   // retained by reverse proxies, request tracing, and provider diagnostics;
   // an Authorization header reaches the same Graph endpoint without making a
   // durable/loggable URL carry a paid-order delivery credential.
-  const response=await postJsonWithTimeout(`https://graph.facebook.com/${META_GRAPH_API_VERSION}/${pixel}/events`,payload,DELIVERY_TIMEOUT_MS,{Authorization:`Bearer ${token}`});
+  const response=await postJsonWithTimeout(`https://graph.facebook.com/${META_GRAPH_API_VERSION}/${pixel}/events`,payload,DELIVERY_TIMEOUT_MS,{Authorization:`Bearer ${token}`},signal);
   // Provider responses are not a safe diagnostic channel: an intermediary
   // can echo request data or credentials. The error is persisted in the
   // operator-visible retry ledger and logged by the webhook, so retain only
@@ -448,7 +458,7 @@ async function sendMetaPurchase(session: Stripe.Checkout.Session, eventTime: num
   if(!metaCapiPurchaseAcknowledged(response.responseBody)) throw new Error('Meta CAPI did not acknowledge the Purchase event');
 }
 
-async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
+async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session, signal: AbortSignal) {
   if(session.payment_status!=='paid') return;
   const host=process.env.SMTP_HOST?.trim(), port=Number(process.env.SMTP_PORT||'587'), secure=smtpSecureTransport(process.env.SMTP_SECURE,port), user=process.env.SMTP_USER?.trim(), pass=process.env.SMTP_PASS, from=(process.env.SMTP_FROM||user||'').trim(), to=(process.env.ORDER_FULFILMENT_EMAIL||process.env.FULFILMENT_TO||'').trim();
   if(!host||!user||!pass||!from||!to||secure===null) throw new Error('SMTP fulfilment email is not configured');
@@ -495,7 +505,7 @@ async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
     // implicit TLS, but SMTP_SECURE also supports providers that use a custom
     // secure submission port. Dropping this bit makes the relay guess and can
     // leave every paid-order notification retrying after checkout was healthy.
-    const response=await postJsonWithTimeout(relayUrl,{relay_secret:relaySecret,smtp_host:host,smtp_port:port,smtp_secure:secure,smtp_user:user,smtp_pass:pass,from,to,subject,text,message_id:messageId});
+    const response=await postJsonWithTimeout(relayUrl,{relay_secret:relaySecret,smtp_host:host,smtp_port:port,smtp_secure:secure,smtp_user:user,smtp_pass:pass,from,to,subject,text,message_id:messageId},DELIVERY_TIMEOUT_MS,{},signal);
     // Do not persist or log a relay response body. A relay failure may echo
     // this credential-bearing request, while the status code is sufficient
     // for a retrying webhook and for staff to identify the failing transport.
@@ -511,7 +521,7 @@ async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
     }
     return;
   }
-  await sendSmtpMail({host,port,secure,user,pass,from,to,subject,text,messageId,timeoutMs:DELIVERY_TIMEOUT_MS});
+  await sendSmtpMail({host,port,secure,user,pass,from,to,subject,text,messageId,timeoutMs:DELIVERY_TIMEOUT_MS,signal});
 }
 
 async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.Event.Type,eventCreated:number,signal:AbortSignal){
@@ -766,7 +776,7 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
   const {claimToken}=acknowledgedClaim;
   let providerAccepted=false;
   try{
-    await sendHumanFulfilmentEmail(fulfilmentSession);
+    await sendHumanFulfilmentEmail(fulfilmentSession,signal);
     providerAccepted=true;
     // The sending lease can be reclaimed after a timed-out worker. Only its
     // owner may settle it: an older worker must never mark a newer delivery
@@ -841,7 +851,7 @@ export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof
   const {claimToken,eventTime:claimedEventTime}=acknowledgedClaim;
   let providerAccepted=false;
   try{
-    await sendMetaPurchase(session,claimedEventTime!);
+    await sendMetaPurchase(session,claimedEventTime!,signal);
     providerAccepted=true;
     const sentAt=new Date().toISOString();
     // As with SMTP, do not let a stale CAPI worker settle a lease that a

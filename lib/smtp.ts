@@ -17,6 +17,9 @@ type SmtpOptions = {
   // It is deliberately optional for general SMTP callers.
   messageId?: string;
   timeoutMs?: number;
+  // Callers that own a wider request/dependency deadline can stop the socket
+  // immediately instead of waiting for this transport's independent timeout.
+  signal?: AbortSignal;
 };
 
 // SMTP replies are supplied by an external relay. A healthy server sends a
@@ -282,6 +285,7 @@ export async function sendSmtpMail(options: SmtpOptions) {
   if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535) throw new Error('Invalid SMTP port');
   const timeoutMs = options.timeoutMs ?? 20_000;
   if (!Number.isFinite(timeoutMs) || timeoutMs < 1) throw new Error('Invalid SMTP timeout');
+  if (options.signal?.aborted) throw options.signal.reason ?? new Error('SMTP delivery aborted');
   const safeOptions = { ...options, host, from, to, subject };
   let activeSocket: net.Socket | tls.TLSSocket = options.secure
     ? tls.connect({ host, port: options.port, ...smtpTlsOptions(host) })
@@ -291,6 +295,10 @@ export async function sendSmtpMail(options: SmtpOptions) {
   // this guard a silent relay can consume one full socket timeout per protocol
   // step and leave a paid Stripe event unacknowledged for several minutes.
   const deadline = setTimeout(() => activeSocket.destroy(new Error('SMTP delivery timed out')), timeoutMs);
+  const abortDelivery = () => activeSocket.destroy(options.signal?.reason ?? new Error('SMTP delivery aborted'));
+  options.signal?.addEventListener('abort', abortDelivery, { once: true });
+  // Close the race between the pre-connect check and listener registration.
+  if (options.signal?.aborted) abortDelivery();
 
   try {
     if (activeSocket instanceof tls.TLSSocket) await waitForTlsHandshake(activeSocket);
@@ -323,6 +331,7 @@ export async function sendSmtpMail(options: SmtpOptions) {
     await sendMessage(activeSocket, safeOptions);
   } finally {
     clearTimeout(deadline);
+    options.signal?.removeEventListener('abort', abortDelivery);
     activeSocket.destroy();
   }
 }

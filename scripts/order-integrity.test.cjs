@@ -3466,7 +3466,7 @@ test('fulfilment retries use durable staff-corrected contact and delivery detail
   assert.match(delivery, /shipping_details:order\.data\.shipping_address \? \{/);
   assert.match(delivery, /address:order\.data\.shipping_address/);
   assert.match(delivery, /paidFulfilmentDetailsIssue\(fulfilmentSession,productType\)/);
-  assert.match(delivery, /await sendHumanFulfilmentEmail\(fulfilmentSession\)/);
+  assert.match(delivery, /await sendHumanFulfilmentEmail\(fulfilmentSession,signal\)/);
   assert.doesNotMatch(delivery, /await sendHumanFulfilmentEmail\(session\)/);
 });
 
@@ -7624,6 +7624,13 @@ test('admin delivery recovery shares one database and Stripe verification deadli
   assert.match(metaDelivery, /signal:AbortSignal/);
   assert.ok((metaDelivery.match(/\.abortSignal\(signal\)/g) || []).length >= 6,
     'every Meta ledger read, claim, settlement, and recovery write must inherit the admitted deadline');
+  assert.match(fulfilmentDelivery, /await sendHumanFulfilmentEmail\(fulfilmentSession,signal\)/);
+  assert.match(metaDelivery, /await sendMetaPurchase\(session,claimedEventTime!,signal\)/);
+  assert.match(webhookRoute, /postJsonWithTimeout\(`https:\/\/graph\.facebook\.com\/[\s\S]{0,300},signal\)/);
+  assert.match(webhookRoute, /sendSmtpMail\(\{host,port,secure,user,pass,from,to,subject,text,messageId,timeoutMs:DELIVERY_TIMEOUT_MS,signal\}\)/);
+  assert.match(smtpClient, /signal\?: AbortSignal/);
+  assert.match(smtpClient, /options\.signal\?\.addEventListener\('abort', abortDelivery, \{ once: true \}\)/);
+  assert.match(smtpClient, /options\.signal\?\.removeEventListener\('abort', abortDelivery\)/);
 });
 
 test('SMTP and Meta delivery settlement retain ownership of their sending leases', () => {
@@ -7718,9 +7725,9 @@ test('accepted paid-order deliveries are not immediately requeued when local set
   // following database update fails, retaining `sending` makes the ambiguity
   // visible and prevents Stripe's next retry from immediately duplicating an
   // email or Purchase. Stale-lease recovery remains the deliberate retry path.
-  assert.match(webhookRoute, /let providerAccepted=false;[\s\S]*await sendHumanFulfilmentEmail\(fulfilmentSession\);\s*providerAccepted=true;/);
+  assert.match(webhookRoute, /let providerAccepted=false;[\s\S]*await sendHumanFulfilmentEmail\(fulfilmentSession,signal\);\s*providerAccepted=true;/);
   assert.match(webhookRoute, /if\(providerAccepted\) throw error;\s*\/\/ This row is shown to operations staff/);
-  assert.match(webhookRoute, /let providerAccepted=false;[\s\S]*await sendMetaPurchase\(session,claimedEventTime!\);\s*providerAccepted=true;/);
+  assert.match(webhookRoute, /let providerAccepted=false;[\s\S]*await sendMetaPurchase\(session,claimedEventTime!,signal\);\s*providerAccepted=true;/);
   assert.match(webhookRoute, /if\(providerAccepted\) throw error;\s*\/\/ Meta\/provider errors are durable operator-visible data too/);
 });
 
@@ -8257,7 +8264,7 @@ test('Meta Purchase retries preserve one durable event timestamp for deduplicati
   assert.match(webhookRoute, /async function persistSession\(session:Stripe\.Checkout\.Session,eventType:Stripe\.Event\.Type,eventCreated:number,signal:AbortSignal\)/);
   assert.match(schema, /payment_confirmed_at = case when v_paid then coalesce\(orders\.payment_confirmed_at, p_payment_confirmed_at\)/);
   assert.match(webhookRoute, /acknowledgedPaidDeliveryClaim\(attempt\.data,session\.id,metaEventTime\)/);
-  assert.match(webhookRoute, /await sendMetaPurchase\(session,claimedEventTime!\)/);
+  assert.match(webhookRoute, /await sendMetaPurchase\(session,claimedEventTime!,signal\)/);
   assert.match(adminOrderRoute, /select\('stripe_session_id,payment_status,payment_confirmed_at,product_type,amount_sgd,plan_id,plan_name,data_allowance,country,travel_start,travel_end,shipping_address,fulfilment_status,measurement_consent'\)/);
   assert.match(adminOrderRoute, /const metaEventTime=hasPaymentConfirmedAt\s*\? validStripePaymentEventCreated\(confirmedAtSeconds,session\.created\)\s*:\s*validStripePaymentEventCreated\(session\.created,session\.created\)/);
   assert.match(adminOrderRoute, /deliverMetaPurchase\(supabase, session, metaEventTime!, adminDeliveryDeadline\.signal\)/);
