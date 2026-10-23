@@ -39,6 +39,7 @@ import {
 } from '@/lib/stripeWebhookConcurrency';
 import { stripeWebhookVerificationFailure } from '@/lib/stripeWebhookVerification';
 import { deliveryResponseContentEncoding, deliveryResponseHasJsonContentType, strictDeliveryResponseText } from '@/lib/deliveryResponse';
+import { createStripeWebhookDeadline } from '@/lib/stripeWebhookDeadline';
 
 export const runtime = 'nodejs';
 
@@ -513,7 +514,7 @@ async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
   await sendSmtpMail({host,port,secure,user,pass,from,to,subject,text,messageId,timeoutMs:DELIVERY_TIMEOUT_MS});
 }
 
-async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.Event.Type,eventCreated:number){
+async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.Event.Type,eventCreated:number,signal?:AbortSignal){
   const supabase=getSupabaseAdmin(); if(!supabase) throw new Error('Order persistence unavailable');
   const paid=session.payment_status==='paid', failed=eventType==='checkout.session.async_payment_failed'||eventType==='checkout.session.expired';
   const productType=session.metadata?.product_type;
@@ -548,7 +549,7 @@ async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.E
       p_payment_confirmed_at:paid?paymentConfirmedAt:null,
       p_payment_failed:failed,
       p_checkout_request_id:session.metadata?.checkout_request_id||null,
-    });
+    }).abortSignal(signal);
     if(persisted.error) throw persisted.error;
     const persistedOrder=exactRpcRow(persisted.data);
     // The RPC response is the commit acknowledgement for this exact order,
@@ -584,7 +585,7 @@ async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.E
     p_shipping_address:orderSnapshot.shipping_address,
     p_payment_confirmed_at:paid?paymentConfirmedAt:null,
     p_payment_failed:failed,
-  });
+  }).abortSignal(signal);
   if(persisted.error) throw persisted.error;
   const persistedOrder=exactRpcRow(persisted.data);
   if(
@@ -598,13 +599,13 @@ type EventClaim =
   | { status: 'processed' }
   | { status: 'in_progress' };
 
-async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string, type:string, sessionId:string):Promise<EventClaim> {
+async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string, type:string, sessionId:string,signal?:AbortSignal):Promise<EventClaim> {
   if(!supabase) throw new Error('Persistence unavailable');
   const claimed=await supabase.rpc('qy_claim_stripe_event',{
     p_event_id:id,
     p_event_type:type,
     p_stripe_session_id:sessionId,
-  });
+  }).abortSignal(signal);
   if(claimed.error) throw claimed.error;
   const result=exactRpcRow(claimed.data);
   if(result?.claim_status==='processed') return {status:'processed'};
@@ -659,6 +660,7 @@ async function settleStripeEvent(
   supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>,
   eventId:string,
   processingStartedAt:string,
+  signal?:AbortSignal,
 ) {
   const processedAt=new Date().toISOString();
   const completed=await supabase.from('stripe_events')
@@ -666,7 +668,8 @@ async function settleStripeEvent(
     .eq('event_id',eventId)
     .eq('processing_started_at',processingStartedAt)
     .is('processed_at',null)
-    .select('event_id,processing_started_at,processed_at');
+    .select('event_id,processing_started_at,processed_at')
+    .abortSignal(signal);
   if(completed.error) throw completed.error;
   const settled=exactRpcRow(completed.data);
   // This response is the final durable acknowledgement before Stripe receives
@@ -1044,6 +1047,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
   if(!releaseProcessing){
     return webhookRetryJson({error:'Webhook processing is busy'},503);
   }
+  const webhookDeadline=createStripeWebhookDeadline();
   try {
   const supabase=getSupabaseAdmin(); if(!supabase) return webhookRetryJson({error:'Persistence unavailable'},503,'30');
   // Claim every trusted terminal event before the outbound Stripe refresh. If
@@ -1055,7 +1059,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
   const eventClaimId=`stripe:${stripeEventId}`;
   let claimStartedAt:string|undefined;
   try{
-    const claim=await claimOnce(supabase,eventClaimId,event.type,eventSessionId);
+    const claim=await claimOnce(supabase,eventClaimId,event.type,eventSessionId,webhookDeadline.signal);
     if(claim.status==='processed') return webhookJson({received:true,duplicate:true});
     if(claim.status==='in_progress') return webhookRetryJson({error:'Event is still processing'});
     claimStartedAt=claim.processingStartedAt;
@@ -1076,7 +1080,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
   // original Purchase timestamp respectively.
   let refreshedSession: unknown;
   try {
-    refreshedSession=await stripe.checkout.sessions.retrieve(eventSessionId);
+    refreshedSession=await stripe.checkout.sessions.retrieve(eventSessionId,webhookDeadline.stripeRequestOptions());
   } catch (error) {
     // A temporary Stripe read failure must remain retryable rather than
     // acknowledging a paid order whose durable fulfilment record we cannot
@@ -1156,8 +1160,8 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
       // gap in which another checkout could consume the same capacity.
       const validation=validateQyRoamTerminalUnpaidSession(session);
       if(!validation.valid) throw new Error(`Order integrity validation failed: ${validation.reason}`);
-      await persistSession(session,event.type,expiryEventCreated);
-      await settleStripeEvent(supabase,eventClaimId,claimStartedAt);
+      await persistSession(session,event.type,expiryEventCreated,webhookDeadline.signal);
+      await settleStripeEvent(supabase,eventClaimId,claimStartedAt,webhookDeadline.signal);
     }catch(error){
       // The signed event id and Checkout Session id are durable on the
       // claimed ledger row. Avoid logging raw dependency errors here: they
@@ -1208,7 +1212,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
     }
     const fulfilmentDetailsIssue=paidFulfilmentDetailsIssue(sessionForEvent,validation.productType);
     if(fulfilmentDetailsIssue) throw new Error(fulfilmentDetailsIssue);
-    await persistSession(sessionForEvent,event.type,eventCreated);
+    await persistSession(sessionForEvent,event.type,eventCreated,webhookDeadline.signal);
     // Pocket WiFi persistence atomically replaces the temporary reservation
     // with the durable order commitment inside qy_persist_stripe_pocket_wifi_order.
     if(event.type!=='checkout.session.async_payment_failed'&&sessionForEvent.payment_status==='paid'){
@@ -1216,7 +1220,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
       // been created well before an asynchronous payment actually succeeded.
       await deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated);
     }
-    await settleStripeEvent(supabase,eventClaimId,claimStartedAt);
+    await settleStripeEvent(supabase,eventClaimId,claimStartedAt,webhookDeadline.signal);
   }catch(error){
     // Recovery uses the claimed Stripe event row, whose failure field is
     // intentionally application-authored. Keep logs on the same boundary.
@@ -1226,6 +1230,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
   }
   return webhookJson({received:true});
   } finally {
+    webhookDeadline.dispose();
     releaseProcessing();
   }
 }

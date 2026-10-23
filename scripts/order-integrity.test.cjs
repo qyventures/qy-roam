@@ -2337,7 +2337,7 @@ test('webhook event and embedded Checkout Session must agree on Stripe mode befo
 
   const modeCheck = webhookRoute.indexOf('stripeWebhookCheckoutSessionMatchesEvent(event,eventSession)');
   const sourceCheck = webhookRoute.indexOf('hasQyRoamWebhookSource(eventSession.metadata)');
-  const claim = webhookRoute.indexOf('claimOnce(supabase,eventClaimId,event.type,eventSessionId)');
+  const claim = webhookRoute.indexOf('claimOnce(supabase,eventClaimId,event.type,eventSessionId,webhookDeadline.signal)');
   assert.ok(modeCheck >= 0 && modeCheck < sourceCheck, 'embedded mode must be bound before the source marker is trusted');
   assert.ok(modeCheck < claim, 'embedded mode mismatch must be rejected before the durable event claim');
   assert.match(webhookRoute, /stripe_webhook_checkout_session_mode_mismatch/);
@@ -2351,7 +2351,7 @@ test('refreshed Checkout Sessions retain the signed immutable creation identity'
   assert.equal(stripeWebhookCheckoutSessionMatchesSnapshot(signed, { ...signed, created: signed.created + 1 }), false);
   assert.equal(stripeWebhookCheckoutSessionMatchesSnapshot({ ...signed, created: undefined }, { ...signed, created: undefined }), false);
 
-  const refresh = webhookRoute.indexOf('refreshedSession=await stripe.checkout.sessions.retrieve(eventSessionId)');
+  const refresh = webhookRoute.indexOf('refreshedSession=await stripe.checkout.sessions.retrieve(eventSessionId,webhookDeadline.stripeRequestOptions())');
   const identity = webhookRoute.indexOf('stripeWebhookCheckoutSessionMatchesCommercialSnapshot(eventSession,session)', refresh);
   const chronology = webhookRoute.indexOf('validStripePaymentEventCreated(event.created,session.created)', identity);
   assert.ok(identity > refresh, 'the fresh API object must be bound to the signed Session snapshot');
@@ -2459,7 +2459,7 @@ test('lookalike payment sessions are ignored before persistence and durable even
   const sessionIdCheck = webhookRoute.indexOf('const eventSessionId=validStripeCheckoutSessionIdForMode(eventSession.id,eventSession.livemode)');
   const provenanceCheck = webhookRoute.indexOf('validQyRoamProvenance(eventSessionId,eventSession.metadata)');
   const persistence = webhookRoute.indexOf('const supabase=getSupabaseAdmin()', sourceCheck);
-  const claim = webhookRoute.indexOf('claimOnce(supabase,eventClaimId,event.type,eventSessionId)');
+  const claim = webhookRoute.indexOf('claimOnce(supabase,eventClaimId,event.type,eventSessionId,webhookDeadline.signal)');
   assert.ok(sourceCheck >= 0 && sessionIdCheck > sourceCheck, 'Session identity validation must follow shared-account routing');
   assert.ok(sessionIdCheck < provenanceCheck, 'the bounded canonical Session id must be the provenance HMAC input');
   assert.ok(provenanceCheck < persistence, 'untrusted sessions must be ignored before persistence is required');
@@ -3384,7 +3384,7 @@ test('paid orders fail into the durable webhook recovery ledger when fulfilment 
   );
   const claim = processing.indexOf('claimStartedAt=claim.processingStartedAt');
   const detailsGuard = processing.indexOf('paidFulfilmentDetailsIssue(sessionForEvent,validation.productType)');
-  const persistence = processing.indexOf('await persistSession(sessionForEvent,event.type,eventCreated)');
+  const persistence = processing.indexOf('await persistSession(sessionForEvent,event.type,eventCreated,webhookDeadline.signal)');
   assert.ok(claim >= 0 && detailsGuard > claim, 'fulfilment validation must run after the durable event claim');
   assert.ok(persistence > detailsGuard, 'an incomplete paid order must not enter the order ledger');
   assert.match(processing, /if\(claimStartedAt\) await recordEventFailure\(supabase,eventClaimId,claimStartedAt,error\)/);
@@ -7775,7 +7775,7 @@ test('paid-order delivery ledgers cannot be orphaned from their Checkout order',
   // orphaned records available for review while enforcing every new write.
   assert.match(schema, /alter table public\.fulfilment_notifications add constraint fulfilment_notifications_order_fk\s+foreign key \(stripe_session_id\) references public\.orders\(stripe_session_id\)\s+on delete restrict not valid;/);
   assert.match(schema, /alter table public\.meta_purchase_deliveries add constraint meta_purchase_deliveries_order_fk\s+foreign key \(stripe_session_id\) references public\.orders\(stripe_session_id\)\s+on delete restrict not valid;/);
-  const persisted = webhookRoute.indexOf('await persistSession(sessionForEvent,event.type,eventCreated)');
+  const persisted = webhookRoute.indexOf('await persistSession(sessionForEvent,event.type,eventCreated,webhookDeadline.signal)');
   const delivery = webhookRoute.indexOf('await deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated)');
   assert.ok(persisted >= 0 && delivery > persisted, 'orders must remain durable before delivery ledgers are created');
 });
@@ -8077,12 +8077,12 @@ test('Stripe expiry events validate signed chronology before releasing inventory
   );
   assert.ok(
     expiryBranch.indexOf("stripeCheckoutEventStateIssue('checkout.session.expired',session)") <
-      expiryBranch.indexOf('await persistSession(session,event.type,expiryEventCreated)'),
+      expiryBranch.indexOf('await persistSession(session,event.type,expiryEventCreated,webhookDeadline.signal)'),
     'the refreshed Session must still be expired and unpaid before inventory is released',
   );
   assert.ok(
     expiryBranch.indexOf('validStripePaymentEventCreated(event.created,session.created)') <
-      expiryBranch.indexOf('await persistSession(session,event.type,expiryEventCreated)'),
+      expiryBranch.indexOf('await persistSession(session,event.type,expiryEventCreated,webhookDeadline.signal)'),
     'expiry chronology must be validated before inventory is released',
   );
   assert.ok(
@@ -8107,7 +8107,7 @@ test('Stripe payment event timestamps are bounded before order persistence or CA
 
   const paidClaim = webhookRoute.lastIndexOf("const eventClaimId=`stripe:${stripeEventId}`");
   const timestampValidation = webhookRoute.indexOf('const eventCreated=validStripePaymentEventCreated(event.created,session.created)', paidClaim);
-  const persistence = webhookRoute.indexOf('await persistSession(sessionForEvent,event.type,eventCreated)', timestampValidation);
+  const persistence = webhookRoute.indexOf('await persistSession(sessionForEvent,event.type,eventCreated,webhookDeadline.signal)', timestampValidation);
   const capiDelivery = webhookRoute.indexOf('await deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated)', timestampValidation);
   assert.ok(timestampValidation > paidClaim, 'invalid timestamp must be retained in the claimed webhook ledger');
   assert.ok(persistence > timestampValidation && capiDelivery > timestampValidation);
@@ -8130,7 +8130,7 @@ test('Stripe terminal events refresh the Checkout Session before persisting or d
   );
   const sourceBoundary = processing.indexOf('if(!hasQyRoamWebhookSource(eventSession.metadata))');
   const sessionIdBoundary = processing.indexOf('const eventSessionId=validStripeCheckoutSessionIdForMode(eventSession.id,eventSession.livemode)');
-  const refresh = processing.indexOf('refreshedSession=await stripe.checkout.sessions.retrieve(eventSessionId)');
+  const refresh = processing.indexOf('refreshedSession=await stripe.checkout.sessions.retrieve(eventSessionId,webhookDeadline.stripeRequestOptions())');
   const refreshedObjectBoundary = processing.indexOf('const session=stripeWebhookCheckoutSession(refreshedSession)');
   const identityBoundary = processing.indexOf('if(!stripeWebhookCheckoutSessionMatchesCommercialSnapshot(eventSession,session))');
   const eventState = processing.indexOf('const eventStateIssue=stripeCheckoutEventStateIssue(event.type as QyRoamCheckoutEventType,eventSession)');
@@ -8146,8 +8146,8 @@ test('Stripe terminal events refresh the Checkout Session before persisting or d
 });
 
 test('trusted Stripe terminal events are durably claimed before the outbound Session refresh', () => {
-  const claimPosition = webhookRoute.indexOf("claimOnce(supabase,eventClaimId,event.type,eventSessionId)");
-  const retrievePosition = webhookRoute.indexOf('stripe.checkout.sessions.retrieve(eventSessionId)');
+  const claimPosition = webhookRoute.indexOf("claimOnce(supabase,eventClaimId,event.type,eventSessionId,webhookDeadline.signal)");
+  const retrievePosition = webhookRoute.indexOf('stripe.checkout.sessions.retrieve(eventSessionId,webhookDeadline.stripeRequestOptions())');
   assert.ok(claimPosition >= 0 && claimPosition < retrievePosition);
   assert.match(webhookRoute, /stripe_webhook_session_retrieve_error[\s\S]*recordEventFailure\(supabase,eventClaimId,claimStartedAt,error\)/);
   assert.match(webhookRoute, /stripe_webhook_invalid_retrieved_session[\s\S]*recordEventFailure\(supabase,eventClaimId,claimStartedAt,new Error\('Stripe returned an invalid Checkout Session object'\)\)/);
@@ -8164,7 +8164,7 @@ test('retried completion events cannot steal a later asynchronous payment timest
   // paid Session and backdating both payment_confirmed_at and Meta Purchase.
   assert.match(webhookRoute, /const eventStateIssue=stripeCheckoutEventStateIssue\(event\.type as QyRoamCheckoutEventType,eventSession\)/);
   assert.match(webhookRoute, /status:eventSession\.status,[\s\S]*payment_status:eventSession\.payment_status/);
-  assert.match(webhookRoute, /persistSession\(sessionForEvent,event\.type,eventCreated\)/);
+  assert.match(webhookRoute, /persistSession\(sessionForEvent,event\.type,eventCreated,webhookDeadline\.signal\)/);
   assert.match(webhookRoute, /deliverPaidOrderSideEffects\(supabase,sessionForEvent,eventCreated\)/);
   assert.doesNotMatch(webhookRoute, /persistSession\(session,event\.type,event\.created\)/);
 });
@@ -8172,9 +8172,9 @@ test('retried completion events cannot steal a later asynchronous payment timest
 test('failed Stripe webhook records identify the affected Checkout Session for recovery', () => {
   assert.match(schema, /stripe_session_id text/);
   assert.match(productionReadiness, /event_id,event_type,stripe_session_id,received_at,processing_started_at/);
-  assert.match(webhookRoute, /claimOnce\(supabase:ReturnType<[^>]+>, id:string, type:string, sessionId:string\)/);
+  assert.match(webhookRoute, /claimOnce\(supabase:ReturnType<[^>]+>, id:string, type:string, sessionId:string,signal\?:AbortSignal\)/);
   assert.match(webhookRoute, /p_stripe_session_id:sessionId/);
-  assert.match(webhookRoute, /claimOnce\(supabase,eventClaimId,event\.type,eventSessionId\)/);
+  assert.match(webhookRoute, /claimOnce\(supabase,eventClaimId,event\.type,eventSessionId,webhookDeadline\.signal\)/);
   assert.match(adminPage, /event_id,event_type,stripe_session_id,received_at,attempts/);
   assert.match(adminPage, /failure\.stripe_session_id/);
 });
@@ -8184,7 +8184,7 @@ test('Meta Purchase retries preserve one durable event timestamp for deduplicati
   assert.match(schema, /event_time bigint check \(event_time is null or event_time > 0\)/);
   assert.match(schema, /payment_confirmed_at timestamptz/);
   assert.match(webhookRoute, /insert\(\{stripe_session_id:session\.id,status:'pending',event_time:requestedEventTime\}\)/);
-  assert.match(webhookRoute, /async function persistSession\(session:Stripe\.Checkout\.Session,eventType:Stripe\.Event\.Type,eventCreated:number\)/);
+  assert.match(webhookRoute, /async function persistSession\(session:Stripe\.Checkout\.Session,eventType:Stripe\.Event\.Type,eventCreated:number,signal\?:AbortSignal\)/);
   assert.match(schema, /payment_confirmed_at = case when v_paid then coalesce\(orders\.payment_confirmed_at, p_payment_confirmed_at\)/);
   assert.match(webhookRoute, /acknowledgedPaidDeliveryClaim\(attempt\.data,session\.id,metaEventTime\)/);
   assert.match(webhookRoute, /await sendMetaPurchase\(session,claimedEventTime!\)/);
@@ -8372,7 +8372,7 @@ test('browser Purchase waits for the same durable paid-order boundary as CAPI', 
   assert.match(metaPurchase, /orderPersisted: boolean/);
   assert.match(metaPurchase, /if \(!orderPersisted \|\| !metaMeasurementAllowed\(\)/);
   assert.match(metaPurchase, /\[consentRevision, contentId, orderPersisted, productType, purchaseIdentity, sessionId, value\]/);
-  const persisted = webhookRoute.indexOf('await persistSession(sessionForEvent,event.type,eventCreated)');
+  const persisted = webhookRoute.indexOf('await persistSession(sessionForEvent,event.type,eventCreated,webhookDeadline.signal)');
   const capi = webhookRoute.indexOf('await deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated)');
   assert.ok(persisted >= 0 && capi > persisted, 'CAPI must remain after durable order persistence');
 });
@@ -9243,10 +9243,10 @@ test('Supabase order-critical requests use a bounded shared transport', async ()
 test('expired authenticated sessions persist a terminal order before acknowledging Stripe', () => {
   const expiryBranch = webhookRoute.slice(webhookRoute.indexOf("if(event.type==='checkout.session.expired')"));
   assert.match(expiryBranch, /const validation=validateQyRoamTerminalUnpaidSession\(session\)/);
-  assert.match(expiryBranch, /await persistSession\(session,event\.type,expiryEventCreated\)/);
+  assert.match(expiryBranch, /await persistSession\(session,event\.type,expiryEventCreated,webhookDeadline\.signal\)/);
   assert.ok(
-    expiryBranch.indexOf('await persistSession(session,event.type,expiryEventCreated)') <
-      expiryBranch.indexOf('await settleStripeEvent(supabase,eventClaimId,claimStartedAt)'),
+    expiryBranch.indexOf('await persistSession(session,event.type,expiryEventCreated,webhookDeadline.signal)') <
+      expiryBranch.indexOf('await settleStripeEvent(supabase,eventClaimId,claimStartedAt,webhookDeadline.signal)'),
   );
   assert.match(webhookRoute, /failed=eventType==='checkout\.session\.async_payment_failed'\|\|eventType==='checkout\.session\.expired'/);
 });
@@ -9256,7 +9256,7 @@ test('expired lookalike sessions are ignored before claiming while trusted refre
   // Require the server-issued HMAC before an expiry event can consume the
   // durable event ledger, release inventory, or mutate a provisional order.
   const signedProvenanceGuard = webhookRoute.indexOf('if(!validQyRoamProvenance(eventSessionId,eventSession.metadata))');
-  const eventClaim = webhookRoute.indexOf('await claimOnce(supabase,eventClaimId,event.type,eventSessionId)');
+  const eventClaim = webhookRoute.indexOf('await claimOnce(supabase,eventClaimId,event.type,eventSessionId,webhookDeadline.signal)');
   assert.notEqual(signedProvenanceGuard, -1);
   assert.notEqual(eventClaim, -1);
   assert.ok(signedProvenanceGuard < eventClaim);
@@ -9268,7 +9268,7 @@ test('expired lookalike sessions are ignored before claiming while trusted refre
 
 test('expiry uses atomic product persistence so a delayed completion cannot reopen the order', () => {
   const expiryBranch = webhookRoute.slice(webhookRoute.indexOf("if(event.type==='checkout.session.expired')"));
-  assert.match(expiryBranch, /await persistSession\(session,event\.type,expiryEventCreated\)/);
+  assert.match(expiryBranch, /await persistSession\(session,event\.type,expiryEventCreated,webhookDeadline\.signal\)/);
   assert.doesNotMatch(expiryBranch, /from\('checkout_reservations'\)\.delete/);
   assert.doesNotMatch(expiryBranch, /from\('orders'\)\.update/);
   const persistence = webhookRoute.slice(
@@ -10188,7 +10188,7 @@ test('Stripe event settlement acknowledges the exact event and database lease', 
   assert.match(webhookRoute, /settled\?\.event_id!==eventId/);
   assert.match(webhookRoute, /exactDatabaseTimestampToken\(settled\.processing_started_at\)!==processingStartedAt/);
   assert.match(webhookRoute, /!databaseTimestampInstantEquals\(settled\.processed_at,processedAt\)/);
-  assert.equal((webhookRoute.match(/await settleStripeEvent\(supabase,eventClaimId,claimStartedAt\)/g) || []).length, 2);
+  assert.equal((webhookRoute.match(/await settleStripeEvent\(supabase,eventClaimId,claimStartedAt,webhookDeadline\.signal\)/g) || []).length, 2);
 });
 
 test('Stripe webhook failure recovery acknowledges the exact event and database lease', () => {
@@ -10277,7 +10277,7 @@ test('Stripe webhook concurrency is bounded without queueing or leaking admissio
   assert.match(webhookRoute, /const releaseProcessing=tryAcquireStripeWebhookProcessing\(\)/);
   assert.match(webhookRoute, /return webhookRetryJson\(\{error:'Webhook processing is busy'\},503\)/);
   assert.match(webhookRoute, /return webhookRetryJson\(\{error:'Webhook upload capacity is busy'\},503\)/);
-  assert.match(webhookRoute, /finally \{\s*releaseProcessing\(\);\s*\}/);
+  assert.match(webhookRoute, /finally \{\s*webhookDeadline\.dispose\(\);\s*releaseProcessing\(\);\s*\}/);
   assert.match(webhookRoute, /const release=tryAcquireStripeWebhookUpload\(\)/);
   assert.match(webhookRoute, /let uploadReleased=false;[\s\S]*if\(uploadReleased\) return;[\s\S]*return await handleStripeWebhook\(req,releaseUpload,receivedAtMs\);[\s\S]*catch\{[\s\S]*finally\{\s*releaseUpload\(\);/);
 });
@@ -11094,4 +11094,27 @@ test('indexed legal pages are customer-ready and do not advertise an expired pro
   assert.match(termsPage, /QY10 launch promotion ended on 30 September 2026/);
   assert.match(termsPage, /is no longer applied at checkout/);
   assert.doesNotMatch(termsPage, /QY10 provides 10% off/);
+});
+
+test('Stripe webhook durable processing shares one end-to-end dependency deadline', async () => {
+  const deadlineModule = require('../lib/stripeWebhookDeadline.ts');
+  const deadline = deadlineModule.createStripeWebhookDeadline(5);
+  assert.equal(deadline.signal.aborted, false);
+  await new Promise((resolve) => deadline.signal.addEventListener('abort', resolve, { once: true }));
+  assert.equal(deadline.signal.aborted, true);
+  assert.match(String(deadline.signal.reason), /Stripe webhook dependency work timed out/i);
+  assert.throws(() => deadline.stripeRequestOptions(), /Stripe webhook dependency work timed out/);
+  deadline.dispose();
+
+  const admission = webhookRoute.indexOf('const webhookDeadline=createStripeWebhookDeadline()');
+  const claim = webhookRoute.indexOf('claimOnce(supabase,eventClaimId,event.type,eventSessionId,webhookDeadline.signal)', admission);
+  const refresh = webhookRoute.indexOf('stripe.checkout.sessions.retrieve(eventSessionId,webhookDeadline.stripeRequestOptions())', claim);
+  const persistence = webhookRoute.indexOf('persistSession(sessionForEvent,event.type,eventCreated,webhookDeadline.signal)', refresh);
+  const settlement = webhookRoute.indexOf('settleStripeEvent(supabase,eventClaimId,claimStartedAt,webhookDeadline.signal)', persistence);
+  const disposal = webhookRoute.indexOf('webhookDeadline.dispose()', settlement);
+  assert.ok(admission >= 0 && claim > admission && refresh > claim && persistence > refresh && settlement > persistence && disposal > settlement,
+    'claim, Stripe refresh, persistence, and settlement must share and release one admitted deadline');
+  assert.match(webhookRoute, /qy_claim_stripe_event'[\s\S]{0,300}\.abortSignal\(signal\)/);
+  assert.match(webhookRoute, /qy_persist_stripe_pocket_wifi_order'[\s\S]{0,800}\.abortSignal\(signal\)/);
+  assert.match(webhookRoute, /qy_persist_stripe_esim_order'[\s\S]{0,800}\.abortSignal\(signal\)/);
 });
