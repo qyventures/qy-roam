@@ -6,6 +6,7 @@ import { operationalConfig } from '@/lib/operationalConfig';
 import { hasIdentityRequestContentEncoding, InvalidRequestBodyLengthError, isJsonRequestContentType, readLimitedRequestText, RequestBodyTimeoutError, RequestBodyTooLargeError, validateLimitedRequestContentLength } from '@/lib/requestBody';
 import { isSafeSmtpMailbox } from '@/lib/smtp';
 import { getEsimPlan } from '@/lib/esimPlans';
+import { getWifiPlan } from '@/lib/wifiPlans';
 import { manualOrderReference, manualOrderSessionId } from '@/lib/manualOrderReference';
 import { tryAcquireAdminOpsConcurrency } from '@/lib/adminOpsConcurrency';
 import { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } from '@/lib/pocketWifiRentalPeriod';
@@ -301,11 +302,19 @@ export async function POST(req: NextRequest) {
       }
       const submittedCountry = optionalTrimmedText(body.country, 120);
       if (submittedCountry === undefined) return NextResponse.json({ error: 'Destination must be at most 120 characters and cannot contain control characters' }, { status: 400 });
-      const submittedPlanName = optionalTrimmedText(body.plan_name, 160);
-      if (submittedPlanName === undefined) return NextResponse.json({ error: 'Plan name must be at most 160 characters and cannot contain control characters' }, { status: 400 });
-      const country = esimPlan?.destination || submittedCountry;
-      if (product === 'pocket_wifi' && (!country || !travel.start || !travel.end)) {
-        return NextResponse.json({ error: 'Pocket WiFi orders require a destination and valid travel start and end dates' }, { status: 400 });
+      // A manual paid rental consumes the same physical fleet as an online
+      // booking. Bind it to the server catalogue too: accepting an arbitrary
+      // free-text destination can reserve scarce stock for a service QY Roam
+      // does not sell and leaves fulfilment with no authoritative package.
+      // The catalogue owns the durable plan name; never trust a hidden or
+      // stale admin client to supply a different description.
+      const wifiPlan = product === 'pocket_wifi' ? getWifiPlan(submittedCountry) : undefined;
+      if (product === 'pocket_wifi' && !wifiPlan) {
+        return NextResponse.json({ error: 'Select a valid Pocket WiFi catalogue destination' }, { status: 400 });
+      }
+      const country = esimPlan?.destination || wifiPlan?.country || submittedCountry;
+      if (product === 'pocket_wifi' && (!travel.start || !travel.end)) {
+        return NextResponse.json({ error: 'Pocket WiFi orders require valid travel start and end dates' }, { status: 400 });
       }
       if (product === 'pocket_wifi') {
         const rentalDays = pocketWifiRentalDays(
@@ -323,7 +332,9 @@ export async function POST(req: NextRequest) {
         email: email?.toLowerCase() || null, phone,
         amount_sgd: amountCents / 100, product_type: product,
         plan_id: esimPlan?.id || null,
-        plan_name: esimPlan ? `${esimPlan.destination} · ${esimPlan.days} days` : submittedPlanName,
+        plan_name: esimPlan
+          ? `${esimPlan.destination} · ${esimPlan.days} days`
+          : `${wifiPlan!.country} Pocket WiFi`,
         data_allowance: esimPlan?.data || null,
         country, travel_start: travel.start, travel_end: travel.end,
         fulfilment_status: initialStatus,

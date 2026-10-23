@@ -5881,7 +5881,8 @@ test('manual orders cannot bypass paid-order lifecycle, pricing, or WiFi capacit
   assert.match(adminOpsRoute, /function money\(value: unknown\)/);
   assert.match(adminOpsRoute, /parseExactIsoDate\(startRaw\)/);
   assert.match(adminOpsRoute, /New orders must start in their initial fulfilment status/);
-  assert.match(adminOpsRoute, /Pocket WiFi orders require a destination and valid travel start and end dates/);
+  assert.match(adminOpsRoute, /Select a valid Pocket WiFi catalogue destination/);
+  assert.match(adminOpsRoute, /Pocket WiFi orders require valid travel start and end dates/);
   // Offline/manual sales do not receive browser measurement consent. They
   // must be persisted as essential-only rather than as an ambiguous NULL
   // that a later CAPI recovery could mistake for consent.
@@ -5936,6 +5937,16 @@ test('manual eSIM sales bind the exact server catalogue entitlement', () => {
   assert.match(schema, /orders_esim_plan_identity_required_check/);
   assert.match(schema, /coalesce\(btrim\(plan_id\), ''\) <> ''/);
   assert.match(schema, /coalesce\(btrim\(data_allowance\), ''\) <> ''/);
+});
+
+test('manual Pocket WiFi sales bind the exact server catalogue destination', () => {
+  assert.match(manualOrderForm, /import \{ WIFI_PLANS \} from '@\/lib\/wifiPlans'/);
+  assert.match(manualOrderForm, /name="country" required/);
+  assert.match(manualOrderForm, /WIFI_PLANS\.map/);
+  assert.doesNotMatch(manualOrderForm, /name="plan_name"/);
+  assert.match(adminOpsRoute, /getWifiPlan\(submittedCountry\)/);
+  assert.match(adminOpsRoute, /Select a valid Pocket WiFi catalogue destination/);
+  assert.match(adminOpsRoute, /`\$\{wifiPlan!\.country\} Pocket WiFi`/);
 });
 
 test('manual eSIM sales are created through one atomic exact-idempotency boundary', () => {
@@ -11392,13 +11403,11 @@ test('manual paid orders reject lossy customer and commercial text instead of tr
   assert.match(orderCreate, /const phone = optionalTrimmedText\(body\.phone, 32\)/);
   assert.match(orderCreate, /const submittedNotes = optionalTrimmedText\(body\.notes, 1500\)/);
   assert.match(orderCreate, /const submittedCountry = optionalTrimmedText\(body\.country, 120\)/);
-  assert.match(orderCreate, /const submittedPlanName = optionalTrimmedText\(body\.plan_name, 160\)/);
   assert.doesNotMatch(orderCreate, /text\(body\.(?:email|phone|country|plan_name|notes),/);
   assert.match(manualOrderForm, /name="customer_name"[^>]*maxLength=\{120\}/);
   assert.match(manualOrderForm, /name="email"[^>]*maxLength=\{200\}/);
   assert.match(manualOrderForm, /name="phone"[^>]*maxLength=\{32\}/);
-  assert.match(manualOrderForm, /name="plan_name"[^>]*maxLength=\{160\}/);
-  assert.match(manualOrderForm, /name="country"[^>]*maxLength=\{120\}/);
+  assert.match(manualOrderForm, /name="country" required/);
   assert.match(manualOrderForm, /name="notes"[^>]*maxLength=\{1500\}/);
 
   const notesGuard = /coalesce\(length\(p_notes\), 0\) not between 1 and 1700 or p_notes ~ '\[\[:cntrl:\]\]'/g;
