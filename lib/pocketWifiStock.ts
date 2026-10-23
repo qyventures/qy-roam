@@ -1,5 +1,5 @@
 import { getSupabaseAdmin } from './supabaseAdmin';
-import { readinessWindowActive } from './readinessBackoff';
+import { readinessFailureBackoffActive, readinessWindowActive } from './readinessBackoff';
 
 const INVENTORY_SCAN_PAGE_SIZE = 1_000;
 // Operational configuration caps the fleet at 10,000 units. Because this
@@ -15,14 +15,24 @@ export const MAX_INVENTORY_SCAN_PAGES = 11;
 export const STOCK_READINESS_TIMEOUT_MS = 8_000;
 // Health and launch-dashboard renders can arrive together during a deploy.
 // Coalesce their identical stock scan and briefly reuse only a successful
-// result. A failure or an empty register is never cached, so restocked units
-// become visible on the very next probe. Keep this shorter than the schema
-// readiness cache because physical stock is operationally more volatile.
+// result. A failure or an empty register is never cached as ready; it uses the
+// short fail-closed retry window below so restocked units become visible
+// promptly without turning an outage into a request-driven scan storm. Keep
+// this shorter than the schema readiness cache because physical stock is
+// operationally more volatile.
 export const STOCK_READINESS_CACHE_MS = 5_000;
+// A failed scan remains fail-closed, but retrying all eleven possible pages
+// on every health/dashboard request can amplify a database outage. Use the
+// same short recovery window as the other production-readiness probes. This
+// is deliberately brief enough that newly replenished stock is visible on a
+// normal monitor retry, and it never converts a failed result into readiness.
+export const STOCK_READINESS_FAILURE_BACKOFF_MS = 5_000;
 
 type PocketWifiStockReadinessState = {
   readyUntil: number;
   readyConfiguredInventory: number | null;
+  retryAfter: number;
+  retryConfiguredInventory: number | null;
   checkInFlight: Promise<boolean> | null;
   checkInFlightConfiguredInventory: number | null;
 };
@@ -41,6 +51,8 @@ const stockReadinessState = (
   (globalThis as PocketWifiStockReadinessGlobal).__qyRoamPocketWifiStockReadinessState ??= {
     readyUntil: 0,
     readyConfiguredInventory: null,
+    retryAfter: 0,
+    retryConfiguredInventory: null,
     checkInFlight: null,
     checkInFlightConfiguredInventory: null,
   }
@@ -121,6 +133,14 @@ export async function hasSaleablePocketWifiInventory(configuredInventory: number
     stockReadinessState.readyConfiguredInventory === configuredInventory &&
     readinessWindowActive(stockReadinessState.readyUntil, now, STOCK_READINESS_CACHE_MS)
   ) return true;
+  if (
+    stockReadinessState.retryConfiguredInventory === configuredInventory &&
+    readinessFailureBackoffActive(
+      stockReadinessState.retryAfter,
+      now,
+      STOCK_READINESS_FAILURE_BACKOFF_MS,
+    )
+  ) return false;
 
   // Operational configuration is process-stable, but keep coalescing keyed
   // to its exact inventory ceiling so a hot configuration drift cannot reuse
@@ -132,10 +152,19 @@ export async function hasSaleablePocketWifiInventory(configuredInventory: number
         if (ready) {
           stockReadinessState.readyConfiguredInventory = configuredInventory;
           stockReadinessState.readyUntil = Date.now() + STOCK_READINESS_CACHE_MS;
+          stockReadinessState.retryAfter = 0;
+          stockReadinessState.retryConfiguredInventory = null;
+        } else {
+          stockReadinessState.retryConfiguredInventory = configuredInventory;
+          stockReadinessState.retryAfter = Date.now() + STOCK_READINESS_FAILURE_BACKOFF_MS;
         }
         return ready;
       })
-      .catch(() => false)
+      .catch(() => {
+        stockReadinessState.retryConfiguredInventory = configuredInventory;
+        stockReadinessState.retryAfter = Date.now() + STOCK_READINESS_FAILURE_BACKOFF_MS;
+        return false;
+      })
       .finally(() => {
         // A second, differently keyed probe may have replaced this shared
         // promise while it was running. Only its owner may clear the slot.

@@ -108,7 +108,7 @@ const { validatedCheckoutReservation, validatedInventoryCustodyOrder, validatedI
 const { validatedDeliveryLedgerRow, validatedStripeEventRecoveryRow } = require('../lib/adminDeliveryRow.ts');
 const { META_ATTRIBUTION_METADATA_KEYS, stripeMeasurementConsentDowngrade } = require('../lib/stripeMeasurementConsent.ts');
 const { signedStripeMeasurementConsentDowngrade } = require('../lib/stripeMeasurementProvenance.ts');
-const { saleablePocketWifiInventory: scanSaleablePocketWifiInventory } = require('../lib/pocketWifiStock.ts');
+const { saleablePocketWifiInventory: scanSaleablePocketWifiInventory, STOCK_READINESS_FAILURE_BACKOFF_MS } = require('../lib/pocketWifiStock.ts');
 const { retryableStripeConfirmationFailure } = require('../lib/confirmationLookupFailure.ts');
 const { CONFIRMATION_REFRESH_INITIAL_DELAY_MS, CONFIRMATION_REFRESH_MAX_DELAY_MS, CONFIRMATION_REFRESH_MAX_ATTEMPTS, confirmationRefreshDelayMs } = require('../lib/confirmationRefresh.ts');
 const { formatSingaporeDate, formatSingaporeTimestamp } = require('../lib/singaporeTimestamp.ts');
@@ -5270,14 +5270,19 @@ test('operations readiness requires the reviewed privileged RPC implementation v
   );
 });
 
-test('stock readiness coalesces deploy probes without caching failures or crossing fleet limits', () => {
+test('stock readiness coalesces deploy probes and backs off failed scans without crossing fleet limits', () => {
   assert.match(pocketWifiStock, /export const STOCK_READINESS_CACHE_MS = 5_000/);
+  assert.equal(STOCK_READINESS_FAILURE_BACKOFF_MS, 5_000);
   assert.match(pocketWifiStock, /__qyRoamPocketWifiStockReadinessState/);
   assert.match(pocketWifiStock, /\(globalThis as PocketWifiStockReadinessGlobal\)\.__qyRoamPocketWifiStockReadinessState \?\?=/);
   assert.match(pocketWifiStock, /stockReadinessState\.readyConfiguredInventory === configuredInventory/);
   assert.match(pocketWifiStock, /readinessWindowActive\(stockReadinessState\.readyUntil, now, STOCK_READINESS_CACHE_MS\)/);
+  assert.match(pocketWifiStock, /stockReadinessState\.retryConfiguredInventory === configuredInventory/);
+  assert.match(pocketWifiStock, /readinessFailureBackoffActive\([\s\S]*?STOCK_READINESS_FAILURE_BACKOFF_MS/);
   assert.match(pocketWifiStock, /stockReadinessState\.checkInFlightConfiguredInventory !== configuredInventory/);
   assert.match(pocketWifiStock, /if \(ready\) \{[\s\S]*?stockReadinessState\.readyUntil = Date\.now\(\) \+ STOCK_READINESS_CACHE_MS/);
+  assert.match(pocketWifiStock, /else \{[\s\S]*?stockReadinessState\.retryAfter = Date\.now\(\) \+ STOCK_READINESS_FAILURE_BACKOFF_MS/);
+  assert.match(pocketWifiStock, /\.catch\(\(\) => \{[\s\S]*?stockReadinessState\.retryAfter = Date\.now\(\) \+ STOCK_READINESS_FAILURE_BACKOFF_MS/);
   assert.doesNotMatch(pocketWifiStock, /if \(!ready\)[\s\S]{0,100}stockReadinessState\.readyUntil/);
   assert.match(pocketWifiStock, /if \(stockReadinessState\.checkInFlight === check\) \{/);
   assert.doesNotMatch(pocketWifiStock, /let stock(?:Ready|CheckInFlight)/);
