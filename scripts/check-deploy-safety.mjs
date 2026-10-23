@@ -387,6 +387,8 @@ assert.match(service, /^TimeoutStopSec=150$/m, 'systemd graceful-stop budget mus
 assert.match(service, /^ProtectSystem=strict$/m, 'the production filesystem must be read-only by default');
 assert.match(service, /^ProtectHome=read-only$/m, 'the root-owned checkout and environment must not be writable at runtime');
 assert.match(service, /^ReadWritePaths=\/root\/qy-roam\/\.next\/cache$/m, 'only the Next.js runtime cache may be writable below the checkout');
+assert.match(service, /^TasksMax=256$/m, 'the storefront must not exhaust the VPS process/task table');
+assert.match(service, /^LimitNOFILE=8192$/m, 'the storefront must have a finite file-descriptor ceiling');
 for (const directive of [
   'NoNewPrivileges=true',
   'PrivateTmp=true',

@@ -57,6 +57,15 @@ LimitCORE=0
 UMask=0077
 ProtectProc=invisible
 ProcSubset=pid
+# Keep an application-level leak or dependency regression inside the QY Roam
+# service instead of letting it consume the VPS-wide process table or file
+# descriptor pool. The standalone server normally uses only a small fraction
+# of these ceilings, while 256 tasks and 8,192 descriptors leave ample room
+# for Node's worker/runtime threads and the bounded concurrent checkout,
+# webhook, SMTP, Stripe and Supabase sockets. systemd will reject additional
+# resources cleanly and Restart=always retains the existing recovery path.
+TasksMax=256
+LimitNOFILE=8192
 # The storefront needs ordinary network sockets for Stripe, Supabase, SMTP and
 # Meta, but it never needs device, kernel, namespace, control-group or setuid
 # administration. An empty bounding set is required here: NoNewPrivileges only
