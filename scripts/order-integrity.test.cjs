@@ -4072,8 +4072,8 @@ test('admin sales-period close totals stable keyset pages instead of silently us
 test('sales reporting pages its full bounded view and hides incomplete headline totals', () => {
   assert.match(reportsPage, /const REPORT_PAGE_SIZE = 250/);
   assert.match(reportsPage, /const REPORT_MAX_ROWS = 5_000/);
-  assert.match(reportsPage, /\.order\('sales_date', \{ ascending: false \}\)\s*\.order\('product_type', \{ ascending: true \}\)\s*\.range\(from, to\)/);
-  assert.match(reportsPage, /fetchPage\(REPORT_MAX_ROWS, REPORT_MAX_ROWS\)/);
+  assert.match(reportsPage, /\.order\('sales_date', \{ ascending: false \}\)\s*\.order\('product_type', \{ ascending: true \}\)\s*\.limit\(limit\)/);
+  assert.match(reportsPage, /const beyond = await fetchPage\(1\)/);
   assert.match(reportsPage, /const reportIncomplete = reportUnavailable \|\| reportResult\.truncated/);
   assert.match(reportsPage, /reportIncomplete \? '—' : value/);
   assert.match(reportsPage, /Headline totals are hidden because they would be incomplete/);
@@ -6906,6 +6906,19 @@ test('CRM pagination cannot skip operational rows when concurrent writes shift r
   assert.match(crmPage, /newestFirst\(a,b,'last_order_at'\)/);
   assert.match(crmPage, /newestFirst\(a,b,'updated_at'\)/);
   assert.match(crmPage, /newestFirst\(a,b,'created_at'\)/);
+});
+
+test('sales reporting uses its composite identity as a stable live-view cursor', () => {
+  assert.match(reportsPage, /let afterDate: string \| null = null/);
+  assert.match(reportsPage, /let afterProduct: string \| null = null/);
+  assert.match(reportsPage, /loaded < REPORT_MAX_ROWS; loaded \+= REPORT_PAGE_SIZE/);
+  assert.match(reportsPage, /sales_date\.lt\.\$\{afterDate\},and\(sales_date\.eq\.\$\{afterDate\},product_type\.gt\.\$\{afterProduct\}\)/);
+  assert.match(reportsPage, /afterDate = nextDate/);
+  assert.match(reportsPage, /afterProduct = nextProduct/);
+  assert.match(reportsPage, /row\.sales_date < previousDate/);
+  assert.match(reportsPage, /row\.sales_date === previousDate && row\.product_type > previousProduct/);
+  assert.match(reportsPage, /const beyond = await fetchPage\(1\)/);
+  assert.doesNotMatch(reportsPage, /\.range\(from, to\)/);
 });
 
 test('admin webhook recovery visibility pages every actionable Stripe exception within its declared bound', () => {

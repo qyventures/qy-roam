@@ -14,42 +14,73 @@ type ReportResult = { data: any[]; error: unknown; truncated: boolean };
 async function loadReportPages(db: NonNullable<ReturnType<typeof getSupabaseAdmin>>): Promise<ReportResult> {
   const data: any[] = [];
   const seenRows = new Set<string>();
-  const fetchPage = (from: number, to: number) => db
-    .from('sales_daily_summary')
-    .select('*')
-    .order('sales_date', { ascending: false })
-    .order('product_type', { ascending: true })
-    .range(from, to);
+  let previousDate: string | null = null;
+  let previousProduct: string | null = null;
+  let afterDate: string | null = null;
+  let afterProduct: string | null = null;
+  const fetchPage = (limit: number) => {
+    let query = db
+      .from('sales_daily_summary')
+      .select('*')
+      .order('sales_date', { ascending: false })
+      .order('product_type', { ascending: true })
+      .limit(limit);
+    if (afterDate !== null && afterProduct !== null) {
+      // Both cursor values come from a row validated below against closed
+      // date/product grammars, so they are safe to place in PostgREST's
+      // composite OR expression. The ordering means the next row is on an
+      // older date, or a later product bucket on the same date.
+      query = query.or(`sales_date.lt.${afterDate},and(sales_date.eq.${afterDate},product_type.gt.${afterProduct})`);
+    }
+    return query;
+  };
 
-  for (let from = 0; from < REPORT_MAX_ROWS; from += REPORT_PAGE_SIZE) {
-    const result = await fetchPage(from, from + REPORT_PAGE_SIZE - 1);
+  for (let loaded = 0; loaded < REPORT_MAX_ROWS; loaded += REPORT_PAGE_SIZE) {
+    const result = await fetchPage(REPORT_PAGE_SIZE);
     if (result.error) return { data: [], error: result.error, truncated: false };
     // The view's natural identity is one product bucket per sales date. A
-    // duplicate across offset pages is evidence that the snapshot shifted
-    // while it was being read (or that the view contract is corrupt), so its
+    // duplicate or out-of-order identity is evidence that the provider did
+    // not honour the cursor contract (or that the view is corrupt), so its
     // revenue must not be counted twice or presented as a complete report.
     if (!Array.isArray(result.data) || result.data.length > REPORT_PAGE_SIZE) {
       return { data: [], error: new Error('Sales report returned an invalid page'), truncated: false };
     }
     const page = result.data;
     for (const row of page) {
-      const identity = typeof row?.sales_date === 'string' && typeof row?.product_type === 'string'
+      const validDate = typeof row?.sales_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(row.sales_date);
+      const validProduct = row?.product_type === 'pocket_wifi' || row?.product_type === 'esim';
+      const identity = validDate && validProduct
         ? `${row.sales_date}\u0000${row.product_type}`
         : null;
-      if (identity === null || seenRows.has(identity)) {
+      const followsPrevious = previousDate === null || previousProduct === null
+        || row.sales_date < previousDate
+        || (row.sales_date === previousDate && row.product_type > previousProduct);
+      if (identity === null || seenRows.has(identity) || !followsPrevious) {
         return { data: [], error: new Error('Sales report returned an invalid or duplicate identity'), truncated: false };
       }
       seenRows.add(identity);
+      previousDate = row.sales_date;
+      previousProduct = row.product_type;
     }
     data.push(...page);
     if (page.length < REPORT_PAGE_SIZE) return { data, error: null, truncated: false };
+    const cursor = page[page.length - 1];
+    const nextDate = cursor?.sales_date;
+    const nextProduct = cursor?.product_type;
+    if (typeof nextDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(nextDate)
+      || (nextProduct !== 'pocket_wifi' && nextProduct !== 'esim')
+      || (nextDate === afterDate && nextProduct === afterProduct)) {
+      return { data: [], error: new Error('Sales report returned an invalid pagination cursor'), truncated: false };
+    }
+    afterDate = nextDate;
+    afterProduct = nextProduct;
   }
 
   // A full last page may be the exact end of the view. Probe one additional
   // row so staff see an overflow warning only when reporting data was actually
   // omitted. A failed probe makes completeness unknown and therefore fails
   // the report closed rather than presenting partial figures as authoritative.
-  const beyond = await fetchPage(REPORT_MAX_ROWS, REPORT_MAX_ROWS);
+  const beyond = await fetchPage(1);
   if (beyond.error) return { data: [], error: beyond.error, truncated: false };
   if (!Array.isArray(beyond.data) || beyond.data.length > 1) {
     return { data: [], error: new Error('Sales report returned an invalid truncation probe'), truncated: false };
