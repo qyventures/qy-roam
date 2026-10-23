@@ -1776,7 +1776,7 @@ test('admin operational mutations have a bounded non-queueing database-work budg
   );
   assert.match(adminOpsRoute, /Operations are busy\. Please try again shortly\./);
   assert.match(adminOpsRoute, /'Retry-After': '5'/);
-  assert.match(adminOpsRoute, /finally \{\s*releaseAdminOps\(\);\s*\}/);
+  assert.match(adminOpsRoute, /finally \{\s*adminOpsDeadline\.dispose\(\);\s*releaseAdminOps\(\);\s*\}/);
 
   const releases = [];
   for (let index = 0; index < ADMIN_OPS_MAX_CONCURRENT_REQUESTS; index += 1) {
@@ -4126,7 +4126,7 @@ test('admin sales-period close totals stable keyset pages instead of silently us
   assert.doesNotMatch(adminOpsRoute, /\.range\(offset, offset \+ CLOSING_ORDER_PAGE_SIZE - 1\)/);
   assert.match(adminOpsRoute, /if \(page\.length < CLOSING_ORDER_PAGE_SIZE\) return gross/);
   assert.match(adminOpsRoute, /if \(loaded >= MAX_CLOSING_ORDERS\)/);
-  assert.match(adminOpsRoute, /await paidOrderGrossForPeriod\(db, dates\.start!, dates\.end!\)/);
+  assert.match(adminOpsRoute, /await paidOrderGrossForPeriod\(db, dates\.start!, dates\.end!, adminOpsDeadline\.signal\)/);
   assert.match(adminOpsRoute, /Period dates must be valid ISO dates with the end date on or after the start date/);
 });
 
@@ -6528,9 +6528,9 @@ test('admin CRM writes reject malformed commercial data and missing mutation tar
   assert.match(adminOpsRoute, /expectedCloseDate !== null && !parseExactIsoDate\(expectedCloseDate\)/);
   assert.doesNotMatch(adminOpsRoute, /expected_value_sgd: Math\.max\(0, num\(/);
   assert.doesNotMatch(adminOpsRoute, /probability = Math\.min\(100, Math\.max\(0, num\(/);
-  assert.match(adminOpsRoute, /from\('crm_activities'\)\.update\([\s\S]*?\.select\('id,completed_at'\)\.maybeSingle\(\)/);
+  assert.match(adminOpsRoute, /from\('crm_activities'\)\.update\([\s\S]*?\.select\('id,completed_at'\)\.abortSignal\(adminOpsDeadline\.signal\)\.maybeSingle\(\)/);
   assert.match(adminOpsRoute, /if \(!data\) return NextResponse\.json\(\{ error: 'Activity not found' \}, \{ status: 404 \}\)/);
-  assert.match(adminOpsRoute, /from\('sales_opportunities'\)\.update\([\s\S]*?\.select\('id,stage,probability'\)\.maybeSingle\(\)/);
+  assert.match(adminOpsRoute, /from\('sales_opportunities'\)\.update\([\s\S]*?\.select\('id,stage,probability'\)\.abortSignal\(adminOpsDeadline\.signal\)\.maybeSingle\(\)/);
   assert.match(adminOpsRoute, /if \(!data\) return NextResponse\.json\(\{ error: 'Opportunity not found' \}, \{ status: 404 \}\)/);
 });
 
@@ -10727,10 +10727,10 @@ test('admin CRM and forecast mutations acknowledge the exact committed record', 
     stage: 'qualified', probability: 45, owner: null,
   }, 17), false);
 
-  assert.match(adminOpsRoute, /from\('customers'\)\.insert\(row\)\.select\([^)]+\)\.single\(\)/);
-  assert.match(adminOpsRoute, /from\('crm_activities'\)\.insert\(row\)\.select\([^)]+\)\.single\(\)/);
-  assert.match(adminOpsRoute, /from\('sales_opportunities'\)\.insert\(row\)\.select\([^)]+\)\.single\(\)/);
-  assert.match(adminOpsRoute, /from\('forecasts'\)\.upsert\(row,[\s\S]{0,120}\.select\([^)]+\)\.single\(\)/);
+  assert.match(adminOpsRoute, /from\('customers'\)\.insert\(row\)\.select\([^)]+\)\.abortSignal\(adminOpsDeadline\.signal\)\.single\(\)/);
+  assert.match(adminOpsRoute, /from\('crm_activities'\)\.insert\(row\)\.select\([^)]+\)\.abortSignal\(adminOpsDeadline\.signal\)\.single\(\)/);
+  assert.match(adminOpsRoute, /from\('sales_opportunities'\)\.insert\(row\)\.select\([^)]+\)\.abortSignal\(adminOpsDeadline\.signal\)\.single\(\)/);
+  assert.match(adminOpsRoute, /from\('forecasts'\)\.upsert\(row,[\s\S]{0,120}\.select\([^)]+\)\.abortSignal\(adminOpsDeadline\.signal\)\.single\(\)/);
   assert.match(adminOpsRoute, /acknowledgedAdminRecord\(data,/g);
 });
 
@@ -11146,4 +11146,35 @@ test('admin fulfilment transitions share one end-to-end database deadline', asyn
   assert.ok(wifiSignal > wifiTransition, 'the Pocket WiFi transition must inherit the shared deadline');
   assert.ok(esimSignal > esimTransition, 'the eSIM transition must inherit the shared deadline');
   assert.ok(disposal > esimSignal && release > disposal, 'the deadline must be cleared before releasing the operations slot');
+});
+
+test('general admin operations share one end-to-end database deadline', async () => {
+  const { createAdminOpsDeadline, ADMIN_OPS_DEPENDENCY_TIMEOUT_MS } = require('../lib/adminOpsDeadline.ts');
+  assert.equal(ADMIN_OPS_DEPENDENCY_TIMEOUT_MS, 15_000);
+  assert.throws(() => createAdminOpsDeadline(0), /Invalid admin operations dependency timeout/);
+  assert.throws(
+    () => createAdminOpsDeadline(ADMIN_OPS_DEPENDENCY_TIMEOUT_MS + 1),
+    /Invalid admin operations dependency timeout/,
+  );
+  const deadline = createAdminOpsDeadline(5);
+  await new Promise((resolve) => deadline.signal.addEventListener('abort', resolve, { once: true }));
+  assert.equal(deadline.signal.aborted, true);
+  assert.match(String(deadline.signal.reason), /Admin operations dependency work timed out/i);
+  deadline.dispose();
+
+  const admission = adminOpsRoute.indexOf('const adminOpsDeadline = createAdminOpsDeadline()');
+  const closeRead = adminOpsRoute.indexOf('.abortSignal(signal)', adminOpsRoute.indexOf('async function paidOrderGrossForPeriod'));
+  const manualOrder = adminOpsRoute.indexOf("qy_create_manual_pocket_wifi_order", admission);
+  const inventory = adminOpsRoute.indexOf("qy_adjust_inventory", manualOrder);
+  const crm = adminOpsRoute.indexOf(".from('crm_activities')", inventory);
+  const closeCall = adminOpsRoute.indexOf('paidOrderGrossForPeriod(db, dates.start!, dates.end!, adminOpsDeadline.signal)', crm);
+  const closeRpc = adminOpsRoute.indexOf("qy_record_closing_period", closeCall);
+  const disposal = adminOpsRoute.indexOf('adminOpsDeadline.dispose()', closeRpc);
+  const release = adminOpsRoute.indexOf('releaseAdminOps()', disposal);
+  assert.ok(admission > 0 && closeRead > 0, 'admitted operations and closing-ledger pages must have a deadline');
+  assert.match(adminOpsRoute.slice(manualOrder, inventory), /\.abortSignal\(adminOpsDeadline\.signal\)/);
+  assert.match(adminOpsRoute.slice(inventory, crm), /\.abortSignal\(adminOpsDeadline\.signal\)/);
+  assert.match(adminOpsRoute.slice(crm, closeCall), /\.abortSignal\(adminOpsDeadline\.signal\)/);
+  assert.match(adminOpsRoute.slice(closeRpc, disposal), /\.abortSignal\(adminOpsDeadline\.signal\)/);
+  assert.ok(disposal > closeRpc && release > disposal, 'the deadline must be cleared before releasing the shared slot');
 });

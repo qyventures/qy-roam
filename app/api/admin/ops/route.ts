@@ -16,6 +16,7 @@ import { acknowledgedAdminRecord } from '@/lib/adminRecordAcknowledgement';
 import { validAdminOperationId } from '@/lib/adminOperationId';
 import { inventoryMutationFailure } from '@/lib/inventoryMutationFailure';
 import { normalizedCustomerPhone } from '@/lib/customerPhone';
+import { createAdminOpsDeadline } from '@/lib/adminOpsDeadline';
 
 export const dynamic = 'force-dynamic';
 
@@ -138,7 +139,7 @@ function optionalTravelDates(body: Record<string, unknown>) {
   return { start: startRaw, end: endRaw };
 }
 
-async function paidOrderGrossForPeriod(db: ReturnType<typeof getSupabaseAdmin>, start: string, end: string) {
+async function paidOrderGrossForPeriod(db: ReturnType<typeof getSupabaseAdmin>, start: string, end: string, signal: AbortSignal) {
   if (!db) throw new Error('Database unavailable');
   let grossCents = 0;
   let afterId: number | null = null;
@@ -158,7 +159,8 @@ async function paidOrderGrossForPeriod(db: ReturnType<typeof getSupabaseAdmin>, 
       // identity can overlap or skip rows when webhook settlements arrive
       // while an operator is preparing the close.
       .order('id')
-      .limit(CLOSING_ORDER_PAGE_SIZE);
+      .limit(CLOSING_ORDER_PAGE_SIZE)
+      .abortSignal(signal);
     if (afterId !== null) query = query.gt('id', afterId);
     const { data: orders, error } = await query;
     if (error) throw error;
@@ -237,6 +239,7 @@ export async function POST(req: NextRequest) {
       headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' },
     });
   }
+  const adminOpsDeadline = createAdminOpsDeadline();
 
   try {
     if (action === 'order_create') {
@@ -360,7 +363,7 @@ export async function POST(req: NextRequest) {
           p_travel_end: row.travel_end,
           p_notes: row.notes,
           p_inventory: config.pocketWifiInventory,
-        });
+        }).abortSignal(adminOpsDeadline.signal);
         if (error) {
           if (/manual order reference already belongs to different order details/i.test(error.message || '')) {
             return NextResponse.json({ error: 'This payment or sales reference already belongs to different order details. Reconcile the existing order before continuing.' }, { status: 409 });
@@ -392,7 +395,7 @@ export async function POST(req: NextRequest) {
           p_travel_start: row.travel_start,
           p_travel_end: row.travel_end,
           p_notes: row.notes,
-        });
+        }).abortSignal(adminOpsDeadline.signal);
         if (error) {
           if (/manual order reference already belongs to different order details/i.test(error.message || '')) {
             return NextResponse.json({ error: 'This payment or sales reference already belongs to different order details. Reconcile the existing order before continuing.' }, { status: 409 });
@@ -460,7 +463,7 @@ export async function POST(req: NextRequest) {
         p_location: row.location,
         p_notes: row.notes,
         p_operation_id: operationId,
-      });
+      }).abortSignal(adminOpsDeadline.signal);
       if (error) {
         const failure = inventoryMutationFailure(error);
         if (failure) return NextResponse.json({ error: failure.message }, { status: failure.status });
@@ -495,7 +498,7 @@ export async function POST(req: NextRequest) {
       if (!validInventoryReference(reference)) return NextResponse.json({ error: 'Inventory references must be a single line of 120 characters or fewer' }, { status: 400 });
       const adjustmentNotes = optionalSingleLineText(body.notes, 1000);
       if (adjustmentNotes === undefined) return NextResponse.json({ error: 'Inventory notes must be a single line of 1,000 characters or fewer' }, { status: 400 });
-      const { data, error } = await db.rpc('qy_adjust_inventory', { p_item_id: itemId, p_delta: delta, p_type: movementType, p_reference: reference, p_notes: adjustmentNotes, p_operation_id: operationId });
+      const { data, error } = await db.rpc('qy_adjust_inventory', { p_item_id: itemId, p_delta: delta, p_type: movementType, p_reference: reference, p_notes: adjustmentNotes, p_operation_id: operationId }).abortSignal(adminOpsDeadline.signal);
       if (error) {
         const failure = inventoryMutationFailure(error);
         if (failure) return NextResponse.json({ error: failure.message }, { status: failure.status });
@@ -533,7 +536,7 @@ export async function POST(req: NextRequest) {
         p_reference: reference,
         p_notes: inspectionNotes,
         p_operation_id: operationId,
-      });
+      }).abortSignal(adminOpsDeadline.signal);
       if (error) {
         const failure = inventoryMutationFailure(error);
         if (failure) return NextResponse.json({ error: failure.message }, { status: failure.status });
@@ -550,7 +553,7 @@ export async function POST(req: NextRequest) {
       if (!['lead', 'active', 'inactive'].includes(status)) return NextResponse.json({ error: 'Choose a valid customer status' }, { status: 400 });
       const row = { email: text(body.email, 200).toLowerCase() || null, phone: text(body.phone, 60) || null, name: text(body.name, 120) || null, status, source: text(body.source, 80) || 'manual', notes: text(body.notes, 1500) || null, updated_at: new Date().toISOString() };
       if (!row.email && !row.phone) return NextResponse.json({ error: 'Email or phone is required' }, { status: 400 });
-      const { data, error } = await db.from('customers').insert(row).select('id,email,phone,name,status,source').single();
+      const { data, error } = await db.from('customers').insert(row).select('id,email,phone,name,status,source').abortSignal(adminOpsDeadline.signal).single();
       if (error) throw error;
       if (!acknowledgedAdminRecord(data, {
         email: row.email, phone: row.phone, name: row.name, status: row.status, source: row.source,
@@ -563,14 +566,14 @@ export async function POST(req: NextRequest) {
       if (!['note', 'call', 'whatsapp', 'email', 'task'].includes(activityType)) return NextResponse.json({ error: 'Choose a valid activity type' }, { status: 400 });
       if (dueAt === undefined) return NextResponse.json({ error: 'Choose a valid follow-up date and time' }, { status: 400 });
       const row = { customer_id: customerId, activity_type: activityType, subject: text(body.subject, 160) || null, detail: text(body.detail, 2000) || null, due_at: dueAt, owner: text(body.owner, 100) || null };
-      const { data, error } = await db.from('crm_activities').insert(row).select('id,customer_id,activity_type,subject,detail,due_at,owner').single();
+      const { data, error } = await db.from('crm_activities').insert(row).select('id,customer_id,activity_type,subject,detail,due_at,owner').abortSignal(adminOpsDeadline.signal).single();
       if (error) throw error;
       if (!acknowledgedAdminRecord(data, row)) throw new Error('CRM activity acknowledgement mismatch');
     } else if (action === 'activity_complete') {
       const activityId = positiveSafeInteger(body.id);
       if (activityId === null) return NextResponse.json({ error: 'Choose a valid activity' }, { status: 400 });
       const completedAt = new Date().toISOString();
-      const { data, error } = await db.from('crm_activities').update({ completed_at: completedAt }).eq('id', activityId).select('id,completed_at').maybeSingle();
+      const { data, error } = await db.from('crm_activities').update({ completed_at: completedAt }).eq('id', activityId).select('id,completed_at').abortSignal(adminOpsDeadline.signal).maybeSingle();
       if (error) throw error;
       if (!data) return NextResponse.json({ error: 'Activity not found' }, { status: 404 });
       if (!acknowledgedAdminRecord(data, { completed_at: completedAt }, activityId)) throw new Error('CRM activity completion acknowledgement mismatch');
@@ -594,7 +597,7 @@ export async function POST(req: NextRequest) {
       if (expectedCloseDate !== null && !parseExactIsoDate(expectedCloseDate)) return NextResponse.json({ error: 'Choose a valid expected close date' }, { status: 400 });
       const row = { customer_id: customerId, title: text(body.title, 180), product_type: productType, stage, probability, expected_value_sgd: expectedValueCents / 100, expected_close_date: expectedCloseDate, source: text(body.source, 80) || null, owner: text(body.owner, 100) || null, notes: text(body.notes, 1500) || null, updated_at: new Date().toISOString() };
       if (!row.title) return NextResponse.json({ error: 'Opportunity title is required' }, { status: 400 });
-      const { data, error } = await db.from('sales_opportunities').insert(row).select('id,customer_id,title,product_type,stage,probability,expected_value_sgd,expected_close_date,source,owner').single();
+      const { data, error } = await db.from('sales_opportunities').insert(row).select('id,customer_id,title,product_type,stage,probability,expected_value_sgd,expected_close_date,source,owner').abortSignal(adminOpsDeadline.signal).single();
       if (error) throw error;
       if (!acknowledgedAdminRecord(data, {
         customer_id: row.customer_id, title: row.title, product_type: row.product_type,
@@ -608,7 +611,7 @@ export async function POST(req: NextRequest) {
       if (opportunityId === null) return NextResponse.json({ error: 'Choose a valid opportunity' }, { status: 400 });
       if (!['lead', 'qualified', 'proposal', 'negotiation', 'won', 'lost'].includes(stage)) return NextResponse.json({ error: 'Choose a valid opportunity stage' }, { status: 400 });
       if (probability === null) return NextResponse.json({ error: 'Probability must be a whole percentage from 0 to 100' }, { status: 400 });
-      const { data, error } = await db.from('sales_opportunities').update({ stage, probability, updated_at: new Date().toISOString() }).eq('id', opportunityId).select('id,stage,probability').maybeSingle();
+      const { data, error } = await db.from('sales_opportunities').update({ stage, probability, updated_at: new Date().toISOString() }).eq('id', opportunityId).select('id,stage,probability').abortSignal(adminOpsDeadline.signal).maybeSingle();
       if (error) throw error;
       if (!data) return NextResponse.json({ error: 'Opportunity not found' }, { status: 404 });
       if (!acknowledgedAdminRecord(data, { stage, probability }, opportunityId)) throw new Error('Opportunity stage acknowledgement mismatch');
@@ -623,7 +626,7 @@ export async function POST(req: NextRequest) {
       // rather than deleting the previous forecast before inserting a new
       // one: an interrupted request must retain the last approved forecast.
       const row = { forecast_month: month, product_type: product, forecast_orders: forecastOrders, forecast_revenue_sgd: forecastRevenueCents / 100, forecast_units: forecastUnits, method: text(body.method, 80) || 'management', notes: text(body.notes, 1200) || null, updated_at: new Date().toISOString() };
-      const { data, error } = await db.from('forecasts').upsert(row, { onConflict: 'forecast_month,product_type' }).select('id,forecast_month,product_type,forecast_orders,forecast_revenue_sgd,forecast_units,method,notes').single();
+      const { data, error } = await db.from('forecasts').upsert(row, { onConflict: 'forecast_month,product_type' }).select('id,forecast_month,product_type,forecast_orders,forecast_revenue_sgd,forecast_units,method,notes').abortSignal(adminOpsDeadline.signal).single();
       if (error) throw error;
       if (!acknowledgedAdminRecord(data, {
         forecast_month: row.forecast_month, product_type: row.product_type,
@@ -643,14 +646,14 @@ export async function POST(req: NextRequest) {
       const lock = body.lock === true;
       const closedBy = text(body.closed_by, 100);
       if (lock && !closedBy) return NextResponse.json({ error: 'Closed accounting periods require an accountable operator name' }, { status: 400 });
-      const gross = await paidOrderGrossForPeriod(db, dates.start!, dates.end!); const refunds = refundsCents / 100, fees = feesCents / 100, cogs = cogsCents / 100, net = gross - refunds, gp = net - fees - cogs;
+      const gross = await paidOrderGrossForPeriod(db, dates.start!, dates.end!, adminOpsDeadline.signal); const refunds = refundsCents / 100, fees = feesCents / 100, cogs = cogsCents / 100, net = gross - refunds, gp = net - fees - cogs;
       const notes = text(body.notes, 1500) || null;
       const { data, error } = await db.rpc('qy_record_closing_period', {
         p_period_start: start, p_period_end: end, p_lock: lock,
         p_gross_sales_sgd: gross, p_refunds_sgd: refunds, p_net_sales_sgd: net,
         p_fees_sgd: fees, p_cogs_sgd: cogs, p_gross_profit_sgd: gp,
         p_closed_by: closedBy || null, p_notes: notes,
-      });
+      }).abortSignal(adminOpsDeadline.signal);
       if (error) {
         if (/closed accounting period|multiple accounting records/i.test(error.message || '')) return NextResponse.json({ error: error.message }, { status: 409 });
         if (/paid-order ledger changed/i.test(error.message || '')) {
@@ -676,6 +679,7 @@ export async function POST(req: NextRequest) {
     console.error('admin_ops_action_failed', { action });
     return NextResponse.json({ error: 'Operation failed. Please try again or contact an administrator.' }, { status: 500 });
   } finally {
+    adminOpsDeadline.dispose();
     releaseAdminOps();
   }
 }
