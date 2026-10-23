@@ -19,6 +19,7 @@ import { scanActivePocketWifiStripeHolds } from '@/lib/pocketWifiStripeHolds';
 import { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } from '@/lib/pocketWifiRentalPeriod';
 import { exactRpcRow } from '@/lib/exactRpcRow';
 import { wifiBenchmarkIsFresh } from '@/lib/wifiPlans';
+import { createAvailabilityDeadline } from '@/lib/availabilityDeadline';
 
 export const dynamic = 'force-dynamic';
 
@@ -63,7 +64,7 @@ async function activeStripeHolds(stripe: Stripe, stripeKey: string, start: strin
   return { holds, requestIds };
 }
 
-async function committedInventory(start: string, end: string, stripeHoldRequestIds: Set<string>, configuredInventory: number) {
+async function committedInventory(start: string, end: string, stripeHoldRequestIds: Set<string>, configuredInventory: number, signal: AbortSignal) {
   const supabase = getSupabaseAdmin();
   if (!supabase) throw new Error('Supabase is not configured');
   const snapshot = await supabase.rpc('qy_pocket_wifi_availability_snapshot', {
@@ -71,7 +72,7 @@ async function committedInventory(start: string, end: string, stripeHoldRequestI
     p_travel_end: end,
     p_inventory: configuredInventory,
     p_stripe_hold_request_ids: [...stripeHoldRequestIds],
-  });
+  }).abortSignal(signal);
   if (snapshot.error) throw snapshot.error;
   // This SECURITY DEFINER RPC owns the atomic stock promise and is defined to
   // return exactly one row. Never turn an empty or multi-row response caused
@@ -89,6 +90,7 @@ async function committedInventory(start: string, end: string, stripeHoldRequestI
 
 export async function GET(req: NextRequest) {
   let releaseAvailability: (() => void) | null = null;
+  let availabilityDeadline: ReturnType<typeof createAvailabilityDeadline> | null = null;
   try {
   // Apply the bounded per-client ingress limit before parsing any attacker-
   // controlled query values. Malformed dates are cheap and must never spend
@@ -190,8 +192,13 @@ export async function GET(req: NextRequest) {
   const from = start.toISOString().slice(0, 10);
   const to = end.toISOString().slice(0, 10);
   try {
+    // The Stripe scan has its own shorter pagination deadline. Start one
+    // wider end-to-end budget immediately before the live inventory work so
+    // the following atomic database snapshot receives only the time left,
+    // rather than stacking a fresh transport timeout after a slow scan.
+    availabilityDeadline = createAvailabilityDeadline();
     const stripeHolds = await activeStripeHolds(createStripeClient(stripeKey), stripeKey, from, to);
-    const inventoryState = await committedInventory(from, to, stripeHolds.requestIds, inventory);
+    const inventoryState = await committedInventory(from, to, stripeHolds.requestIds, inventory, availabilityDeadline.signal);
     const committed = inventoryState.committed + stripeHolds.holds;
     // This must mirror qy_reserve_pocket_wifi: the lower of the configured
     // operating cap and current saleable stock is the only capacity we can
@@ -226,6 +233,7 @@ export async function GET(req: NextRequest) {
     console.error('availability_check_failed');
     return unavailableAvailability();
   } finally {
+    availabilityDeadline?.dispose();
     releaseAvailability?.();
   }
 }

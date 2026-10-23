@@ -89,6 +89,7 @@ const { MANUAL_ORDER_REFERENCE_MAX_LENGTH, manualOrderReference, manualOrderSess
 const { createConcurrencyLimiter } = require('../lib/concurrencyLimit.ts');
 const { CHECKOUT_MAX_CONCURRENT_REQUESTS, CHECKOUT_MAX_CONCURRENT_UPLOADS, tryAcquireCheckoutConcurrency, tryAcquireCheckoutUpload } = require('../lib/checkoutConcurrency.ts');
 const { AVAILABILITY_MAX_CONCURRENT_REQUESTS, tryAcquireAvailabilityConcurrency } = require('../lib/availabilityConcurrency.ts');
+const { AVAILABILITY_LOOKUP_TIMEOUT_MS, createAvailabilityDeadline } = require('../lib/availabilityDeadline.ts');
 const { CONFIRMATION_MAX_CONCURRENT_REQUESTS, tryAcquireConfirmationConcurrency } = require('../lib/confirmationConcurrency.ts');
 const { CONFIRMATION_LOOKUP_TIMEOUT_MS, createConfirmationDeadline } = require('../lib/confirmationDeadline.ts');
 const { HEALTH_MAX_CONCURRENT_REQUESTS, tryAcquireHealthConcurrency } = require('../lib/healthConcurrency.ts');
@@ -392,7 +393,7 @@ test('live availability has a bounded non-queueing dependency-work budget', () =
   const firstDependency = availabilityRoute.indexOf('hasRequiredPaymentSchema()');
   assert.ok(validationBoundary > -1 && admission > validationBoundary && firstDependency > admission);
   assert.match(availabilityRoute, /if \(!releaseAvailability\)[\s\S]*?status: 503[\s\S]*?'Retry-After': '5'/);
-  assert.match(availabilityRoute, /finally \{\s*releaseAvailability\?\.\(\);\s*\}/);
+  assert.match(availabilityRoute, /finally \{\s*availabilityDeadline\?\.dispose\(\);\s*releaseAvailability\?\.\(\);\s*\}/);
 });
 
 test('every live availability response is non-cacheable and unexpected prerequisite failures stay retryable', () => {
@@ -10478,6 +10479,28 @@ test('customer confirmation Stripe and ledger reads share one end-to-end deadlin
     assert.ok(stripeLookup >= 0 && ledgerSignal > stripeLookup && disposal > ledgerSignal,
       'the ledger read must inherit and release the deadline created before Stripe');
   }
+});
+
+test('live availability Stripe and inventory reads share one end-to-end deadline', async () => {
+  assert.equal(AVAILABILITY_LOOKUP_TIMEOUT_MS, 20_000);
+  assert.throws(() => createAvailabilityDeadline(0), RangeError);
+  assert.throws(() => createAvailabilityDeadline(AVAILABILITY_LOOKUP_TIMEOUT_MS + 1), RangeError);
+
+  const deadline = createAvailabilityDeadline(5);
+  assert.equal(deadline.signal.aborted, false);
+  await new Promise((resolve) => deadline.signal.addEventListener('abort', resolve, { once: true }));
+  assert.equal(deadline.signal.aborted, true);
+  assert.match(String(deadline.signal.reason), /availability lookup timed out/i);
+  deadline.dispose();
+
+  const deadlineCreation = availabilityRoute.indexOf('availabilityDeadline = createAvailabilityDeadline()');
+  const stripeLookup = availabilityRoute.indexOf('activeStripeHolds(', deadlineCreation);
+  const inventorySignal = availabilityRoute.indexOf('availabilityDeadline.signal', stripeLookup);
+  const disposal = availabilityRoute.indexOf('availabilityDeadline?.dispose()', inventorySignal);
+  assert.ok(deadlineCreation >= 0 && stripeLookup > deadlineCreation &&
+    inventorySignal > stripeLookup && disposal > inventorySignal,
+  'the atomic inventory read must inherit and release the deadline created before Stripe');
+  assert.match(availabilityRoute, /qy_pocket_wifi_availability_snapshot[\s\S]{0,500}\.abortSignal\(signal\)/);
 });
 
 test('dependency-work concurrency budgets survive duplicate Next server module graphs', () => {
