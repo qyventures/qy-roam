@@ -1869,7 +1869,7 @@ test('admin order transitions share the bounded operations database-work budget'
   assert.match(adminOrderRoute, /'Retry-After': '5'/);
   assert.match(
     adminOrderRoute.slice(admission, adminOrderRoute.indexOf('async function retryOrderDeliveries')),
-    /finally \{\s*releaseAdminOps\(\);\s*\}/,
+    /finally \{\s*adminOrderDeadline\.dispose\(\);\s*releaseAdminOps\(\);\s*\}/,
   );
 });
 
@@ -1887,7 +1887,7 @@ test('admin order transitions contain unexpected dependency failures inside a re
   assert.match(transitionHandler, /status: 503/);
   assert.match(transitionHandler, /'Cache-Control': 'no-store'/);
   assert.match(transitionHandler, /'Retry-After': '5'/);
-  assert.match(transitionHandler, /catch \{[\s\S]*finally \{\s*releaseAdminOps\(\);\s*\}/);
+  assert.match(transitionHandler, /catch \{[\s\S]*finally \{\s*adminOrderDeadline\.dispose\(\);\s*releaseAdminOps\(\);\s*\}/);
 });
 
 test('Pocket WiFi reservation authority validates its complete capacity snapshot', () => {
@@ -11117,4 +11117,33 @@ test('Stripe webhook durable processing shares one end-to-end dependency deadlin
   assert.match(webhookRoute, /qy_claim_stripe_event'[\s\S]{0,300}\.abortSignal\(signal\)/);
   assert.match(webhookRoute, /qy_persist_stripe_pocket_wifi_order'[\s\S]{0,800}\.abortSignal\(signal\)/);
   assert.match(webhookRoute, /qy_persist_stripe_esim_order'[\s\S]{0,800}\.abortSignal\(signal\)/);
+});
+
+test('admin fulfilment transitions share one end-to-end database deadline', async () => {
+  const { createAdminOrderDeadline, ADMIN_ORDER_DEPENDENCY_TIMEOUT_MS } = require('../lib/adminOrderDeadline.ts');
+  assert.equal(ADMIN_ORDER_DEPENDENCY_TIMEOUT_MS, 15_000);
+  assert.throws(() => createAdminOrderDeadline(0), /Invalid admin order dependency timeout/);
+  assert.throws(
+    () => createAdminOrderDeadline(ADMIN_ORDER_DEPENDENCY_TIMEOUT_MS + 1),
+    /Invalid admin order dependency timeout/,
+  );
+  const deadline = createAdminOrderDeadline(5);
+  await new Promise((resolve) => deadline.signal.addEventListener('abort', resolve, { once: true }));
+  assert.equal(deadline.signal.aborted, true);
+  assert.match(String(deadline.signal.reason), /Admin order dependency work timed out/i);
+  deadline.dispose();
+
+  const route = adminOrderRoute;
+  const admission = route.indexOf('const adminOrderDeadline = createAdminOrderDeadline()');
+  const readSignal = route.indexOf('.abortSignal(adminOrderDeadline.signal)', admission);
+  const wifiTransition = route.indexOf("qy_transition_pocket_wifi_order", readSignal);
+  const wifiSignal = route.indexOf('.abortSignal(adminOrderDeadline.signal)', wifiTransition);
+  const esimTransition = route.indexOf("qy_transition_esim_order", wifiSignal);
+  const esimSignal = route.indexOf('.abortSignal(adminOrderDeadline.signal)', esimTransition);
+  const disposal = route.indexOf('adminOrderDeadline.dispose()', esimSignal);
+  const release = route.indexOf('releaseAdminOps()', disposal);
+  assert.ok(admission > 0 && readSignal > admission, 'the admitted order read must inherit the shared deadline');
+  assert.ok(wifiSignal > wifiTransition, 'the Pocket WiFi transition must inherit the shared deadline');
+  assert.ok(esimSignal > esimTransition, 'the eSIM transition must inherit the shared deadline');
+  assert.ok(disposal > esimSignal && release > disposal, 'the deadline must be cleared before releasing the operations slot');
 });

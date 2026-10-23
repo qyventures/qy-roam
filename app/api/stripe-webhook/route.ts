@@ -514,7 +514,7 @@ async function sendHumanFulfilmentEmail(session: Stripe.Checkout.Session) {
   await sendSmtpMail({host,port,secure,user,pass,from,to,subject,text,messageId,timeoutMs:DELIVERY_TIMEOUT_MS});
 }
 
-async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.Event.Type,eventCreated:number,signal?:AbortSignal){
+async function persistSession(session:Stripe.Checkout.Session,eventType:Stripe.Event.Type,eventCreated:number,signal:AbortSignal){
   const supabase=getSupabaseAdmin(); if(!supabase) throw new Error('Order persistence unavailable');
   const paid=session.payment_status==='paid', failed=eventType==='checkout.session.async_payment_failed'||eventType==='checkout.session.expired';
   const productType=session.metadata?.product_type;
@@ -599,7 +599,7 @@ type EventClaim =
   | { status: 'processed' }
   | { status: 'in_progress' };
 
-async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string, type:string, sessionId:string,signal?:AbortSignal):Promise<EventClaim> {
+async function claimOnce(supabase:ReturnType<typeof getSupabaseAdmin>, id:string, type:string, sessionId:string,signal:AbortSignal):Promise<EventClaim> {
   if(!supabase) throw new Error('Persistence unavailable');
   const claimed=await supabase.rpc('qy_claim_stripe_event',{
     p_event_id:id,
@@ -660,7 +660,7 @@ async function settleStripeEvent(
   supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>,
   eventId:string,
   processingStartedAt:string,
-  signal?:AbortSignal,
+  signal:AbortSignal,
 ) {
   const processedAt=new Date().toISOString();
   const completed=await supabase.from('stripe_events')

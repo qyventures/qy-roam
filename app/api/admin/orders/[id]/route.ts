@@ -18,6 +18,7 @@ import { tryAcquireAdminDeliveryConcurrency } from '@/lib/adminDeliveryConcurren
 import { exactDatabaseTimestampToken } from '@/lib/stripeClaimToken';
 import { exactRpcRow } from '@/lib/exactRpcRow';
 import { acknowledgedOrderTransition } from '@/lib/adminOrderTransitionAcknowledgement';
+import { createAdminOrderDeadline } from '@/lib/adminOrderDeadline';
 
 export const runtime = 'nodejs';
 
@@ -183,9 +184,10 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' },
     });
   }
+  const adminOrderDeadline = createAdminOrderDeadline();
 
   try {
-  const existing = await supabase.from('orders').select('product_type,payment_status,fulfilment_status,dispatched_at,returned_at,courier_tracking,return_tracking,return_disposition,digital_delivery_reference,notes').eq('id', id).maybeSingle();
+  const existing = await supabase.from('orders').select('product_type,payment_status,fulfilment_status,dispatched_at,returned_at,courier_tracking,return_tracking,return_disposition,digital_delivery_reference,notes').eq('id', id).abortSignal(adminOrderDeadline.signal).maybeSingle();
   if (existing.error) return NextResponse.json({ error: 'Unable to load order' }, { status: 500 });
   if (!existing.data) return NextResponse.json({ error: 'Order not found' }, { status: 404 });
   if (!validFulfilmentStatus(existing.data.product_type, status)) return NextResponse.json({ error: 'Invalid fulfilment status for this order' }, { status: 400 });
@@ -364,7 +366,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       p_notes: cancellationNotes || submittedNotes,
       p_inventory_item_id: selectedInventoryItemId,
       p_return_disposition: returnDisposition,
-    });
+    }).abortSignal(adminOrderDeadline.signal);
     if (error) {
       const transitionError = pocketWifiTransitionError(error.message || '');
       if (transitionError) return NextResponse.json({ error: transitionError.error }, { status: transitionError.status });
@@ -388,7 +390,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     p_next_status: status,
     p_digital_delivery_reference: typeof body.digital_delivery_reference === 'string' ? deliveryReference || null : null,
     p_notes: cancellationNotes || submittedNotes,
-  });
+  }).abortSignal(adminOrderDeadline.signal);
   if (error) {
     const transitionError = esimTransitionError(error.message || '');
     if (transitionError) return NextResponse.json({ error: transitionError.error }, { status: transitionError.status });
@@ -421,6 +423,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       },
     );
   } finally {
+    adminOrderDeadline.dispose();
     releaseAdminOps();
   }
 }
