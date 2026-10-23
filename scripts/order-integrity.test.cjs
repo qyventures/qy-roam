@@ -94,6 +94,7 @@ const { AVAILABILITY_LOOKUP_TIMEOUT_MS, createAvailabilityDeadline } = require('
 const { CONFIRMATION_MAX_CONCURRENT_REQUESTS, tryAcquireConfirmationConcurrency } = require('../lib/confirmationConcurrency.ts');
 const { CONFIRMATION_LOOKUP_TIMEOUT_MS, createConfirmationDeadline } = require('../lib/confirmationDeadline.ts');
 const { HEALTH_MAX_CONCURRENT_REQUESTS, tryAcquireHealthConcurrency } = require('../lib/healthConcurrency.ts');
+const { HEALTH_READINESS_TIMEOUT_MS, createHealthDeadline } = require('../lib/healthDeadline.ts');
 const { ADMIN_OPS_MAX_CONCURRENT_REQUESTS, tryAcquireAdminOpsConcurrency } = require('../lib/adminOpsConcurrency.ts');
 const { ADMIN_DELIVERY_MAX_CONCURRENT_REQUESTS, tryAcquireAdminDeliveryConcurrency } = require('../lib/adminDeliveryConcurrency.ts');
 const { ADMIN_DELIVERY_LOOKUP_TIMEOUT_MS, createAdminDeliveryDeadline } = require('../lib/adminDeliveryDeadline.ts');
@@ -7225,9 +7226,9 @@ test('authenticated health readiness separates shared release controls from prod
   assert.match(healthRoute, /const releaseHealth = tryAcquireHealthConcurrency\(\)/);
   assert.match(healthRoute, /error: 'Readiness checks are busy\.'/);
   assert.match(healthRoute, /'Retry-After': '5'/);
-  assert.match(healthRoute, /finally \{\s*releaseHealth\(\);\s*\}/);
+  assert.match(healthRoute, /finally \{\s*healthDeadline\.dispose\(\);\s*releaseHealth\(\);\s*\}/);
   assert.match(healthRoute, /const esimOfferActive = esimOfferIsSaleable\(\)/);
-  assert.match(healthRoute, /dependencyChecks = await Promise\.all\(\[/);
+  assert.match(healthRoute, /dependencyChecks = await healthDeadline\.waitFor\(Promise\.all\(\[/);
   assert.match(healthRoute, /esimOfferActive \? hasRequiredEsimOrderSchema\(\) : Promise\.resolve\(false\)/);
   assert.match(healthRoute, /const \[stripeApi, esimOrderSchema, paymentSchema, pocketWifiFulfilmentSchema, operationsSchema, pocketWifiStock\] = dependencyChecks/);
   assert.match(healthRoute, /stripeApi,/);
@@ -10858,7 +10859,7 @@ test('public Pocket WiFi booking terms stay aligned with the checkout authority'
 });
 
 test('authenticated production readiness keeps unexpected dependency failures structured and retryable', () => {
-  const dependencyChecks = healthRoute.indexOf('dependencyChecks = await Promise.all([');
+  const dependencyChecks = healthRoute.indexOf('dependencyChecks = await healthDeadline.waitFor(Promise.all([');
   const failureBoundary = healthRoute.indexOf("console.error('production_readiness_dependency_check_failed')", dependencyChecks);
   const normalChecks = healthRoute.indexOf('const checks = {', failureBoundary);
   assert.ok(dependencyChecks > -1 && failureBoundary > dependencyChecks && normalChecks > failureBoundary);
@@ -10871,6 +10872,26 @@ test('authenticated production readiness keeps unexpected dependency failures st
   assert.match(failureResponse, /status: 503/);
   assert.match(failureResponse, /headers: \{ \.\.\.headers, 'Retry-After': '5' \}/);
   assert.doesNotMatch(failureResponse, /error instanceof|String\(error\)|error\.message/);
+});
+
+test('authenticated production readiness releases stalled provider work on one wall-clock deadline', async () => {
+  assert.equal(HEALTH_READINESS_TIMEOUT_MS, 10_000);
+  assert.throws(() => createHealthDeadline(0), /Invalid health readiness timeout/);
+  assert.throws(() => createHealthDeadline(HEALTH_READINESS_TIMEOUT_MS + 1), /Invalid health readiness timeout/);
+
+  const deadline = createHealthDeadline(20);
+  try {
+    await assert.rejects(deadline.waitFor(new Promise(() => {})), /Health readiness timed out/);
+    assert.equal(deadline.signal.aborted, true);
+  } finally {
+    deadline.dispose();
+  }
+
+  const deadlineCreation = healthRoute.indexOf('const healthDeadline = createHealthDeadline()');
+  const dependencyBoundary = healthRoute.indexOf('healthDeadline.waitFor(Promise.all([', deadlineCreation);
+  const deadlineDisposal = healthRoute.indexOf('healthDeadline.dispose()', dependencyBoundary);
+  const slotRelease = healthRoute.indexOf('releaseHealth()', deadlineDisposal);
+  assert.ok(deadlineCreation > -1 && dependencyBoundary > deadlineCreation && deadlineDisposal > dependencyBoundary && slotRelease > deadlineDisposal);
 });
 
 test('every unavailable authenticated readiness result advertises a bounded retry', () => {

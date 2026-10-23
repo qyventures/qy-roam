@@ -9,6 +9,7 @@ import { hasRequiredSupabaseAdminConfig } from '@/lib/supabaseAdmin';
 import { esimOfferIsSaleable } from '@/lib/esimPlans';
 import { hasSaleablePocketWifiInventory } from '@/lib/pocketWifiStock';
 import { tryAcquireHealthConcurrency } from '@/lib/healthConcurrency';
+import { createHealthDeadline } from '@/lib/healthDeadline';
 import { wifiBenchmarkIsFresh } from '@/lib/wifiPlans';
 
 export const dynamic = 'force-dynamic';
@@ -77,6 +78,7 @@ export async function GET(req: Request) {
     });
   }
 
+  const healthDeadline = createHealthDeadline();
   try {
   const config = operationalConfig();
   // The approved eSIM catalogue can be intentionally paused at its offer
@@ -93,14 +95,14 @@ export async function GET(req: Request) {
   // correctly fails closed against a partial migration.
   let dependencyChecks: [boolean, boolean, boolean, boolean, boolean, boolean];
   try {
-    dependencyChecks = await Promise.all([
+    dependencyChecks = await healthDeadline.waitFor(Promise.all([
       hasRequiredStripeApiAccess(),
       esimOfferActive ? hasRequiredEsimOrderSchema() : Promise.resolve(false),
       hasRequiredPaymentSchema(),
       hasRequiredPocketWifiFulfilmentSchema(),
       hasRequiredOperationsSchema(),
       hasSaleablePocketWifiInventory(config?.pocketWifiInventory || 0),
-    ]);
+    ]));
   } catch {
     // Every current probe normally converts dependency failures into `false`,
     // but keep the release authority stable if a provider SDK, runtime, or
@@ -254,6 +256,7 @@ export async function GET(req: Request) {
     headers: salesReady ? headers : { ...headers, 'Retry-After': '5' },
   });
   } finally {
+    healthDeadline.dispose();
     releaseHealth();
   }
 }
