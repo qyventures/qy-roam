@@ -88,7 +88,7 @@ const { esimCheckoutFingerprint, pocketWifiCheckoutFingerprint } = require('../l
 const { MANUAL_ORDER_REFERENCE_MAX_LENGTH, manualOrderReference, manualOrderSessionId } = require('../lib/manualOrderReference.ts');
 const { createConcurrencyLimiter } = require('../lib/concurrencyLimit.ts');
 const { CHECKOUT_MAX_CONCURRENT_REQUESTS, CHECKOUT_MAX_CONCURRENT_UPLOADS, tryAcquireCheckoutConcurrency, tryAcquireCheckoutUpload } = require('../lib/checkoutConcurrency.ts');
-const { CHECKOUT_DEPENDENCY_TIMEOUT_MS, createCheckoutDeadline } = require('../lib/checkoutDeadline.ts');
+const { CHECKOUT_DEPENDENCY_TIMEOUT_MS, CHECKOUT_FAILURE_RECOVERY_RESERVE_MS, createCheckoutDeadline } = require('../lib/checkoutDeadline.ts');
 const { AVAILABILITY_MAX_CONCURRENT_REQUESTS, tryAcquireAvailabilityConcurrency } = require('../lib/availabilityConcurrency.ts');
 const { AVAILABILITY_LOOKUP_TIMEOUT_MS, createAvailabilityDeadline } = require('../lib/availabilityDeadline.ts');
 const { CONFIRMATION_MAX_CONCURRENT_REQUESTS, tryAcquireConfirmationConcurrency } = require('../lib/confirmationConcurrency.ts');
@@ -866,7 +866,7 @@ test('checkout re-authorises promotional prices immediately before Stripe Sessio
   assert.ok(wifiCreate > -1 && wifiReservation > -1 && wifiFinalPromoCheck > wifiReservation && wifiFinalPromoCheck < wifiCreate);
   const wifiBoundary = wifiCheckoutRoute.slice(wifiFinalPromoCheck, wifiCreate);
   assert.match(wifiBoundary, /pricingExpired:true/);
-  assert.match(wifiBoundary, /await releaseUnlinkedReservation\(supabase,requestId,checkoutDeadline\.signal\)/);
+  assert.match(wifiBoundary, /await releaseUnlinkedReservation\(supabase,requestId,checkoutDeadline\.recoverySignal\)/);
 });
 
 test('privileged Supabase requests use one canonical hosted-project configuration boundary', () => {
@@ -3649,7 +3649,7 @@ test('Pocket WiFi quote and payment boundaries re-authorise the Singapore bookin
   assert.ok(reservation >= 0 && checkoutRecheck > reservation && stripeCreate > checkoutRecheck,
     'checkout must recheck the lead-time cutoff after reserving stock and before creating a Stripe capability');
   const recheckBlock = wifiCheckoutRoute.slice(checkoutRecheck, stripeCreate);
-  assert.match(recheckBlock, /await releaseUnlinkedReservation\(supabase,requestId,checkoutDeadline\.signal\)/,
+  assert.match(recheckBlock, /await releaseUnlinkedReservation\(supabase,requestId,checkoutDeadline\.recoverySignal\)/,
     'a cutoff-crossing checkout must release only its still-unlinked reservation');
   assert.match(recheckBlock, /bookingWindowChanged:true/);
 });
@@ -10492,16 +10492,20 @@ test('product checkouts share one bounded live-work budget and always release ad
 
 test('product checkouts share one end-to-end dependency deadline', async () => {
   assert.equal(CHECKOUT_DEPENDENCY_TIMEOUT_MS, 30_000);
+  assert.equal(CHECKOUT_FAILURE_RECOVERY_RESERVE_MS, 3_000);
   assert.throws(() => createCheckoutDeadline(0), /Invalid checkout dependency timeout/);
   assert.throws(() => createCheckoutDeadline(CHECKOUT_DEPENDENCY_TIMEOUT_MS + 1), /Invalid checkout dependency timeout/);
 
-  const deadline = createCheckoutDeadline(25);
+  const deadline = createCheckoutDeadline(40);
   try {
     const first = deadline.stripeRequestOptions();
-    assert.ok(first.timeout > 0 && first.timeout <= 25);
-    await new Promise((resolve) => setTimeout(resolve, 35));
+    assert.ok(first.timeout > 0 && first.timeout <= 30);
+    await new Promise((resolve) => deadline.signal.addEventListener('abort', resolve, { once: true }));
     assert.equal(deadline.signal.aborted, true);
+    assert.equal(deadline.recoverySignal.aborted, false, 'safe reservation cleanup must retain a reserved deadline window');
     assert.throws(() => deadline.stripeRequestOptions(), /Checkout dependency work timed out/);
+    await new Promise((resolve) => deadline.recoverySignal.addEventListener('abort', resolve, { once: true }));
+    assert.match(String(deadline.recoverySignal.reason), /Checkout reservation recovery timed out/i);
   } finally {
     deadline.dispose();
   }
@@ -10888,7 +10892,8 @@ test('aborted Pocket WiFi checkouts prove their exact unlinked reservation was r
   assert.ok(helperStart >= 0);
   assert.match(helper, /\.delete\(\)[\s\S]*\.eq\('checkout_request_id',requestId\)[\s\S]*\.is\('stripe_session_id',null\)[\s\S]*\.select\('checkout_request_id,stripe_session_id'\)[\s\S]*\.abortSignal\(signal\)/);
   assert.match(helper, /acknowledgedUnlinkedReservationRelease\(released\.data,requestId\)/);
-  assert.equal((wifiCheckoutRoute.match(/await releaseUnlinkedReservation\(supabase,requestId,checkoutDeadline\.signal\)/g) || []).length, 6);
+  assert.equal((wifiCheckoutRoute.match(/await releaseUnlinkedReservation\(supabase,requestId,checkoutDeadline\.recoverySignal\)/g) || []).length, 6);
+  assert.equal((wifiCheckoutRoute.match(/await releaseUnlinkedReservation\(supabase,requestId,checkoutDeadline\.signal\)/g) || []).length, 0);
 });
 
 test('terminal Pocket WiFi checkout recovery acknowledges only its own reservation cleanup', () => {

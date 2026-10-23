@@ -5,21 +5,44 @@ import { STRIPE_REQUEST_TIMEOUT_MS } from './stripeClient';
 // dependency sequence one absolute budget while retaining Stripe's shorter
 // per-request timeout and durable idempotency recovery.
 export const CHECKOUT_DEPENDENCY_TIMEOUT_MS = 30_000;
+export const CHECKOUT_FAILURE_RECOVERY_RESERVE_MS = 3_000;
 
 export function createCheckoutDeadline(timeoutMs = CHECKOUT_DEPENDENCY_TIMEOUT_MS) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > CHECKOUT_DEPENDENCY_TIMEOUT_MS) {
     throw new RangeError('Invalid checkout dependency timeout');
   }
   const deadlineAtMs = Date.now() + timeoutMs;
+  // Pocket WiFi checkout can acquire scarce inventory before the final
+  // payment-capability checks. Preserve a small part of the admitted request
+  // budget for releasing a reservation that is still provably unlinked when
+  // one of those checks aborts. Reusing an already-expired processing signal
+  // would leave that capacity unavailable until the reservation expires.
+  const recoveryReserveMs = Math.min(
+    CHECKOUT_FAILURE_RECOVERY_RESERVE_MS,
+    Math.max(1, Math.floor(timeoutMs / 4)),
+  );
+  const processingDeadlineAtMs = deadlineAtMs - recoveryReserveMs;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error('Checkout dependency work timed out')), timeoutMs);
+  const recoveryController = new AbortController();
+  const processingTimeout = setTimeout(
+    () => controller.abort(new Error('Checkout dependency work timed out')),
+    Math.max(1, processingDeadlineAtMs - Date.now()),
+  );
+  const recoveryTimeout = setTimeout(
+    () => recoveryController.abort(new Error('Checkout reservation recovery timed out')),
+    Math.max(1, deadlineAtMs - Date.now()),
+  );
   return {
     signal: controller.signal,
+    recoverySignal: recoveryController.signal,
     stripeRequestOptions() {
-      const remainingMs = deadlineAtMs - Date.now();
+      const remainingMs = processingDeadlineAtMs - Date.now();
       if (remainingMs < 1 || controller.signal.aborted) throw new Error('Checkout dependency work timed out');
       return { timeout: Math.min(STRIPE_REQUEST_TIMEOUT_MS, remainingMs) };
     },
-    dispose() { clearTimeout(timeout); },
+    dispose() {
+      clearTimeout(processingTimeout);
+      clearTimeout(recoveryTimeout);
+    },
   };
 }
