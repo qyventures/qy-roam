@@ -333,6 +333,16 @@ async function renderAdminPage(signal: AbortSignal) {
     typeof order.stripe_session_id === 'string' &&
     (sessionIdentityCounts.get(order.stripe_session_id) || 0) > 1
   );
+  // A lifecycle-safe row is still not an operational authority when its
+  // payment/session identity names more than one durable order. Keep every
+  // suspect row visible for reconciliation, but exclude it from dispatch,
+  // return, and eSIM work queues and do not expose mutation/retry controls
+  // whose delivery-ledger join would be ambiguous.
+  const operationallySafeOrderIds = new Set(orders.filter((order:any) =>
+    adminOrderMutationSafe(order) &&
+    typeof order.stripe_session_id === 'string' &&
+    (sessionIdentityCounts.get(order.stripe_session_id) || 0) === 1
+  ).map((order:any) => order.id));
   const operationalLedgerIntegrityIssues = unsafeOperationalOrders.length + duplicateSessionOrders.length;
   // Email and CAPI exception totals join orders to their independent delivery
   // ledgers. If either side failed or hit its safety ceiling, a numeric result
@@ -378,7 +388,11 @@ async function renderAdminPage(signal: AbortSignal) {
   // fulfilled. Unpaid asynchronous Checkouts remain in the order table below
   // and in Stripe recovery visibility, but must never inflate the fulfilment
   // workload or departure/return exception queues.
-  const active = paid.filter((o:any)=>isSupportedProduct(o.product_type) && !['closed','cancelled','payment_failed'].includes(o.fulfilment_status));
+  const active = paid.filter((o:any)=>
+    operationallySafeOrderIds.has(o.id) &&
+    isSupportedProduct(o.product_type) &&
+    !['closed','cancelled','payment_failed'].includes(o.fulfilment_status)
+  );
   const revenueCents = paid.reduce((sum:number,o:any)=>sum + (paidAmountCents(o.amount_sgd) || 0), 0);
   // A Checkout Session can be created days before an asynchronous payment is
   // confirmed. Sales recency must follow the immutable payment boundary used
@@ -461,7 +475,7 @@ async function renderAdminPage(signal: AbortSignal) {
       </div>}
       {!ordersIncomplete && operationalLedgerIntegrityIssues > 0 && <div role="alert" style={{...cardStyle,borderColor:'#dc2626',background:'#fef2f2',marginBottom:20}}>
         <strong>Order operations ledger needs reconciliation.</strong>
-        <div style={{marginTop:6}}>Fulfilment totals and joined delivery status are withheld because {unsafeOperationalOrders.length} order row{unsafeOperationalOrders.length === 1 ? '' : 's'} {unsafeOperationalOrders.length === 1 ? 'has' : 'have'} malformed lifecycle or identity data and {duplicateSessionOrders.length} row{duplicateSessionOrders.length === 1 ? '' : 's'} {duplicateSessionOrders.length === 1 ? 'uses' : 'use'} a duplicated payment identity. The source rows remain visible below with mutation controls disabled where applicable.</div>
+        <div style={{marginTop:6}}>Fulfilment totals and joined delivery status are withheld because {unsafeOperationalOrders.length} order row{unsafeOperationalOrders.length === 1 ? '' : 's'} {unsafeOperationalOrders.length === 1 ? 'has' : 'have'} malformed lifecycle or identity data and {duplicateSessionOrders.length} row{duplicateSessionOrders.length === 1 ? '' : 's'} {duplicateSessionOrders.length === 1 ? 'uses' : 'use'} a duplicated payment identity. The source rows remain visible below, but suspect rows are excluded from work queues and their mutation controls are disabled.</div>
       </div>}
       {!metaCapiConfigured && <div role="alert" style={{...cardStyle,borderColor:'#b45309',background:'#fffbeb',marginBottom:20}}>
         <strong>Meta CAPI Purchase delivery is not configured.</strong>
@@ -589,7 +603,7 @@ async function renderAdminPage(signal: AbortSignal) {
             (metaCapiConfigured && o.measurement_consent === 'accepted' && metaDelivery?.status !== 'sent')
           );
           const supportReference = customerOrderReference(o.stripe_session_id);
-          const mutationSafe = adminOrderMutationSafe(o);
+          const mutationSafe = operationallySafeOrderIds.has(o.id);
           return <tr id={`order-${o.id}`} key={o.id} style={{borderTop:'1px solid #e5e8ed',verticalAlign:'top'}}>
             <td style={{padding:'14px 10px',maxWidth:220}}>{supportReference && <><strong>{supportReference}</strong><br/></>}<code style={{overflowWrap:'anywhere'}}>{String(o.stripe_session_id || o.id)}</code><br/><small>{formatSingaporeTimestamp(o.created_at)} SGT</small></td>
             <td style={{padding:'14px 8px'}}>{o.customer_name || '-'}<br/><small>{o.phone || '-'}</small>{o.email && <><br/><small>{o.email}</small></>}</td>
@@ -600,7 +614,7 @@ async function renderAdminPage(signal: AbortSignal) {
             <td style={{padding:'14px 8px'}}>{metaDelivery?.status === 'sent' ? '✓ Sent' : !metaCapiConfigured && o.measurement_consent === 'accepted' ? 'CAPI unavailable' : metaDelivery ? `⚠ ${metaDelivery.status}` : o.payment_status === 'paid' && stripeCheckoutOrder ? 'Not requested / not recorded' : o.payment_status === 'paid' ? 'Manual sale · no measurement consent' : '-'}{metaDelivery?.last_error && <><br/><small>{String(metaDelivery.last_error).slice(0,120)}</small></>}</td>
             <td style={{padding:'14px 8px'}}>{o.return_disposition && <small>Return: {String(o.return_disposition).replaceAll('_',' ')}</small>}{isEsim(o) && o.digital_delivery_reference && <small>{isSafeDigitalDeliveryReference(o.digital_delivery_reference) ? 'Delivery audit reference recorded' : '⚠ Unsafe legacy delivery value hidden — review support record'}</small>}{mutationSafe
               ? <AdminOrderActions key={`${o.id}:${o.updated_at}`} id={o.id} initialStatus={o.fulfilment_status} initialUpdatedAt={o.updated_at} paymentStatus={o.payment_status} productType={o.product_type} courierTracking={o.courier_tracking} returnTracking={o.return_tracking} initialReturnDisposition={o.return_disposition} digitalDeliveryReference={isSafeDigitalDeliveryReference(o.digital_delivery_reference) ? o.digital_delivery_reference : ''} inventoryItemId={o.inventory_item_id} inventoryItems={inventoryItems} canRetryNotifications={canRetryNotifications}/>
-              : <div role="alert" style={{display:'grid',gap:6,minWidth:190}}><strong>Order controls unavailable</strong><small>This row has malformed lifecycle or audit data. Reconcile the durable order before changing fulfilment or retrying delivery.</small></div>}</td>
+              : <div role="alert" style={{display:'grid',gap:6,minWidth:190}}><strong>Order controls unavailable</strong><small>This row has malformed lifecycle/audit data or a duplicated payment identity. Reconcile the durable order before changing fulfilment or retrying delivery.</small></div>}</td>
           </tr>;
         })}</tbody>
       </table></div>}

@@ -147,10 +147,14 @@ test('admin order mutations require one coherent durable lifecycle row', () => {
     { ...row, return_disposition: 'available' },
   ]) assert.equal(adminOrderMutationSafe(malformed), false);
 
-  assert.match(adminPage, /const mutationSafe = adminOrderMutationSafe\(o\)/);
+  assert.match(adminPage, /const mutationSafe = operationallySafeOrderIds\.has\(o\.id\)/);
+  assert.doesNotMatch(adminPage, /const mutationSafe = adminOrderMutationSafe\(o\)/);
   assert.match(adminPage, /mutationSafe[\s\S]*?Order controls unavailable[\s\S]*?Reconcile the durable order/);
   assert.match(adminPage, /const unsafeOperationalOrders = orders\.filter\(\(order:any\) => !adminOrderMutationSafe\(order\)\)/);
   assert.match(adminPage, /const duplicateSessionOrders = orders\.filter/);
+  assert.match(adminPage, /const operationallySafeOrderIds = new Set\(orders\.filter/);
+  assert.match(adminPage, /adminOrderMutationSafe\(order\)[\s\S]*?\(sessionIdentityCounts\.get\(order\.stripe_session_id\) \|\| 0\) === 1/);
+  assert.match(adminPage, /const active = paid\.filter\(\(o:any\)=>[\s\S]*?operationallySafeOrderIds\.has\(o\.id\)/);
   assert.match(adminPage, /fulfilmentSummaryIncomplete = ordersIncomplete \|\| operationalLedgerIntegrityIssues > 0/);
   assert.match(adminPage, /Order operations ledger needs reconciliation/);
   assert.match(adminPage, /shares a payment identity with another order/);
