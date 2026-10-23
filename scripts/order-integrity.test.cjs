@@ -161,12 +161,15 @@ test('primary operations dashboard releases stalled ledger scans on one shared d
 
   const deadline = createAdminDashboardDeadline(20);
   assert.equal(deadline.signal.aborted, false);
-  await new Promise(resolve => deadline.signal.addEventListener('abort', resolve, { once: true }));
+  await assert.rejects(
+    deadline.waitFor(new Promise(() => {})),
+    /Admin dashboard lookup timed out/,
+  );
   assert.equal(deadline.signal.aborted, true);
   deadline.dispose();
 
   assert.match(adminPage, /createAdminDashboardDeadline\(\)/);
-  assert.match(adminPage, /renderAdminPage\(dashboardDeadline\.signal\)/);
+  assert.match(adminPage, /dashboardDeadline\.waitFor\(renderAdminPage\(dashboardDeadline\.signal\)\)/);
   assert.match(adminPage, /dashboardDeadline\.dispose\(\);\s*releaseDashboard\(\)/);
   assert.equal((adminPage.match(/return query\.abortSignal\(signal\)/g) || []).length, 5);
   assert.match(adminPage, /admin_dashboard_lookup_failed/);
@@ -1833,7 +1836,7 @@ test('main admin order visibility has a bounded shared ledger-read budget', () =
   const firstLedgerRead = adminPage.indexOf("supabase.from('orders')");
   assert.ok(admission > -1 && firstLedgerRead > admission);
   assert.match(adminPage, /if \(!releaseDashboard\)[\s\S]*Operations dashboard is busy/);
-  assert.match(adminPage, /const dashboardDeadline = createAdminDashboardDeadline\(\);[\s\S]*?try \{\s*return await renderAdminPage\(dashboardDeadline\.signal\);\s*\} finally \{\s*dashboardDeadline\.dispose\(\);\s*releaseDashboard\(\);\s*\}/);
+  assert.match(adminPage, /const dashboardDeadline = createAdminDashboardDeadline\(\);[\s\S]*?try \{\s*return await dashboardDeadline\.waitFor\(renderAdminPage\(dashboardDeadline\.signal\)\);\s*\} finally \{\s*dashboardDeadline\.dispose\(\);\s*releaseDashboard\(\);\s*\}/);
 });
 
 test('all read-heavy admin views share the bounded dashboard budget and release it after failures', async () => {
@@ -1861,6 +1864,20 @@ test('all read-heavy admin views share the bounded dashboard budget and release 
   const recovered = tryAcquireAdminDashboardConcurrency();
   assert.equal(typeof recovered, 'function', 'a failed admin read must release its shared slot');
   recovered();
+
+  const originalSetTimeout = global.setTimeout;
+  try {
+    global.setTimeout = (callback, _delay, ...args) => originalSetTimeout(callback, 5, ...args);
+    await assert.rejects(
+      runAdminDashboardWork(async () => new Promise(() => {}), fallback),
+      /Admin dashboard lookup timed out/,
+    );
+  } finally {
+    global.setTimeout = originalSetTimeout;
+  }
+  const recoveredAfterIgnoredCancellation = tryAcquireAdminDashboardConcurrency();
+  assert.equal(typeof recoveredAfterIgnoredCancellation, 'function', 'a stalled admin read must release its shared slot after the wall-clock deadline');
+  recoveredAfterIgnoredCancellation();
 
   for (const source of [inventoryPage, reportsPage, crmPage, forecastingPage, closingPage, launchPage]) {
     assert.match(source, /runAdminDashboardWork\(/);

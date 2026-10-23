@@ -174,7 +174,7 @@ export default async function AdminPage() {
 
   const dashboardDeadline = createAdminDashboardDeadline();
   try {
-    return await renderAdminPage(dashboardDeadline.signal);
+    return await dashboardDeadline.waitFor(renderAdminPage(dashboardDeadline.signal));
   } finally {
     dashboardDeadline.dispose();
     releaseDashboard();

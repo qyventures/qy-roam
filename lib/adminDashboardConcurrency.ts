@@ -33,7 +33,7 @@ export async function runAdminDashboardWork<T, B>(work: (signal: AbortSignal) =>
   if (!release) return busy;
   const deadline = createAdminDashboardDeadline();
   try {
-    return await work(deadline.signal);
+    return await deadline.waitFor(work(deadline.signal));
   } finally {
     deadline.dispose();
     release();
