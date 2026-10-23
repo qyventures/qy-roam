@@ -23,6 +23,11 @@ export const dynamic = 'force-dynamic';
 // data set visible to staff before it can hide operational work.
 const ADMIN_PAGE_SIZE = 250;
 const ADMIN_MAX_ROWS = 5_000;
+// Keep the primary operations page usable as the customer base grows. This is
+// a preview rather than a reporting boundary: the headline metric still uses
+// the complete validated order ledger, and the UI must say exactly when older
+// customer summaries are omitted instead of looking like a complete CRM.
+const ADMIN_CUSTOMER_PREVIEW_ROWS = 200;
 // Database and application clocks can differ slightly, but a payment recorded
 // materially in the future is not trustworthy sales/accounting evidence. Keep
 // this aligned with the modest operational skew allowance used by delivery
@@ -607,9 +612,10 @@ async function renderAdminPage(signal: AbortSignal) {
       <h2>Customer CRM</h2>
       <p style={{color:'#64748b'}}>Customer history is aggregated from paid orders. This is the first CRM layer; lead stages, notes, tasks and WhatsApp history can be added next.</p>
       {reportingIncomplete && <p><strong>Customer order history is unavailable until the complete paid ledger is loaded and valid.</strong></p>}
+      {!reportingIncomplete && customers.length > ADMIN_CUSTOMER_PREVIEW_ROWS && <p role="status"><strong>Showing the {ADMIN_CUSTOMER_PREVIEW_ROWS} most recent customers of {customers.length.toLocaleString()}.</strong> {customers.length - ADMIN_CUSTOMER_PREVIEW_ROWS} older customer summar{customers.length - ADMIN_CUSTOMER_PREVIEW_ROWS === 1 ? 'y is' : 'ies are'} omitted from this dashboard preview; the customer metric above still includes the complete validated ledger.</p>}
       {!reportingIncomplete && customers.length > 0 && <div style={{overflowX:'auto',...cardStyle,padding:0}}><table style={{width:'100%',borderCollapse:'collapse',minWidth:760}}>
         <thead><tr style={{background:'#f8fafc'}}><th align="left" style={{padding:'12px 10px'}}>Customer</th><th align="left">Products</th><th align="left">Orders</th><th align="left">Lifetime value</th><th align="left">Last purchase</th></tr></thead>
-        <tbody>{customers.slice(0,200).map((c:any,idx:number)=><tr key={`${c.email || c.phone || c.name}-${idx}`} style={{borderTop:'1px solid #e5e8ed'}}>
+        <tbody>{customers.slice(0,ADMIN_CUSTOMER_PREVIEW_ROWS).map((c:any,idx:number)=><tr key={`${c.email || c.phone || c.name}-${idx}`} style={{borderTop:'1px solid #e5e8ed'}}>
           <td style={{padding:'14px 10px'}}><strong>{c.name || '-'}</strong><br/><small>{c.email || '-'}</small><br/><small>{c.phone || '-'}</small></td>
           <td>{Array.from(c.products).join(' + ')}</td>
           <td>{c.orders}{c.orders > 1 ? ' · Repeat' : ''}</td>

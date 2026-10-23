@@ -8116,6 +8116,15 @@ test('admin order visibility distinguishes creation from Singapore payment settl
   assert.doesNotMatch(adminPage, /String\(o\.stripe_session_id \|\| o\.id\)\.slice\(-10\)/);
 });
 
+test('admin customer preview never hides older customers without disclosure', () => {
+  assert.match(adminPage, /const ADMIN_CUSTOMER_PREVIEW_ROWS = 200/);
+  assert.match(adminPage, /customers\.length > ADMIN_CUSTOMER_PREVIEW_ROWS/);
+  assert.match(adminPage, /Showing the \{ADMIN_CUSTOMER_PREVIEW_ROWS\} most recent customers of \{customers\.length\.toLocaleString\(\)\}/);
+  assert.match(adminPage, /\{customers\.length - ADMIN_CUSTOMER_PREVIEW_ROWS\} older customer summar/);
+  assert.match(adminPage, /customers\.slice\(0,ADMIN_CUSTOMER_PREVIEW_ROWS\)/);
+  assert.doesNotMatch(adminPage, /customers\.slice\(0,200\)/);
+});
+
 test('operational admin timestamps never inherit the VPS timezone', () => {
   for (const page of [adminPage, inventoryPage, crmPage]) {
     assert.match(page, /from '@\/lib\/singaporeTimestamp'/);
