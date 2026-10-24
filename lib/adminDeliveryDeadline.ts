@@ -1,4 +1,5 @@
 import { STRIPE_REQUEST_TIMEOUT_MS } from './stripeClient';
+import { performance } from 'node:perf_hooks';
 
 // Delivery recovery must verify the durable order and its signed Stripe
 // Session before it can safely resume email or analytics side effects. Bound
@@ -16,7 +17,7 @@ export function createAdminDeliveryDeadline(timeoutMs = ADMIN_DELIVERY_LOOKUP_TI
     throw new RangeError('Invalid admin delivery lookup timeout');
   }
 
-  const deadlineAtMs = Date.now() + timeoutMs;
+  const deadlineAtMs = performance.now() + timeoutMs;
   const recoveryReserveMs = Math.min(
     ADMIN_DELIVERY_FAILURE_RECOVERY_RESERVE_MS,
     Math.max(1, Math.floor(timeoutMs / 4)),
@@ -26,18 +27,18 @@ export function createAdminDeliveryDeadline(timeoutMs = ADMIN_DELIVERY_LOOKUP_TI
   const recoveryController = new AbortController();
   const processingTimeout = setTimeout(
     () => controller.abort(new Error('Admin delivery lookup timed out')),
-    Math.max(1, processingDeadlineAtMs - Date.now()),
+    Math.max(1, processingDeadlineAtMs - performance.now()),
   );
   const recoveryTimeout = setTimeout(
     () => recoveryController.abort(new Error('Admin delivery failure recovery timed out')),
-    Math.max(1, deadlineAtMs - Date.now()),
+    Math.max(1, deadlineAtMs - performance.now()),
   );
 
   return {
     signal: controller.signal,
     recoverySignal: recoveryController.signal,
     stripeRequestOptions() {
-      const remainingMs = processingDeadlineAtMs - Date.now();
+      const remainingMs = processingDeadlineAtMs - performance.now();
       if (remainingMs < 1 || controller.signal.aborted) throw new Error('Admin delivery lookup timed out');
       return { timeout: Math.min(STRIPE_REQUEST_TIMEOUT_MS, remainingMs) };
     },

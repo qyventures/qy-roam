@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
+const { performance } = require('node:perf_hooks');
 const test = require('node:test');
 const ts = require('typescript');
 
@@ -9088,7 +9089,7 @@ test('Stripe network calls use a bounded shared production client', () => {
 test('Pocket WiFi hold scans have one bounded read attempt per page', () => {
   assert.equal(STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, 5_000);
   assert.equal(STRIPE_HOLD_SCAN_TIMEOUT_MS, 12_000);
-  assert.match(pocketWifiStripeHolds, /remainingMs = STRIPE_HOLD_SCAN_TIMEOUT_MS - \(Date\.now\(\) - scanStartedAtMs\)/);
+  assert.match(pocketWifiStripeHolds, /remainingMs = STRIPE_HOLD_SCAN_TIMEOUT_MS - \(performance\.now\(\) - scanStartedAtMs\)/);
   assert.match(pocketWifiStripeHolds, /checkout\.sessions\.list\([\s\S]*?timeout: Math\.min\(STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, remainingMs\), maxNetworkRetries: 0/);
 });
 
@@ -9142,10 +9143,9 @@ test('Pocket WiFi hold scans visit only current authenticated holds across every
   assert.equal(calls[0].options.maxNetworkRetries, 0);
 });
 
-test('Pocket WiFi hold scans share one end-to-end deadline across Stripe pages', async () => {
-  const originalNow = Date.now;
+test('Pocket WiFi hold scans share one end-to-end deadline across Stripe pages', async (t) => {
   let elapsedMs = 0;
-  Date.now = () => 2_000_000_000_000 + elapsedMs;
+  t.mock.method(performance, 'now', () => elapsedMs);
   const calls = [];
   const stripe = { checkout: { sessions: { list: async (_params, options) => {
     calls.push(options);
@@ -9153,14 +9153,10 @@ test('Pocket WiFi hold scans share one end-to-end deadline across Stripe pages',
     return { data: [{ id: `cs_test_deadline${calls.length}`, livemode: false, metadata: {} }], has_more: true };
   } } } };
 
-  try {
-    await assert.rejects(
-      () => scanActivePocketWifiStripeHolds(stripe, 'sk_test_inventoryscancredential', () => {}),
-      /time limit/,
-    );
-  } finally {
-    Date.now = originalNow;
-  }
+  await assert.rejects(
+    () => scanActivePocketWifiStripeHolds(stripe, 'sk_test_inventoryscancredential', () => {}),
+    /time limit/,
+  );
 
   assert.equal(calls.length, 3);
   assert.deepEqual(calls.map((options) => options.timeout), [5_000, 5_000, 3_000]);
@@ -11534,6 +11530,39 @@ test('Stripe webhook durable processing shares one end-to-end dependency deadlin
     (webhookRoute.match(/recordEventFailure\([^\n]+webhookDeadline\.recoverySignal\)/g) || []).length,
     6,
     'every post-claim failure path must use the reserved recovery deadline',
+  );
+});
+
+test('order-critical provider budgets use monotonic elapsed time', () => {
+  const confirmationDeadlineSource = fs.readFileSync(
+    require.resolve('../lib/confirmationDeadline.ts'),
+    'utf8',
+  );
+  const adminDeliveryDeadlineSource = fs.readFileSync(
+    require.resolve('../lib/adminDeliveryDeadline.ts'),
+    'utf8',
+  );
+  const pocketWifiHoldSource = fs.readFileSync(
+    require.resolve('../lib/pocketWifiStripeHolds.ts'),
+    'utf8',
+  );
+
+  for (const source of [confirmationDeadlineSource, adminDeliveryDeadlineSource]) {
+    assert.match(source, /from 'node:perf_hooks'/);
+    assert.match(source, /performance\.now\(\)/);
+    assert.doesNotMatch(source, /Date\.now\(\)/);
+  }
+
+  assert.match(pocketWifiHoldSource, /const nowSeconds = Math\.floor\(Date\.now\(\) \/ 1000\)/);
+  assert.match(pocketWifiHoldSource, /const scanStartedAtMs = performance\.now\(\)/);
+  assert.match(
+    pocketWifiHoldSource,
+    /STRIPE_HOLD_SCAN_TIMEOUT_MS - \(performance\.now\(\) - scanStartedAtMs\)/,
+  );
+  assert.equal(
+    (pocketWifiHoldSource.match(/Date\.now\(\)/g) || []).length,
+    1,
+    'the hold scan may use wall time only for Stripe lifecycle timestamps',
   );
 });
 

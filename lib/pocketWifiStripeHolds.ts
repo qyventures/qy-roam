@@ -1,4 +1,5 @@
 import type Stripe from 'stripe';
+import { performance } from 'node:perf_hooks';
 import { parseExactIsoDate, validCheckoutRequestId } from './checkoutValidation';
 import {
   MAX_STRIPE_HOLD_SCAN_PAGES,
@@ -30,8 +31,12 @@ export async function scanActivePocketWifiStripeHolds(
   stripeKey: string,
   visit: (hold: ActivePocketWifiStripeHold) => void,
 ) {
-  const scanStartedAtMs = Date.now();
-  const nowSeconds = Math.floor(scanStartedAtMs / 1000);
+  // Stripe's creation cutoff is calendar time, while the provider-work
+  // budget must be elapsed time. Keeping separate clocks prevents an NTP
+  // correction from shortening or extending a scan that owns scarce live
+  // availability/checkout capacity.
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const scanStartedAtMs = performance.now();
   const cutoff = nowSeconds - STRIPE_HOLD_SCAN_WINDOW_SECONDS;
   let startingAfter: string | undefined;
   let pagesScanned = 0;
@@ -41,7 +46,7 @@ export async function scanActivePocketWifiStripeHolds(
     if (pagesScanned >= MAX_STRIPE_HOLD_SCAN_PAGES) {
       throw new Error('Stripe Pocket WiFi hold scan exceeded its safe page limit');
     }
-    const remainingMs = STRIPE_HOLD_SCAN_TIMEOUT_MS - (Date.now() - scanStartedAtMs);
+    const remainingMs = STRIPE_HOLD_SCAN_TIMEOUT_MS - (performance.now() - scanStartedAtMs);
     if (remainingMs <= 0) {
       throw new Error('Stripe Pocket WiFi hold scan exceeded its time limit');
     }

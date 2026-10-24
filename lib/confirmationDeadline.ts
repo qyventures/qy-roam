@@ -1,4 +1,5 @@
 import { STRIPE_REQUEST_TIMEOUT_MS } from './stripeClient';
+import { performance } from 'node:perf_hooks';
 
 // Customer confirmation performs a Stripe read followed by a Supabase read.
 // Each transport has its own timeout, but treating those limits independently
@@ -13,7 +14,7 @@ export function createConfirmationDeadline(timeoutMs = CONFIRMATION_LOOKUP_TIMEO
     throw new RangeError('Invalid confirmation lookup timeout');
   }
 
-  const deadlineAtMs = Date.now() + timeoutMs;
+  const deadlineAtMs = performance.now() + timeoutMs;
   const controller = new AbortController();
   const timeout = setTimeout(() => {
     controller.abort(new Error('Order confirmation lookup timed out'));
@@ -22,7 +23,7 @@ export function createConfirmationDeadline(timeoutMs = CONFIRMATION_LOOKUP_TIMEO
   return {
     signal: controller.signal,
     stripeRequestOptions() {
-      const remainingMs = deadlineAtMs - Date.now();
+      const remainingMs = deadlineAtMs - performance.now();
       if (remainingMs < 1 || controller.signal.aborted) throw new Error('Order confirmation lookup timed out');
       return { timeout: Math.min(STRIPE_REQUEST_TIMEOUT_MS, remainingMs) };
     },
