@@ -53,7 +53,8 @@ export const WIFI_PLANS: WifiPlan[] = [
 ];
 
 export function getWifiPlan(country: unknown) {
-  return WIFI_PLANS.find((p)=>p.country===String(country||''));
+  if (typeof country !== 'string') return undefined;
+  return WIFI_PLANS.find((p)=>p.country===country);
 }
 
 for (const plan of WIFI_PLANS) {

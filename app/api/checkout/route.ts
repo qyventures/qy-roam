@@ -242,13 +242,15 @@ export async function POST(req: Request) {
   if(!requestId) return NextResponse.json({error:'Invalid checkout request.'},{status:400});
   const expiresAtSeconds=checkoutAttemptExpiresAt(body.checkoutAttemptCreatedAt);
   if(!expiresAtSeconds) return NextResponse.json({error:'This checkout attempt has expired. Please refresh and try again.',checkoutExpired:true},{status:409,headers:{'Cache-Control':'no-store'}});
-  const country=String(body.country||''); const wifiPlan=getWifiPlan(country); const daily=wifiPlan?.daily; const startDate=parseExactIsoDate(body.start); const endDate=parseExactIsoDate(body.end);
+  const country=typeof body.country==='string'?body.country:'';
+  const start=typeof body.start==='string'?body.start:'';
+  const end=typeof body.end==='string'?body.end:'';
+  const wifiPlan=getWifiPlan(country); const daily=wifiPlan?.daily; const startDate=parseExactIsoDate(start); const endDate=parseExactIsoDate(end);
   if(!wifiPlan||!daily||!startDate||!endDate||endDate<startDate) return NextResponse.json({error:'Please select a valid destination and travel period.'},{status:400});
   // Delivery is operated in Singapore. UTC midnight can still be the previous
   // calendar day in Singapore, which would incorrectly accept a past date or
   // shorten the advertised lead time during the local early morning.
   const today=operationalIsoDate();
-  const start=String(body.start), end=String(body.end);
   if(start<today) return NextResponse.json({error:'Travel start date cannot be in the past.'},{status:400});
   const minLeadDays=config.minDeliveryLeadDays, earliest=operationalIsoDateAfter(minLeadDays);
   if(start<earliest) return NextResponse.json({error:`Please book at least ${minLeadDays} day${minLeadDays===1?'':'s'} before departure so we can arrange delivery. Contact +65 8032 7183 for urgent trips.`},{status:400});

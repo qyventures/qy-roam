@@ -126,5 +126,6 @@ export function esimOfferIsSaleable(now = new Date()) {
 }
 
 export function getEsimPlan(id: unknown) {
-  return ESIM_PLANS.find((plan) => plan.id === String(id || ''));
+  if (typeof id !== 'string') return undefined;
+  return ESIM_PLANS.find((plan) => plan.id === id);
 }

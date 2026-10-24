@@ -7,7 +7,7 @@ export const LAUNCH_PROMO = {
 } as const;
 
 export function normalisePromoCode(value: unknown) {
-  return String(value || '').trim().toUpperCase();
+  return typeof value === 'string' ? value.trim().toUpperCase() : '';
 }
 
 export function promoIsActive(today = new Date()) {

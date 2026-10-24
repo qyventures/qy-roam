@@ -22,13 +22,13 @@ require.extensions['.ts'] = (module, filename) => {
   module._compile(output.outputText, filename);
 };
 
-const { ESIM_BENCHMARK_MAX_AGE_DAYS, ESIM_PLANS, ESIM_PROMO, esimBenchmarksAreFresh, esimOfferIsSaleable, esimPromoIsActive } = require('../lib/esimPlans.ts');
-const { LAUNCH_PROMO, applyPromoCents, promoIsActive } = require('../lib/promotions.ts');
+const { ESIM_BENCHMARK_MAX_AGE_DAYS, ESIM_PLANS, ESIM_PROMO, esimBenchmarksAreFresh, esimOfferIsSaleable, esimPromoIsActive, getEsimPlan } = require('../lib/esimPlans.ts');
+const { LAUNCH_PROMO, applyPromoCents, normalisePromoCode, promoIsActive } = require('../lib/promotions.ts');
 const { validateQyRoamSession, validateQyRoamTerminalUnpaidSession } = require('../lib/qyRoamSession.ts');
 const { parseExactIsoDate, validCheckoutRequestId } = require('../lib/checkoutValidation.ts');
 const { operationalIsoDate, operationalIsoDateAfter, operationalDaysFromToday } = require('../lib/operationalDate.ts');
 const { POCKET_WIFI_RETURN_GRACE_DAYS, pocketWifiReturnTiming } = require('../lib/pocketWifiReturns.ts');
-const { WIFI_BENCHMARK, WIFI_BENCHMARK_MAX_AGE_DAYS, WIFI_PLANS, wifiBenchmarkIsFresh } = require('../lib/wifiPlans.ts');
+const { WIFI_BENCHMARK, WIFI_BENCHMARK_MAX_AGE_DAYS, WIFI_PLANS, getWifiPlan, wifiBenchmarkIsFresh } = require('../lib/wifiPlans.ts');
 const { pocketWifiRentalCents, sgdFromCents } = require('../lib/pocketWifiPricing.ts');
 const { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } = require('../lib/pocketWifiRentalPeriod.ts');
 const { allowedFulfilmentStatuses, fulfilmentNotificationActionable, validFulfilmentTransition, STRIPE_EVENT_CLAIM_STALE_MS, STRIPE_EVENT_CLAIM_CLOCK_SKEW_MS, stripeEventClaimInProgress } = require('../lib/orderLifecycle.ts');
@@ -122,6 +122,29 @@ const { readinessFailureBackoffActive, readinessWindowActive } = require('../lib
 const { adminOrderMutationSafe } = require('../lib/adminOrderRow.ts');
 const { ADMIN_DASHBOARD_LOOKUP_TIMEOUT_MS, createAdminDashboardDeadline } = require('../lib/adminDashboardDeadline.ts');
 const { adminCustomerIdentity, compareCustomerPurchaseRecency } = require('../lib/adminCustomerIdentity.ts');
+
+test('checkout commercial fields reject structured JSON values instead of coercing them', () => {
+  const wifiCountry = WIFI_PLANS[0].country;
+  const esimPlanId = ESIM_PLANS[0].id;
+  const requestId = 'checkout_request_123456';
+
+  assert.equal(getWifiPlan(wifiCountry)?.country, wifiCountry);
+  assert.equal(getWifiPlan([wifiCountry]), undefined);
+  assert.equal(getEsimPlan(esimPlanId)?.id, esimPlanId);
+  assert.equal(getEsimPlan([esimPlanId]), undefined);
+  assert.ok(parseExactIsoDate('2026-10-25'));
+  assert.equal(parseExactIsoDate(['2026-10-25']), null);
+  assert.equal(validCheckoutRequestId(requestId), requestId);
+  assert.equal(validCheckoutRequestId([requestId]), null);
+  assert.equal(normalisePromoCode(' qy10 '), 'QY10');
+  assert.equal(normalisePromoCode(['QY10']), '');
+  assert.equal(applyPromoCents(1_000, ['QY10'], new Date('2026-09-01T00:00:00+08:00')).discountCents, 0);
+
+  assert.match(wifiCheckoutRoute, /const country=typeof body\.country==='string'\?body\.country:''/);
+  assert.match(wifiCheckoutRoute, /const start=typeof body\.start==='string'\?body\.start:''/);
+  assert.match(wifiCheckoutRoute, /const end=typeof body\.end==='string'\?body\.end:''/);
+  assert.match(esimCheckoutRoute, /body\.promoCode !== undefined && typeof body\.promoCode !== 'string'/);
+});
 
 test('admin structured inputs are rejected instead of silently truncated or defaulted', () => {
   assert.equal(boundedInputText(' 2026-10-25 ', 10), '2026-10-25');

@@ -189,7 +189,10 @@ export async function POST(req: Request) {
       }, { status: 409, headers: { 'Cache-Control': 'no-store' } });
     }
 
-    const promoCode = String(body.promoCode || '').trim().toUpperCase();
+    if (body.promoCode !== undefined && typeof body.promoCode !== 'string') {
+      return NextResponse.json({ error: 'Invalid eSIM promo code.' }, { status: 400 });
+    }
+    const promoCode = typeof body.promoCode === 'string' ? body.promoCode.trim().toUpperCase() : '';
     if (promoCode && promoCode !== ESIM_PROMO.code) {
       return NextResponse.json({ error: 'Invalid eSIM promo code.' }, { status: 400 });
     }
