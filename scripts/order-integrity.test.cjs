@@ -10149,6 +10149,15 @@ test('release verification enforces the complete customer ingress security bound
   const openerPolicyHeaders = nginxConfig.match(/add_header Cross-Origin-Opener-Policy same-origin always;/g) || [];
   assert.equal(openerPolicyHeaders.length, 2, 'both canonical and www TLS servers must isolate their browsing context');
   assert.match(nginxConfig, /server_name www\.qyroam\.com;[\s\S]*?add_header Referrer-Policy no-referrer always;[\s\S]*?return 301 https:\/\/qyroam\.com\$request_uri;/);
+
+  // Admin access uses HTTP Basic Auth. Nginx's `$remote_user` is therefore
+  // the configured operator username, not harmless request telemetry. Keep it
+  // out of the same deliberately capability-free access-log format that
+  // already excludes confirmation query strings and campaign attribution.
+  const accessLogFormat = nginxConfig.match(/log_format qyroam_no_query ([\s\S]*?);/)?.[1] || '';
+  assert.ok(accessLogFormat, 'production ingress must define its reviewed access-log format');
+  assert.doesNotMatch(accessLogFormat, /\$remote_user\b/);
+  assert.match(accessLogFormat, /\$remote_addr - - \[\$time_local\]/);
 });
 
 test('production service contains credential exposure through procfs and crash artifacts', () => {
