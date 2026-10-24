@@ -473,6 +473,16 @@ export async function POST(req: Request) {
     await releaseUnlinkedReservation(supabase,requestId,checkoutDeadline.recoverySignal);
     return NextResponse.json({error:'This checkout attempt has expired. Please try again to start a new one.',checkoutExpired:true},{status:409,headers:{'Cache-Control':'no-store'}});
   }
+  // Readiness, Stripe hold scans and the reservation transaction can cross
+  // the Singapore benchmark-review cutoff after the earlier cheap freshness
+  // check. Re-authorise the public comparison at the final payment boundary,
+  // just as discounted promotional pricing is re-authorised below. The hold
+  // is still unlinked here, so release it rather than retaining scarce router
+  // capacity for a payment capability that must not be created.
+  if(!wifiBenchmarkIsFresh()){
+    await releaseUnlinkedReservation(supabase,requestId,checkoutDeadline.recoverySignal);
+    return NextResponse.json({error:'Pocket WiFi pricing is temporarily under review. Please try again shortly or contact +65 8032 7183.',pricingReviewRequired:true},{status:503,headers:{'Cache-Control':'no-store','Retry-After':'30'}});
+  }
   // Promotion eligibility was calculated before provider-backed hold scans
   // and the atomic reservation call. Re-authorise a discounted price at the
   // final Stripe boundary so a request that crosses the Singapore campaign

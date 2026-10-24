@@ -11282,7 +11282,7 @@ test('aborted Pocket WiFi checkouts prove their exact unlinked reservation was r
   assert.ok(helperStart >= 0);
   assert.match(helper, /\.delete\(\)[\s\S]*\.eq\('checkout_request_id',requestId\)[\s\S]*\.is\('stripe_session_id',null\)[\s\S]*\.select\('checkout_request_id,stripe_session_id'\)[\s\S]*\.abortSignal\(signal\)/);
   assert.match(helper, /acknowledgedUnlinkedReservationRelease\(released\.data,requestId\)/);
-  assert.equal((wifiCheckoutRoute.match(/await releaseUnlinkedReservation\(supabase,requestId,checkoutDeadline\.recoverySignal\)/g) || []).length, 6);
+  assert.equal((wifiCheckoutRoute.match(/await releaseUnlinkedReservation\(supabase,requestId,checkoutDeadline\.recoverySignal\)/g) || []).length, 7);
   assert.equal((wifiCheckoutRoute.match(/await releaseUnlinkedReservation\(supabase,requestId,checkoutDeadline\.signal\)/g) || []).length, 0);
 });
 
@@ -11498,6 +11498,15 @@ test('Pocket WiFi benchmark freshness remains a runtime sales boundary after dep
   const availabilityGlobalAdmission = availabilityRoute.indexOf('if (availabilityGloballyLimited())');
   assert.ok(checkoutFreshness > -1 && checkoutFreshness < checkoutGlobalAdmission,
     'stale pricing must stop checkout before shared provider admission');
+  const checkoutCreate = wifiCheckoutRoute.indexOf('stripe.checkout.sessions.create({');
+  const checkoutReservation = wifiCheckoutRoute.indexOf("supabase.rpc('qy_reserve_pocket_wifi'");
+  const finalFreshness = wifiCheckoutRoute.lastIndexOf('if(!wifiBenchmarkIsFresh())', checkoutCreate);
+  assert.ok(finalFreshness > checkoutReservation && finalFreshness < checkoutCreate,
+    'benchmark freshness must be re-authorised after reserving stock and before creating payment');
+  const finalFreshnessBoundary = wifiCheckoutRoute.slice(finalFreshness, checkoutCreate);
+  assert.match(finalFreshnessBoundary, /pricingReviewRequired:true/);
+  assert.match(finalFreshnessBoundary, /await releaseUnlinkedReservation\(supabase,requestId,checkoutDeadline\.recoverySignal\)/,
+    'an expired review window must release its exact unlinked inventory hold');
   assert.ok(availabilityFreshness > -1 && availabilityFreshness < availabilityGlobalAdmission,
     'stale pricing must stop availability before shared provider admission');
   assert.match(healthRoute, /pocketWifiPricing: wifiBenchmarkIsFresh\(\)/);
