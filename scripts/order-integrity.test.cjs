@@ -872,6 +872,13 @@ test('eSIM benchmark freshness remains a runtime sales boundary after deployment
 });
 
 test('Pocket WiFi promotion expires consistently across pricing and storefront claims', () => {
+  // The homepage evaluates both Pocket WiFi promotion and eSIM catalogue
+  // eligibility from the current clock. A static build would preserve those
+  // claims after their checkout authorities have expired, so keep this route
+  // request-time rendered just like the eSIM subtree.
+  assert.match(rootLayout, /export const dynamic = ['"]force-dynamic['"]/);
+  assert.doesNotMatch(homePage, /export const dynamic/,
+    'the storefront client component must not carry an ignored route config');
   assert.equal(promoIsActive(new Date('2026-09-30T15:59:59.000Z')), true);
   assert.equal(promoIsActive(new Date('2026-09-30T16:00:00.000Z')), false);
   assert.deepEqual(

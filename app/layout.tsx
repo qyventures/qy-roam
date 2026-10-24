@@ -2,6 +2,14 @@ import './styles.css';
 import type { Metadata } from 'next';
 import MetaConsent from '@/components/MetaConsent';
 
+// The primary storefront is a client page whose initial HTML includes
+// Singapore-clock promotion and catalogue eligibility. Keep the server route
+// tree request-time rendered so a long-running release cannot preserve an
+// expired offer in public HTML after checkout has correctly failed closed.
+// This server-owned boundary is inherited by `/`, unlike route configuration
+// exported from a client page (which Next intentionally ignores).
+export const dynamic = 'force-dynamic';
+
 export const metadata: Metadata = {
   metadataBase: new URL('https://qyroam.com'),
   title: {
