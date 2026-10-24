@@ -605,6 +605,19 @@ export async function POST(req: Request, context: { params: { id: string } }) {
     }
     return NextResponse.json({ error: 'Invalid request' }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
   }
+  // A bodyless command can still arrive with a chunked stream whose peer
+  // never closes it. Share the admin ingress budget used by JSON mutations
+  // while proving that this request is actually empty, then release that
+  // capacity before acquiring the smaller, long-lived delivery-work pool.
+  // This prevents authenticated stalled uploads from creating an unbounded
+  // number of request readers without reducing legitimate recovery capacity.
+  const releaseAdminUpload = tryAcquireAdminUpload();
+  if (!releaseAdminUpload) {
+    return NextResponse.json({ error: 'Order delivery retry uploads are busy. Please try again shortly.' }, {
+      status: 503,
+      headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' },
+    });
+  }
   try {
     await readLimitedRequestText(req, 0, ADMIN_DELIVERY_RETRY_BODY_TIMEOUT_MS);
   } catch (error) {
@@ -615,6 +628,8 @@ export async function POST(req: Request, context: { params: { id: string } }) {
       return NextResponse.json({ error: 'Request timed out. Please try again.' }, { status: 408, headers: { 'Cache-Control': 'no-store' } });
     }
     return NextResponse.json({ error: 'Invalid request' }, { status: 400, headers: { 'Cache-Control': 'no-store' } });
+  } finally {
+    releaseAdminUpload();
   }
 
   const release = tryAcquireAdminDeliveryConcurrency();

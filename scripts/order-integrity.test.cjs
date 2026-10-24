@@ -1845,7 +1845,7 @@ test('admin operational mutations have a bounded non-queueing database-work budg
   for (const release of releases.slice(1)) release();
 });
 
-test('admin JSON mutations share a bounded slow-upload budget', () => {
+test('admin mutations share a bounded slow-upload budget', () => {
   assert.equal(ADMIN_UPLOAD_MAX_CONCURRENT_REQUESTS, 12);
 
   for (const source of [adminOpsRoute, adminOrderRoute]) {
@@ -1862,6 +1862,20 @@ test('admin JSON mutations share a bounded slow-upload budget', () => {
       'slow uploads must release ingress capacity before database-work admission');
     assert.match(source, /uploads are busy\. Please try again shortly\./);
   }
+
+  const deliveryHandler = adminOrderRoute.slice(adminOrderRoute.indexOf('export async function POST'));
+  const declaredLengthCheck = deliveryHandler.indexOf('validateLimitedRequestContentLength(req, 0)');
+  const uploadAdmission = deliveryHandler.indexOf('tryAcquireAdminUpload()');
+  const bodyRead = deliveryHandler.indexOf('readLimitedRequestText(req, 0, ADMIN_DELIVERY_RETRY_BODY_TIMEOUT_MS)');
+  const uploadRelease = deliveryHandler.indexOf('releaseAdminUpload()', bodyRead);
+  const deliveryAdmission = deliveryHandler.indexOf('tryAcquireAdminDeliveryConcurrency()');
+  assert.ok(declaredLengthCheck >= 0 && uploadAdmission > declaredLengthCheck,
+    'invalid delivery-retry lengths must be rejected before upload admission');
+  assert.ok(bodyRead > uploadAdmission && uploadRelease > bodyRead,
+    'the shared upload slot must cover and be released after the bodyless stream read');
+  assert.ok(deliveryAdmission > uploadRelease,
+    'stalled delivery-retry uploads must release ingress capacity before delivery-work admission');
+  assert.match(deliveryHandler, /delivery retry uploads are busy\. Please try again shortly\./);
 
   const releases = [];
   for (let index = 0; index < ADMIN_UPLOAD_MAX_CONCURRENT_REQUESTS; index += 1) {
