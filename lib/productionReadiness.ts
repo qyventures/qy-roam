@@ -136,7 +136,7 @@ export async function hasRequiredStripeApiAccess() {
 }
 
 async function hasCurrentOrderIntegritySchema(database: any, signal: AbortSignal) {
-  const [integrityProbe, versionProbe, eventClaimProbe] = await Promise.all([
+  const [integrityProbe, versionProbe, eventClaimProbe, esimPersistenceProbe, wifiPersistenceProbe] = await Promise.all([
     database.rpc('qy_order_integrity_schema_ready', {}).abortSignal(signal),
     database.rpc('qy_order_integrity_schema_version', {}).abortSignal(signal),
     // Resolve the exact webhook claim signature through PostgREST and prove
@@ -149,11 +149,53 @@ async function hasCurrentOrderIntegritySchema(database: any, signal: AbortSignal
       p_event_type: 'checkout.session.completed',
       p_stripe_session_id: 'cs_test_readinessProbe',
     }).abortSignal(signal),
+    // Presence and schema-version checks cannot detect an accidentally
+    // revoked service-role grant. Exercise the exact eSIM persistence
+    // signature with an invalid empty Session id, which the function rejects
+    // before taking its per-order lock or writing an order.
+    database.rpc('qy_persist_stripe_esim_order', {
+      p_stripe_session_id: '',
+      p_payment_status: 'unpaid',
+      p_customer_name: null,
+      p_email: null,
+      p_phone: null,
+      p_amount_sgd: 1,
+      p_plan_id: 'readiness-probe',
+      p_plan_name: 'Readiness probe',
+      p_data_allowance: '1 GB',
+      p_country: 'Readiness probe',
+      p_measurement_consent: 'essential',
+      p_shipping_address: null,
+      p_payment_confirmed_at: null,
+      p_payment_failed: false,
+    }).abortSignal(signal),
+    // Use the same no-write expected-error probe for the physical-order path.
+    // This closes the gap where checkout inventory is healthy but the webhook
+    // cannot convert a paid Session into its durable router commitment.
+    database.rpc('qy_persist_stripe_pocket_wifi_order', {
+      p_stripe_session_id: '',
+      p_payment_status: 'unpaid',
+      p_customer_name: null,
+      p_email: null,
+      p_phone: null,
+      p_amount_sgd: 1,
+      p_plan_name: 'Readiness probe',
+      p_country: 'Readiness probe',
+      p_travel_start: '2000-01-01',
+      p_travel_end: '2000-01-01',
+      p_measurement_consent: 'essential',
+      p_shipping_address: null,
+      p_payment_confirmed_at: null,
+      p_payment_failed: false,
+      p_checkout_request_id: 'readiness_probe_0001',
+    }).abortSignal(signal),
   ]);
   if (
     integrityProbe.error || integrityProbe.data !== true ||
     versionProbe.error || versionProbe.data !== REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION ||
-    !eventClaimProbe.error || !/invalid Stripe event id/i.test(eventClaimProbe.error.message || '')
+    !eventClaimProbe.error || !/invalid Stripe event id/i.test(eventClaimProbe.error.message || '') ||
+    !esimPersistenceProbe.error || !/Stripe session id is required/i.test(esimPersistenceProbe.error.message || '') ||
+    !wifiPersistenceProbe.error || !/Stripe session id is required/i.test(wifiPersistenceProbe.error.message || '')
   ) {
     console.error('production_payment_integrity_schema_check_failed');
     return false;

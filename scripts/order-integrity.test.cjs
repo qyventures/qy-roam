@@ -5002,6 +5002,25 @@ test('checkout readiness proves the webhook idempotency claim is executable with
   assert.match(schema, /grant execute on function public\.qy_claim_stripe_event\(text,text,text\) to service_role/);
 });
 
+test('checkout readiness proves both paid-order persistence paths are executable without writing an order', () => {
+  // Function presence and a matching schema marker can both survive a grant
+  // being revoked after deployment. Expected validation errors prove that
+  // PostgREST resolved the exact overload and service_role entered each
+  // function, while the empty Session id stops before either lock or write.
+  assert.match(productionReadiness, /database\.rpc\('qy_persist_stripe_esim_order', \{[\s\S]*?p_stripe_session_id: ''/);
+  assert.match(productionReadiness, /database\.rpc\('qy_persist_stripe_pocket_wifi_order', \{[\s\S]*?p_stripe_session_id: ''/);
+  assert.match(productionReadiness, /!esimPersistenceProbe\.error \|\| !\/Stripe session id is required\/i\.test\(esimPersistenceProbe\.error\.message \|\| ''\)/);
+  assert.match(productionReadiness, /!wifiPersistenceProbe\.error \|\| !\/Stripe session id is required\/i\.test\(wifiPersistenceProbe\.error\.message \|\| ''\)/);
+
+  for (const functionName of ['qy_persist_stripe_esim_order', 'qy_persist_stripe_pocket_wifi_order']) {
+    const persistenceFunction = schema.match(new RegExp(`create or replace function public\\.${functionName}\\([\\s\\S]*?\\n\\$\\$;`))?.[0] || '';
+    const identityRejection = persistenceFunction.indexOf("raise exception 'Stripe session id is required'");
+    const firstLock = persistenceFunction.indexOf('pg_advisory_xact_lock');
+    const firstWrite = persistenceFunction.indexOf('insert into public.orders');
+    assert.ok(identityRejection > -1 && firstLock > identityRejection && firstWrite > identityRejection);
+  }
+});
+
 test('checkout readiness rejects an older order-integrity schema with matching object names', () => {
   // The compatibility marker covers function bodies and privilege boundaries
   // that object-presence probes cannot distinguish during a rolling deploy.
