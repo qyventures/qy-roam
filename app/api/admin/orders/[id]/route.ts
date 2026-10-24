@@ -240,7 +240,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
   try {
   return await adminOrderDeadline.waitFor((async () => {
-  const existing = await supabase.from('orders').select('product_type,payment_status,fulfilment_status,dispatched_at,returned_at,courier_tracking,return_tracking,return_disposition,digital_delivery_reference,notes').eq('id', id).abortSignal(adminOrderDeadline.signal).maybeSingle();
+  const existing = await supabase.from('orders').select('product_type,payment_status,fulfilment_status,inventory_item_id,dispatched_at,returned_at,courier_tracking,return_tracking,return_disposition,digital_delivery_reference,notes').eq('id', id).abortSignal(adminOrderDeadline.signal).maybeSingle();
   if (existing.error) return adminOrderTransitionRetryJson('Unable to load the current order. Please try again shortly.');
   if (!existing.data) return NextResponse.json({ error: 'Order not found' }, { status: 404 });
   if (!validFulfilmentStatus(existing.data.product_type, status)) return NextResponse.json({ error: 'Invalid fulfilment status for this order' }, { status: 400 });
@@ -406,6 +406,14 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     if (body.inventory_item_id !== undefined && body.inventory_item_id !== '' && selectedInventoryItemId === null) {
       return NextResponse.json({ error: 'Invalid Pocket WiFi inventory item' }, { status: 400 });
     }
+    const existingInventoryItemId = exactPositiveIntegerId(existing.data.inventory_item_id);
+    const committedInventoryItemId = selectedInventoryItemId ?? existingInventoryItemId;
+    if (status === 'dispatched' && existing.data.fulfilment_status !== 'dispatched' && committedInventoryItemId === null) {
+      return NextResponse.json({ error: 'Select the Pocket WiFi inventory item being dispatched' }, { status: 400 });
+    }
+    if (status === 'returned' && existing.data.fulfilment_status !== 'returned' && existingInventoryItemId === null) {
+      return NextResponse.json({ error: 'The dispatched Pocket WiFi inventory item is missing. Reconcile the order before recording its return.' }, { status: 409 });
+    }
     // Dispatch/return update both ledgers inside the database transaction. This
     // is the physical inventory boundary, so do not fall back to a plain order
     // update if the new RPC has not been deployed yet.
@@ -429,7 +437,28 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       console.error('admin_pocket_wifi_transition_error');
       return adminOrderTransitionRetryJson();
     }
-    const order = acknowledgedOrderTransition(exactRpcRow(data), { orderId: id, status });
+    const crossingDispatchBoundary = status === 'dispatched' && existing.data.fulfilment_status !== 'dispatched';
+    const crossingReturnBoundary = status === 'returned' && existing.data.fulfilment_status !== 'returned';
+    // A physical transition changes both the order and inventory ledgers.
+    // Do not acknowledge it from status alone: require the RPC response to
+    // echo the exact custody evidence and device identity committed under the
+    // row lock. This leaves an ambiguous provider response safely retryable
+    // instead of telling staff that an unproven hand-off or receipt succeeded.
+    const order = acknowledgedOrderTransition(exactRpcRow(data), {
+      orderId: id,
+      status,
+      ...(crossingDispatchBoundary ? {
+        inventoryItemId: committedInventoryItemId!,
+        courierTracking,
+        dispatched: true,
+      } : {}),
+      ...(crossingReturnBoundary ? {
+        inventoryItemId: existingInventoryItemId!,
+        returnTracking,
+        returnDisposition,
+        returned: true,
+      } : {}),
+    });
     if (!order) return NextResponse.json({ error: 'Unable to verify the saved order. Refresh before making another change.' }, { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' } });
     return NextResponse.json(order, { headers: { 'Cache-Control': 'no-store' } });
   }

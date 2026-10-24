@@ -676,6 +676,66 @@ test('admin order transitions preserve exact database versions and verify their 
   assert.match(adminOrderRoute, /Unable to verify the saved order\. Refresh before making another change\./);
 });
 
+test('Pocket WiFi custody transitions acknowledge exact durable dispatch and return evidence', () => {
+  const base = {
+    id: 41,
+    fulfilment_status: 'dispatched',
+    updated_at: '2026-10-25T10:00:00.123456+00:00',
+    inventory_item_id: 7,
+    courier_tracking: 'QY-DELIVERY-41',
+    dispatched_at: '2026-10-25T10:00:00.123456+00:00',
+  };
+  const expectedDispatch = {
+    orderId: 41,
+    status: 'dispatched',
+    inventoryItemId: 7,
+    courierTracking: 'QY-DELIVERY-41',
+    dispatched: true,
+  };
+  assert.deepEqual(acknowledgedOrderTransition(base, expectedDispatch), {
+    id: 41,
+    fulfilment_status: 'dispatched',
+    updated_at: base.updated_at,
+  });
+  for (const malformed of [
+    { ...base, inventory_item_id: 8 },
+    { ...base, courier_tracking: 'QY-DELIVERY-OTHER' },
+    { ...base, dispatched_at: null },
+    { ...base, dispatched_at: 'not-a-database-timestamp' },
+    { ...base, dispatched_at: '2026-10-25T09:59:59.123456+00:00' },
+  ]) assert.equal(acknowledgedOrderTransition(malformed, expectedDispatch), null);
+
+  const returned = {
+    ...base,
+    fulfilment_status: 'returned',
+    updated_at: '2026-11-02T09:30:00.654321+00:00',
+    return_tracking: 'QY-RECEIPT-41',
+    return_disposition: 'restock',
+    returned_at: '2026-11-02T09:30:00.654321+00:00',
+  };
+  const expectedReturn = {
+    orderId: 41,
+    status: 'returned',
+    inventoryItemId: 7,
+    returnTracking: 'QY-RECEIPT-41',
+    returnDisposition: 'restock',
+    returned: true,
+  };
+  assert.ok(acknowledgedOrderTransition(returned, expectedReturn));
+  for (const malformed of [
+    { ...returned, inventory_item_id: 9 },
+    { ...returned, return_tracking: 'QY-RECEIPT-OTHER' },
+    { ...returned, return_disposition: 'quarantine' },
+    { ...returned, returned_at: null },
+    { ...returned, returned_at: '2026-11-02T09:29:59.654321+00:00' },
+  ]) assert.equal(acknowledgedOrderTransition(malformed, expectedReturn), null);
+
+  assert.match(adminOrderRoute, /select\('product_type,payment_status,fulfilment_status,inventory_item_id,/);
+  assert.match(adminOrderRoute, /committedInventoryItemId = selectedInventoryItemId \?\? existingInventoryItemId/);
+  assert.match(adminOrderRoute, /crossingDispatchBoundary[\s\S]*?inventoryItemId: committedInventoryItemId![\s\S]*?courierTracking[\s\S]*?dispatched: true/);
+  assert.match(adminOrderRoute, /crossingReturnBoundary[\s\S]*?inventoryItemId: existingInventoryItemId![\s\S]*?returnTracking[\s\S]*?returnDisposition[\s\S]*?returned: true/);
+});
+
 test('order-critical RPC acknowledgements require exactly one returned row', () => {
   const row = { id: 42 };
   assert.equal(exactRpcRow(row), row);
