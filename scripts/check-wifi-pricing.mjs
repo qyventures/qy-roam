@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 const src=fs.readFileSync(new URL('../lib/wifiPlans.ts',import.meta.url),'utf8');
-const storefront=fs.readFileSync(new URL('../app/page.tsx',import.meta.url),'utf8');
+const storefrontPage=fs.readFileSync(new URL('../app/page.tsx',import.meta.url),'utf8');
+const storefront=fs.readFileSync(new URL('../components/HomePageClient.tsx',import.meta.url),'utf8');
 const promotions=fs.readFileSync(new URL('../lib/promotions.ts',import.meta.url),'utf8');
 const MAX_BENCHMARK_AGE_DAYS=30;
 const min=Number((src.match(/minimumDiscountPercent:\s*(\d+(?:\.\d+)?)/)||[])[1]);
@@ -24,6 +25,16 @@ if(provider!=='Yoowifi') throw new Error('WiFi benchmark provider does not match
 if(!Number.isFinite(ageDays)||ageDays<0||ageDays>MAX_BENCHMARK_AGE_DAYS) throw new Error(`Stale WiFi benchmark: ${verifiedOn||'missing'} (checked ${today})`);
 if(!exactIsoDate(promoEnd)) throw new Error('The Pocket WiFi launch promotion has an invalid end date');
 if(today>promoEnd){
+  // The homepage is deliberately split into a request-time server boundary
+  // and a client storefront. Validate both halves: scanning app/page.tsx
+  // alone would miss the actual promotion presentation, while scanning only
+  // the component would allow expired promotional HTML to be statically
+  // cached across the campaign cutoff.
+  if(!/import HomePageClient from ['"]@\/components\/HomePageClient['"]/.test(storefrontPage)||
+    !/export const dynamic = ['"]force-dynamic['"]/.test(storefrontPage)||
+    !/<HomePageClient\s*\/>/.test(storefrontPage)) {
+    throw new Error('Expired Pocket WiFi promotion is not behind the dynamic storefront boundary');
+  }
   if(!/\{launchPromoActive && <section className="promo-banner">/.test(storefront)||
     !/\{launchPromoActive && <section className="wrap section promo-section">/.test(storefront)||
     !/useState<string>\(launchPromoActive \? LAUNCH_PROMO\.code : ''\)/.test(storefront)||
