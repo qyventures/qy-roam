@@ -245,6 +245,31 @@ assert.ok(
   deploy.lastIndexOf('cleanup_release_snapshot') > deploy.indexOf('if [[ "$ready" -ne 1 ]]'),
   'the rollback snapshot must survive until live readiness succeeds',
 );
+// Every structured ingress probe writes an upstream-controlled body to a
+// temporary file. A routing/proxy regression must fail within the same 64 KiB
+// envelope as authenticated readiness instead of consuming deployment disk
+// until curl's time limit expires. Keep this assertion tied to the helper
+// bodies so both isolated and public post-cutover calls inherit the boundary.
+for (const helperName of [
+  'verify_checkout_ingress',
+  'verify_pocket_wifi_sales_api_ingress',
+  'verify_webhook_ingress',
+  'verify_admin_ingress',
+]) {
+  const helperStart = deploy.indexOf(`${helperName}() {`);
+  const helperEnd = deploy.indexOf('\n}\n', helperStart);
+  assert.notEqual(helperStart, -1, `${helperName} must remain defined`);
+  assert.notEqual(helperEnd, -1, `${helperName} must have a bounded function body`);
+  const helper = deploy.slice(helperStart, helperEnd);
+  const bodyWrites = (helper.match(/--output "\$response_body"/g) || []).length;
+  const sizeLimits = (helper.match(/--max-filesize "\$READINESS_MAX_RESPONSE_BYTES"/g) || []).length;
+  assert.ok(bodyWrites > 0, `${helperName} must continue validating a response body`);
+  assert.equal(
+    sizeLimits,
+    bodyWrites,
+    `${helperName} must bound every response written to its temporary body file`,
+  );
+}
 // Compile success alone is not a safe restart boundary. Boot the exact
 // standalone artifact on loopback and require its authenticated order
 // readiness response before replacing the live process. This catches a
@@ -387,8 +412,8 @@ assert.ok(
 assert.match(deploy, /curl --header "@\$health_header" --fail --silent --show-error --max-time "\$READINESS_CURL_TIMEOUT_SECONDS"/);
 assert.equal(
   (deploy.match(/--max-filesize "\$READINESS_MAX_RESPONSE_BYTES"/g) || []).length,
-  4,
-  'every authenticated readiness response must be bounded before validation',
+  9,
+  'every authenticated readiness and structured ingress response must be bounded before validation',
 );
 assert.match(
   deploy,

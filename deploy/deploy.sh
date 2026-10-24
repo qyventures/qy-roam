@@ -419,6 +419,7 @@ verify_checkout_ingress() {
       --data 'qy-roam-release-probe' \
       --dump-header "$response_headers" \
       --output "$response_body" \
+      --max-filesize "$READINESS_MAX_RESPONSE_BYTES" \
       --write-out '%{http_code}' \
       "${base_url}${checkout_path}")" || {
         rm -f "$response_headers" "$response_body"
@@ -450,6 +451,7 @@ verify_pocket_wifi_sales_api_ingress() {
   response_body="$(mktemp /tmp/qyroam-sales-api-body.XXXXXX)"
 
   status="$("$@" --dump-header "$response_headers" --output "$response_body" \
+    --max-filesize "$READINESS_MAX_RESPONSE_BYTES" \
     --write-out '%{http_code}' "$base_url/api/booking-terms")" || {
       rm -f "$response_headers" "$response_body"
       return 1
@@ -466,6 +468,7 @@ verify_pocket_wifi_sales_api_ingress() {
   : > "$response_headers"
   : > "$response_body"
   status="$("$@" --dump-header "$response_headers" --output "$response_body" \
+    --max-filesize "$READINESS_MAX_RESPONSE_BYTES" \
     --write-out '%{http_code}' \
     "$base_url/api/availability?start=2026-01-01&start=2026-01-02&end=2026-01-03")" || {
       rm -f "$response_headers" "$response_body"
@@ -503,6 +506,7 @@ verify_webhook_ingress() {
       --data '{}' \
       --dump-header "$response_headers" \
       --output "$response_body" \
+      --max-filesize "$READINESS_MAX_RESPONSE_BYTES" \
       --write-out '%{http_code}' \
       "${base_url}${webhook_path}")" || {
         rm -f "$response_headers" "$response_body"
@@ -537,6 +541,7 @@ verify_admin_ingress() {
   status="$("$@" \
     --dump-header "$response_headers" \
     --output "$response_body" \
+    --max-filesize "$READINESS_MAX_RESPONSE_BYTES" \
     --write-out '%{http_code}' \
     "$base_url/admin")" || {
       rm -f "$response_headers" "$response_body"
