@@ -628,16 +628,41 @@ fi
 # health API and shared framework runtime remain healthy.
 verify_sales_page_assets() {
   local page_path="$1"
-  local page_assets
+  local page_assets response_headers static_asset asset_path downloaded_bytes
+  response_headers="$(mktemp /tmp/qyroam-static-headers.XXXXXX)"
   page_assets="$(
     curl --fail --silent --show-error --max-time 10 "http://127.0.0.1:${smoke_port}${page_path}" |
       node -e "let body='';process.stdin.on('data',chunk=>body+=chunk).on('end',()=>{const assets=[...body.matchAll(/(?:src|href)=\"(\/_next\/static\/[^\"?#]+(?:[?#][^\"]*)?)\"/g)].map(match=>match[1]);const unique=[...new Set(assets)];if(!unique.length||!unique.some(asset=>asset.split(/[?#]/,1)[0].endsWith('.js')))process.exit(1);process.stdout.write(unique.join('\\n'))})"
-  )" || return 1
+  )" || { rm -f "$response_headers"; return 1; }
   while IFS= read -r static_asset; do
-    [[ "$static_asset" == /_next/static/* ]] || return 1
-    curl --fail --silent --show-error --output /dev/null --max-time 10 \
-      "http://127.0.0.1:${smoke_port}${static_asset}" || return 1
+    [[ "$static_asset" == /_next/static/* ]] || { rm -f "$response_headers"; return 1; }
+    : > "$response_headers"
+    downloaded_bytes="$(curl --fail --silent --show-error --output /dev/null --max-time 10 \
+      --dump-header "$response_headers" --write-out '%{size_download}' \
+      "http://127.0.0.1:${smoke_port}${static_asset}")" || { rm -f "$response_headers"; return 1; }
+    asset_path="${static_asset%%[?#]*}"
+    if [[ ! "$downloaded_bytes" =~ ^[0-9]+$ ]] || (( downloaded_bytes < 1 )); then
+      rm -f "$response_headers"
+      return 1
+    fi
+    case "$asset_path" in
+      *.js)
+        grep -Eiq '^content-type:[[:space:]]*(application|text)/javascript([[:space:]]*;|[[:space:]]*$)' "$response_headers" || { rm -f "$response_headers"; return 1; }
+        ;;
+      *.css)
+        grep -Eiq '^content-type:[[:space:]]*text/css([[:space:]]*;|[[:space:]]*$)' "$response_headers" || { rm -f "$response_headers"; return 1; }
+        ;;
+      *)
+        # Future Next.js releases may advertise fonts or other static assets.
+        # They still need an explicit non-HTML representation: a proxy SPA
+        # fallback returning the sales page with HTTP 200 is not a usable
+        # browser asset and must not approve this release.
+        grep -Eiq '^content-type:' "$response_headers" || { rm -f "$response_headers"; return 1; }
+        grep -Eiq '^content-type:[[:space:]]*text/html' "$response_headers" && { rm -f "$response_headers"; return 1; }
+        ;;
+    esac
   done <<< "$page_assets"
+  rm -f "$response_headers"
 }
 
 for sales_page in / /esim; do
@@ -807,15 +832,37 @@ fi
 
 verify_public_sales_page_assets() {
   local page_path="$1"
-  local page_assets
+  local page_assets response_headers static_asset asset_path downloaded_bytes
+  response_headers="$(mktemp /tmp/qyroam-public-static-headers.XXXXXX)"
   page_assets="$(
     "${public_curl[@]}" "$PUBLIC_ORIGIN${page_path}" |
       node -e "let body='';process.stdin.on('data',chunk=>body+=chunk).on('end',()=>{const assets=[...body.matchAll(/(?:src|href)=\"(\/_next\/static\/[^\"?#]+(?:[?#][^\"]*)?)\"/g)].map(match=>match[1]);const unique=[...new Set(assets)];if(!unique.length||!unique.some(asset=>asset.split(/[?#]/,1)[0].endsWith('.js')))process.exit(1);process.stdout.write(unique.join('\\n'))})"
-  )" || return 1
+  )" || { rm -f "$response_headers"; return 1; }
   while IFS= read -r static_asset; do
-    [[ "$static_asset" == /_next/static/* ]] || return 1
-    "${public_curl[@]}" --output /dev/null "$PUBLIC_ORIGIN${static_asset}" || return 1
+    [[ "$static_asset" == /_next/static/* ]] || { rm -f "$response_headers"; return 1; }
+    : > "$response_headers"
+    downloaded_bytes="$("${public_curl[@]}" --output /dev/null \
+      --dump-header "$response_headers" --write-out '%{size_download}' \
+      "$PUBLIC_ORIGIN${static_asset}")" || { rm -f "$response_headers"; return 1; }
+    asset_path="${static_asset%%[?#]*}"
+    if [[ ! "$downloaded_bytes" =~ ^[0-9]+$ ]] || (( downloaded_bytes < 1 )); then
+      rm -f "$response_headers"
+      return 1
+    fi
+    case "$asset_path" in
+      *.js)
+        grep -Eiq '^content-type:[[:space:]]*(application|text)/javascript([[:space:]]*;|[[:space:]]*$)' "$response_headers" || { rm -f "$response_headers"; return 1; }
+        ;;
+      *.css)
+        grep -Eiq '^content-type:[[:space:]]*text/css([[:space:]]*;|[[:space:]]*$)' "$response_headers" || { rm -f "$response_headers"; return 1; }
+        ;;
+      *)
+        grep -Eiq '^content-type:' "$response_headers" || { rm -f "$response_headers"; return 1; }
+        grep -Eiq '^content-type:[[:space:]]*text/html' "$response_headers" && { rm -f "$response_headers"; return 1; }
+        ;;
+    esac
   done <<< "$page_assets"
+  rm -f "$response_headers"
 }
 
 for sales_page in / /esim; do

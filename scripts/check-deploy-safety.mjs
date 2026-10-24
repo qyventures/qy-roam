@@ -290,6 +290,26 @@ assert.match(standalonePackager, /resolve\(standalone, distDir, 'static'\)/);
 assert.match(deploy, /verify_sales_page_assets\(\)/);
 assert.match(deploy, /for sales_page in \/ \/esim/);
 assert.match(deploy, /unique\.some\(asset=>asset\.split/);
+assert.equal(
+  (deploy.match(/--write-out '%\{size_download\}'/g) || []).length,
+  2,
+  'isolated and public asset probes must reject empty successful responses',
+);
+assert.equal(
+  (deploy.match(/\(application\|text\)\/javascript/g) || []).length,
+  2,
+  'isolated and public asset probes must require JavaScript MIME types',
+);
+assert.equal(
+  (deploy.match(/text\/css/g) || []).length,
+  2,
+  'isolated and public asset probes must require CSS MIME types',
+);
+assert.equal(
+  (deploy.match(/content-type:\[\[:space:\]\]\*text\/html/g) || []).length,
+  2,
+  'isolated and public asset probes must reject HTML fallbacks for static assets',
+);
 assert.match(deploy, /Built QY Roam artifact has an unavailable sales page or browser asset/);
 assert.ok(
   deploy.indexOf('verify_sales_page_assets()') < deploy.indexOf('echo "[10/11] Restarting service"'),
