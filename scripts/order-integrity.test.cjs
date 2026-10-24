@@ -11675,6 +11675,18 @@ test('Pocket WiFi benchmark freshness remains a runtime sales boundary after dep
   assert.match(healthRoute, /checks\.inventory && checks\.pocketWifiPricing && availabilityChecks\.pocketWifiStock/);
 });
 
+test('live availability re-authorises Pocket WiFi pricing after provider work', () => {
+  const providerWork = availabilityRoute.indexOf('const stripeHolds = await availabilityDeadline.waitFor(');
+  const inventorySnapshot = availabilityRoute.indexOf('const inventoryState = await committedInventory(', providerWork);
+  const finalFreshness = availabilityRoute.indexOf('if (!wifiBenchmarkIsFresh()) return unavailableAvailability();', inventorySnapshot);
+  const positiveResponse = availabilityRoute.indexOf('return NextResponse.json({ available: remaining > 0', inventorySnapshot);
+
+  assert.ok(providerWork >= 0, 'availability must retain its bounded Stripe hold scan');
+  assert.ok(inventorySnapshot > providerWork, 'availability must retain its atomic inventory snapshot');
+  assert.ok(finalFreshness > inventorySnapshot, 'pricing freshness must be rechecked after provider work');
+  assert.ok(positiveResponse > finalFreshness, 'availability must not publish stock after pricing expires in flight');
+});
+
 test('release health credentials survive HTTP header transport byte-for-byte', () => {
   const { healthCheckToken, MAX_HEALTH_CHECK_TOKEN_LENGTH } = require('../lib/healthCheckToken.ts');
   const valid = 'release-health_0123456789.ABC-xyz';

@@ -212,6 +212,13 @@ export async function GET(req: NextRequest) {
     // truthfully show to a customer.
     const effectiveInventory = Math.min(inventory, inventoryState.saleableInventory);
     const remaining = Math.max(0, effectiveInventory - committed);
+    // Stripe pagination and the atomic inventory snapshot can also cross the
+    // Singapore benchmark-review cutoff. The quote returned by this endpoint
+    // is the customer's price-review boundary immediately before checkout, so
+    // do not publish fresh-looking stock against a comparison that expired
+    // while provider work was in flight. Checkout independently repeats this
+    // gate before and after reserving inventory.
+    if (!wifiBenchmarkIsFresh()) return unavailableAvailability();
     // The Stripe scan and atomic inventory snapshot can straddle Singapore
     // midnight. Do not publish a positive stock promise after the delivery
     // lead-time boundary has advanced beyond the requested start date; the
