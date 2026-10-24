@@ -334,7 +334,8 @@ const bookingTermsRoute = fs.readFileSync(require.resolve('../app/api/booking-te
 const esimPage = fs.readFileSync(require.resolve('../app/esim/page.tsx'), 'utf8');
 const customerCheckout = fs.readFileSync(require.resolve('../lib/customerCheckout.ts'), 'utf8');
 const esimLayout = fs.readFileSync(require.resolve('../app/esim/layout.tsx'), 'utf8');
-const homePage = fs.readFileSync(require.resolve('../app/page.tsx'), 'utf8');
+const homePageRoute = fs.readFileSync(require.resolve('../app/page.tsx'), 'utf8');
+const homePage = fs.readFileSync(require.resolve('../components/HomePageClient.tsx'), 'utf8');
 const qyRoamSessionSource = fs.readFileSync(require.resolve('../lib/qyRoamSession.ts'), 'utf8');
 const manualOrderForm = fs.readFileSync(require.resolve('../components/ManualOrderForm.tsx'), 'utf8');
 const adminOpsForms = fs.readFileSync(require.resolve('../components/AdminOpsForms.tsx'), 'utf8');
@@ -875,10 +876,13 @@ test('Pocket WiFi promotion expires consistently across pricing and storefront c
   // The homepage evaluates both Pocket WiFi promotion and eSIM catalogue
   // eligibility from the current clock. A static build would preserve those
   // claims after their checkout authorities have expired, so keep this route
-  // request-time rendered just like the eSIM subtree.
-  assert.match(rootLayout, /export const dynamic = ['"]force-dynamic['"]/);
-  assert.doesNotMatch(homePage, /export const dynamic/,
-    'the storefront client component must not carry an ignored route config');
+  // request-time rendered just like the eSIM subtree. Scope that boundary to
+  // `/`: putting it on the root layout needlessly disables static optimisation
+  // for every public legal and informational page.
+  assert.match(homePageRoute, /export const dynamic = ['"]force-dynamic['"]/);
+  assert.match(homePageRoute, /import HomePageClient from ['"]@\/components\/HomePageClient['"]/);
+  assert.doesNotMatch(rootLayout, /export const dynamic/);
+  assert.doesNotMatch(homePage, /export const dynamic/);
   assert.equal(promoIsActive(new Date('2026-09-30T15:59:59.000Z')), true);
   assert.equal(promoIsActive(new Date('2026-09-30T16:00:00.000Z')), false);
   assert.deepEqual(
