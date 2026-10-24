@@ -26,13 +26,26 @@ export function databaseTimestampInstantEquals(left: unknown, right: unknown) {
   const rightToken = exactDatabaseTimestampToken(right);
   if (!leftToken || !rightToken) return false;
 
-  const epochMicroseconds = (token: string) => {
-    const fractional = /\.(\d{1,6})/.exec(token)?.[1] || '';
-    const subMillisecond = Number(fractional.padEnd(6, '0').slice(3, 6));
-    return BigInt(new Date(token).getTime()) * BigInt(1_000) + BigInt(subMillisecond);
-  };
+  return databaseTimestampEpochMicroseconds(leftToken) === databaseTimestampEpochMicroseconds(rightToken);
+}
 
-  return epochMicroseconds(leftToken) === epochMicroseconds(rightToken);
+function databaseTimestampEpochMicroseconds(token: string) {
+  const fractional = /\.(\d{1,6})/.exec(token)?.[1] || '';
+  const subMillisecond = Number(fractional.padEnd(6, '0').slice(3, 6));
+  return BigInt(new Date(token).getTime()) * BigInt(1_000) + BigInt(subMillisecond);
+}
+
+/**
+ * Compare two exact PostgreSQL timestamptz values without losing the final
+ * three fractional digits to JavaScript Date. Lifecycle acknowledgements use
+ * this to reject a syntactically valid response whose completion/failure time
+ * predates the database lease it claims to have settled.
+ */
+export function databaseTimestampInstantIsAtOrAfter(value: unknown, boundary: unknown) {
+  const valueToken = exactDatabaseTimestampToken(value);
+  const boundaryToken = exactDatabaseTimestampToken(boundary);
+  if (!valueToken || !boundaryToken) return false;
+  return databaseTimestampEpochMicroseconds(valueToken) >= databaseTimestampEpochMicroseconds(boundaryToken);
 }
 
 // Retain the domain-specific name at existing Stripe event call sites while

@@ -1,4 +1,4 @@
-import { databaseTimestampInstantEquals, exactStripeClaimToken } from './stripeClaimToken';
+import { databaseTimestampInstantIsAtOrAfter, exactStripeClaimToken } from './stripeClaimToken';
 
 type StripeEventFailureRow = {
   event_id?: unknown;
@@ -17,7 +17,6 @@ export function acknowledgedStripeEventFailure(
   value: unknown,
   eventId: string,
   processingStartedAt: string,
-  failedAt: string,
   message: string,
 ) {
   if (!Array.isArray(value) || value.length !== 1) return false;
@@ -26,6 +25,6 @@ export function acknowledgedStripeEventFailure(
     row?.event_id === eventId &&
     exactStripeClaimToken(row?.processing_started_at) === processingStartedAt &&
     row?.processed_at === null &&
-    databaseTimestampInstantEquals(row?.last_failed_at, failedAt) &&
+    databaseTimestampInstantIsAtOrAfter(row?.last_failed_at, processingStartedAt) &&
     row?.last_error === message;
 }

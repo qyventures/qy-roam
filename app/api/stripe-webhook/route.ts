@@ -28,7 +28,7 @@ import { contentLengthMatches, declaredContentLength } from '@/lib/contentLength
 import { paidFulfilmentDetailsIssue } from '@/lib/paidFulfilmentDetails';
 import { structurallyValidStripeSignatureHeader, stripeSignatureTimestampWithinTolerance } from '@/lib/stripeSignatureHeader';
 import { hasIdentityRequestContentEncoding, isJsonRequestContentType } from '@/lib/requestBody';
-import { exactDatabaseTimestampToken, exactStripeClaimToken } from '@/lib/stripeClaimToken';
+import { exactStripeClaimToken } from '@/lib/stripeClaimToken';
 import { exactRpcRow } from '@/lib/exactRpcRow';
 import { acknowledgedPaidDeliveryClaim, acknowledgedPaidDeliveryFailure, acknowledgedPaidDeliverySettlement } from '@/lib/paidDeliveryAcknowledgement';
 import { durableOrderMatchesPaidSession, durablePaidOrderMatchesPaymentEvent, durableOrderMatchesUnpaidPaymentEvent } from '@/lib/durableOrderSnapshot';
@@ -39,6 +39,8 @@ import {
 import { stripeWebhookVerificationFailure } from '@/lib/stripeWebhookVerification';
 import { deliveryResponseContentEncoding, deliveryResponseHasJsonContentType, strictDeliveryResponseText } from '@/lib/deliveryResponse';
 import { createStripeWebhookDeadline } from '@/lib/stripeWebhookDeadline';
+import { acknowledgedStripeEventFailure } from '@/lib/stripeEventFailureAcknowledgement';
+import { acknowledgedStripeEventSettlement } from '@/lib/stripeEventSettlementAcknowledgement';
 
 export const runtime = 'nodejs';
 
@@ -651,14 +653,10 @@ async function recordEventFailure(supabase:NonNullable<ReturnType<typeof getSupa
       p_processing_started_at:processingStartedAt,
       p_last_error:failureMessage,
     }).abortSignal(signal);
-    const failedRow=exactRpcRow(failed.data);
     // This is a recovery-path write, so PostgREST can surface a proxy or
     // database error here. Do not turn the application log into a second raw
     // exception sink after deliberately sanitising the durable event ledger.
-    if(failed.error||!failedRow||failedRow.event_id!==eventId||
-      exactDatabaseTimestampToken(failedRow.processing_started_at)!==processingStartedAt||
-      failedRow.processed_at!==null||failedRow.last_error!==failureMessage||
-      !exactDatabaseTimestampToken(failedRow.last_failed_at)) {
+    if(failed.error||!acknowledgedStripeEventFailure(failed.data,eventId,processingStartedAt,failureMessage)) {
       console.error('stripe_webhook_failure_record_error');
     }
   } catch {
@@ -685,16 +683,13 @@ async function settleStripeEvent(
     p_processing_started_at:processingStartedAt,
   }).abortSignal(signal);
   if(completed.error) throw completed.error;
-  const settled=exactRpcRow(completed.data);
   // This response is the final durable acknowledgement before Stripe receives
   // HTTP 200. A one-row array alone is not sufficient: a malformed gateway
   // response or changed projection could otherwise make this worker report
   // success without proving that its exact event and lease were settled.
-  if(
-    settled?.event_id!==eventId ||
-    exactDatabaseTimestampToken(settled.processing_started_at)!==processingStartedAt ||
-    !exactDatabaseTimestampToken(settled.processed_at)
-  ) throw new Error('Stripe event settlement returned a mismatched event');
+  if(!acknowledgedStripeEventSettlement(completed.data,eventId,processingStartedAt)) {
+    throw new Error('Stripe event settlement returned a mismatched event');
+  }
 }
 
 export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnType<typeof getSupabaseAdmin>>, session:Stripe.Checkout.Session, signal:AbortSignal,recoverySignal:AbortSignal=signal){
