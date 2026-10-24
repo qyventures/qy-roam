@@ -11505,7 +11505,7 @@ test('Stripe webhook durable processing shares one end-to-end dependency deadlin
   const deadline = deadlineModule.createStripeWebhookDeadline(40);
   assert.equal(deadline.signal.aborted, false);
   assert.equal(deadline.recoverySignal.aborted, false);
-  await new Promise((resolve) => deadline.signal.addEventListener('abort', resolve, { once: true }));
+  await assert.rejects(deadline.waitFor(new Promise(() => {})), /Stripe webhook dependency work timed out/);
   assert.equal(deadline.signal.aborted, true);
   assert.equal(deadline.recoverySignal.aborted, false, 'failure recording must retain a reserved deadline window');
   assert.match(String(deadline.signal.reason), /Stripe webhook dependency work timed out/i);
@@ -11515,14 +11515,15 @@ test('Stripe webhook durable processing shares one end-to-end dependency deadlin
   deadline.dispose();
 
   const admission = webhookRoute.indexOf('const webhookDeadline=createStripeWebhookDeadline()');
-  const claim = webhookRoute.indexOf('claimOnce(supabase,eventClaimId,event.type,eventSessionId,webhookDeadline.signal)', admission);
+  const wallClockBoundary = webhookRoute.indexOf('webhookDeadline.waitFor((async () => {', admission);
+  const claim = webhookRoute.indexOf('claimOnce(supabase,eventClaimId,event.type,eventSessionId,webhookDeadline.signal)', wallClockBoundary);
   const refresh = webhookRoute.indexOf('stripe.checkout.sessions.retrieve(eventSessionId,webhookDeadline.stripeRequestOptions())', claim);
   const persistence = webhookRoute.indexOf('persistSession(sessionForEvent,event.type,eventCreated,webhookDeadline.signal)', refresh);
   const delivery = webhookRoute.indexOf('deliverPaidOrderSideEffects(supabase,sessionForEvent,eventCreated,webhookDeadline.signal,webhookDeadline.recoverySignal)', persistence);
   const settlement = webhookRoute.indexOf('settleStripeEvent(supabase,eventClaimId,claimStartedAt,webhookDeadline.signal)', delivery);
   const disposal = webhookRoute.indexOf('webhookDeadline.dispose()', settlement);
-  assert.ok(admission >= 0 && claim > admission && refresh > claim && persistence > refresh && delivery > persistence && settlement > delivery && disposal > settlement,
-    'claim, Stripe refresh, persistence, paid delivery, and settlement must share and release one admitted deadline');
+  assert.ok(admission >= 0 && wallClockBoundary > admission && claim > wallClockBoundary && refresh > claim && persistence > refresh && delivery > persistence && settlement > delivery && disposal > settlement,
+    'the complete admitted workflow must race the deadline while claim, Stripe refresh, persistence, paid delivery, and settlement share its cancellation signal');
   assert.match(webhookRoute, /qy_claim_stripe_event'[\s\S]{0,300}\.abortSignal\(signal\)/);
   assert.match(webhookRoute, /qy_persist_stripe_pocket_wifi_order'[\s\S]{0,800}\.abortSignal\(signal\)/);
   assert.match(webhookRoute, /qy_persist_stripe_esim_order'[\s\S]{0,800}\.abortSignal\(signal\)/);

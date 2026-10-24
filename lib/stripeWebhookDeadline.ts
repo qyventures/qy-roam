@@ -39,6 +39,23 @@ export function createStripeWebhookDeadline(timeoutMs = STRIPE_WEBHOOK_DEPENDENC
   return {
     signal: controller.signal,
     recoverySignal: recoveryController.signal,
+    async waitFor<T>(work: Promise<T>) {
+      if (controller.signal.aborted) throw new Error('Stripe webhook dependency work timed out');
+      let rejectOnAbort: (() => void) | undefined;
+      const deadline = new Promise<never>((_, reject) => {
+        rejectOnAbort = () => reject(new Error('Stripe webhook dependency work timed out'));
+        controller.signal.addEventListener('abort', rejectOnAbort, { once: true });
+      });
+      try {
+        // AbortSignal remains the cooperative cancellation boundary for each
+        // provider. Race the complete admitted workflow as well so a stalled
+        // or future transport that ignores cancellation cannot retain a
+        // scarce paid-order processing slot indefinitely.
+        return await Promise.race([work, deadline]);
+      } finally {
+        if (rejectOnAbort) controller.signal.removeEventListener('abort', rejectOnAbort);
+      }
+    },
     stripeRequestOptions() {
       const remainingMs = processingDeadlineAtMs - performance.now();
       if (remainingMs < 1 || controller.signal.aborted) throw new Error('Stripe webhook dependency work timed out');

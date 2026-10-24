@@ -1066,6 +1066,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
   }
   const webhookDeadline=createStripeWebhookDeadline();
   try {
+  return await webhookDeadline.waitFor((async () => {
   const supabase=getSupabaseAdmin(); if(!supabase) return webhookRetryJson({error:'Persistence unavailable'},503,'30');
   // Claim every trusted terminal event before the outbound Stripe refresh. If
   // that dependency is unavailable until Stripe exhausts its delivery retry
@@ -1246,6 +1247,7 @@ async function handleStripeWebhook(req:Request, releaseUpload:()=>void, received
     return webhookRetryJson({error:'Processing failed'});
   }
   return webhookJson({received:true});
+  })());
   } finally {
     webhookDeadline.dispose();
     releaseProcessing();
