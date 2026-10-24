@@ -40,20 +40,23 @@ export function createStripeWebhookDeadline(timeoutMs = STRIPE_WEBHOOK_DEPENDENC
     signal: controller.signal,
     recoverySignal: recoveryController.signal,
     async waitFor<T>(work: Promise<T>) {
-      if (controller.signal.aborted) throw new Error('Stripe webhook dependency work timed out');
+      if (recoveryController.signal.aborted) throw new Error('Stripe webhook failure recovery timed out');
       let rejectOnAbort: (() => void) | undefined;
       const deadline = new Promise<never>((_, reject) => {
-        rejectOnAbort = () => reject(new Error('Stripe webhook dependency work timed out'));
-        controller.signal.addEventListener('abort', rejectOnAbort, { once: true });
+        rejectOnAbort = () => reject(new Error('Stripe webhook failure recovery timed out'));
+        recoveryController.signal.addEventListener('abort', rejectOnAbort, { once: true });
       });
       try {
-        // AbortSignal remains the cooperative cancellation boundary for each
-        // provider. Race the complete admitted workflow as well so a stalled
-        // or future transport that ignores cancellation cannot retain a
-        // scarce paid-order processing slot indefinitely.
+        // The processing signal cancels ordinary provider work early enough
+        // to leave a reserved window for the workflow's catch path to mark a
+        // claimed event failed. Do not race the workflow against that earlier
+        // signal: doing so would return to Stripe, release admission, and
+        // dispose both timers while failure recovery was still running in the
+        // background. The recovery deadline is the absolute wall-clock bound;
+        // it still releases the slot if a transport ignores cancellation.
         return await Promise.race([work, deadline]);
       } finally {
-        if (rejectOnAbort) controller.signal.removeEventListener('abort', rejectOnAbort);
+        if (rejectOnAbort) recoveryController.signal.removeEventListener('abort', rejectOnAbort);
       }
     },
     stripeRequestOptions() {

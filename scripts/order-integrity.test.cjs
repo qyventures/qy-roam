@@ -11502,17 +11502,25 @@ test('Stripe webhook durable processing shares one end-to-end dependency deadlin
     assert.match(source, /performance\.now\(\)/);
     assert.doesNotMatch(source, /Date\.now\(\)/);
   }
-  const deadline = deadlineModule.createStripeWebhookDeadline(40);
+  const deadline = deadlineModule.createStripeWebhookDeadline(80);
   assert.equal(deadline.signal.aborted, false);
   assert.equal(deadline.recoverySignal.aborted, false);
-  await assert.rejects(deadline.waitFor(new Promise(() => {})), /Stripe webhook dependency work timed out/);
+  const recovered = deadline.waitFor(new Promise((resolve) => {
+    deadline.signal.addEventListener('abort', () => resolve('failure-recorded'), { once: true });
+  }));
+  assert.equal(await recovered, 'failure-recorded');
   assert.equal(deadline.signal.aborted, true);
   assert.equal(deadline.recoverySignal.aborted, false, 'failure recording must retain a reserved deadline window');
   assert.match(String(deadline.signal.reason), /Stripe webhook dependency work timed out/i);
   assert.throws(() => deadline.stripeRequestOptions(), /Stripe webhook dependency work timed out/);
-  await new Promise((resolve) => deadline.recoverySignal.addEventListener('abort', resolve, { once: true }));
-  assert.match(String(deadline.recoverySignal.reason), /Stripe webhook failure recovery timed out/i);
   deadline.dispose();
+
+  const stalledDeadline = deadlineModule.createStripeWebhookDeadline(40);
+  await assert.rejects(stalledDeadline.waitFor(new Promise(() => {})), /Stripe webhook failure recovery timed out/);
+  assert.equal(stalledDeadline.signal.aborted, true);
+  assert.equal(stalledDeadline.recoverySignal.aborted, true);
+  assert.match(String(stalledDeadline.recoverySignal.reason), /Stripe webhook failure recovery timed out/i);
+  stalledDeadline.dispose();
 
   const admission = webhookRoute.indexOf('const webhookDeadline=createStripeWebhookDeadline()');
   const wallClockBoundary = webhookRoute.indexOf('webhookDeadline.waitFor((async () => {', admission);
@@ -11523,7 +11531,7 @@ test('Stripe webhook durable processing shares one end-to-end dependency deadlin
   const settlement = webhookRoute.indexOf('settleStripeEvent(supabase,eventClaimId,claimStartedAt,webhookDeadline.signal)', delivery);
   const disposal = webhookRoute.indexOf('webhookDeadline.dispose()', settlement);
   assert.ok(admission >= 0 && wallClockBoundary > admission && claim > wallClockBoundary && refresh > claim && persistence > refresh && delivery > persistence && settlement > delivery && disposal > settlement,
-    'the complete admitted workflow must race the deadline while claim, Stripe refresh, persistence, paid delivery, and settlement share its cancellation signal');
+    'the complete admitted workflow must remain inside the recovery deadline while claim, Stripe refresh, persistence, paid delivery, and settlement share its earlier cancellation signal');
   assert.match(webhookRoute, /qy_claim_stripe_event'[\s\S]{0,300}\.abortSignal\(signal\)/);
   assert.match(webhookRoute, /qy_persist_stripe_pocket_wifi_order'[\s\S]{0,800}\.abortSignal\(signal\)/);
   assert.match(webhookRoute, /qy_persist_stripe_esim_order'[\s\S]{0,800}\.abortSignal\(signal\)/);
