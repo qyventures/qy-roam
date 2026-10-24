@@ -165,6 +165,10 @@ test('admin structured inputs are rejected instead of silently truncated or defa
   assert.match(adminOpsRoute, /import \{ boundedInputText \} from '@\/lib\/boundedInputText'/);
   assert.match(adminOpsRoute, /const text = boundedInputText/);
   assert.doesNotMatch(adminOpsRoute, /\.trim\(\)\.slice\(0, max\)/);
+  assert.match(adminOrderRoute, /if \(typeof body\.status !== 'string'\)/);
+  assert.doesNotMatch(adminOrderRoute, /const status = String\(body\.status \|\| ''\)/);
+  assert.match(adminOrderRoute, /typeof body\[field\] !== 'string'/);
+  assert.match(adminOrderRoute, /typeof body\.inventory_item_id !== 'string'[\s\S]{0,120}typeof body\.inventory_item_id !== 'number'/);
 });
 
 test('admin order mutations require one coherent durable lifecycle row', () => {

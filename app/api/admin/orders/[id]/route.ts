@@ -188,7 +188,33 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     releaseAdminUpload();
   }
 
-  const status = String(body.status || '');
+  // These values are operational commands and audit evidence, not display
+  // input. JavaScript coercion would turn ["dispatched"] into a valid status
+  // and ["1"] into inventory item 1, allowing malformed JSON from a stale or
+  // custom client to select a real lifecycle mutation. Optional fields may be
+  // omitted, but a supplied value must retain its expected scalar type.
+  if (typeof body.status !== 'string') {
+    return NextResponse.json({ error: 'Invalid fulfilment status' }, { status: 400 });
+  }
+  const stringFields = [
+    'courier_tracking',
+    'return_tracking',
+    'return_disposition',
+    'digital_delivery_reference',
+    'cancellation_reason',
+  ];
+  if (stringFields.some((field) => Object.prototype.hasOwnProperty.call(body, field) && typeof body[field] !== 'string')) {
+    return NextResponse.json({ error: 'Order update fields must be text' }, { status: 400 });
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(body, 'inventory_item_id') &&
+    body.inventory_item_id !== '' &&
+    typeof body.inventory_item_id !== 'string' &&
+    typeof body.inventory_item_id !== 'number'
+  ) {
+    return NextResponse.json({ error: 'Invalid Pocket WiFi inventory item' }, { status: 400 });
+  }
+  const status = body.status;
   // This database-authored value is an optimistic-lock token. Preserve its
   // microseconds exactly and reject JavaScript-only date spellings before
   // passing them to PostgREST/Postgres as a timestamptz parameter.
