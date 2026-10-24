@@ -4416,7 +4416,7 @@ test('admin sales-period close totals stable keyset pages instead of silently us
   assert.match(adminOpsRoute, /\.select\('id,amount_sgd'\)/);
   assert.match(adminOpsRoute, /\.order\('id'\)\s*\.limit\(CLOSING_ORDER_PAGE_SIZE\)/);
   assert.match(adminOpsRoute, /query = query\.gt\('id', afterId\)/);
-  assert.match(adminOpsRoute, /positiveSafeInteger\(page\[page\.length - 1\]\?\.id\)/);
+  assert.match(adminOpsRoute, /exactPositiveIntegerId\(page\[page\.length - 1\]\?\.id\)/);
   assert.match(adminOpsRoute, /Paid-order ledger returned an invalid pagination cursor/);
   assert.doesNotMatch(adminOpsRoute, /\.range\(offset, offset \+ CLOSING_ORDER_PAGE_SIZE - 1\)/);
   assert.match(adminOpsRoute, /if \(page\.length < CLOSING_ORDER_PAGE_SIZE\) return gross/);
@@ -6839,12 +6839,13 @@ test('generic inventory adjustments cannot bypass the Pocket WiFi hand-off and i
 
 test('admin inventory quantities and costs fail closed instead of being silently coerced', () => {
   assert.match(adminOpsRoute, /function signedNonZeroInteger\(value: unknown\)/);
-  assert.match(adminOpsRoute, /function positiveSafeInteger\(value: unknown\)/);
+  assert.doesNotMatch(adminOpsRoute, /function positiveSafeInteger\(value: unknown\)/);
+  assert.match(adminOpsRoute, /import \{ exactPositiveIntegerId \} from '@\/lib\/positiveIntegerId'/);
   assert.match(adminOpsRoute, /const quantityOnHand = nonNegativeInteger\(body\.quantity_on_hand\)/);
   assert.match(adminOpsRoute, /const reorderLevel = nonNegativeInteger\(body\.reorder_level\)/);
   assert.match(adminOpsRoute, /const unitCostCents = nonNegativeMoney\(body\.unit_cost_sgd\)/);
   assert.match(adminOpsRoute, /const delta = signedNonZeroInteger\(body\.delta\)/);
-  assert.match(adminOpsRoute, /const itemId = positiveSafeInteger\(body\.item_id\)/);
+  assert.match(adminOpsRoute, /const itemId = exactPositiveIntegerId\(body\.item_id\)/);
   assert.doesNotMatch(adminOpsRoute, /quantity_on_hand: Math\.max\(0, int\(/);
   assert.doesNotMatch(adminOpsRoute, /p_delta: int\(body\.delta\)/);
   assert.match(schema, /p_quantity_on_hand > 1000000/);
@@ -6941,7 +6942,7 @@ test('admin CRM writes reject malformed commercial data and missing mutation tar
 test('admin inventory identities and CRM follow-up timestamps are exact operational data', () => {
   assert.match(adminOpsRoute, /function optionalOperationalDateTime\(value: unknown\)/);
   assert.match(adminOpsRoute, /const candidate = local \? `\$\{value\}.*?\+08:00` : value/);
-  assert.match(adminOpsRoute, /const itemId = positiveSafeInteger\(body\.item_id\);[\s\S]*?action === 'customer_create'/);
+  assert.match(adminOpsRoute, /const itemId = exactPositiveIntegerId\(body\.item_id\);[\s\S]*?action === 'customer_create'/);
   assert.doesNotMatch(adminOpsRoute, /action === 'inventory_status'[\s\S]*?const itemId = int\(body\.item_id\)/);
   assert.match(adminOpsRoute, /const dueAt = optionalOperationalDateTime\(body\.due_at\)/);
   assert.match(adminOpsRoute, /due_at: dueAt/);

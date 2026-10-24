@@ -20,6 +20,7 @@ import { normalizedCustomerPhone } from '@/lib/customerPhone';
 import { createAdminOpsDeadline } from '@/lib/adminOpsDeadline';
 import { tryAcquireAdminUpload } from '@/lib/adminUploadConcurrency';
 import { boundedInputText } from '@/lib/boundedInputText';
+import { exactPositiveIntegerId } from '@/lib/positiveIntegerId';
 
 export const dynamic = 'force-dynamic';
 
@@ -102,16 +103,9 @@ function signedNonZeroInteger(value: unknown) {
   return Number.isSafeInteger(parsed) && parsed !== 0 && Math.abs(parsed) <= 1_000_000 ? parsed : null;
 }
 
-function positiveSafeInteger(value: unknown) {
-  const raw = typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
-  if (!/^\d+$/.test(raw)) return null;
-  const parsed = Number(raw);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
-}
-
 function optionalPositiveSafeInteger(value: unknown) {
   if (value === undefined || value === null || value === '') return null;
-  return positiveSafeInteger(value);
+  return exactPositiveIntegerId(value);
 }
 
 function exactPercentage(value: unknown) {
@@ -196,7 +190,7 @@ async function paidOrderGrossForPeriod(db: ReturnType<typeof getSupabaseAdmin>, 
       }
     }
     if (page.length < CLOSING_ORDER_PAGE_SIZE) return grossCents / 100;
-    const nextId = positiveSafeInteger(page[page.length - 1]?.id);
+    const nextId = exactPositiveIntegerId(page[page.length - 1]?.id);
     if (nextId === null || nextId === afterId) throw new Error('Paid-order ledger returned an invalid pagination cursor');
     afterId = nextId;
     loaded += page.length;
@@ -522,7 +516,7 @@ export async function POST(req: NextRequest) {
       const operationId = validAdminOperationId(body.operation_id);
       const movementType = text(body.movement_type, 40).toLowerCase() || 'adjustment';
       const reference = typeof body.reference === 'string' ? body.reference.trim() : '';
-      const itemId = positiveSafeInteger(body.item_id);
+      const itemId = exactPositiveIntegerId(body.item_id);
       const delta = signedNonZeroInteger(body.delta);
       if (!operationId) return NextResponse.json({ error: 'Invalid inventory operation identity. Refresh the page before retrying.' }, { status: 400 });
       if (!itemId || delta === null) return NextResponse.json({ error: 'Choose an inventory item and enter a non-zero whole-number quantity change' }, { status: 400 });
@@ -551,7 +545,7 @@ export async function POST(req: NextRequest) {
       }
     } else if (action === 'inventory_status') {
       const operationId = validAdminOperationId(body.operation_id);
-      const itemId = positiveSafeInteger(body.item_id);
+      const itemId = exactPositiveIntegerId(body.item_id);
       const status = text(body.status, 40).toLowerCase();
       // Status is intentionally separate from a quantity adjustment. Returning
       // a quarantined unit to service requires staff to both record the
@@ -628,7 +622,7 @@ export async function POST(req: NextRequest) {
       if (error) throw error;
       if (!acknowledgedAdminRecord(data, row)) throw new Error('CRM activity acknowledgement mismatch');
     } else if (action === 'activity_complete') {
-      const activityId = positiveSafeInteger(body.id);
+      const activityId = exactPositiveIntegerId(body.id);
       if (activityId === null) return NextResponse.json({ error: 'Choose a valid activity' }, { status: 400 });
       const completedAt = new Date().toISOString();
       const { data, error } = await db.from('crm_activities').update({ completed_at: completedAt }).eq('id', activityId).select('id,completed_at').abortSignal(adminOpsDeadline.signal).maybeSingle();
@@ -668,7 +662,7 @@ export async function POST(req: NextRequest) {
         expected_close_date: row.expected_close_date, source: row.source, owner: row.owner,
       })) throw new Error('Sales opportunity acknowledgement mismatch');
     } else if (action === 'opportunity_stage') {
-      const opportunityId = positiveSafeInteger(body.id);
+      const opportunityId = exactPositiveIntegerId(body.id);
       const stage = text(body.stage, 40);
       const probability = exactPercentage(body.probability);
       if (opportunityId === null) return NextResponse.json({ error: 'Choose a valid opportunity' }, { status: 400 });
