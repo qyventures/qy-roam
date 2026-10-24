@@ -569,7 +569,8 @@ test('Stripe claim ownership preserves the database microsecond token exactly', 
 
   assert.match(webhookRoute, /exactStripeClaimToken\(result\.claim_started_at\)/);
   assert.doesNotMatch(webhookRoute, /new Date\(result\.claim_started_at\)\.toISOString\(\)/);
-  assert.match(webhookRoute, /\.eq\('processing_started_at',processingStartedAt\)/);
+  assert.match(webhookRoute, /p_processing_started_at:processingStartedAt/);
+  assert.match(schema, /processing_started_at = p_processing_started_at/);
 });
 
 test('database settlement acknowledgements compare the complete timestamp instant', () => {
@@ -1759,9 +1760,9 @@ test('delivery ledger claims remain recoverable at the PostgreSQL retry-counter 
   assert.equal((schema.match(/old\.attempts < 2147483647 and new\.attempts = old\.attempts \+ 1/g) || []).length, 3);
   assert.equal((schema.match(/new\.last_attempt_at is not distinct from old\.last_attempt_at/g) || []).length, 2);
   assert.doesNotMatch(schema, /new\.status = 'sending' and \(new\.attempts <= old\.attempts or new\.last_attempt_at is null\)/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 60/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 61/);
   assert.match(schema, /Version 36 certifies the saturating retry-counter contract/);
-  assert.match(schema, /qy_order_integrity_schema_version\(\)[\s\S]*?select 60;/);
+  assert.match(schema, /qy_order_integrity_schema_version\(\)[\s\S]*?select 61;/);
 });
 
 test('durable orders accept only canonical Stripe or protected manual-sale identities', () => {
@@ -1775,7 +1776,7 @@ test('durable orders accept only canonical Stripe or protected manual-sale ident
     'checkout readiness must reject a deployed schema missing the order identity boundary',
   );
   assert.match(manualOrderSessionId('provider-reference-123'), /^manual_[a-f0-9]{48}$/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 60/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 61/);
 });
 
 test('payment readiness certifies both product-specific Stripe persistence functions', () => {
@@ -1791,7 +1792,7 @@ test('payment readiness certifies both product-specific Stripe persistence funct
     schema,
     /to_regprocedure\('public\.qy_persist_stripe_pocket_wifi_order\(text,text,text,text,text,numeric,text,text,date,date,text,jsonb,timestamptz,boolean,text\)'\) is not null/,
   );
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 60/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 61/);
   assert.match(schema, /Version 45 makes both product-specific Stripe persistence RPC signatures/);
 });
 
@@ -2058,7 +2059,7 @@ test('Pocket WiFi reservation authority validates its complete capacity snapshot
   assert.match(schema, /hold_id is null or hold_id !~ '\^\[A-Za-z0-9_\-\]\{16,80\}\$'/);
   assert.match(schema, /cardinality\(p_stripe_hold_request_ids\) <> \(\s*select count\(distinct hold_id\)/);
   assert.match(schema, /v_existing\.expires_at <> p_expires_at/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 60/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 61/);
 });
 
 test('Pocket WiFi deployment inventory cannot exceed the database reservation boundary', () => {
@@ -2777,7 +2778,7 @@ test('Stripe webhook transient failures consistently advertise a bounded retry',
 test('Stripe webhook failure recording cannot replace the controlled retry response', () => {
   const failureRecorder = webhookRoute.match(/async function recordEventFailure[\s\S]*?\n}\n\nasync function settleStripeEvent/);
   assert.ok(failureRecorder, 'webhook must retain a dedicated event-failure recorder');
-  assert.match(failureRecorder[0], /try\s*{[\s\S]*await supabase\.from\('stripe_events'\)/,
+  assert.match(failureRecorder[0], /try\s*{[\s\S]*await supabase\.rpc\('qy_fail_stripe_event'/,
     'the recovery-ledger transport must be guarded');
   assert.match(failureRecorder[0], /catch\s*{[\s\S]*console\.error\('stripe_webhook_failure_record_error'\)/,
     'a secondary recovery-write outage must emit only a stable diagnostic');
@@ -4486,8 +4487,8 @@ test('accounting period closes reconcile exact cents against the paid-order ledg
   assert.match(closingFunction, /p_gross_sales_sgd <> v_ledger_gross/);
   assert.match(closingFunction, /p_net_sales_sgd <> p_gross_sales_sgd - p_refunds_sgd/);
   assert.match(closingFunction, /p_gross_profit_sgd <> p_net_sales_sgd - p_fees_sgd - p_cogs_sgd/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 60/);
-  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 60;/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 61/);
+  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 61;/);
 });
 
 test('admin order transitions bound and validate their JSON request bodies', () => {
@@ -5046,18 +5047,18 @@ test('checkout readiness certifies webhook retry-ledger write privileges without
       `not has_table_privilege\\('service_role', 'public\\.${table}', 'DELETE,TRUNCATE'\\)`,
     ));
   }
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 60/);
-  assert.match(schema, /select 60;\s*\$\$;\s*revoke all on function public\.qy_order_integrity_schema_version/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 61/);
+  assert.match(schema, /select 61;\s*\$\$;\s*revoke all on function public\.qy_order_integrity_schema_version/);
 });
 
 test('checkout readiness rejects an older order-integrity schema with matching object names', () => {
   // The compatibility marker covers function bodies and privilege boundaries
   // that object-presence probes cannot distinguish during a rolling deploy.
-  assert.match(productionReadiness, /const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 60/);
+  assert.match(productionReadiness, /const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 61/);
   assert.match(productionReadiness, /database\.rpc\('qy_order_integrity_schema_version', \{\}\)\.abortSignal\(signal\)/);
   assert.match(productionReadiness, /versionProbe\.data !== REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION/);
   assert.match(productionReadiness, /if \(!await hasCurrentOrderIntegritySchema\(database, signal\)\) return false/);
-  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 60;/);
+  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 61;/);
   assert.match(schema, /grant execute on function public\.qy_order_integrity_schema_version\(\) to service_role/);
   assert.ok(
     schema.indexOf('create or replace function public.qy_order_integrity_schema_version') >
@@ -5900,7 +5901,7 @@ test('paid order cancellation requires durable reconciliation evidence', () => {
   assert.match(schema, /orders_paid_cancellation_reason_check check \([\s\S]*?payment_status is distinct from 'paid'[\s\S]*?fulfilment_status <> 'cancelled'[\s\S]*?Cancellation reason: \[\^\[\:cntrl\:\]\]\{5,500\}\$[\s\S]*?\) not valid;/);
   assert.match(schema, /'orders_paid_cancellation_reason_check'/);
   assert.match(schema, /tgname in \([\s\S]*?'qy_require_paid_order_cancellation_reason'[\s\S]*?\)\) = 8 and/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 60/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 61/);
 });
 
 test('admin fulfilment attention and controls exclude orders without confirmed payment', () => {
@@ -6401,8 +6402,8 @@ test('privileged order persistence rejects fractional cents and out-of-range SGD
   // silently records a different amount.
   const amountBoundary = /p_amount_sgd is null or p_amount_sgd <= 0 or p_amount_sgd > 99999999\.99 or p_amount_sgd <> round\(p_amount_sgd, 2\)/g;
   assert.equal([...schema.matchAll(amountBoundary)].length, 4);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 60/);
-  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 60;/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 61/);
+  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 61;/);
 });
 
 test('paid order commercial identity cannot be rewritten after payment', () => {
@@ -6419,8 +6420,8 @@ test('service-role clients cannot erase the paid-order idempotency audit trail',
     schema,
     /revoke delete, truncate\s+on table public\.orders, public\.stripe_events,\s+public\.fulfilment_notifications, public\.meta_purchase_deliveries\s+from service_role;/,
   );
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 60/);
-  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 60;/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 61/);
+  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 61;/);
 });
 
 test('eSIM entitlement snapshots stay bounded and printable at the database boundary', () => {
@@ -6433,7 +6434,7 @@ test('eSIM entitlement snapshots stay bounded and printable at the database boun
   assert.match(schema, /if coalesce\(length\(p_plan_name\), 0\) not between 1 and 200[\s\S]*?raise exception 'invalid eSIM plan name'/);
   assert.match(schema, /if coalesce\(length\(p_data_allowance\), 0\) not between 1 and 200[\s\S]*?raise exception 'invalid eSIM data allowance'/);
   assert.match(schema, /if coalesce\(length\(p_country\), 0\) not between 1 and 100[\s\S]*?raise exception 'invalid eSIM destination'/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 60/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 61/);
 });
 
 test('Stripe order persistence RPCs cannot accept manual identities or cross product types', () => {
@@ -6471,15 +6472,15 @@ test('Stripe payment transitions preserve commercial snapshots while allowing co
   assert.match(wifiPersistence, consentRevocation);
   assert.doesNotMatch(esimPersistence, /p_measurement_consent = 'accepted'[\s\S]{0,120}v_order\.measurement_consent = 'essential'/);
   assert.doesNotMatch(wifiPersistence, /p_measurement_consent = 'accepted'[\s\S]{0,120}v_order\.measurement_consent = 'essential'/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 60/);
-  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 60;/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 61/);
+  assert.match(schema, /create or replace function public\.qy_order_integrity_schema_version\(\)[\s\S]*?select 61;/);
 });
 
 test('every paid eSIM order requires a database-enforced delivery email', () => {
   assert.match(schema, /orders_paid_esim_delivery_email_check/);
   assert.match(schema, /orders_paid_esim_delivery_email_check check \([\s\S]*?payment_status is distinct from 'paid' or[\s\S]*?product_type <> 'esim' or[\s\S]*?email is not null and[\s\S]*?email = btrim\(email\) and[\s\S]*?length\(email\) <= 254 and[\s\S]*?email ~ '\^\[\^\[:space:\]@\]\+@\[\^\[:space:\]@\]\+\\\.\[\^\[:space:\]@\]\+\$'/);
   assert.match(adminOpsRoute, /product === 'esim' && !isSafeSmtpMailbox\(row\.email \|\| undefined\)/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 60/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 61/);
 });
 
 test('paid-order measurement consent cannot be broadened after checkout', () => {
@@ -6548,8 +6549,8 @@ test('digital and physical fulfilment evidence cannot cross product boundaries',
   assert.match(schema, /product_type <> 'esim' or \([\s\S]*?inventory_item_id is null[\s\S]*?courier_tracking is null[\s\S]*?return_tracking is null[\s\S]*?return_disposition is null[\s\S]*?dispatched_at is null[\s\S]*?returned_at is null/);
   assert.match(schema, /product_type <> 'pocket_wifi' or digital_delivery_reference is null/);
   assert.match(schema, /'orders_product_fulfilment_evidence_check'[\s\S]*?\)\) = 20/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 60/);
-  assert.match(schema, /qy_order_integrity_schema_version\(\)[\s\S]*?select 60/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 61/);
+  assert.match(schema, /qy_order_integrity_schema_version\(\)[\s\S]*?select 61/);
 });
 
 test('eSIM delivery references are safe audit pointers and remain mandatory and immutable after fulfilment', () => {
@@ -6622,7 +6623,7 @@ test('admin fulfilment writes reject stale same-status saves using the exact ord
     assert.match(transition, /p_expected_updated_at is null or v_order\.updated_at is distinct from p_expected_updated_at/);
     assert.match(transition, /raise exception 'order changed since it was loaded'/);
   }
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 60/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 61/);
   assert.match(productionReadiness, /REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 11/);
 });
 
@@ -8124,7 +8125,8 @@ test('failed Stripe webhook claims remain visible and immediately retryable', ()
   assert.match(schema, /stripe_events add column if not exists last_error text/);
   assert.match(productionReadiness, /processing_started_at,processed_at,attempts,last_failed_at,last_error/);
   assert.match(webhookRoute, /async function recordEventFailure/);
-  assert.match(webhookRoute, /last_error:message\.slice\(0,500\)/);
+  assert.match(webhookRoute, /const failureMessage=message\.slice\(0,500\)/);
+  assert.match(webhookRoute, /p_last_error:failureMessage/);
   assert.match(schema, /v_event\.last_error is null[\s\S]{0,700}v_event\.processing_started_at >= v_now - interval '5 minutes'/);
   assert.doesNotMatch(webhookRoute, /from\('stripe_events'\)\.delete\(\)/);
   assert.match(adminPage, /Stripe webhook failures/);
@@ -8223,7 +8225,7 @@ test('delivery retry audit evidence cannot move backwards or be rewritten outsid
   assert.equal((schema.match(/delivery failure evidence can change only on failure or reclaim/g) || []).length, 2);
   assert.equal((schema.match(/old\.status = 'sending' and new\.status = 'pending' and new\.last_error is not null/g) || []).length, 2);
   assert.equal((schema.match(/old\.status = 'pending' and new\.status = 'sending' and new\.last_error is null/g) || []).length, 2);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 60/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 61/);
   assert.match(schema, /Earlier versions also certify[\s\S]*monotonic delivery retry counts/);
 });
 
@@ -8238,8 +8240,8 @@ test('Stripe webhook claims own their settlement and immutable failure evidence'
   assert.match(schema, /Stripe event failure evidence can change only on failure or reclaim/);
   assert.match(schema, /Stripe event failure timestamp can change only with new failure evidence/);
   assert.match(schema, /Stripe event can settle only under its current claim/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 60/);
-  assert.match(schema, /qy_order_integrity_schema_version\(\)[\s\S]*?select 60;/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 61/);
+  assert.match(schema, /qy_order_integrity_schema_version\(\)[\s\S]*?select 61;/);
 });
 
 test('delivery ledgers cannot claim provider success without an audited send attempt', () => {
@@ -10635,11 +10637,12 @@ test('Stripe webhook side effects require an exact durable persistence acknowled
 
 test('Stripe event settlement acknowledges the exact event and database lease', () => {
   assert.match(webhookRoute, /async function settleStripeEvent\(/);
-  assert.match(webhookRoute, /\.select\('event_id,processing_started_at,processed_at'\)/);
+  assert.match(webhookRoute, /supabase\.rpc\('qy_settle_stripe_event'/);
   assert.match(webhookRoute, /const settled=exactRpcRow\(completed\.data\)/);
   assert.match(webhookRoute, /settled\?\.event_id!==eventId/);
   assert.match(webhookRoute, /exactDatabaseTimestampToken\(settled\.processing_started_at\)!==processingStartedAt/);
-  assert.match(webhookRoute, /!databaseTimestampInstantEquals\(settled\.processed_at,processedAt\)/);
+  assert.match(webhookRoute, /!exactDatabaseTimestampToken\(settled\.processed_at\)/);
+  assert.match(schema, /create or replace function public\.qy_settle_stripe_event[\s\S]{0,500}set processed_at = clock_timestamp\(\)/);
   assert.equal((webhookRoute.match(/await settleStripeEvent\(supabase,eventClaimId,claimStartedAt,webhookDeadline\.signal\)/g) || []).length, 2);
 });
 
@@ -10670,8 +10673,11 @@ test('Stripe webhook failure recovery acknowledges the exact event and database 
     assert.equal(acknowledgedStripeEventFailure(malformed, eventId, claimStartedAt, failedAt, message), false);
   }
 
-  assert.match(webhookRoute, /\.select\('event_id,processing_started_at,processed_at,last_failed_at,last_error'\)/);
-  assert.match(webhookRoute, /!acknowledgedStripeEventFailure\(failed\.data,eventId,processingStartedAt,failedAt,message\.slice\(0,500\)\)/);
+  assert.match(webhookRoute, /supabase\.rpc\('qy_fail_stripe_event'/);
+  assert.match(webhookRoute, /failedRow\.event_id!==eventId/);
+  assert.match(webhookRoute, /exactDatabaseTimestampToken\(failedRow\.processing_started_at\)!==processingStartedAt/);
+  assert.match(webhookRoute, /failedRow\.last_error!==failureMessage/);
+  assert.match(webhookRoute, /!exactDatabaseTimestampToken\(failedRow\.last_failed_at\)/);
 });
 
 test('Stripe webhook concurrency is bounded without queueing or leaking admission slots', () => {
@@ -11217,7 +11223,7 @@ test('Pocket WiFi rental duration is one shared customer and paid-order boundary
   assert.match(schema, /checkout_reservations_rental_duration_check check \(\s*travel_end - travel_start between 0 and 89\s*\) not valid/);
   assert.match(schema, /'orders_pocket_wifi_rental_duration_check'/);
   assert.match(schema, /'checkout_reservations_rental_duration_check'/);
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 60/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 61/);
 });
 
 test('admin CRM and forecast mutations acknowledge the exact committed record', () => {
@@ -11587,8 +11593,8 @@ test('manual paid orders reject lossy customer and commercial text instead of tr
 
   const notesGuard = /coalesce\(length\(p_notes\), 0\) not between 1 and 1700 or p_notes ~ '\[\[:cntrl:\]\]'/g;
   assert.equal((schema.match(notesGuard) || []).length, 2, 'both manual-order RPCs must reject unsafe audit text');
-  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 60/);
-  assert.match(schema, /qy_order_integrity_schema_version\(\)[\s\S]*?select 60;/);
+  assert.match(productionReadiness, /REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 61/);
+  assert.match(schema, /qy_order_integrity_schema_version\(\)[\s\S]*?select 61;/);
 });
 
 test('indexed legal pages are customer-ready and do not advertise an expired promotion', () => {

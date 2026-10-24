@@ -36,7 +36,7 @@ export const READINESS_FAILURE_BACKOFF_MS = 5_000;
 // probes cannot distinguish an old function body from the current one; this
 // explicit handshake prevents a rolling application deploy from accepting a
 // payment against stale database logic.
-const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 60;
+const REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION = 61;
 const REQUIRED_POCKET_WIFI_FULFILMENT_SCHEMA_VERSION = 11;
 // Version 2 is the first marker that certifies the complete current admin
 // mutation surface, including atomic manual eSIM/WiFi order creation, exact
@@ -136,7 +136,7 @@ export async function hasRequiredStripeApiAccess() {
 }
 
 async function hasCurrentOrderIntegritySchema(database: any, signal: AbortSignal) {
-  const [integrityProbe, versionProbe, eventClaimProbe, esimPersistenceProbe, wifiPersistenceProbe] = await Promise.all([
+  const [integrityProbe, versionProbe, eventClaimProbe, eventFailureProbe, eventSettlementProbe, esimPersistenceProbe, wifiPersistenceProbe] = await Promise.all([
     database.rpc('qy_order_integrity_schema_ready', {}).abortSignal(signal),
     database.rpc('qy_order_integrity_schema_version', {}).abortSignal(signal),
     // Resolve the exact webhook claim signature through PostgREST and prove
@@ -148,6 +148,18 @@ async function hasCurrentOrderIntegritySchema(database: any, signal: AbortSignal
       p_event_id: '',
       p_event_type: 'checkout.session.completed',
       p_stripe_session_id: 'cs_test_readinessProbe',
+    }).abortSignal(signal),
+    // Missing-but-valid identities exercise both claim-owned transition RPC
+    // grants without changing a ledger row. An empty result is the expected
+    // compare-and-swap miss and proves PostgREST resolved the exact signature.
+    database.rpc('qy_fail_stripe_event', {
+      p_event_id: 'stripe:evt_readiness00',
+      p_processing_started_at: '2000-01-01T00:00:00Z',
+      p_last_error: 'Readiness probe',
+    }).abortSignal(signal),
+    database.rpc('qy_settle_stripe_event', {
+      p_event_id: 'stripe:evt_readiness00',
+      p_processing_started_at: '2000-01-01T00:00:00Z',
     }).abortSignal(signal),
     // Presence and schema-version checks cannot detect an accidentally
     // revoked service-role grant. Exercise the exact eSIM persistence
@@ -194,6 +206,8 @@ async function hasCurrentOrderIntegritySchema(database: any, signal: AbortSignal
     integrityProbe.error || integrityProbe.data !== true ||
     versionProbe.error || versionProbe.data !== REQUIRED_ORDER_INTEGRITY_SCHEMA_VERSION ||
     !eventClaimProbe.error || !/invalid Stripe event id/i.test(eventClaimProbe.error.message || '') ||
+    eventFailureProbe.error || exactRpcRow(eventFailureProbe.data) !== null ||
+    eventSettlementProbe.error || exactRpcRow(eventSettlementProbe.data) !== null ||
     !esimPersistenceProbe.error || !/Stripe session id is required/i.test(esimPersistenceProbe.error.message || '') ||
     !wifiPersistenceProbe.error || !/Stripe session id is required/i.test(wifiPersistenceProbe.error.message || '')
   ) {

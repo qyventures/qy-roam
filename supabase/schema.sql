@@ -1380,6 +1380,53 @@ $$;
 revoke all on function public.qy_claim_stripe_event(text,text,text) from public;
 grant execute on function public.qy_claim_stripe_event(text,text,text) to service_role;
 
+-- Complete claim-owned event transitions with the database clock that issued
+-- the lease. Application clocks can move independently after NTP correction;
+-- using a worker timestamp here could violate lifecycle chronology after the
+-- order or an outbound delivery has already committed. Returning no row is an
+-- explicit lost-lease acknowledgement that the webhook treats as retryable.
+create or replace function public.qy_fail_stripe_event(
+  p_event_id text,
+  p_processing_started_at timestamptz,
+  p_last_error text
+)
+returns setof public.stripe_events
+language sql
+security definer
+set search_path = public
+as $$
+  update public.stripe_events
+  set last_failed_at = clock_timestamp(), last_error = p_last_error
+  where event_id = p_event_id
+    and processing_started_at = p_processing_started_at
+    and processed_at is null
+    and p_last_error is not null
+    and length(p_last_error) between 1 and 500
+  returning *;
+$$;
+revoke all on function public.qy_fail_stripe_event(text,timestamptz,text) from public;
+grant execute on function public.qy_fail_stripe_event(text,timestamptz,text) to service_role;
+
+create or replace function public.qy_settle_stripe_event(
+  p_event_id text,
+  p_processing_started_at timestamptz
+)
+returns setof public.stripe_events
+language sql
+security definer
+set search_path = public
+as $$
+  update public.stripe_events
+  set processed_at = clock_timestamp()
+  where event_id = p_event_id
+    and processing_started_at = p_processing_started_at
+    and processed_at is null
+    and last_error is null
+  returning *;
+$$;
+revoke all on function public.qy_settle_stripe_event(text,timestamptz) from public;
+grant execute on function public.qy_settle_stripe_event(text,timestamptz) to service_role;
+
 -- Durable human-fulfilment notification ledger. One row per paid checkout.
 -- The webhook records pending before SMTP and sent after SMTP succeeds. Failed
 -- sends stay retryable without coupling the notification state to Stripe's
@@ -1730,6 +1777,8 @@ as $$
         and c.relrowsecurity
     ) = 6 and
     to_regprocedure('public.qy_claim_stripe_event(text,text,text)') is not null and
+    to_regprocedure('public.qy_fail_stripe_event(text,timestamptz,text)') is not null and
+    to_regprocedure('public.qy_settle_stripe_event(text,timestamptz)') is not null and
     -- Checkout readiness is the last boundary before the application creates
     -- a payable Stripe Session. Certify both product-specific persistence
     -- functions here: table/constraint probes alone can look healthy after a
@@ -3673,8 +3722,10 @@ as $$
   -- privileges on its event and outbound-delivery retry ledgers. Checkout
   -- must not accept payment when SELECT still works but INSERT/UPDATE recovery
   -- has been revoked, and application roles must remain unable to erase the
-  -- audit trail with DELETE or TRUNCATE.
-  select 60;
+  -- audit trail with DELETE or TRUNCATE. Version 61 moves claim-owned Stripe
+  -- event failure and settlement timestamps to database-authoritative RPCs,
+  -- preventing application clock correction from stranding completed work.
+  select 61;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;

@@ -28,11 +28,10 @@ import { contentLengthMatches, declaredContentLength } from '@/lib/contentLength
 import { paidFulfilmentDetailsIssue } from '@/lib/paidFulfilmentDetails';
 import { structurallyValidStripeSignatureHeader, stripeSignatureTimestampWithinTolerance } from '@/lib/stripeSignatureHeader';
 import { hasIdentityRequestContentEncoding, isJsonRequestContentType } from '@/lib/requestBody';
-import { databaseTimestampInstantEquals, exactDatabaseTimestampToken, exactStripeClaimToken } from '@/lib/stripeClaimToken';
+import { exactDatabaseTimestampToken, exactStripeClaimToken } from '@/lib/stripeClaimToken';
 import { exactRpcRow } from '@/lib/exactRpcRow';
 import { acknowledgedPaidDeliveryClaim, acknowledgedPaidDeliveryFailure, acknowledgedPaidDeliverySettlement } from '@/lib/paidDeliveryAcknowledgement';
 import { durableOrderMatchesPaidSession, durablePaidOrderMatchesPaymentEvent, durableOrderMatchesUnpaidPaymentEvent } from '@/lib/durableOrderSnapshot';
-import { acknowledgedStripeEventFailure } from '@/lib/stripeEventFailureAcknowledgement';
 import {
   tryAcquireStripeWebhookProcessing,
   tryAcquireStripeWebhookUpload,
@@ -642,19 +641,24 @@ async function recordEventFailure(supabase:NonNullable<ReturnType<typeof getSupa
   // next signed Stripe retry can reclaim it immediately rather than waiting
   // for the abandoned-worker timeout. The ownership predicate prevents an old
   // worker from overwriting a newer retry's claim.
-  const failedAt=new Date().toISOString();
   try {
-    const failed=await supabase.from('stripe_events')
-      .update({last_failed_at:failedAt,last_error:message.slice(0,500)})
-      .eq('event_id',eventId)
-      .eq('processing_started_at',processingStartedAt)
-      .is('processed_at',null)
-      .select('event_id,processing_started_at,processed_at,last_failed_at,last_error')
-      .abortSignal(signal);
+    // Failure time and ownership comparison belong to the database that
+    // issued the claim. An NTP correction on this app host must not make a
+    // valid recovery write violate the ledger's chronology constraints.
+    const failureMessage=message.slice(0,500);
+    const failed=await supabase.rpc('qy_fail_stripe_event',{
+      p_event_id:eventId,
+      p_processing_started_at:processingStartedAt,
+      p_last_error:failureMessage,
+    }).abortSignal(signal);
+    const failedRow=exactRpcRow(failed.data);
     // This is a recovery-path write, so PostgREST can surface a proxy or
     // database error here. Do not turn the application log into a second raw
     // exception sink after deliberately sanitising the durable event ledger.
-    if(failed.error||!acknowledgedStripeEventFailure(failed.data,eventId,processingStartedAt,failedAt,message.slice(0,500))) {
+    if(failed.error||!failedRow||failedRow.event_id!==eventId||
+      exactDatabaseTimestampToken(failedRow.processing_started_at)!==processingStartedAt||
+      failedRow.processed_at!==null||failedRow.last_error!==failureMessage||
+      !exactDatabaseTimestampToken(failedRow.last_failed_at)) {
       console.error('stripe_webhook_failure_record_error');
     }
   } catch {
@@ -673,14 +677,13 @@ async function settleStripeEvent(
   processingStartedAt:string,
   signal:AbortSignal,
 ) {
-  const processedAt=new Date().toISOString();
-  const completed=await supabase.from('stripe_events')
-    .update({processed_at:processedAt})
-    .eq('event_id',eventId)
-    .eq('processing_started_at',processingStartedAt)
-    .is('processed_at',null)
-    .select('event_id,processing_started_at,processed_at')
-    .abortSignal(signal);
+  // Settle with the same database clock that created the ownership token.
+  // This keeps a host wall-clock jump from stranding already completed paid
+  // work behind an impossible processed_at chronology check.
+  const completed=await supabase.rpc('qy_settle_stripe_event',{
+    p_event_id:eventId,
+    p_processing_started_at:processingStartedAt,
+  }).abortSignal(signal);
   if(completed.error) throw completed.error;
   const settled=exactRpcRow(completed.data);
   // This response is the final durable acknowledgement before Stripe receives
@@ -690,7 +693,7 @@ async function settleStripeEvent(
   if(
     settled?.event_id!==eventId ||
     exactDatabaseTimestampToken(settled.processing_started_at)!==processingStartedAt ||
-    !databaseTimestampInstantEquals(settled.processed_at,processedAt)
+    !exactDatabaseTimestampToken(settled.processed_at)
   ) throw new Error('Stripe event settlement returned a mismatched event');
 }
 
