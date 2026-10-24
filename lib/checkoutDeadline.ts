@@ -1,4 +1,5 @@
 import { STRIPE_REQUEST_TIMEOUT_MS } from './stripeClient';
+import { performance } from 'node:perf_hooks';
 
 // Several individually bounded provider calls can otherwise stack while one
 // checkout holds a scarce shared worker slot. Give the complete admitted
@@ -11,7 +12,12 @@ export function createCheckoutDeadline(timeoutMs = CHECKOUT_DEPENDENCY_TIMEOUT_M
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > CHECKOUT_DEPENDENCY_TIMEOUT_MS) {
     throw new RangeError('Invalid checkout dependency timeout');
   }
-  const deadlineAtMs = Date.now() + timeoutMs;
+  // Provider budgets are elapsed-time limits, not calendar deadlines. The
+  // host wall clock can jump during an NTP correction; using it here could
+  // make a healthy payment request appear instantly expired (forward jump)
+  // or grant later Stripe calls extra time (backward jump). Node's monotonic
+  // performance clock advances independently of those corrections.
+  const deadlineAtMs = performance.now() + timeoutMs;
   // Pocket WiFi checkout can acquire scarce inventory before the final
   // payment-capability checks. Preserve a small part of the admitted request
   // budget for releasing a reservation that is still provably unlinked when
@@ -26,11 +32,11 @@ export function createCheckoutDeadline(timeoutMs = CHECKOUT_DEPENDENCY_TIMEOUT_M
   const recoveryController = new AbortController();
   const processingTimeout = setTimeout(
     () => controller.abort(new Error('Checkout dependency work timed out')),
-    Math.max(1, processingDeadlineAtMs - Date.now()),
+    Math.max(1, processingDeadlineAtMs - performance.now()),
   );
   const recoveryTimeout = setTimeout(
     () => recoveryController.abort(new Error('Checkout reservation recovery timed out')),
-    Math.max(1, deadlineAtMs - Date.now()),
+    Math.max(1, deadlineAtMs - performance.now()),
   );
   return {
     signal: controller.signal,
@@ -53,7 +59,7 @@ export function createCheckoutDeadline(timeoutMs = CHECKOUT_DEPENDENCY_TIMEOUT_M
       }
     },
     stripeRequestOptions() {
-      const remainingMs = processingDeadlineAtMs - Date.now();
+      const remainingMs = processingDeadlineAtMs - performance.now();
       if (remainingMs < 1 || controller.signal.aborted) throw new Error('Checkout dependency work timed out');
       return { timeout: Math.min(STRIPE_REQUEST_TIMEOUT_MS, remainingMs) };
     },

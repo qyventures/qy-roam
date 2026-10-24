@@ -11495,6 +11495,17 @@ test('indexed legal pages are customer-ready and do not advertise an expired pro
 
 test('Stripe webhook durable processing shares one end-to-end dependency deadline', async () => {
   const deadlineModule = require('../lib/stripeWebhookDeadline.ts');
+  const webhookDeadlineSource = fs.readFileSync(require.resolve('../lib/stripeWebhookDeadline.ts'), 'utf8');
+  const checkoutDeadlineSource = fs.readFileSync(require.resolve('../lib/checkoutDeadline.ts'), 'utf8');
+  // A host clock correction must not change the amount of provider work an
+  // admitted checkout or paid webhook is allowed to perform. The timers and
+  // every remaining-budget calculation therefore share Node's monotonic
+  // performance clock rather than the adjustable calendar clock.
+  for (const source of [webhookDeadlineSource, checkoutDeadlineSource]) {
+    assert.match(source, /from 'node:perf_hooks'/);
+    assert.match(source, /performance\.now\(\)/);
+    assert.doesNotMatch(source, /Date\.now\(\)/);
+  }
   const deadline = deadlineModule.createStripeWebhookDeadline(40);
   assert.equal(deadline.signal.aborted, false);
   assert.equal(deadline.recoverySignal.aborted, false);

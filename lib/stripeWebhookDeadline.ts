@@ -1,4 +1,5 @@
 import { STRIPE_REQUEST_TIMEOUT_MS } from './stripeClient';
+import { performance } from 'node:perf_hooks';
 
 // A webhook performs several individually bounded calls before Stripe can be
 // acknowledged. Keep the complete durable-processing sequence from stacking
@@ -10,7 +11,10 @@ export function createStripeWebhookDeadline(timeoutMs = STRIPE_WEBHOOK_DEPENDENC
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > STRIPE_WEBHOOK_DEPENDENCY_TIMEOUT_MS) {
     throw new RangeError('Invalid Stripe webhook dependency timeout');
   }
-  const startedAtMs = Date.now();
+  // This is an elapsed processing budget. Keep it on a monotonic clock so an
+  // NTP/host wall-clock correction cannot prematurely abandon a paid event
+  // or give a later Stripe refresh more time than the admitted worker owns.
+  const startedAtMs = performance.now();
   const deadlineAtMs = startedAtMs + timeoutMs;
   // Preserve a small part of the admitted request budget for marking a
   // claimed event failed. Without this reserve, the processing signal can
@@ -25,18 +29,18 @@ export function createStripeWebhookDeadline(timeoutMs = STRIPE_WEBHOOK_DEPENDENC
   const recoveryController = new AbortController();
   const processingTimeout = setTimeout(
     () => controller.abort(new Error('Stripe webhook dependency work timed out')),
-    Math.max(1, processingDeadlineAtMs - Date.now()),
+    Math.max(1, processingDeadlineAtMs - performance.now()),
   );
   const recoveryTimeout = setTimeout(
     () => recoveryController.abort(new Error('Stripe webhook failure recovery timed out')),
-    Math.max(1, deadlineAtMs - Date.now()),
+    Math.max(1, deadlineAtMs - performance.now()),
   );
 
   return {
     signal: controller.signal,
     recoverySignal: recoveryController.signal,
     stripeRequestOptions() {
-      const remainingMs = processingDeadlineAtMs - Date.now();
+      const remainingMs = processingDeadlineAtMs - performance.now();
       if (remainingMs < 1 || controller.signal.aborted) throw new Error('Stripe webhook dependency work timed out');
       return { timeout: Math.min(STRIPE_REQUEST_TIMEOUT_MS, remainingMs) };
     },
