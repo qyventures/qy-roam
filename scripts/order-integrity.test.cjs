@@ -7255,6 +7255,8 @@ test('admin delivery and webhook recovery ledgers reject malformed operational s
   assert.equal(validatedDeliveryLedgerRow({ ...delivery, status: 'sent', sent_at: '2026-10-21T02:01:00Z', last_error: null })?.status, 'sent');
   assert.equal(validatedDeliveryLedgerRow({ ...delivery, status: 'failed' }), null);
   assert.equal(validatedDeliveryLedgerRow({ ...delivery, attempts: -1 }), null);
+  assert.equal(validatedDeliveryLedgerRow({ ...delivery, attempts: 2_147_483_647 })?.attempts, 2_147_483_647);
+  assert.equal(validatedDeliveryLedgerRow({ ...delivery, attempts: 2_147_483_648 }), null);
   assert.equal(validatedDeliveryLedgerRow({ ...delivery, status: 'sent', sent_at: null, last_error: null }), null);
   assert.equal(validatedDeliveryLedgerRow({ ...delivery, last_error: 'x'.repeat(501) }), null);
   assert.equal(validatedDeliveryLedgerRow({ ...delivery, attempts: 0, last_attempt_at: null, last_error: null })?.status, 'pending');
@@ -7276,6 +7278,8 @@ test('admin delivery and webhook recovery ledgers reject malformed operational s
   assert.equal(validatedStripeEventRecoveryRow({ ...event, event_id: 'stripe:evt_bad\nlog' }), null);
   assert.equal(validatedStripeEventRecoveryRow({ ...event, last_failed_at: null }), null);
   assert.equal(validatedStripeEventRecoveryRow({ ...event, last_failed_at: null, last_error: null })?.attempts, 1);
+  assert.equal(validatedStripeEventRecoveryRow({ ...event, attempts: 2_147_483_647 })?.attempts, 2_147_483_647);
+  assert.equal(validatedStripeEventRecoveryRow({ ...event, attempts: 2_147_483_648 }), null);
   assert.equal(validatedStripeEventRecoveryRow({ ...event, processing_started_at: '2026-10-21T01:59:59Z' }), null);
   assert.equal(validatedStripeEventRecoveryRow({ ...event, last_failed_at: '2026-10-21T02:00:00Z' }), null);
   assert.equal(validatedStripeEventRecoveryRow({ ...event, received_at: '2026-10-21' }), null);

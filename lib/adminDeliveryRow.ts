@@ -1,5 +1,6 @@
 import { validStripeEventId } from './stripeEventId';
 import { validStripeCheckoutSessionId } from './stripeSessionId';
+import { POSTGRES_INTEGER_MAX } from './retryAttempt';
 
 const DELIVERY_STATUSES = new Set(['pending', 'sending', 'sent']);
 const STRIPE_EVENT_TYPES = new Set([
@@ -8,7 +9,6 @@ const STRIPE_EVENT_TYPES = new Set([
   'checkout.session.async_payment_failed',
   'checkout.session.expired',
 ]);
-const MAX_ATTEMPTS = 1_000_000;
 const MAX_FAILURE_LENGTH = 500;
 
 function exactTimestamp(value: unknown) {
@@ -28,7 +28,12 @@ function nullableTimestamp(value: unknown) {
 }
 
 function validAttempts(value: unknown, minimum: number) {
-  return Number.isSafeInteger(value) && (value as number) >= minimum && (value as number) <= MAX_ATTEMPTS
+  // These are PostgreSQL `integer` ledgers. The workers deliberately
+  // saturate at that storage ceiling so a long-lived or inherited record
+  // remains retryable. Accept the same complete domain here: imposing a
+  // smaller display-only ceiling would make a valid recovery row disappear
+  // from the operations dashboard exactly when it needs reconciliation.
+  return Number.isSafeInteger(value) && (value as number) >= minimum && (value as number) <= POSTGRES_INTEGER_MAX
     ? value as number
     : null;
 }

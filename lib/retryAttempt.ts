@@ -3,7 +3,7 @@
 // Treat a malformed inherited value as an initial attempt rather than letting
 // `NaN`, a negative counter, or an integer overflow strand a paid-order retry.
 // PostgreSQL's integer range is also the range used by the ledger columns.
-const POSTGRES_INTEGER_MAX = 2_147_483_647;
+export const POSTGRES_INTEGER_MAX = 2_147_483_647;
 
 export function nextRetryAttempt(value: unknown, initialAttempt: number) {
   if (!Number.isSafeInteger(initialAttempt) || initialAttempt < 0 || initialAttempt > POSTGRES_INTEGER_MAX) {
