@@ -31,14 +31,15 @@ if(today>promoEnd){
   // the component would allow expired promotional HTML to be statically
   // cached across the campaign cutoff.
   if(!/import HomePageClient from ['"]@\/components\/HomePageClient['"]/.test(storefrontPage)||
+    !/import \{ wifiBenchmarkIsFresh \} from ['"]@\/lib\/wifiPlans['"]/.test(storefrontPage)||
     !/export const dynamic = ['"]force-dynamic['"]/.test(storefrontPage)||
-    !/<HomePageClient\s*\/>/.test(storefrontPage)) {
+    !/<HomePageClient\s+pocketWifiPricingFresh=\{wifiBenchmarkIsFresh\(\)\}\s*\/>/.test(storefrontPage)) {
     throw new Error('Expired Pocket WiFi promotion is not behind the dynamic storefront boundary');
   }
   if(!/\{launchPromoActive && <section className="promo-banner">/.test(storefront)||
     !/\{launchPromoActive && <section className="wrap section promo-section">/.test(storefront)||
     !/useState<string>\(launchPromoActive \? LAUNCH_PROMO\.code : ''\)/.test(storefront)||
-    !/\{launchPromoActive && <label>Promo code<input/.test(storefront)||
+    !/\{launchPromoActive && pocketWifiPricingFresh && <label>Promo code<input/.test(storefront)||
     !/minimum booking\{launchPromoActive \? ' before promotion' : ''\}/.test(storefront)||
     !/rental total\{launchPromoActive \? ' and promotion' : ''\} before payment/.test(storefront)) {
     throw new Error('Expired Pocket WiFi promotion remains advertised or prefilled on the storefront');

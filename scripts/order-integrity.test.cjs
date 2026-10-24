@@ -11653,6 +11653,12 @@ test('Pocket WiFi benchmark freshness remains a runtime sales boundary after dep
   assert.ok(availabilityFreshness > -1 && availabilityFreshness < availabilityGlobalAdmission,
     'stale pricing must stop availability before shared provider admission');
   assert.match(healthRoute, /pocketWifiPricing: wifiBenchmarkIsFresh\(\)/);
+  assert.match(homePageRoute, /<HomePageClient pocketWifiPricingFresh=\{wifiBenchmarkIsFresh\(\)\} \/>/,
+    'the request-time storefront must share the checkout pricing-freshness authority');
+  assert.match(homePage, /disabled=\{checking \|\| !datesValid \|\| !pocketWifiPricingFresh\}/,
+    'stale benchmark pricing must disable the public availability action');
+  assert.match(homePage, /pocketWifiPricingFresh \? <div className="price">[\s\S]*?Current pricing unavailable/,
+    'stale benchmark pricing must be hidden rather than advertised beside a refused checkout');
   assert.match(healthRoute, /checks\.inventory && checks\.pocketWifiPricing && availabilityChecks\.pocketWifiStock/);
 });
 
