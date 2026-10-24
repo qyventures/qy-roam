@@ -12,7 +12,7 @@ import { fetchCustomerCheckout } from '../lib/customerCheckout';
 import { esimOfferIsSaleable } from '../lib/esimPlans';
 import { parsePocketWifiAvailability, parsePocketWifiBookingTerms, type PocketWifiAvailability } from '../lib/pocketWifiAvailability';
 import { pocketWifiCheckoutFingerprint } from '../lib/checkoutFingerprint';
-import { MAX_POCKET_WIFI_RENTAL_DAYS } from '../lib/pocketWifiRentalPeriod';
+import { MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays } from '../lib/pocketWifiRentalPeriod';
 
 const plans = WIFI_PLANS;
 
@@ -61,9 +61,14 @@ function restoredPocketWifiDraft(value: string | null, earliestStart: string): P
 
 function daysBetween(start: string, end: string) {
   if (!start || !end) return 1;
-  const a = new Date(start + 'T00:00:00');
-  const b = new Date(end + 'T00:00:00');
-  return Math.max(1, Math.round((b.getTime() - a.getTime()) / 86400000) + 1);
+  // Rental dates are destination-independent calendar dates, not instants in
+  // the shopper's local timezone. Parse them at UTC midnight and use the same
+  // inclusive-day authority as availability, checkout, webhook validation,
+  // and manual orders. Local-midnight arithmetic can cross a timezone offset
+  // transition and render a total that the server correctly refuses.
+  const a = new Date(`${start}T00:00:00Z`);
+  const b = new Date(`${end}T00:00:00Z`);
+  return Math.max(1, pocketWifiRentalDays(a, b));
 }
 
 export default function Home() {

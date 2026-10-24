@@ -11178,6 +11178,15 @@ test('Pocket WiFi rental duration is one shared customer and paid-order boundary
   assert.equal(pocketWifiRentalDays(start, new Date('2027-01-12T00:00:00Z')), 90);
   assert.equal(pocketWifiRentalDays(start, new Date('2027-01-13T00:00:00Z')), 91);
 
+  // The browser must treat date-only selections as UTC calendar dates. A
+  // local-midnight subtraction changes elapsed hours across timezone/DST
+  // transitions and can make its displayed amount disagree with checkout.
+  assert.match(homePage, /MAX_POCKET_WIFI_RENTAL_DAYS, pocketWifiRentalDays/);
+  assert.match(homePage, /new Date\(`\$\{start\}T00:00:00Z`\)/);
+  assert.match(homePage, /new Date\(`\$\{end\}T00:00:00Z`\)/);
+  assert.match(homePage, /Math\.max\(1, pocketWifiRentalDays\(a, b\)\)/);
+  assert.doesNotMatch(homePage, /Math\.round\(\(b\.getTime\(\) - a\.getTime\(\)\) \/ 86400000\)/);
+
   assert.match(homePage, /days > MAX_POCKET_WIFI_RENTAL_DAYS/);
   assert.match(wifiCheckoutRoute, /days>MAX_POCKET_WIFI_RENTAL_DAYS/);
   assert.match(availabilityRoute, /rentalDays > MAX_POCKET_WIFI_RENTAL_DAYS/);
