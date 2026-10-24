@@ -1689,6 +1689,25 @@ as $$
     to_regclass('public.stripe_events') is not null and
     to_regclass('public.fulfilment_notifications') is not null and
     to_regclass('public.meta_purchase_deliveries') is not null and
+    -- The webhook uses direct compare-and-swap writes for event settlement
+    -- and both outbound-delivery ledgers. Object/column checks only exercise
+    -- SELECT, while an accidentally narrowed service-role grant could still
+    -- let checkout report ready and then strand a paid order on its first
+    -- INSERT or UPDATE. Certify the exact non-destructive table privileges
+    -- used by webhook and admin recovery, and retain the deliberate ban on
+    -- erasing their audit evidence.
+    has_table_privilege('service_role', 'public.stripe_events', 'SELECT') and
+    has_table_privilege('service_role', 'public.stripe_events', 'INSERT') and
+    has_table_privilege('service_role', 'public.stripe_events', 'UPDATE') and
+    has_table_privilege('service_role', 'public.fulfilment_notifications', 'SELECT') and
+    has_table_privilege('service_role', 'public.fulfilment_notifications', 'INSERT') and
+    has_table_privilege('service_role', 'public.fulfilment_notifications', 'UPDATE') and
+    has_table_privilege('service_role', 'public.meta_purchase_deliveries', 'SELECT') and
+    has_table_privilege('service_role', 'public.meta_purchase_deliveries', 'INSERT') and
+    has_table_privilege('service_role', 'public.meta_purchase_deliveries', 'UPDATE') and
+    not has_table_privilege('service_role', 'public.stripe_events', 'DELETE,TRUNCATE') and
+    not has_table_privilege('service_role', 'public.fulfilment_notifications', 'DELETE,TRUNCATE') and
+    not has_table_privilege('service_role', 'public.meta_purchase_deliveries', 'DELETE,TRUNCATE') and
     -- Supabase exposes public-schema relations through PostgREST. Constraints
     -- and triggers can remain healthy after an accidental DISABLE ROW LEVEL
     -- SECURITY, while anon/authenticated table grants would then expose paid
@@ -3650,7 +3669,12 @@ as $$
   -- Version 59 additionally makes the Stripe product-snapshot separation
   -- constraint part of checkout readiness. A dropped or partial migration
   -- must not expose payment while digital and physical order fields can mix.
-  select 59;
+  -- Version 60 also certifies the webhook's exact non-destructive table
+  -- privileges on its event and outbound-delivery retry ledgers. Checkout
+  -- must not accept payment when SELECT still works but INSERT/UPDATE recovery
+  -- has been revoked, and application roles must remain unable to erase the
+  -- audit trail with DELETE or TRUNCATE.
+  select 60;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
