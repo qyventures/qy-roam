@@ -433,6 +433,51 @@ verify_checkout_ingress() {
   rm -f "$response_headers" "$response_body"
 }
 
+# Pocket WiFi's first customer-visible quote depends on these public read APIs.
+# Readiness proves their dependencies, but not that the built routes and public
+# proxy preserve their JSON/cache contracts. The availability probe is
+# deliberately invalid so it returns before Stripe or Supabase work.
+verify_pocket_wifi_sales_api_ingress() {
+  local base_url="$1"
+  shift
+  local response_headers response_body status
+  response_headers="$(mktemp /tmp/qyroam-sales-api-headers.XXXXXX)"
+  response_body="$(mktemp /tmp/qyroam-sales-api-body.XXXXXX)"
+
+  status="$("$@" --dump-header "$response_headers" --output "$response_body" \
+    --write-out '%{http_code}' "$base_url/api/booking-terms")" || {
+      rm -f "$response_headers" "$response_body"
+      return 1
+    }
+  if [[ "$status" != "200" ]] ||
+     ! grep -Eiq '^content-type:[[:space:]]*application/json([[:space:]]*;|[[:space:]]*$)' "$response_headers" ||
+     ! grep -Eiq '^cache-control:.*no-store' "$response_headers" ||
+     ! grep -Eiq '^x-robots-tag:.*noindex' "$response_headers" ||
+     ! node -e "const fs=require('fs');const value=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(!Number.isSafeInteger(value?.minDeliveryLeadDays)||value.minDeliveryLeadDays<0||typeof value?.courierFeeSgd!=='number'||!Number.isFinite(value.courierFeeSgd)||value.courierFeeSgd<0)process.exit(1)" "$response_body"; then
+    rm -f "$response_headers" "$response_body"
+    return 1
+  fi
+
+  : > "$response_headers"
+  : > "$response_body"
+  status="$("$@" --dump-header "$response_headers" --output "$response_body" \
+    --write-out '%{http_code}' \
+    "$base_url/api/availability?start=2026-01-01&start=2026-01-02&end=2026-01-03")" || {
+      rm -f "$response_headers" "$response_body"
+      return 1
+    }
+  if [[ "$status" != "400" ]] ||
+     ! grep -Eiq '^content-type:[[:space:]]*application/json([[:space:]]*;|[[:space:]]*$)' "$response_headers" ||
+     ! grep -Eiq '^cache-control:.*no-store' "$response_headers" ||
+     ! grep -Eiq '^x-robots-tag:.*noindex' "$response_headers" ||
+     ! node -e "const fs=require('fs');const value=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(value?.available!==false||value?.error!=='Valid start and end dates are required.')process.exit(1)" "$response_body"; then
+    rm -f "$response_headers" "$response_body"
+    return 1
+  fi
+
+  rm -f "$response_headers" "$response_body"
+}
+
 # Readiness proves that webhook secrets are configured, but not that Stripe's
 # POST routes exist in the standalone artifact or survive the public proxy.
 # Probe both the canonical endpoint and its migration alias with inert,
@@ -597,6 +642,10 @@ if ! verify_customer_response_headers "http://127.0.0.1:${smoke_port}" curl --fa
 fi
 if ! verify_checkout_ingress "http://127.0.0.1:${smoke_port}" curl --silent --show-error --max-time 10; then
   echo "Built QY Roam artifact does not preserve the checkout mutation contract" >&2
+  exit 1
+fi
+if ! verify_pocket_wifi_sales_api_ingress "http://127.0.0.1:${smoke_port}" curl --silent --show-error --max-time 10; then
+  echo "Built QY Roam artifact does not preserve the Pocket WiFi sales API contract" >&2
   exit 1
 fi
 if ! verify_webhook_ingress "http://127.0.0.1:${smoke_port}" curl --silent --show-error --max-time 10; then
@@ -772,6 +821,10 @@ fi
 public_mutation_curl=(curl --noproxy '*' --resolve qyroam.com:443:127.0.0.1 --silent --show-error --max-time "$READINESS_CURL_TIMEOUT_SECONDS")
 if ! verify_checkout_ingress "$PUBLIC_ORIGIN" "${public_mutation_curl[@]}"; then
   echo "QY Roam public TLS ingress does not preserve the checkout mutation contract" >&2
+  exit 1
+fi
+if ! verify_pocket_wifi_sales_api_ingress "$PUBLIC_ORIGIN" "${public_mutation_curl[@]}"; then
+  echo "QY Roam public TLS ingress does not preserve the Pocket WiFi sales API contract" >&2
   exit 1
 fi
 if ! verify_webhook_ingress "$PUBLIC_ORIGIN" "${public_mutation_curl[@]}"; then

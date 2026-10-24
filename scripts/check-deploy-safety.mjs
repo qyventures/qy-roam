@@ -272,6 +272,7 @@ assert.ok(
 );
 assert.match(deploy, /verify_customer_response_headers\(\)/);
 assert.match(deploy, /verify_checkout_ingress\(\)/);
+assert.match(deploy, /verify_pocket_wifi_sales_api_ingress\(\)/);
 assert.match(deploy, /for checkout_path in \/api\/checkout \/api\/esim-checkout/);
 assert.match(deploy, /--request POST[\s\S]*?Content-Type: text\/plain[\s\S]*?\$\{base_url\}\$\{checkout_path\}/);
 assert.match(deploy, /value\?\.error!==['"]Expected JSON request\./);
@@ -306,6 +307,11 @@ assert.ok(
   deploy.indexOf('verify_checkout_ingress "http://127.0.0.1:${smoke_port}"') < deploy.indexOf('echo "[10/11] Restarting service"'),
   'the isolated artifact checkout mutation contract must be verified before restart',
 );
+assert.equal((deploy.match(/verify_pocket_wifi_sales_api_ingress "/g) || []).length, 2);
+assert.ok(
+  deploy.indexOf('verify_pocket_wifi_sales_api_ingress "http://127.0.0.1:${smoke_port}"') < deploy.indexOf('echo "[10/11] Restarting service"'),
+  'the isolated Pocket WiFi sales API contract must be verified before restart',
+);
 assert.ok(
   deploy.indexOf('verify_webhook_ingress "http://127.0.0.1:${smoke_port}"') < deploy.indexOf('echo "[10/11] Restarting service"'),
   'the isolated artifact webhook ingress contract must be verified before restart',
@@ -317,6 +323,10 @@ assert.ok(
 assert.ok(
   deploy.lastIndexOf('verify_checkout_ingress "$PUBLIC_ORIGIN"') < deploy.indexOf('release_verified=1'),
   'the public checkout mutation contract must be verified before the rollback artifact is discarded',
+);
+assert.ok(
+  deploy.lastIndexOf('verify_pocket_wifi_sales_api_ingress "$PUBLIC_ORIGIN"') < deploy.indexOf('release_verified=1'),
+  'the public Pocket WiFi sales API contract must be verified before the rollback artifact is discarded',
 );
 assert.ok(
   deploy.lastIndexOf('verify_webhook_ingress "$PUBLIC_ORIGIN"') < deploy.indexOf('release_verified=1'),

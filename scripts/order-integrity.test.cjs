@@ -9958,6 +9958,15 @@ test('release verification enforces the complete customer ingress security bound
     deployScript.lastIndexOf('verify_checkout_ingress "$PUBLIC_ORIGIN"') < deployScript.indexOf('release_verified=1'),
     'a side-effect-free checkout POST must cross public TLS before rollback protection is discarded',
   );
+  assert.match(deployScript, /verify_pocket_wifi_sales_api_ingress\(\)/);
+  assert.equal((deployScript.match(/verify_pocket_wifi_sales_api_ingress "/g) || []).length, 2);
+  assert.match(deployScript, /\/api\/booking-terms/);
+  assert.match(deployScript, /\/api\/availability\?start=2026-01-01&start=2026-01-02&end=2026-01-03/);
+  assert.match(deployScript, /Valid start and end dates are required\./);
+  assert.ok(
+    deployScript.lastIndexOf('verify_pocket_wifi_sales_api_ingress "$PUBLIC_ORIGIN"') < deployScript.indexOf('release_verified=1'),
+    'Pocket WiFi pricing and availability ingress must cross public TLS before rollback protection is discarded',
+  );
   // A green readiness response proves that signing secrets are configured,
   // but it cannot prove that either Stripe POST route survived standalone
   // packaging and the Nginx routing boundary. Keep both the canonical route
