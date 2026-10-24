@@ -376,13 +376,25 @@ assert.match(deploy, /QY Roam service restart failed/);
 // cause an unnecessary rollback after the new process is already healthy.
 const readinessProbeTimeout = Number(readinessProbe.match(/export const READINESS_PROBE_TIMEOUT_MS = ([\d_]+);/)?.[1].replaceAll('_', ''));
 const readinessCurlTimeout = Number(deploy.match(/^READINESS_CURL_TIMEOUT_SECONDS=(\d+)$/m)?.[1]);
+const readinessMaxResponseBytes = Number(deploy.match(/^READINESS_MAX_RESPONSE_BYTES=(\d+)$/m)?.[1]);
 assert.ok(Number.isFinite(readinessProbeTimeout), 'application readiness probe timeout must remain explicit');
 assert.ok(Number.isFinite(readinessCurlTimeout), 'deployment readiness curl timeout must remain explicit');
+assert.equal(readinessMaxResponseBytes, 64 * 1024, 'deployment readiness transport must match the validator byte ceiling');
 assert.ok(
   readinessCurlTimeout * 1_000 > readinessProbeTimeout,
   'deployment readiness deadline must exceed the application probe deadline',
 );
 assert.match(deploy, /curl --header "@\$health_header" --fail --silent --show-error --max-time "\$READINESS_CURL_TIMEOUT_SECONDS"/);
+assert.equal(
+  (deploy.match(/--max-filesize "\$READINESS_MAX_RESPONSE_BYTES"/g) || []).length,
+  4,
+  'every authenticated readiness response must be bounded before validation',
+);
+assert.match(
+  deploy,
+  /curl --header "@\$health_header"[^\n]+--max-filesize "\$READINESS_MAX_RESPONSE_BYTES"[^\n]+> "\$health_output"/,
+  'the file-backed post-restart readiness probe must enforce the response ceiling before writing',
+);
 
 // A healthy loopback process is not sufficient for a sales-ready release:
 // customers still depend on the local TLS listener, certificate, canonical

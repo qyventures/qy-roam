@@ -19,6 +19,11 @@ DEPLOY_LOCK_PATH="${DEPLOY_LOCK_PATH:-/run/lock/qyroam-deploy.lock}"
 # slow-but-healthy probe can return its authoritative result instead of being
 # mistaken for a failed release and triggering rollback.
 READINESS_CURL_TIMEOUT_SECONDS=12
+# Keep the wire-level readiness response within the same ceiling enforced by
+# validate-sales-readiness.mjs. In particular, the post-restart probe writes
+# to a temporary file before validation; without a curl limit, a broken proxy
+# could fill disk even though the validator would eventually reject the body.
+READINESS_MAX_RESPONSE_BYTES=65536
 # Build away from the artifact that the live Next.js process is still serving.
 # Next clears its dist directory during compilation; pointing it at `.next`
 # here would create a customer-visible missing/mixed asset window before the
@@ -38,7 +43,7 @@ ROLLBACK_RESTORE_DIST_DIR=.next-rollback-restore
 # Make the resolved operator overrides immutable before reading that file;
 # Bash will fail closed if it tries to assign one of these names.
 readonly APP_DIR ENV_FILE SERVICE_NAME HEALTH_URL PUBLIC_ORIGIN
-readonly SYSTEMD_UNIT_PATH NGINX_CONFIG_PATH READINESS_CURL_TIMEOUT_SECONDS
+readonly SYSTEMD_UNIT_PATH NGINX_CONFIG_PATH READINESS_CURL_TIMEOUT_SECONDS READINESS_MAX_RESPONSE_BYTES
 readonly RELEASE_DIST_DIR ROLLBACK_RESTORE_DIST_DIR DEPLOY_LOCK_PATH
 
 # Hold this descriptor for the complete script lifetime. `flock --nonblock`
@@ -240,7 +245,7 @@ restore_previous_artifact() {
   local rollback_ready=0
   local attempt
   for attempt in {1..15}; do
-    if curl --header "@$rollback_health_header" --fail --silent --show-error --max-time "$READINESS_CURL_TIMEOUT_SECONDS" "$HEALTH_URL" |
+    if curl --header "@$rollback_health_header" --fail --silent --show-error --max-time "$READINESS_CURL_TIMEOUT_SECONDS" --max-filesize "$READINESS_MAX_RESPONSE_BYTES" "$HEALTH_URL" |
        node scripts/validate-sales-readiness.mjs; then
       rollback_ready=1
       break
@@ -598,7 +603,7 @@ for attempt in {1..15}; do
   if ! kill -0 "$smoke_pid" 2>/dev/null; then
     break
   fi
-  if curl --header "@$smoke_health_header" --fail --silent --show-error --max-time "$READINESS_CURL_TIMEOUT_SECONDS" "http://127.0.0.1:${smoke_port}/api/health" |
+  if curl --header "@$smoke_health_header" --fail --silent --show-error --max-time "$READINESS_CURL_TIMEOUT_SECONDS" --max-filesize "$READINESS_MAX_RESPONSE_BYTES" "http://127.0.0.1:${smoke_port}/api/health" |
      node scripts/validate-sales-readiness.mjs; then
     smoke_ready=1
     break
@@ -753,7 +758,7 @@ chmod 600 "$health_output" "$health_header"
 printf 'Authorization: Bearer %s\n' "$health_check_token" > "$health_header"
 ready=0
 for attempt in {1..15}; do
-  if curl --header "@$health_header" --fail --silent --show-error --max-time "$READINESS_CURL_TIMEOUT_SECONDS" "$HEALTH_URL" > "$health_output" &&
+  if curl --header "@$health_header" --fail --silent --show-error --max-time "$READINESS_CURL_TIMEOUT_SECONDS" --max-filesize "$READINESS_MAX_RESPONSE_BYTES" "$HEALTH_URL" > "$health_output" &&
      node scripts/validate-sales-readiness.mjs "$health_output"; then
     ready=1
     break
@@ -789,7 +794,7 @@ fi
 # curl can send the request to an outbound proxy and accidentally test a
 # different server despite the loopback --resolve entry.
 public_curl=(curl --noproxy '*' --resolve qyroam.com:443:127.0.0.1 --fail --silent --show-error --max-time "$READINESS_CURL_TIMEOUT_SECONDS")
-if ! "${public_curl[@]}" --header "@$health_header" "$PUBLIC_ORIGIN/api/health" |
+if ! "${public_curl[@]}" --header "@$health_header" --max-filesize "$READINESS_MAX_RESPONSE_BYTES" "$PUBLIC_ORIGIN/api/health" |
    node scripts/validate-sales-readiness.mjs; then
   echo "QY Roam public TLS ingress did not reach the launch-ready service" >&2
   exit 1
