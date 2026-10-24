@@ -20,6 +20,7 @@ import { exactRpcRow } from '@/lib/exactRpcRow';
 import { acknowledgedOrderTransition } from '@/lib/adminOrderTransitionAcknowledgement';
 import { createAdminOrderDeadline } from '@/lib/adminOrderDeadline';
 import { createAdminDeliveryDeadline } from '@/lib/adminDeliveryDeadline';
+import { tryAcquireAdminUpload } from '@/lib/adminUploadConcurrency';
 
 export const runtime = 'nodejs';
 
@@ -165,6 +166,13 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     if (error instanceof RequestBodyTooLargeError) return NextResponse.json({ error: 'Request too large' }, { status: 413 });
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
   }
+  const releaseAdminUpload = tryAcquireAdminUpload();
+  if (!releaseAdminUpload) {
+    return NextResponse.json({ error: 'Order update uploads are busy. Please try again shortly.' }, {
+      status: 503,
+      headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' },
+    });
+  }
   let body: Record<string, unknown>;
   try {
     const raw = await readLimitedRequestText(req, MAX_ADMIN_ORDER_BODY_BYTES, ADMIN_ORDER_BODY_TIMEOUT_MS);
@@ -176,6 +184,8 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     if (error instanceof InvalidRequestBodyLengthError) return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
     if (error instanceof RequestBodyTimeoutError) return NextResponse.json({ error: 'Request timed out. Please try again.' }, { status: 408 });
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
+  } finally {
+    releaseAdminUpload();
   }
 
   const status = String(body.status || '');

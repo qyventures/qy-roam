@@ -18,6 +18,7 @@ import { validAdminOperationId } from '@/lib/adminOperationId';
 import { inventoryMutationFailure } from '@/lib/inventoryMutationFailure';
 import { normalizedCustomerPhone } from '@/lib/customerPhone';
 import { createAdminOpsDeadline } from '@/lib/adminOpsDeadline';
+import { tryAcquireAdminUpload } from '@/lib/adminUploadConcurrency';
 
 export const dynamic = 'force-dynamic';
 
@@ -225,6 +226,13 @@ export async function POST(req: NextRequest) {
     if (error instanceof RequestBodyTooLargeError) return NextResponse.json({ error: 'Request too large' }, { status: 413 });
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
   }
+  const releaseAdminUpload = tryAcquireAdminUpload();
+  if (!releaseAdminUpload) {
+    return NextResponse.json({ error: 'Operations uploads are busy. Please try again shortly.' }, {
+      status: 503,
+      headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' },
+    });
+  }
   let raw: string;
   try {
     raw = await readLimitedRequestText(req, MAX_ADMIN_OPS_BODY_BYTES, ADMIN_OPS_BODY_TIMEOUT_MS);
@@ -233,6 +241,8 @@ export async function POST(req: NextRequest) {
     if (error instanceof InvalidRequestBodyLengthError) return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
     if (error instanceof RequestBodyTimeoutError) return NextResponse.json({ error: 'Request timed out. Please try again.' }, { status: 408 });
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+  } finally {
+    releaseAdminUpload();
   }
   let body: Record<string, unknown>;
   try {

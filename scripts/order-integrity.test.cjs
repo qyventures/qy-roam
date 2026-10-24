@@ -97,6 +97,7 @@ const { CONFIRMATION_LOOKUP_TIMEOUT_MS, createConfirmationDeadline } = require('
 const { HEALTH_MAX_CONCURRENT_REQUESTS, tryAcquireHealthConcurrency } = require('../lib/healthConcurrency.ts');
 const { HEALTH_READINESS_TIMEOUT_MS, createHealthDeadline } = require('../lib/healthDeadline.ts');
 const { ADMIN_OPS_MAX_CONCURRENT_REQUESTS, tryAcquireAdminOpsConcurrency } = require('../lib/adminOpsConcurrency.ts');
+const { ADMIN_UPLOAD_MAX_CONCURRENT_REQUESTS, tryAcquireAdminUpload } = require('../lib/adminUploadConcurrency.ts');
 const { ADMIN_DELIVERY_MAX_CONCURRENT_REQUESTS, tryAcquireAdminDeliveryConcurrency } = require('../lib/adminDeliveryConcurrency.ts');
 const { ADMIN_DELIVERY_LOOKUP_TIMEOUT_MS, createAdminDeliveryDeadline } = require('../lib/adminDeliveryDeadline.ts');
 const { ADMIN_DASHBOARD_MAX_CONCURRENT_REQUESTS, tryAcquireAdminDashboardConcurrency, runAdminDashboardWork } = require('../lib/adminDashboardConcurrency.ts');
@@ -1840,6 +1841,40 @@ test('admin operational mutations have a bounded non-queueing database-work budg
   assert.equal(typeof recovered, 'function');
   releases[0]();
   assert.equal(tryAcquireAdminOpsConcurrency(), null);
+  recovered();
+  for (const release of releases.slice(1)) release();
+});
+
+test('admin JSON mutations share a bounded slow-upload budget', () => {
+  assert.equal(ADMIN_UPLOAD_MAX_CONCURRENT_REQUESTS, 12);
+
+  for (const source of [adminOpsRoute, adminOrderRoute]) {
+    const declaredLengthCheck = source.indexOf('validateLimitedRequestContentLength(req,');
+    const uploadAdmission = source.indexOf('tryAcquireAdminUpload()');
+    const bodyRead = source.indexOf('readLimitedRequestText(req,');
+    const uploadRelease = source.indexOf('releaseAdminUpload()', bodyRead);
+    const databaseAdmission = source.indexOf('tryAcquireAdminOpsConcurrency()');
+    assert.ok(declaredLengthCheck >= 0 && uploadAdmission > declaredLengthCheck,
+      'invalid declared lengths must be rejected before upload admission');
+    assert.ok(bodyRead > uploadAdmission && uploadRelease > bodyRead,
+      'the upload slot must cover and be released after the bounded body read');
+    assert.ok(databaseAdmission > uploadRelease,
+      'slow uploads must release ingress capacity before database-work admission');
+    assert.match(source, /uploads are busy\. Please try again shortly\./);
+  }
+
+  const releases = [];
+  for (let index = 0; index < ADMIN_UPLOAD_MAX_CONCURRENT_REQUESTS; index += 1) {
+    const release = tryAcquireAdminUpload();
+    assert.equal(typeof release, 'function');
+    releases.push(release);
+  }
+  assert.equal(tryAcquireAdminUpload(), null);
+  releases[0]();
+  const recovered = tryAcquireAdminUpload();
+  assert.equal(typeof recovered, 'function');
+  releases[0]();
+  assert.equal(tryAcquireAdminUpload(), null);
   recovered();
   for (const release of releases.slice(1)) release();
 });
@@ -10923,6 +10958,11 @@ test('dependency-work concurrency budgets survive duplicate Next server module g
       path: '../lib/adminOpsConcurrency.ts',
       maximum: ADMIN_OPS_MAX_CONCURRENT_REQUESTS,
       acquire: 'tryAcquireAdminOpsConcurrency',
+    },
+    {
+      path: '../lib/adminUploadConcurrency.ts',
+      maximum: ADMIN_UPLOAD_MAX_CONCURRENT_REQUESTS,
+      acquire: 'tryAcquireAdminUpload',
     },
     {
       path: '../lib/adminDeliveryConcurrency.ts',
