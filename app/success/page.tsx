@@ -103,16 +103,23 @@ export default async function SuccessPage({ searchParams }: Props) {
             .eq('stripe_session_id', session.id)
             .abortSignal(confirmationDeadline!.signal)
             .maybeSingle();
+          // PostgREST normally returns either data or an error, but this is a
+          // runtime trust boundary rather than a TypeScript guarantee. Never
+          // let a malformed/partial response carry an order row alongside an
+          // error and turn a failed ledger read into a customer confirmation
+          // (or a terminal payment-failure decision). An errored read remains
+          // retryable and contributes no durable-order evidence.
+          const storedOrder = orderResult.error ? null : orderResult.data;
           // A previously received asynchronous-completion event can have
           // created an awaiting-payment row. The success page must wait for
           // the paid snapshot, not merely any row for this Checkout Session.
-          orderPersisted = durableOrderMatchesPaidSession(orderResult.data, session, productType);
+          orderPersisted = durableOrderMatchesPaidSession(storedOrder, session, productType);
           // An asynchronous failure is terminal only after the signed webhook
           // has written the exact failed commercial snapshot. Until then an
           // unpaid Session can still become paid, so keep polling the same
           // customer capability instead of inviting a duplicate checkout.
-          paymentFailed = orderResult.data?.fulfilment_status === 'payment_failed' &&
-            durableOrderMatchesFailedSession(orderResult.data, session, productType);
+          paymentFailed = storedOrder?.fulfilment_status === 'payment_failed' &&
+            durableOrderMatchesFailedSession(storedOrder, session, productType);
           orderLookupFailed = Boolean(orderResult.error);
         }
       }

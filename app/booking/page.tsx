@@ -122,7 +122,11 @@ export default async function BookingPage({ searchParams }: Props) {
     // finalising a paid order. Do not present the latter as a reassuring
     // normal state when this server could not query the ledger at all.
     const orderLookupFailed = !supabase || Boolean(orderResult?.error);
-    const storedOrder = orderResult?.data;
+    // Treat an errored PostgREST response as data-less even if a malformed or
+    // partial runtime response also contains a row. Customer-visible
+    // fulfilment state, tracking references, and terminal payment failure all
+    // require a clean ledger read in addition to an exact commercial match.
+    const storedOrder = orderLookupFailed ? null : orderResult?.data;
     // A provisional row can be created for a delayed payment method before
     // Stripe confirms it, and the paid webhook can still be retrying when the
     // customer first opens this page. Only a paid order snapshot proves the
