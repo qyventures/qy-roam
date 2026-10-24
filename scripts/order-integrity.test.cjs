@@ -52,6 +52,7 @@ const { metaMeasurementAllowed, metaPageViewAllowed, setMetaMeasurementConsent, 
 const { digitalDeliveryReferenceIssue, isSafeDigitalDeliveryReference } = require('../lib/digitalDeliveryReference.ts');
 const { SUPABASE_REQUEST_TIMEOUT_MS, SUPABASE_REQUEST_TIMEOUT_MAX_MS, SUPABASE_RESPONSE_MAX_BYTES, SUPABASE_RESPONSE_MAX_CHUNKS, canonicalSupabaseProjectUrl, fetchSupabaseWithTimeout, hasRequiredSupabaseAdminConfig, supabaseServiceRoleKey } = require('../lib/supabaseAdmin.ts');
 const { checkoutAttempt, clearCheckoutAttempt, CHECKOUT_ATTEMPT_MAX_AGE_MS } = require('../lib/checkoutAttempt.ts');
+const { boundedInputText } = require('../lib/boundedInputText.ts');
 const { CUSTOMER_REQUEST_TIMEOUT_MS, CUSTOMER_JSON_RESPONSE_MAX_BYTES, CUSTOMER_JSON_RESPONSE_MAX_CHUNKS, CUSTOMER_JSON_CONTENT_TYPE_MAX_LENGTH, CUSTOMER_JSON_CONTENT_ENCODING_MAX_LENGTH, CustomerRequestTimeoutError, customerResponseContentEncoding, fetchCustomerJson, fetchCustomerRequest, isCustomerJsonResponseContentType } = require('../lib/clientRequest.ts');
 const { safeHttpsDeliveryEndpoint } = require('../lib/deliveryEndpoint.ts');
 const { fulfilmentRelayAcknowledged } = require('../lib/deliveryAcknowledgement.ts');
@@ -121,6 +122,27 @@ const { readinessFailureBackoffActive, readinessWindowActive } = require('../lib
 const { adminOrderMutationSafe } = require('../lib/adminOrderRow.ts');
 const { ADMIN_DASHBOARD_LOOKUP_TIMEOUT_MS, createAdminDashboardDeadline } = require('../lib/adminDashboardDeadline.ts');
 const { adminCustomerIdentity, compareCustomerPurchaseRecency } = require('../lib/adminCustomerIdentity.ts');
+
+test('admin structured inputs are rejected instead of silently truncated or defaulted', () => {
+  assert.equal(boundedInputText(' 2026-10-25 ', 10), '2026-10-25');
+  assert.equal(boundedInputText(undefined, 10), '');
+
+  const overlongDate = boundedInputText('2026-10-25unexpected', 10);
+  assert.ok(overlongDate.length > 10);
+  assert.notEqual(overlongDate, '');
+  assert.notEqual(overlongDate, '2026-10-25');
+
+  const invalidEnum = boundedInputText({ toString: () => 'available' }, 40);
+  assert.ok(invalidEnum.length > 40);
+  assert.notEqual(invalidEnum, '');
+  assert.notEqual(invalidEnum, 'available');
+  assert.ok(boundedInputText('paid\nrefunded', 40).length > 40);
+  assert.throws(() => boundedInputText('value', 0), /Invalid input text limit/);
+
+  assert.match(adminOpsRoute, /import \{ boundedInputText \} from '@\/lib\/boundedInputText'/);
+  assert.match(adminOpsRoute, /const text = boundedInputText/);
+  assert.doesNotMatch(adminOpsRoute, /\.trim\(\)\.slice\(0, max\)/);
+});
 
 test('admin order mutations require one coherent durable lifecycle row', () => {
   const row = {

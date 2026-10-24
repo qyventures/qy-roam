@@ -19,6 +19,7 @@ import { inventoryMutationFailure } from '@/lib/inventoryMutationFailure';
 import { normalizedCustomerPhone } from '@/lib/customerPhone';
 import { createAdminOpsDeadline } from '@/lib/adminOpsDeadline';
 import { tryAcquireAdminUpload } from '@/lib/adminUploadConcurrency';
+import { boundedInputText } from '@/lib/boundedInputText';
 
 export const dynamic = 'force-dynamic';
 
@@ -52,7 +53,7 @@ function adminOpsRetryJson(message: string) {
   );
 }
 
-function text(v: unknown, max = 500) { return String(v ?? '').trim().slice(0, max); }
+const text = boundedInputText;
 function optionalSingleLineText(value: unknown, max: number) {
   if (value === undefined || value === null || value === '') return null;
   if (typeof value !== 'string' || value !== value.trim() || value.length > max || /[\u0000-\u001f\u007f]/.test(value)) {
