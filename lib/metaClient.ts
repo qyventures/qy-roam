@@ -78,7 +78,17 @@ export function metaAttribution() {
 export function trackMeta(event: string, params: Record<string, unknown> = {}, options: Record<string, unknown> = {}) {
   if (!metaMeasurementAllowed() || typeof window === 'undefined') return;
   const fbq = (window as Window & { fbq?: (...args: any[]) => void }).fbq;
-  if (typeof fbq === 'function') fbq('track', event, params, options);
+  if (typeof fbq !== 'function') return;
+  try {
+    // Pixel is an optional third-party dependency. A partially loaded,
+    // blocked, or browser-extension-replaced implementation must never throw
+    // through the storefront click handler and prevent the Stripe request
+    // that follows this best-effort funnel event.
+    fbq('track', event, params, options);
+  } catch {
+    // Checkout remains authoritative; no local delivery marker is written
+    // for immediate funnel events, so a later customer attempt can try again.
+  }
 }
 
 // The consent banner loads the Pixel asynchronously. A conversion can be
@@ -101,11 +111,18 @@ export function trackMetaWhenReady(
     if (cancelled || !metaMeasurementAllowed() || typeof window === 'undefined') return;
     const fbq = (window as Window & { fbq?: (...args: any[]) => void }).fbq;
     if (typeof fbq === 'function') {
-      // Treat the event as locally delivered only after the Pixel queue has
-      // accepted it. A missing/late Pixel must remain retryable on refresh.
-      fbq('track', event, params, options);
-      onTracked?.();
-      return;
+      try {
+        // Treat the event as locally delivered only after the Pixel queue has
+        // accepted it. A missing/late/broken Pixel must remain retryable on
+        // this page and on refresh rather than crashing order confirmation or
+        // incorrectly writing its local Purchase delivery marker.
+        fbq('track', event, params, options);
+        onTracked?.();
+        return;
+      } catch {
+        // A broken third-party queue is equivalent to one that has not loaded
+        // yet. Retain the same short bounded retry budget below.
+      }
     }
     if (remaining > 0) timer = window.setTimeout(() => attempt(remaining - 1), 100);
   };

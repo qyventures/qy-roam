@@ -47,7 +47,7 @@ const { metaAttributionFromRequest } = require('../lib/metaAttribution.ts');
 const { CHECKOUT_PAYMENT_WINDOW_MINUTES, STRIPE_EXPIRY_SAFETY_SECONDS, CHECKOUT_EXPIRY_CREATION_MARGIN_SECONDS, CHECKOUT_HOLD_WINDOW_SECONDS, CHECKOUT_ATTEMPT_MAX_FUTURE_MS, STRIPE_HOLD_SCAN_WINDOW_SECONDS, STRIPE_HOLD_CREATED_MAX_FUTURE_SECONDS, STRIPE_HOLD_SCAN_PAGE_TIMEOUT_MS, STRIPE_HOLD_SCAN_TIMEOUT_MS, checkoutAttemptExpiresAt, checkoutExpiresAt } = require('../lib/checkoutExpiry.ts');
 const { checkoutSiteOrigin, isProductionQyRoamOrigin, metaPurchaseEventSourceUrl } = require('../lib/siteOrigin.ts');
 const { hasRequiredAdminCredentials, hasRequiredMetaCapiPurchaseConfig, metaPixelId } = require('../lib/runtimeConfig.ts');
-const { metaMeasurementAllowed, metaPageViewAllowed, setMetaMeasurementConsent } = require('../lib/metaClient.ts');
+const { metaMeasurementAllowed, metaPageViewAllowed, setMetaMeasurementConsent, trackMeta, trackMetaWhenReady } = require('../lib/metaClient.ts');
 const { digitalDeliveryReferenceIssue, isSafeDigitalDeliveryReference } = require('../lib/digitalDeliveryReference.ts');
 const { SUPABASE_REQUEST_TIMEOUT_MS, SUPABASE_REQUEST_TIMEOUT_MAX_MS, SUPABASE_RESPONSE_MAX_BYTES, SUPABASE_RESPONSE_MAX_CHUNKS, canonicalSupabaseProjectUrl, fetchSupabaseWithTimeout, hasRequiredSupabaseAdminConfig, supabaseServiceRoleKey } = require('../lib/supabaseAdmin.ts');
 const { checkoutAttempt, clearCheckoutAttempt, CHECKOUT_ATTEMPT_MAX_AGE_MS } = require('../lib/checkoutAttempt.ts');
@@ -2124,6 +2124,44 @@ test('optional Meta consent storage cannot block checkout in privacy-restricted 
     assert.equal(metaMeasurementAllowed(), true);
     assert.doesNotThrow(() => setMetaMeasurementConsent('essential'));
     assert.equal(metaMeasurementAllowed(), false);
+  } finally {
+    if (previousWindow === undefined) delete global.window;
+    else global.window = previousWindow;
+  }
+});
+
+test('optional Meta Pixel failures cannot block checkout or crash paid confirmation', () => {
+  const previousWindow = global.window;
+  let pixelCalls = 0;
+  let purchaseMarkedDelivered = false;
+  global.window = {
+    localStorage: {
+      getItem() { return 'accepted'; },
+      setItem() {},
+    },
+    fbq() {
+      pixelCalls += 1;
+      throw new Error('Pixel queue unavailable');
+    },
+    setTimeout() {
+      throw new Error('a zero-attempt delivery must not schedule another retry');
+    },
+    clearTimeout() {},
+  };
+  try {
+    // InitiateCheckout runs immediately before the paid checkout request in
+    // both storefronts. Optional measurement must never throw through that
+    // click handler when the third-party queue is broken.
+    assert.doesNotThrow(() => trackMeta('InitiateCheckout', { value: 1 }, { eventID: 'checkout_test' }));
+    assert.doesNotThrow(() => trackMetaWhenReady(
+      'Purchase',
+      { value: 1 },
+      { eventID: 'purchase_test' },
+      () => { purchaseMarkedDelivered = true; },
+      0,
+    ));
+    assert.equal(pixelCalls, 2);
+    assert.equal(purchaseMarkedDelivered, false);
   } finally {
     if (previousWindow === undefined) delete global.window;
     else global.window = previousWindow;
