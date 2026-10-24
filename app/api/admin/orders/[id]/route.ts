@@ -202,6 +202,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const adminOrderDeadline = createAdminOrderDeadline();
 
   try {
+  return await adminOrderDeadline.waitFor((async () => {
   const existing = await supabase.from('orders').select('product_type,payment_status,fulfilment_status,dispatched_at,returned_at,courier_tracking,return_tracking,return_disposition,digital_delivery_reference,notes').eq('id', id).abortSignal(adminOrderDeadline.signal).maybeSingle();
   if (existing.error) return adminOrderTransitionRetryJson('Unable to load the current order. Please try again shortly.');
   if (!existing.data) return NextResponse.json({ error: 'Order not found' }, { status: 404 });
@@ -422,6 +423,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   });
   if (!order) return NextResponse.json({ error: 'Unable to verify the saved order. Refresh before making another change.' }, { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' } });
   return NextResponse.json(order, { headers: { 'Cache-Control': 'no-store' } });
+  })());
   } catch {
     // Supabase normally returns PostgREST failures in the result object, but
     // its bounded transport can still throw on a network timeout, aborted

@@ -11575,13 +11575,14 @@ test('admin fulfilment transitions share one end-to-end database deadline', asyn
     /Invalid admin order dependency timeout/,
   );
   const deadline = createAdminOrderDeadline(5);
-  await new Promise((resolve) => deadline.signal.addEventListener('abort', resolve, { once: true }));
+  await assert.rejects(deadline.waitFor(new Promise(() => {})), /Admin order dependency work timed out/);
   assert.equal(deadline.signal.aborted, true);
   assert.match(String(deadline.signal.reason), /Admin order dependency work timed out/i);
   deadline.dispose();
 
   const route = adminOrderRoute;
   const admission = route.indexOf('const adminOrderDeadline = createAdminOrderDeadline()');
+  const wallClockBoundary = route.indexOf('adminOrderDeadline.waitFor((async () => {', admission);
   const readSignal = route.indexOf('.abortSignal(adminOrderDeadline.signal)', admission);
   const wifiTransition = route.indexOf("qy_transition_pocket_wifi_order", readSignal);
   const wifiSignal = route.indexOf('.abortSignal(adminOrderDeadline.signal)', wifiTransition);
@@ -11589,7 +11590,7 @@ test('admin fulfilment transitions share one end-to-end database deadline', asyn
   const esimSignal = route.indexOf('.abortSignal(adminOrderDeadline.signal)', esimTransition);
   const disposal = route.indexOf('adminOrderDeadline.dispose()', esimSignal);
   const release = route.indexOf('releaseAdminOps()', disposal);
-  assert.ok(admission > 0 && readSignal > admission, 'the admitted order read must inherit the shared deadline');
+  assert.ok(admission > 0 && wallClockBoundary > admission && readSignal > wallClockBoundary, 'the complete admitted transition must inherit and race the shared deadline');
   assert.ok(wifiSignal > wifiTransition, 'the Pocket WiFi transition must inherit the shared deadline');
   assert.ok(esimSignal > esimTransition, 'the eSIM transition must inherit the shared deadline');
   assert.ok(disposal > esimSignal && release > disposal, 'the deadline must be cleared before releasing the operations slot');
@@ -11604,12 +11605,13 @@ test('general admin operations share one end-to-end database deadline', async ()
     /Invalid admin operations dependency timeout/,
   );
   const deadline = createAdminOpsDeadline(5);
-  await new Promise((resolve) => deadline.signal.addEventListener('abort', resolve, { once: true }));
+  await assert.rejects(deadline.waitFor(new Promise(() => {})), /Admin operations dependency work timed out/);
   assert.equal(deadline.signal.aborted, true);
   assert.match(String(deadline.signal.reason), /Admin operations dependency work timed out/i);
   deadline.dispose();
 
   const admission = adminOpsRoute.indexOf('const adminOpsDeadline = createAdminOpsDeadline()');
+  const wallClockBoundary = adminOpsRoute.indexOf('adminOpsDeadline.waitFor((async () => {', admission);
   const closeRead = adminOpsRoute.indexOf('.abortSignal(signal)', adminOpsRoute.indexOf('async function paidOrderGrossForPeriod'));
   const manualOrder = adminOpsRoute.indexOf("qy_create_manual_pocket_wifi_order", admission);
   const inventory = adminOpsRoute.indexOf("qy_adjust_inventory", manualOrder);
@@ -11618,7 +11620,7 @@ test('general admin operations share one end-to-end database deadline', async ()
   const closeRpc = adminOpsRoute.indexOf("qy_record_closing_period", closeCall);
   const disposal = adminOpsRoute.indexOf('adminOpsDeadline.dispose()', closeRpc);
   const release = adminOpsRoute.indexOf('releaseAdminOps()', disposal);
-  assert.ok(admission > 0 && closeRead > 0, 'admitted operations and closing-ledger pages must have a deadline');
+  assert.ok(admission > 0 && wallClockBoundary > admission && closeRead > 0, 'the complete admitted operation and closing-ledger pages must have a deadline');
   assert.match(adminOpsRoute.slice(manualOrder, inventory), /\.abortSignal\(adminOpsDeadline\.signal\)/);
   assert.match(adminOpsRoute.slice(inventory, crm), /\.abortSignal\(adminOpsDeadline\.signal\)/);
   assert.match(adminOpsRoute.slice(crm, closeCall), /\.abortSignal\(adminOpsDeadline\.signal\)/);

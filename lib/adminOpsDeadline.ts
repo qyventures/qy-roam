@@ -17,6 +17,22 @@ export function createAdminOpsDeadline(timeoutMs = ADMIN_OPS_DEPENDENCY_TIMEOUT_
 
   return {
     signal: controller.signal,
+    async waitFor<T>(work: Promise<T>) {
+      if (controller.signal.aborted) throw new Error('Admin operations dependency work timed out');
+      let rejectOnAbort: (() => void) | undefined;
+      const deadline = new Promise<never>((_, reject) => {
+        rejectOnAbort = () => reject(new Error('Admin operations dependency work timed out'));
+        controller.signal.addEventListener('abort', rejectOnAbort, { once: true });
+      });
+      try {
+        // Supabase normally observes AbortSignal. Keep a separate promise
+        // boundary as well so a stalled or future transport implementation
+        // cannot permanently consume scarce mutation capacity.
+        return await Promise.race([work, deadline]);
+      } finally {
+        if (rejectOnAbort) controller.signal.removeEventListener('abort', rejectOnAbort);
+      }
+    },
     dispose() { clearTimeout(timeout); },
   };
 }

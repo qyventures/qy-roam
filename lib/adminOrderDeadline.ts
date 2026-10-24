@@ -16,6 +16,23 @@ export function createAdminOrderDeadline(timeoutMs = ADMIN_ORDER_DEPENDENCY_TIME
 
   return {
     signal: controller.signal,
+    async waitFor<T>(work: Promise<T>) {
+      if (controller.signal.aborted) throw new Error('Admin order dependency work timed out');
+      let rejectOnAbort: (() => void) | undefined;
+      const deadline = new Promise<never>((_, reject) => {
+        rejectOnAbort = () => reject(new Error('Admin order dependency work timed out'));
+        controller.signal.addEventListener('abort', rejectOnAbort, { once: true });
+      });
+      try {
+        // Abort PostgREST as the first line of defence, but do not assume a
+        // transport will always settle its promise after cancellation. Race
+        // the complete admitted transition so a stalled dependency cannot
+        // retain one of the shared operations slots forever.
+        return await Promise.race([work, deadline]);
+      } finally {
+        if (rejectOnAbort) controller.signal.removeEventListener('abort', rejectOnAbort);
+      }
+    },
     dispose() { clearTimeout(timeout); },
   };
 }

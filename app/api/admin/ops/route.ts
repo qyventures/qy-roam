@@ -259,6 +259,7 @@ export async function POST(req: NextRequest) {
   const adminOpsDeadline = createAdminOpsDeadline();
 
   try {
+    return await adminOpsDeadline.waitFor((async () => {
     if (action === 'order_create') {
       const product = text(body.product_type, 40) || 'pocket_wifi';
       if (product !== 'pocket_wifi' && product !== 'esim') return NextResponse.json({ error: 'Invalid product type' }, { status: 400 });
@@ -726,6 +727,7 @@ export async function POST(req: NextRequest) {
     } else return NextResponse.json({ error: 'Unsupported action' }, { status: 400 });
 
     return NextResponse.json({ ok: true });
+    })());
   } catch {
     // A Supabase/PostgREST error can include SQL details or echoed operator
     // input. Expected, actionable conflicts are returned above; unexpected
