@@ -11172,6 +11172,7 @@ test('initial Pocket WiFi booking terms require one coherent cent-precise price 
 test('live Pocket WiFi availability supersedes the initial booking-terms request', () => {
   assert.match(homePage, /const bookingTermsAbortController = useRef<AbortController \| null>\(null\)/);
   assert.match(homePage, /fetchCustomerJson\('\/api\/booking-terms', \{ cache: 'no-store', signal: controller\.signal \}\)/);
+  assert.match(homePage, /if \(!active \|\| controller\.signal\.aborted \|\| !response\.ok/);
   assert.match(homePage, /controller\.abort\(\);[\s\S]{0,180}bookingTermsAbortController\.current === controller/);
 
   const availabilityStart = homePage.indexOf('async function checkAvailability()');

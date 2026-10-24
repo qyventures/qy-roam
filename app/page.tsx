@@ -136,7 +136,12 @@ export default function Home() {
     const controller = new AbortController();
     bookingTermsAbortController.current = controller;
     void fetchCustomerJson('/api/booking-terms', { cache: 'no-store', signal: controller.signal }).then(({ response, value }) => {
-      if (!active || !response.ok || !value || typeof value !== 'object' || Array.isArray(value)) return;
+      // Abort is an ownership boundary, not merely a network optimisation.
+      // A browser, service worker or fetch shim can still settle a response
+      // while cancellation is propagating. Once live availability starts it
+      // owns the newer booking-terms snapshot, so an aborted initial request
+      // must never restore an older lead time or courier fee afterward.
+      if (!active || controller.signal.aborted || !response.ok || !value || typeof value !== 'object' || Array.isArray(value)) return;
       // Treat the initial public terms as one coherent price/date snapshot.
       // Applying only one valid field from a malformed or partially deployed
       // response could still show a payable total that disagrees with the
