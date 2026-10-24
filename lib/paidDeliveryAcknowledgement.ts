@@ -28,15 +28,15 @@ export function acknowledgedPaidDeliveryClaim(
 export function acknowledgedPaidDeliverySettlement(
   data: unknown,
   expectedSessionId: string,
-  expectedSentAt: string,
 ) {
   const row = exactRpcRow(data) as DeliveryClaim & { sent_at?: unknown } | null;
+  const sentAt = exactDatabaseTimestampToken(row?.sent_at);
+  const updatedAt = exactDatabaseTimestampToken(row?.updated_at);
   return Boolean(
     row &&
     row.stripe_session_id === expectedSessionId &&
     row.status === 'sent' &&
-    databaseTimestampInstantEquals(row.sent_at, expectedSentAt) &&
-    databaseTimestampInstantEquals(row.updated_at, expectedSentAt)
+    sentAt && updatedAt && databaseTimestampInstantEquals(sentAt, updatedAt)
   );
 }
 
@@ -44,7 +44,6 @@ export function acknowledgedPaidDeliveryFailure(
   data: unknown,
   expectedSessionId: string,
   expectedError: string,
-  expectedUpdatedAt: string,
 ) {
   const row = exactRpcRow(data) as DeliveryClaim & { last_error?: unknown } | null;
   return Boolean(
@@ -52,6 +51,6 @@ export function acknowledgedPaidDeliveryFailure(
     row.stripe_session_id === expectedSessionId &&
     row.status === 'pending' &&
     row.last_error === expectedError &&
-    databaseTimestampInstantEquals(row.updated_at, expectedUpdatedAt)
+    exactDatabaseTimestampToken(row.updated_at)
   );
 }

@@ -785,10 +785,9 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
     // The sending lease can be reclaimed after a timed-out worker. Only its
     // owner may settle it: an older worker must never mark a newer delivery
     // sent (or later reset it to pending in the catch below).
-    const sentAt=new Date().toISOString();
-    const sent=await supabase.from('fulfilment_notifications').update({status:'sent',sent_at:sentAt,updated_at:sentAt}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',claimToken).select('stripe_session_id,status,sent_at,updated_at').abortSignal(signal);
+    const sent=await supabase.rpc('qy_settle_fulfilment_notification',{p_stripe_session_id:session.id,p_claimed_at:claimToken}).abortSignal(signal);
     if(sent.error) throw sent.error;
-    if(!acknowledgedPaidDeliverySettlement(sent.data,session.id,sentAt)) throw new Error('Fulfilment notification delivery lease was lost');
+    if(!acknowledgedPaidDeliverySettlement(sent.data,session.id)) throw new Error('Fulfilment notification delivery lease was lost');
   }catch(error){
     // Once SMTP/the relay has accepted the deterministic message id, a
     // database failure while recording `sent` is an ambiguous-success state,
@@ -805,12 +804,11 @@ export async function deliverFulfilmentNotification(supabase:NonNullable<ReturnT
     // Keep a newer worker's lease intact if this worker was reclaimed while
     // its provider call was still in flight.
     const failureMessage=message.slice(0,500);
-    const failedAt=new Date().toISOString();
     // Provider cancellation can be caused by the processing deadline itself.
     // Use the deadline's reserved recovery window so this owned lease becomes
     // immediately retryable instead of remaining `sending` for 15 minutes.
-    const failed=await supabase.from('fulfilment_notifications').update({status:'pending',last_error:failureMessage,updated_at:failedAt}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',claimToken).select('stripe_session_id,status,last_error,updated_at').abortSignal(recoverySignal);
-    if(failed.error||!acknowledgedPaidDeliveryFailure(failed.data,session.id,failureMessage,failedAt)) console.error('fulfilment_notification_failure_record_error');
+    const failed=await supabase.rpc('qy_fail_fulfilment_notification',{p_stripe_session_id:session.id,p_claimed_at:claimToken,p_last_error:failureMessage}).abortSignal(recoverySignal);
+    if(failed.error||!acknowledgedPaidDeliveryFailure(failed.data,session.id,failureMessage)) console.error('fulfilment_notification_failure_record_error');
     throw error;
   }
 }
@@ -860,13 +858,12 @@ export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof
   try{
     await sendMetaPurchase(session,claimedEventTime!,signal);
     providerAccepted=true;
-    const sentAt=new Date().toISOString();
     // As with SMTP, do not let a stale CAPI worker settle a lease that a
     // newer retry has reclaimed. Meta's event_id deduplicates the provider
     // event, while this predicate preserves an accurate local delivery state.
-    const sent=await supabase.from('meta_purchase_deliveries').update({status:'sent',sent_at:sentAt,updated_at:sentAt}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',claimToken).select('stripe_session_id,status,sent_at,updated_at').abortSignal(signal);
+    const sent=await supabase.rpc('qy_settle_meta_purchase_delivery',{p_stripe_session_id:session.id,p_claimed_at:claimToken}).abortSignal(signal);
     if(sent.error) throw sent.error;
-    if(!acknowledgedPaidDeliverySettlement(sent.data,session.id,sentAt)) throw new Error('Meta purchase delivery lease was lost');
+    if(!acknowledgedPaidDeliverySettlement(sent.data,session.id)) throw new Error('Meta purchase delivery lease was lost');
   }catch(error){
     // A positive Graph API acknowledgement followed by a local settlement
     // failure is also ambiguous success. Preserve the sending lease instead
@@ -878,11 +875,10 @@ export async function deliverMetaPurchase(supabase:NonNullable<ReturnType<typeof
     // a recovery instruction rather than an arbitrary upstream error string.
     const message=safeProviderDeliveryFailure(error,'Meta CAPI delivery failed; retry or inspect provider configuration');
     const failureMessage=message.slice(0,500);
-    const failedAt=new Date().toISOString();
     // As with fulfilment email, an aborted provider attempt needs a distinct
     // recovery budget to release its exact compare-and-swap lease promptly.
-    const failed=await supabase.from('meta_purchase_deliveries').update({status:'pending',last_error:failureMessage,updated_at:failedAt}).eq('stripe_session_id',session.id).eq('status','sending').eq('updated_at',claimToken).select('stripe_session_id,status,last_error,updated_at').abortSignal(recoverySignal);
-    if(failed.error||!acknowledgedPaidDeliveryFailure(failed.data,session.id,failureMessage,failedAt)) console.error('meta_purchase_failure_record_error');
+    const failed=await supabase.rpc('qy_fail_meta_purchase_delivery',{p_stripe_session_id:session.id,p_claimed_at:claimToken,p_last_error:failureMessage}).abortSignal(recoverySignal);
+    if(failed.error||!acknowledgedPaidDeliveryFailure(failed.data,session.id,failureMessage)) console.error('meta_purchase_failure_record_error');
     throw error;
   }
 }

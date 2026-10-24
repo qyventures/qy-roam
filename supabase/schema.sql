@@ -1703,6 +1703,72 @@ create trigger qy_enforce_meta_purchase_delivery_immutability
 before insert or update on public.meta_purchase_deliveries
 for each row execute function public.qy_enforce_meta_purchase_delivery_immutability();
 
+-- Provider delivery settlement and failure timestamps must come from the
+-- database that issued the exact updated_at lease. A host clock correction
+-- must not strand an accepted email/Purchase in `sending`, or make a failed
+-- attempt unrecoverable. Each function is a one-row compare-and-swap and
+-- returns the committed row as the caller's durable acknowledgement.
+create or replace function public.qy_settle_fulfilment_notification(
+  p_stripe_session_id text, p_claimed_at timestamptz
+)
+returns setof public.fulfilment_notifications
+language sql security definer set search_path = public
+as $$
+  with timestamp_authority as (select clock_timestamp() as value)
+  update public.fulfilment_notifications
+  set status = 'sent', sent_at = timestamp_authority.value, updated_at = timestamp_authority.value
+  from timestamp_authority
+  where stripe_session_id = p_stripe_session_id and status = 'sending' and updated_at = p_claimed_at
+  returning *;
+$$;
+
+create or replace function public.qy_fail_fulfilment_notification(
+  p_stripe_session_id text, p_claimed_at timestamptz, p_last_error text
+)
+returns setof public.fulfilment_notifications
+language sql security definer set search_path = public
+as $$
+  update public.fulfilment_notifications
+  set status = 'pending', last_error = p_last_error, updated_at = clock_timestamp()
+  where stripe_session_id = p_stripe_session_id and status = 'sending' and updated_at = p_claimed_at
+  returning *;
+$$;
+
+create or replace function public.qy_settle_meta_purchase_delivery(
+  p_stripe_session_id text, p_claimed_at timestamptz
+)
+returns setof public.meta_purchase_deliveries
+language sql security definer set search_path = public
+as $$
+  with timestamp_authority as (select clock_timestamp() as value)
+  update public.meta_purchase_deliveries
+  set status = 'sent', sent_at = timestamp_authority.value, updated_at = timestamp_authority.value
+  from timestamp_authority
+  where stripe_session_id = p_stripe_session_id and status = 'sending' and updated_at = p_claimed_at
+  returning *;
+$$;
+
+create or replace function public.qy_fail_meta_purchase_delivery(
+  p_stripe_session_id text, p_claimed_at timestamptz, p_last_error text
+)
+returns setof public.meta_purchase_deliveries
+language sql security definer set search_path = public
+as $$
+  update public.meta_purchase_deliveries
+  set status = 'pending', last_error = p_last_error, updated_at = clock_timestamp()
+  where stripe_session_id = p_stripe_session_id and status = 'sending' and updated_at = p_claimed_at
+  returning *;
+$$;
+
+revoke all on function public.qy_settle_fulfilment_notification(text,timestamptz) from public;
+revoke all on function public.qy_fail_fulfilment_notification(text,timestamptz,text) from public;
+revoke all on function public.qy_settle_meta_purchase_delivery(text,timestamptz) from public;
+revoke all on function public.qy_fail_meta_purchase_delivery(text,timestamptz,text) from public;
+grant execute on function public.qy_settle_fulfilment_notification(text,timestamptz) to service_role;
+grant execute on function public.qy_fail_fulfilment_notification(text,timestamptz,text) to service_role;
+grant execute on function public.qy_settle_meta_purchase_delivery(text,timestamptz) to service_role;
+grant execute on function public.qy_fail_meta_purchase_delivery(text,timestamptz,text) to service_role;
+
 -- These relations are the durable financial, webhook-idempotency and
 -- outbound-delivery audit trail. Their triggers permit the bounded inserts
 -- and updates used by Checkout, webhook retries and admin recovery, but
@@ -1736,8 +1802,16 @@ as $$
     to_regclass('public.stripe_events') is not null and
     to_regclass('public.fulfilment_notifications') is not null and
     to_regclass('public.meta_purchase_deliveries') is not null and
-    -- The webhook uses direct compare-and-swap writes for event settlement
-    -- and both outbound-delivery ledgers. Object/column checks only exercise
+    to_regprocedure('public.qy_settle_fulfilment_notification(text,timestamptz)') is not null and
+    to_regprocedure('public.qy_fail_fulfilment_notification(text,timestamptz,text)') is not null and
+    to_regprocedure('public.qy_settle_meta_purchase_delivery(text,timestamptz)') is not null and
+    to_regprocedure('public.qy_fail_meta_purchase_delivery(text,timestamptz,text)') is not null and
+    has_function_privilege('service_role', 'public.qy_settle_fulfilment_notification(text,timestamptz)', 'EXECUTE') and
+    has_function_privilege('service_role', 'public.qy_fail_fulfilment_notification(text,timestamptz,text)', 'EXECUTE') and
+    has_function_privilege('service_role', 'public.qy_settle_meta_purchase_delivery(text,timestamptz)', 'EXECUTE') and
+    has_function_privilege('service_role', 'public.qy_fail_meta_purchase_delivery(text,timestamptz,text)', 'EXECUTE') and
+    -- The webhook uses exact compare-and-swap writes for event claims and
+    -- database-authoritative RPCs for outbound-delivery settlement. Checks only exercise
     -- SELECT, while an accidentally narrowed service-role grant could still
     -- let checkout report ready and then strand a paid order on its first
     -- INSERT or UPDATE. Certify the exact non-destructive table privileges
@@ -3725,7 +3799,9 @@ as $$
   -- audit trail with DELETE or TRUNCATE. Version 61 moves claim-owned Stripe
   -- event failure and settlement timestamps to database-authoritative RPCs,
   -- preventing application clock correction from stranding completed work.
-  select 61;
+  -- Version 62 applies the same exact-lease, database-clock settlement and
+  -- failure boundary to fulfilment email and Meta Purchase delivery.
+  select 62;
 $$;
 revoke all on function public.qy_order_integrity_schema_version() from public;
 grant execute on function public.qy_order_integrity_schema_version() to service_role;
