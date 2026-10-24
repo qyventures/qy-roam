@@ -10144,6 +10144,10 @@ test('release verification enforces the complete customer ingress security bound
 
   const hstsHeaders = nginxConfig.match(/add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;/g) || [];
   assert.equal(hstsHeaders.length, 2, 'both canonical and www TLS servers must emit HSTS');
+  const permissionsPolicyHeaders = nginxConfig.match(/add_header Permissions-Policy "camera=\(\), microphone=\(\), geolocation=\(\), payment=\(self\)" always;/g) || [];
+  assert.equal(permissionsPolicyHeaders.length, 2, 'both canonical and www TLS servers must retain the reviewed browser capability boundary');
+  const openerPolicyHeaders = nginxConfig.match(/add_header Cross-Origin-Opener-Policy same-origin always;/g) || [];
+  assert.equal(openerPolicyHeaders.length, 2, 'both canonical and www TLS servers must isolate their browsing context');
   assert.match(nginxConfig, /server_name www\.qyroam\.com;[\s\S]*?add_header Referrer-Policy no-referrer always;[\s\S]*?return 301 https:\/\/qyroam\.com\$request_uri;/);
 });
 
