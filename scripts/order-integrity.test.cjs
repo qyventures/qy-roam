@@ -122,6 +122,7 @@ const { readinessFailureBackoffActive, readinessWindowActive } = require('../lib
 const { adminOrderMutationSafe } = require('../lib/adminOrderRow.ts');
 const { ADMIN_DASHBOARD_LOOKUP_TIMEOUT_MS, createAdminDashboardDeadline } = require('../lib/adminDashboardDeadline.ts');
 const { adminCustomerIdentity, compareCustomerPurchaseRecency } = require('../lib/adminCustomerIdentity.ts');
+const { exactPositiveIntegerId } = require('../lib/positiveIntegerId.ts');
 
 test('checkout commercial fields reject structured JSON values instead of coercing them', () => {
   const wifiCountry = WIFI_PLANS[0].country;
@@ -169,6 +170,17 @@ test('admin structured inputs are rejected instead of silently truncated or defa
   assert.doesNotMatch(adminOrderRoute, /const status = String\(body\.status \|\| ''\)/);
   assert.match(adminOrderRoute, /typeof body\[field\] !== 'string'/);
   assert.match(adminOrderRoute, /typeof body\.inventory_item_id !== 'string'[\s\S]{0,120}typeof body\.inventory_item_id !== 'number'/);
+  assert.equal(exactPositiveIntegerId(1), 1);
+  assert.equal(exactPositiveIntegerId('1'), 1);
+  assert.equal(exactPositiveIntegerId(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER);
+  assert.equal(exactPositiveIntegerId(String(Number.MAX_SAFE_INTEGER)), Number.MAX_SAFE_INTEGER);
+  for (const ambiguousId of [0, -1, 1.5, '0', '01', ' 1', '1 ', '+1', '1e0', '0x1', String(Number.MAX_SAFE_INTEGER + 1)]) {
+    assert.equal(exactPositiveIntegerId(ambiguousId), null);
+  }
+  assert.equal((adminOrderRoute.match(/exactPositiveIntegerId\(params\.id\)/g) || []).length, 2);
+  assert.match(adminOrderRoute, /exactPositiveIntegerId\(body\.inventory_item_id\)/);
+  assert.doesNotMatch(adminOrderRoute, /Number\(params\.id\)/);
+  assert.doesNotMatch(adminOrderRoute, /Number\(body\.inventory_item_id\)/);
 });
 
 test('admin order mutations require one coherent durable lifecycle row', () => {
@@ -2063,7 +2075,7 @@ test('admin order transitions share the bounded operations database-work budget'
   const bodyRead = adminOrderRoute.indexOf(
     'readLimitedRequestText(req, MAX_ADMIN_ORDER_BODY_BYTES, ADMIN_ORDER_BODY_TIMEOUT_MS)',
   );
-  const idValidation = adminOrderRoute.indexOf("if (!Number.isSafeInteger(id) || id < 1)", bodyRead);
+  const idValidation = adminOrderRoute.indexOf("if (id === null) return NextResponse.json({ error: 'Invalid order id' }", bodyRead);
   const admission = adminOrderRoute.indexOf('const releaseAdminOps = tryAcquireAdminOpsConcurrency()', idValidation);
   const orderRead = adminOrderRoute.indexOf("supabase.from('orders').select", admission);
   const wifiTransition = adminOrderRoute.indexOf("supabase.rpc('qy_transition_pocket_wifi_order'", orderRead);

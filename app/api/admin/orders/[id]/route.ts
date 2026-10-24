@@ -21,6 +21,7 @@ import { acknowledgedOrderTransition } from '@/lib/adminOrderTransitionAcknowled
 import { createAdminOrderDeadline } from '@/lib/adminOrderDeadline';
 import { createAdminDeliveryDeadline } from '@/lib/adminDeliveryDeadline';
 import { tryAcquireAdminUpload } from '@/lib/adminUploadConcurrency';
+import { exactPositiveIntegerId } from '@/lib/positiveIntegerId';
 
 export const runtime = 'nodejs';
 
@@ -219,8 +220,8 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   // microseconds exactly and reject JavaScript-only date spellings before
   // passing them to PostgREST/Postgres as a timestamptz parameter.
   const expectedUpdatedAt = exactDatabaseTimestampToken(body.expected_updated_at);
-  const id = Number(params.id);
-  if (!Number.isSafeInteger(id) || id < 1) return NextResponse.json({ error: 'Invalid order id' }, { status: 400 });
+  const id = exactPositiveIntegerId(params.id);
+  if (id === null) return NextResponse.json({ error: 'Invalid order id' }, { status: 400 });
   if (!expectedUpdatedAt) return NextResponse.json({ error: 'Invalid order version. Refresh before updating it.' }, { status: 400 });
 
   // Fulfilment transitions mutate the same order and inventory ledgers as the
@@ -401,8 +402,8 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   if (existing.data.product_type === 'pocket_wifi') {
     const selectedInventoryItemId = body.inventory_item_id === undefined || body.inventory_item_id === ''
       ? null
-      : Number(body.inventory_item_id);
-    if (selectedInventoryItemId !== null && (!Number.isSafeInteger(selectedInventoryItemId) || selectedInventoryItemId < 1)) {
+      : exactPositiveIntegerId(body.inventory_item_id);
+    if (body.inventory_item_id !== undefined && body.inventory_item_id !== '' && selectedInventoryItemId === null) {
       return NextResponse.json({ error: 'Invalid Pocket WiFi inventory item' }, { status: 400 });
     }
     // Dispatch/return update both ledgers inside the database transaction. This
@@ -488,8 +489,8 @@ async function retryOrderDeliveries(_req: Request, { params }: { params: { id: s
   const stripeKey = process.env.STRIPE_SECRET_KEY?.trim();
   if (!stripeKey || !hasRequiredStripeCheckoutConfig()) return NextResponse.json({ error: 'Stripe is not configured' }, { status: 503 });
 
-  const id = Number(params.id);
-  if (!Number.isSafeInteger(id) || id < 1) return NextResponse.json({ error: 'Invalid order id' }, { status: 400 });
+  const id = exactPositiveIntegerId(params.id);
+  if (id === null) return NextResponse.json({ error: 'Invalid order id' }, { status: 400 });
 
   try {
     const { data: order, error } = await supabase
