@@ -33,7 +33,17 @@ export async function runAdminDashboardWork<T, B>(work: (signal: AbortSignal) =>
   if (!release) return busy;
   const deadline = createAdminDashboardDeadline();
   try {
-    return await deadline.waitFor(work(deadline.signal));
+    try {
+      return await deadline.waitFor(work(deadline.signal));
+    } catch (error) {
+      // Every secondary admin view supplies a fail-closed value that hides
+      // totals and mutation authorities when its ledgers are unavailable.
+      // Use that same safe rendering path when the shared wall-clock budget
+      // expires. Let ordinary provider/programming failures keep propagating:
+      // only the deadline owned by this invocation may turn into the fallback.
+      if (deadline.signal.aborted) return busy;
+      throw error;
+    }
   } finally {
     deadline.dispose();
     release();

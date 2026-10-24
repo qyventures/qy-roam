@@ -2100,15 +2100,21 @@ test('all read-heavy admin views share the bounded dashboard budget and release 
   recovered();
 
   const originalSetTimeout = global.setTimeout;
+  let stalledSignal;
   try {
     global.setTimeout = (callback, _delay, ...args) => originalSetTimeout(callback, 5, ...args);
-    await assert.rejects(
-      runAdminDashboardWork(async () => new Promise(() => {}), fallback),
-      /Admin dashboard lookup timed out/,
+    assert.equal(
+      await runAdminDashboardWork(async (signal) => {
+        stalledSignal = signal;
+        return new Promise(() => {});
+      }, fallback),
+      fallback,
+      'a wall-clock timeout must render the supplied fail-closed admin state',
     );
   } finally {
     global.setTimeout = originalSetTimeout;
   }
+  assert.equal(stalledSignal?.aborted, true, 'the stalled provider work must still receive cancellation');
   const recoveredAfterIgnoredCancellation = tryAcquireAdminDashboardConcurrency();
   assert.equal(typeof recoveredAfterIgnoredCancellation, 'function', 'a stalled admin read must release its shared slot after the wall-clock deadline');
   recoveredAfterIgnoredCancellation();
